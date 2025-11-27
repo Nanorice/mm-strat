@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  quant-engine:
+    build: .
+    container_name: sepa_engine
+    volumes:
+      # SYNC CODE: Edits on your laptop reflect inside Docker immediately
+      - ./:/app
+      # PERSIST DATA: Data downloaded inside Docker saves to your laptop
+      - ./data:/app/data
+      - ./database:/app/database
+    environment:
+      - PYTHONPATH=/app
+    # Keep container running so you can execute commands inside it
+    command: tail -f /dev/null
