@@ -227,10 +227,11 @@ class TechnicalAnalysis:
             c2 = df['SMA_150'] > df['SMA_200']
             c3 = df['SMA_200'] > df['SMA_200'].shift(20)  # 200 SMA rising
             c4 = df['Close'] > df['SMA_50']
+            c4b = df['SMA_50'] > df['SMA_150']  # MA50 > MA150
             c5 = df['Close'] > df['Low_52W'] * config.WEEKS_52_LOW_THRESHOLD
             c6 = df['Close'] > df['High_52W'] * config.WEEKS_52_HIGH_THRESHOLD
 
-            c_trend = c1 & c2 & c3 & c4 & c5 & c6
+            c_trend = c1 & c2 & c3 & c4 & c4b & c5 & c6
 
         return c_trend
 

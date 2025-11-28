@@ -166,6 +166,82 @@ class SEPAStrategy(AlphaModel):
                 return True, 'Trend Break (50 SMA)'
 
         return False, ''
+    
+    def extract_sepa_criteria(self, df: pd.DataFrame, date: pd.Timestamp) -> Dict[str, int]:
+        """
+        Extracts individual SEPA criteria for database storage.
+        
+        Returns 8 individual checks as integers (1=True, 0=False):
+        - price_above_ma50
+        - price_above_ma150  
+        - price_above_ma200
+        - ma50_above_ma150
+        - ma150_above_ma200
+        - ma200_trending_up
+        - price_above_52w_low_30pct
+        - price_within_25pct_of_52w_high
+        
+        Args:
+            df: DataFrame with indicators
+            date: Date to extract criteria for
+            
+        Returns:
+            Dict with 8 criteria as integers (1/0)
+        """
+        if date not in df.index:
+            # Return all zeros if date not found
+            return {
+                'price_above_ma50': 0,
+                'price_above_ma150': 0,
+                'price_above_ma200': 0,
+                'ma50_above_ma150': 0,
+                'ma150_above_ma200': 0,
+                'ma200_trending_up': 0,
+                'price_above_52w_low_30pct': 0,
+                'price_within_25pct_of_52w_high': 0
+            }
+        
+        try:
+            row = df.loc[date]
+            price = row['Close']
+            ma50 = row.get('SMA_50', 0)
+            ma150 = row.get('SMA_150', 0)
+            ma200 = row.get('SMA_200', 0)
+            high_52w = row.get('High_52W', 0)
+            low_52w = row.get('Low_52W', 0)
+            
+            # Calculate 8 individual checks
+            criteria = {
+                'price_above_ma50': 1 if price > ma50 else 0,
+                'price_above_ma150': 1 if price > ma150 else 0,
+                'price_above_ma200': 1 if price > ma200 else 0,
+                'ma50_above_ma150': 1 if ma50 > ma150 else 0,
+                'ma150_above_ma200': 1 if ma150 > ma200 else 0,
+                'ma200_trending_up': 0,  # Calculate below
+                'price_above_52w_low_30pct': 1 if price > low_52w * 1.30 else 0,
+                'price_within_25pct_of_52w_high': 1 if price > high_52w * 0.75 else 0
+            }
+            
+            # MA200 trending up (current > 20 days ago)
+            if len(df) > 20 and 'SMA_200' in df.columns:
+                ma200_prev = df['SMA_200'].shift(20).loc[date] if pd.notna(df['SMA_200'].shift(20).loc[date]) else ma200
+                criteria['ma200_trending_up'] = 1 if ma200 > ma200_prev else 0
+            
+            return criteria
+            
+        except Exception as e:
+            logger.debug(f"Error extracting SEPA criteria: {e}")
+            # Return all zeros on error
+            return {
+                'price_above_ma50': 0,
+                'price_above_ma150': 0,
+                'price_above_ma200': 0,
+                'ma50_above_ma150': 0,
+                'ma150_above_ma200': 0,
+                'ma200_trending_up': 0,
+                'price_above_52w_low_30pct': 0,
+                'price_within_25pct_of_52w_high': 0
+            }
 
     def generate_signals(self, df: pd.DataFrame, date: pd.Timestamp) -> Dict:
         """
@@ -262,6 +338,114 @@ class SEPAStrategy(AlphaModel):
             'reward_pct': round(config.STOP_LOSS_PCT * config.PROFIT_TARGET_R * 100, 2),
             'position_size_pct': round(position_size_pct * 100, 1),
             'atr': round(atr, 2) if atr else None
+        }
+    
+    def batch_scan_universe(self, enriched_data_dict: Dict[str, pd.DataFrame], 
+                           scan_date: Optional[pd.Timestamp] = None) -> Dict:
+        """
+        Batch scan multiple tickers for SEPA signals (vectorized/parallel processing).
+        
+        Args:
+            enriched_data_dict: Dict mapping ticker -> enriched DataFrame (with lightweight features)
+            scan_date: Optional specific date to scan. If None, uses latest date from each ticker
+        
+        Returns:
+            Dict with:
+                'qualifying_stocks': List of all stocks with trend_ok = True
+                'new_triggers': List of stocks with buy = True (triggered on scan_date)
+                'summary': Dict with counts and statistics
+        """
+        qualifying_stocks = []
+        new_triggers = []
+        latest_date = None
+        
+        # Process all tickers
+        for ticker, df in enriched_data_dict.items():
+            try:
+                # Determine scan date (use latest if not specified)
+                if scan_date is None:
+                    ticker_date = df.index[-1]
+                else:
+                    # Find nearest date if scan_date doesn't exist
+                    if scan_date in df.index:
+                        ticker_date = scan_date
+                    else:
+                        available = df.index[df.index <= scan_date]
+                        if len(available) == 0:
+                            continue
+                        ticker_date = available[-1]
+                
+                # Track latest date across all tickers
+                if latest_date is None or ticker_date > latest_date:
+                    latest_date = ticker_date
+                
+                # Generate signal (this is fast - mostly boolean operations)
+                signal = self.generate_signals(df, ticker_date)
+                
+                # Extract metrics
+                row = df.loc[ticker_date]
+                rs_value = row.get('RS')
+                vol_ratio = row.get('Vol_Ratio')
+                atr_value = row.get('ATR')
+                price = row['Close']
+                
+                # Check if qualifying (trend_ok = True)
+                if signal['metadata'].get('trend_ok', False):
+                    stock_data = {
+                        'ticker': ticker,
+                        'date': ticker_date,
+                        'price': price,
+                        'rs': rs_value,
+                        'vol_ratio': vol_ratio,
+                        'atr': atr_value,
+                        'is_new_trigger': signal['buy'],
+                        'signal_strength': signal['signal_strength'],
+                        'trend_ok': signal['metadata'].get('trend_ok'),
+                        'vcp_ok': signal['metadata'].get('trigger_ok'),
+                        'trigger_ok': signal['metadata'].get('trigger_ok')
+                    }
+                    
+                    qualifying_stocks.append(stock_data)
+                    
+                    # If triggered, calculate trade plan
+                    if signal['buy']:
+                        trade_plan = self.calculate_trade_plan(df, ticker_date)
+                        if trade_plan:
+                            trigger_data = {
+                                'ticker': ticker,
+                                'date': ticker_date,
+                                'entry_price': trade_plan['entry_price'],
+                                'stop_price': trade_plan['stop_price'],
+                                'target_price': trade_plan['target_price'],
+                                'risk_pct': trade_plan['risk_pct'],
+                                'reward_pct': trade_plan['reward_pct'],
+                                'atr': trade_plan['atr'],
+                                'rs': rs_value,
+                                'vol_ratio': vol_ratio,
+                                'signal_strength': signal['signal_strength']
+                            }
+                            new_triggers.append(trigger_data)
+            
+            except Exception as e:
+                logger.debug(f"Error processing {ticker}: {e}")
+                continue
+        
+        # Build summary
+        summary = {
+            'total_scanned': len(enriched_data_dict),
+            'qualifying_count': len(qualifying_stocks),
+            'new_triggers_count': len(new_triggers),
+            'latest_date': latest_date,
+            'qualification_rate': len(qualifying_stocks) / len(enriched_data_dict) if enriched_data_dict else 0,
+            'trigger_rate': len(new_triggers) / len(enriched_data_dict) if enriched_data_dict else 0
+        }
+        
+        logger.info(f"Batch scan: {summary['qualifying_count']} qualifying, {summary['new_triggers_count']} new triggers")
+        
+        return {
+            'qualifying_stocks': qualifying_stocks,
+            'new_triggers': new_triggers,
+            'summary': summary
         }
 
     # TODO: Future enhancement - integrate ML-based signal scoring

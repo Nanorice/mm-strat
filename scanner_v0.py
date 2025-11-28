@@ -16,6 +16,7 @@ from src.data_engine import DataRepository
 from src.strategy import SEPAStrategy
 from src.database import DatabaseManager
 from src.buy_list_manager import BuyListManager
+from src.features import FeatureEngineer  # NEW: QSS Module B
 import logging
 
 # Setup logging
@@ -28,15 +29,17 @@ logger = logging.getLogger(__name__)
 
 def run_daily_scanner():
     """
-    Main scanner routine:
+    Main scanner routine (QSS Two-Stage Funnel):
     1. Fetch S&P 500 universe
     2. Update data cache
-    3. Scan for SEPA setups
-    4. Update watchlist database
-    5. Display results
+    3. [STAGE 1] Lightweight feature calculation (universe-wide)
+    4. [STAGE 2] SEPA screening (Trend → VCP → Trigger)
+    5. [FUTURE] Heavyweight feature enrichment for candidates (Phase 2)
+    6. Update watchlist database
+    7. Display results
     """
     print("=" * 80)
-    print(f" SEPA DAILY SCANNER | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f" SEPA DAILY SCANNER (QSS Architecture) | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print("=" * 80)
 
     # Initialize components
@@ -44,27 +47,31 @@ def run_daily_scanner():
     db = DatabaseManager()
 
     # Step 1: Get Universe
-    print("\n[1/5] Fetching S&P 500 Universe...")
+    print("\n[1/6] Fetching S&P 500 Universe...")
     tickers = data_repo.update_universe()
     print(f"       Loaded {len(tickers)} tickers")
 
     # Step 2: Update Cache
-    print("\n[2/5] Updating Price Data Cache...")
+    print("\n[2/6] Updating Price Data Cache...")
     results = data_repo.update_cache(tickers, force=False)
     success_count = sum(results.values())
     print(f"       Updated {success_count}/{len(tickers)} tickers")
 
     # Step 3: Get Benchmark
-    print("\n[3/5] Loading Benchmark (SPY)...")
+    print("\n[3/6] Loading Benchmark (SPY)...")
     benchmark_data = data_repo.get_benchmark_data()
     if benchmark_data is None:
         print("       ERROR: Could not load benchmark data!")
         return
 
-    # Step 4: Scan for Setups
-    print("\n[4/5] Scanning for SEPA Setups...")
+    # Initialize QSS components
+    feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
     strategy = SEPAStrategy(benchmark_data=benchmark_data)
 
+    # Step 4: Scan for Setups (QSS Two-Stage Funnel)
+    print("\n[4/6] QSS Two-Stage Scanner...")
+    print("       Stage 1: Lightweight feature calculation (universe-wide)")
+    
     candidates = []  # Buy signals (triggered)
     setup_watchlist = []  # Stage 2 setups (not triggered yet)
     sepa_qualifying = []  # ALL stocks that pass SEPA criteria (for buy_list_manager)
@@ -80,21 +87,22 @@ def run_daily_scanner():
         if df is None or len(df) < 200:
             continue
 
-        # Prepare indicators
+        # QSS STAGE 1: Calculate lightweight features using FeatureEngine
         try:
-            df = strategy.prepare_data(df)
+            df = feature_engine.calculate_lightweight_features(df)
         except Exception as e:
             logger.debug(f"Failed to prepare {ticker}: {e}")
             continue
 
         # Get latest date in data
         latest_date = df.index[-1]
+
         
         # Track the actual latest date across all tickers
         if actual_latest_date is None or latest_date > actual_latest_date:
             actual_latest_date = latest_date
 
-        # Generate signal
+        # QSS STAGE 2: SEPA Three-Stage Screening
         signal = strategy.generate_signals(df, latest_date)
 
         rs_value = df.loc[latest_date, 'RS'] if 'RS' in df.columns else None
@@ -102,6 +110,10 @@ def run_daily_scanner():
 
         # Check if triggered (buy signal) - add to candidates for display/database
         if signal['buy']:
+            # QSS STAGE 3 (Phase 2 TODO): Heavyweight feature enrichment
+            # df_enriched = feature_engine.calculate_heavyweight_features(df, ticker)
+            # This will add: WorldQuant Alphas, EPS Growth, Sales Acceleration
+            
             trade_plan = strategy.calculate_trade_plan(df, latest_date)
             if trade_plan:
                 # Add to candidates list for display
@@ -143,10 +155,12 @@ def run_daily_scanner():
             })
 
     print(f"       Scan complete: {len(candidates)} buy signals, {len(setup_watchlist)} in setup phase")
+
     print(f"       Latest data date: {actual_latest_date.strftime('%Y-%m-%d')}")
 
     # Step 5: Update Database - Both Lists
-    print("\n[5/5] Updating Database...")
+    print("\n[5/6] Updating Database...")
+
     current_date = today.strftime('%Y-%m-%d')
 
     # Update Setup Watchlist (Stage 2 stocks not triggered yet)
@@ -178,31 +192,19 @@ def run_daily_scanner():
     print("       Updating Buy List CSV tracker...")
     buy_list_mgr = BuyListManager()
     
-    # Use actual latest date from data
+    # Use actual latest date from data, not 'today'
     update_date = actual_latest_date if actual_latest_date else today
     
-    # Query the database for ACTIVE buy signals (this is the source of truth)
-    db_buy_list = db.get_buy_list(active_only=True)
-    
-    if not db_buy_list.empty:
-        # Convert database buy_list to format buy_list_manager expects
-        signals_for_tracker = []
-        for _, row in db_buy_list.iterrows():
-            signals_for_tracker.append({
-                'ticker': row['ticker'],
-                'Close': row['entry_price'],  # Use entry price as reference
-                'rs_rank': row.get('rs', 0.0),
-                'volume_ratio': row.get('volume_ratio', 1.0),
-                'ATR': row.get('atr', 0.0),
-                'High_52w': row['entry_price'] * 1.1  # Approximate, not critical for tracking
-            })
+    # Prepare signals DataFrame for buy_list_manager (ALL SEPA-qualifying stocks)
+    if sepa_qualifying:
+        signals_df = pd.DataFrame(sepa_qualifying)
         
-        signals_df = pd.DataFrame(signals_for_tracker)
+        # Update buy_list with performance tracking
         summary = buy_list_mgr.update_buy_list(signals_df, update_date)
         print(f"       Buy List: {summary['active_count']} active | "
               f"+{summary['added_today']} added, -{summary['removed_today']} removed")
     else:
-        # No active signals, update with empty list to detect removals
+        # Even if no signals today, still update to detect removals
         empty_df = pd.DataFrame(columns=['ticker', 'Close', 'rs_rank', 'volume_ratio'])
         summary = buy_list_mgr.update_buy_list(empty_df, update_date)
         if summary['removed_today'] > 0:

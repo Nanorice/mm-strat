@@ -22,15 +22,21 @@ The system is designed as a **multi-stage funnel** that progressively filters an
 
 1. **Universe Ingestion:** Daily ingestion of the S&P 500 constituents (via SSGA) to ensure a survivorship-bias-free and tradeable universe.
 
-2. **Stage 1: Technical Screening (The Wide Net):** A lightweight, vectorized pass that filters the entire universe using strict SEPA trend templates and VCP criteria. This reduces ~500 stocks to ~5-10 daily candidates.
+2. **Stage 1: Technical Screening (The Wide Net):** A lightweight, vectorized pass that filters the entire universe using strict SEPA trend templates and VCP criteria. This reduces ~500 stocks to ~5-15 daily candidates.
 
-3. **Stage 2: Feature Enrichment (The Deep Dive):** A computationally intensive pass on only the valid candidates. It fetches quarterly fundamentals and calculates complex Alpha Factors.
+3. **Stage 2: Feature Enrichment (The Deep Dive):** A computationally intensive pass on only the valid candidates. Calculates all technical indicators and relative strength metrics using the dual-stage FeatureEngineer.
 
-4. **Stage 3: ML Scoring (The Selector):** The enriched candidates are fed into a Meta-Model (Random Forest/XGBoost/Logistic Regression). The model predicts the probability of the trade becoming a "Superperformer" (hitting profit targets before stops).
+4. **Stage 3: Buy List Management (The Tracker):** Active buy signals are tracked in a persistent database with:
+   - Signal price and date (never changes)
+   - Current price and P&L tracking (updates daily)
+   - Actual indicator values (MA50/150/200, 52w high/low)
+   - Smart data handling for market holidays
 
-5. **Stage 4: Portfolio Allocation (The Executioner):** A Portfolio Manager module ranks trades by their ML score, applies constraints (Max 8 positions, Cash availability), and executes orders.
+5. **Stage 4: ML Scoring (The Selector - Future):** Enriched candidates will be fed into a Meta-Model (Random Forest/XGBoost) to predict probability of trade success.
 
-6. **Validation:** An Event-Driven Backtest Engine validates the entire pipeline, simulating realistic frictions like cash drag and market regime shifts.
+6. **Stage 5: Portfolio Allocation (The Executioner - Future):** Portfolio Manager will rank trades by ML score, apply constraints (Max 8 positions), and execute orders.
+
+7. **Validation:** Event-Driven Backtest Engine validates the pipeline with realistic frictions like cash drag and market regime shifts.
 
 ---
 
@@ -39,137 +45,223 @@ The system is designed as a **multi-stage funnel** that progressively filters an
 ### **Module A: The Data Curator**
 **Responsibility:** Acts as the "Source of Truth" for the system, handling data ingestion, cleaning, and persistent storage.
 
-* **Data Sources:** State Street (SSGA) for Universe definitions; Yahoo Finance for Price and Fundamental data.
+* **Data Sources:** 
+    * State Street (SSGA) for S&P 500 universe
+    * Yahoo Finance (primary) for OHLCV data
+    * Financial Modeling Prep (FMP) for historical data (with yfinance fallback)
 * **Storage Strategy:**
-    * **Time-Series:** Parquet files (columnar storage) for high-speed reading of price history.
-    * **Metadata:** SQLite database for tracking the Watchlist, Trade Logs, and System State.
-* **Optimization:** Implements a "Smart Update" mechanism that checks the local cache against the current date, downloading only the delta (missing days) to prevent API rate-limiting.
+    * **Time-Series:** Parquet files (columnar storage) for high-speed reading of price history
+    * **Metadata:** SQLite database for Watchlist, Buy List, and Trade Logs
+* **Optimization:** Smart cache update checks local files vs current date, downloads only missing data to prevent API rate-limiting
+* **Batch Processing:** Processes up to 500 tickers in ~5-6 seconds
 
 ### **Module B: The Feature Engine**
 A dual-stage engine designed to optimize computational resources:
 
-* **Lightweight Mode (Universe Scan):** Calculates low-cost vectorized indicators required for the broad screen (SMA 50/150/200, RSI, ATR, Relative Strength). Applied to the full S&P 500 daily.
-* **Heavyweight Mode (Candidate Enrichment):** Calculates computationally expensive features only for stocks that pass the SEPA screen.
-    * **Alpha Factors:** WorldQuant Alphas (e.g., Alpha#101 for intraday strength, Alpha#9 for momentum).
-    * **Fundamentals:** EPS Growth (QoQ), Sales Acceleration, Earnings Surprises.
+* **Lightweight Mode (Universe Scan):** Calculates low-cost vectorized indicators for broad screen:
+    * Moving Averages (SMA 50/150/200)
+    * ATR (volatility)
+    * Relative Strength vs SPY
+    * Volume metrics (ratio vs 50-day average)
+    * 52-week high/low tracking
+    * Breakout detection (20-day high)
+
+* **Heavyweight Mode (Future - Candidate Enrichment):** Will calculate expensive features for passing stocks:
+    * **Alpha Factors:** WorldQuant Alphas (Alpha#101, Alpha#9)
+    * **Fundamentals:** EPS Growth, Sales Acceleration, Earnings Surprises
 
 ### **Module C: The Strategy Engine (SEPA Logic)**
-* **Trend Template:** Enforces the "Stage 2" uptrend criteria (Price > SMAs, Rising 200-day SMA, Price near 52-week highs).
-* **Pattern Recognition:** Detects Volatility Contraction Patterns (VCP) by analyzing standard deviation compression over multiple timeframes.
-* **Trigger Logic:** Identifies precise entry points, specifically looking for price breakouts above a 20-day high accompanied by a volume spike (>130% of average).
+* **Trend Template:** Enforces "Stage 2" uptrend criteria:
+    * Price > MA50 > MA150 > MA200
+    * MA200 trending up (> 20 days ago)
+    * Price > 30% above 52-week low
+    * Price within 25% of 52-week high
 
-### **Module D: The Machine Learning Core (Meta-Labeling)**
+* **Pattern Recognition:** Detects Volatility Contraction Patterns (VCP) by analyzing standard deviation compression
+
+* **Trigger Logic:** Identifies precise entry points:
+    * Price breakout above 20-day high
+    * Volume spike (>130% of average)
+    * Relative strength confirmation
+
+### **Module D: The Database Manager**
+**Responsibility:** Persistent storage and retrieval of system state
+
+* **Tables:**
+    * **watchlist:** Tracks stocks in Stage 2 setup (not yet triggered)
+    * **buy_list:** Active buy signals with detailed tracking:
+        * `signal_date`, `signal_price` (never changes)
+        * `current_price`, `last_updated` (updates each scan)
+        * Actual indicator values (ma50, ma150, ma200, high_52w, low_52w)
+        * RS and volume_ratio
+    * **buy_list_activity:** Complete audit log of all additions/removals
+    * **trades:** Historical trade log (for future portfolio tracking)
+
+* **Smart Features:**
+    * Automatic P&L calculation (price_change_$ and price_change_%)
+    * Historical date filtering (as_of_date support)
+    * Missing data handling (uses last available date)
+
+### **Module E: The Machine Learning Core (Meta-Labeling - Future)**
 **Goal:** To classify the quality of a setup before trading it.
 
-* **The Model:** Random Forest or XGBoost Classifier.
-* **The Input:** The "State" of the trade at the moment of entry (Market Regime + Stock Fundamentals + Alpha Factors).
-* **The Target (Lifecycle Labeling):** Did the trade achieve "Superperformance" (>20% return) before hitting a Stop Loss or Trend Break?
-    * **Label 1 (Win):** Yes.
-    * **Label 0 (Loss/Noise):** No.
-* **Output:** A probability score (0.0 to 1.0) used by the Portfolio Manager to rank competing signals.
+* **The Model:** Random Forest or XGBoost Classifier
+* **The Input:** Trade state at entry (Market Regime + Stock Fundamentals + Alpha Factors)
+* **The Target:** Did trade achieve "Superperformance" (>20% return) before stop?
+* **Output:** Probability score (0.0-1.0) for portfolio ranking
 
-### **Module E: The Portfolio Manager**
-**Responsibility:** Manages allocation, risk, and trade lifecycle.
+### **Module F: The Portfolio Manager (Future)**
+**Responsibility:** Manages allocation, risk, and trade lifecycle
 
-* **Constraints:** Enforces reality checks, such as a maximum of 8 simultaneous positions and preventing trading if cash is insufficient ("Cash Drag").
-* **Ranking Logic:** If valid signals exceed available slots, candidates are ranked by their ML Probability Score.
+* **Constraints:** Max 8 positions, cash drag prevention
+* **Ranking:** ML probability score
 * **Exit Management:**
-    * **Stop Loss:** Dynamic volatility-based stops (e.g., 2.5x ATR).
-    * **Profit Taking:** Partial scaling out at 3R (3x Risk).
-    * **Trend Defense:** Trailing stops along the 50-day SMA to capture extended runs.
+    * Stop Loss: Dynamic volatility-based stops (2.5x ATR)
+    * Profit Taking: Partial scaling at 3R
+    * Trend Defense: Trailing stops at 50-day SMA
 
-### **Module F: The Backtest Engine (The Laboratory)**
-* **Type:** Event-Driven (Day-by-Day iteration), distinct from vectorized backtesters.
-* **Function:** Simulates the passage of time without look-ahead bias. It steps through history one day at a time, updating the Data, Strategy, and Portfolio states sequentially.
-* **Metrics:** Generates a professional "Tearsheet" including Sharpe Ratio, Sortino Ratio, Max Drawdown, Win/Loss Rate, Profit Factor, and Expectancy.
-
----
-
-## 4. Detailed Implementation Roadmap
-
-### **Phase 1: Foundation & Data Architecture (Days 1-3)**
-* [ ] Set up folder structure (`data/`, `src/`, `notebooks/`).
-* [ ] Implement `DataRepository` with Parquet caching and Smart Update mechanism.
-* [ ] Build the `update_data` routine to handle batch downloads and API rate limits.
-* [ ] **Milestone:** A script that downloads/updates 500 tickers in <60 seconds.
-
-### **Phase 2: The OOP Strategy Core (Days 4-6)**
-* [ ] Implement `FeatureEngineer` with dual-stage processing (Lightweight + Heavyweight modes).
-* [ ] Implement `SEPAStrategy` class with modular methods for "Trend", "Structure", and "Trigger".
-* [ ] **Milestone:** A script that takes a Ticker + Date and returns "BUY", "SELL", or "WAIT".
-
-### **Phase 3: Event-Driven Backtester (Days 7-10)**
-* [ ] Build the `BacktestEngine` loop (Day-by-Day iteration).
-* [ ] Implement `PortfolioManager` to handle the "Max 8 Positions" and "Cash Drag" logic.
-* [ ] Integrate Transaction Costs and Slippage simulation.
-* [ ] **Milestone:** A realistic Equity Curve that accounts for limited cash.
-
-### **Phase 4: Reporting & Watchlist System (Days 11-12)**
-* [ ] Create `PerformanceReporter` to calculate Sharpe, Drawdown, and Win/Loss stats.
-* [ ] Build the **Persistent Watchlist** (SQLite) to track how long a stock has been setting up (Days on Watchlist).
-* [ ] **Milestone:** A generated PDF/HTML report of the strategy performance.
-
-### **Phase 5: Machine Learning Integration (Meta-Labeling)**
-* [ ] **Data Generation:** Generate labeled training data from backtest trade logs.
-* [ ] **Model Training:** Train a Random Forest/XGBoost Classifier on historical setups.
-* [ ] **Feature Importance:** Identify which factors (Vol, RS, Sector) predict trade success.
-* [ ] **Scoring:** Replace binary "Buy" signals with probability scores (0-100%) to rank trades dynamically.
-* [ ] **Milestone:** ML-enhanced portfolio allocation with improved risk-adjusted returns.
+### **Module G: The Backtest Engine**
+* **Type:** Event-Driven (day-by-day iteration)
+* **Function:** Simulates time passage without look-ahead bias
+* **Metrics:** Sharpe, Sortino, Max Drawdown, Win/Loss Rate, Profit Factor, Expectancy
 
 ---
 
-## 5. Tech Stack & Infrastructure (No Cost)
+## 4. Current Implementation Status
+
+### ✅ **Completed:**
+* Data Repository with Parquet caching and smart updates
+* FeatureEngineer with dual-stage processing
+* SEPAStrategy with modular Trend/Structure/Trigger methods
+* DatabaseManager with enhanced buy_list schema
+* Optimized scanner (500 tickers in ~5-6 seconds)
+* Buy list tracking with P&L monitoring
+* Activity logging system
+* Historical scanning capability
+* Smart data handling for market holidays
+
+### 🚧 **In Progress:**
+* ML Meta-Labeling model training
+* Portfolio Manager implementation
+* Advanced position sizing
+
+### 📋 **Planned:**
+* Fundamental data integration
+* WorldQuant Alpha factors
+* Full backtesting engine
+* Performance reporting dashboard
+
+---
+
+## 5. Tech Stack & Infrastructure
 
 * **Language:** Python 3.10+
-* **Core Libraries:** `pandas`, `numpy` (Vectorized math).
-* **Data:** `yfinance` (Market Data), `requests` (SSGA/Wiki Scraping).
-* **Storage:** `pyarrow` (Parquet support), `sqlite3`.
-* **ML:** `scikit-learn`, `xgboost` (Meta-Labeling models).
-* **Visuals:** `matplotlib`, `seaborn`.
-* **Environment:** Google Colab (Cloud execution) + Google Drive (Persistent Storage).
+* **Core Libraries:** `pandas`, `numpy` (vectorized math)
+* **Data:** `yfinance` (primary), `financialmodelingprep` (FMP with fallback)
+* **Storage:** `pyarrow` (Parquet), `sqlite3` (metadata)
+* **ML:** `scikit-learn`, `xgboost` (future Meta-Labeling)
+* **Visualization:** `matplotlib`, `seaborn`
+* **Environment:** Local execution with file-based storage
 
 ---
 
 ## 6. File Structure
 
 ```
-quant_sepa/
+quantamental/
 │
 ├── data/                       # [GitIgnore] Local Data Lake
-│   ├── price/                  # Parquet files (OHLCV data per ticker)
-│   ├── fundamentals/           # Quarterly financial statements
-│   └── ml_datasets/            # Labeled training data generated by the system
+│   ├── price/                  # Parquet files (OHLCV per ticker)
+│   └── sp500_constituents/     # Universe snapshots
 │
 ├── database/
-│   └── system.db               # SQLite database (Watchlist history, Trade Logs)
+│   └── trades.db               # SQLite (watchlist, buy_list, trades, activity)
 │
-├── src/                        # Core Logic Modules (Source Code)
+├── src/                        # Core Logic Modules
 │   ├── __init__.py
-│   ├── data_engine.py          # Class: DataRepository (Ingestion & Caching)
-│   ├── features.py             # Class: FeatureEngineer (Indicators & Factors)
-│   ├── strategy.py             # Class: SEPAStrategy (Screening Rules)
-│   ├── ml_engine.py            # Class: MetaLabelingModel (Training & Inference)
-│   ├── portfolio.py            # Class: PortfolioManager (Sizing & Risk)
-│   └── backtester.py           # Class: BacktestEngine (Event-Driven Loop)
+│   ├── data_engine.py          # DataRepository (ingestion & caching)
+│   ├── features.py             # FeatureEngineer (indicators & factors)
+│   ├── indicators.py           # TechnicalAnalysis (Stage 2, VCP detection)
+│   ├── strategy.py             # SEPAStrategy (screening rules)
+│   ├── database.py             # DatabaseManager (persistent storage)
+│   ├── reporting.py            # PerformanceReporter (metrics & charts)
+│   └── [future] ml_engine.py   # Meta-Labeling model
 │
-├── notebooks/                  # Research & Prototyping Lab
-│   ├── 01_data_validation.ipynb
-│   ├── 02_factor_analysis.ipynb
-│   └── 03_ml_model_training.ipynb
+├── notebooks/                  # Research & Analysis
+│   └── scanner.ipynb
 │
-├── config.py                   # Global Configuration (Paths, Risk Parameters, API Keys)
-├── main_scanner.py             # Entry Point: Daily Live Scanning Script
-├── run_backtest.py             # Entry Point: Historical Simulation Script
-├── requirements.txt            # Python Dependencies
-└── README.md                   # Project Documentation
+├── config.py                   # Global configuration
+├── optimized_scanner.py        # Primary scanner (supports date ranges)
+├── show_buy_list.py            # Quick buy list viewer
+├── view_buy_list_db.py         # Detailed database viewer
+├── reset_database.py           # Database recreation utility
+├── requirements.txt
+├── QSS.md                      # This document
+└── README.md
 ```
 
 ---
 
 ## 7. Key Design Principles
 
-* **Modularity:** Each module has a single, well-defined responsibility.
-* **Performance:** Dual-stage feature calculation optimizes computational resources.
-* **Scalability:** Parquet storage and vectorized operations enable fast processing of large datasets.
-* **Scientific Rigor:** Event-driven backtesting prevents look-ahead bias.
-* **Cost Efficiency:** 100% open-source stack with local file-based storage.
+* **Modularity:** Each module has single, well-defined responsibility
+* **Performance:** Dual-stage feature calculation + Parquet storage
+* **Scalability:** Vectorized operations enable fast processing
+* **Scientific Rigor:** Event-driven backtesting prevents look-ahead bias
+* **Cost Efficiency:** 100% open-source stack with local storage
+* **Data Integrity:** Smart handling of missing data and market holidays
+* **Audit Trail:** Complete activity logging for all buy list changes
+
+---
+
+## 8. Scanner Workflow (Current Implementation)
+
+### Daily Scan Process:
+1. **Universe Update:** Fetch S&P 500 tickers from SSGA (~504 stocks)
+2. **Cache Update:** Smart update of missing/stale Parquet files
+3. **Data Loading:** Batch load all tickers (500 tickers in ~2-3s)
+4. **Feature Calculation:** Vectorized indicators (500 tickers in ~1-2s)
+5. **SEPA Screening:** Identify qualifying stocks & new triggers (~0.4s)
+6. **Buy List Management:**
+   - Add new triggers with signal_price tracking
+   - Update existing positions with current metrics
+   - Remove tickers that break trend
+   - Log all activity
+
+### Display Output:
+* New triggers with entry metrics
+* Active buy list showing:
+  * Signal date and price
+  * Current price and P/L ($ and %)
+  * RS and volume metrics
+  * MA50, MA150, MA200 values
+  * 52-week high/low
+  * Last updated date
+
+---
+
+## 9. Usage Examples
+
+### Single Day Scan:
+```python
+python optimized_scanner.py  # Scans configured date
+```
+
+### Date Range Backfill:
+```python
+# Edit optimized_scanner.py main block
+start_date = datetime(2025, 11, 17)
+end_date = datetime(2025, 11, 27)
+# Automatically scans all dates in range
+```
+
+### View Buy List:
+```python
+python show_buy_list.py  # Quick view
+python view_buy_list_db.py  # Detailed view with activity
+```
+
+---
+
+*Last Updated: 2025-11-28*
+*Version: 2.0 (Buy List Enhancement)*
