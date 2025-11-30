@@ -30,7 +30,7 @@ def main():
         buy_list['price_change_%'] = ((buy_list['current_price'] - buy_list['signal_price']) / buy_list['signal_price'] * 100)
     
     # Display columns
-    display_cols = ['ticker', 'signal_date', 'signal_price', 'current_price', 'price_change_%', 
+    display_cols = ['ticker', 'signal_date', 'ml_probability','signal_price', 'current_price', 'price_change_%', 
                    'days_on_list', 'rs', 'volume_ratio', 'ma50', 'ma150', 'ma200', 'last_updated']
     available_cols = [col for col in display_cols if col in buy_list.columns]
     

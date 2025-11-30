@@ -1,0 +1,269 @@
+{
+  "timestamp": "2025-11-30T21:17:08.862542",
+  "n_folds": 2,
+  "fold_results": [
+    {
+      "fold_id": 1,
+      "test_size": 237,
+      "precision_at_k": {
+        "precision@top10%": 0.2608695652173913,
+        "precision@top20%": 0.2553191489361702,
+        "precision@top30%": 0.19718309859154928
+      },
+      "classification_metrics": {
+        "roc_auc": 0.5110692416391899,
+        "pr_auc": 0.20628250020339733,
+        "true_positive": 1,
+        "false_positive": 5,
+        "true_negative": 188,
+        "false_negative": 43,
+        "precision": 0.16666666666666666,
+        "recall": 0.022727272727272728,
+        "specificity": 0.9740932642487047,
+        "f1_score": 0.04
+      },
+      "trading_simulation": {
+        "n_trades": 47,
+        "avg_return": 7.0352646834347885,
+        "median_return": 0.4767364976219288,
+        "total_return": 330.65744012143506,
+        "win_rate": 0.5319148936170213,
+        "avg_winner": 18.85851745318739,
+        "avg_loser": -6.400249827647713,
+        "best_trade": 127.8615760921618,
+        "worst_trade": -20.3451656268224,
+        "sharpe_ratio": 0.30203474329558955
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.18565400843881857,
+        "baseline_avg_return": 5.852789310598115,
+        "model_win_rate": 0.2553191489361702,
+        "model_avg_return": 7.0352646834347885,
+        "win_rate_improvement": 0.06966514049735162,
+        "return_improvement": 1.1824753728366737,
+        "win_rate_lift": 0.3752417794970986,
+        "return_lift": 0.2020362104433644
+      },
+      "top_features": [
+        {
+          "feature": "interestExpense",
+          "importance": 0.24645152688026428
+        },
+        {
+          "feature": "interestIncome",
+          "importance": 0.21982350945472717
+        },
+        {
+          "feature": "eps_growth_yoy",
+          "importance": 0.2196037620306015
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.16426686942577362
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.1641583889722824
+        },
+        {
+          "feature": "incomeTaxExpense",
+          "importance": 0.13545694947242737
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.1213279515504837
+        },
+        {
+          "feature": "days_since_report",
+          "importance": 0.10907769203186035
+        },
+        {
+          "feature": "intangibleAssets",
+          "importance": 0.10866506397724152
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.10408790409564972
+        },
+        {
+          "feature": "otherNonCurrentLiabilities",
+          "importance": 0.09602172672748566
+        },
+        {
+          "feature": "prepaids",
+          "importance": 0.09430557489395142
+        },
+        {
+          "feature": "roa",
+          "importance": 0.08914133906364441
+        },
+        {
+          "feature": "cashAndCashEquivalents",
+          "importance": 0.08621585369110107
+        },
+        {
+          "feature": "otherExpenses",
+          "importance": 0.08427973091602325
+        },
+        {
+          "feature": "accountsReceivables",
+          "importance": 0.08306236565113068
+        },
+        {
+          "feature": "inventory",
+          "importance": 0.07671792060136795
+        },
+        {
+          "feature": "ebit",
+          "importance": 0.07089176028966904
+        },
+        {
+          "feature": "taxPayables",
+          "importance": 0.06904415786266327
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.05801275372505188
+        }
+      ]
+    },
+    {
+      "fold_id": 2,
+      "test_size": 780,
+      "precision_at_k": {
+        "precision@top10%": 0.07692307692307693,
+        "precision@top20%": 0.08333333333333333,
+        "precision@top30%": 0.10256410256410256
+      },
+      "classification_metrics": {
+        "roc_auc": 0.5514912425644415,
+        "pr_auc": 0.0940927022847454,
+        "true_positive": 3,
+        "false_positive": 48,
+        "true_negative": 664,
+        "false_negative": 65,
+        "precision": 0.058823529411764705,
+        "recall": 0.04411764705882353,
+        "specificity": 0.9325842696629213,
+        "f1_score": 0.0504201680672269
+      },
+      "trading_simulation": {
+        "n_trades": 156,
+        "avg_return": -0.10176600522669278,
+        "median_return": -1.7138968646508976,
+        "total_return": -15.875496815364073,
+        "win_rate": 0.3782051282051282,
+        "avg_winner": 9.355099322389911,
+        "avg_loser": -5.8538799673852475,
+        "best_trade": 57.51756344988047,
+        "worst_trade": -23.45091952810674,
+        "sharpe_ratio": -0.009372998864065896
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.08717948717948718,
+        "baseline_avg_return": 2.033945857304815,
+        "model_win_rate": 0.08333333333333333,
+        "model_avg_return": -0.10176600522669278,
+        "win_rate_improvement": -0.0038461538461538464,
+        "return_improvement": -2.1357118625315077,
+        "win_rate_lift": -0.044117647058823484,
+        "return_lift": -1.0500337827878776
+      },
+      "top_features": [
+        {
+          "feature": "SMA_50",
+          "importance": 0.0792313739657402
+        },
+        {
+          "feature": "accountsReceivables",
+          "importance": 0.06917790323495865
+        },
+        {
+          "feature": "netDebt",
+          "importance": 0.04901399463415146
+        },
+        {
+          "feature": "otherPayables",
+          "importance": 0.02554037794470787
+        },
+        {
+          "feature": "eps_growth_yoy",
+          "importance": 0.024044442921876907
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.0
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.0
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.0
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.0
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.0
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.0
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.0
+        },
+        {
+          "feature": "revenue_growth_yoy",
+          "importance": 0.0
+        },
+        {
+          "feature": "additionalPaidInCapital",
+          "importance": 0.0
+        },
+        {
+          "feature": "taxPayables",
+          "importance": 0.0
+        },
+        {
+          "feature": "depreciationAndAmortization",
+          "importance": 0.0
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "avg_precision@top10%": 0.1688963210702341,
+    "std_precision@top10%": 0.09197324414715718,
+    "avg_precision@top20%": 0.16932624113475175,
+    "std_precision@top20%": 0.08599290780141844,
+    "avg_precision@top30%": 0.14987360057782592,
+    "std_precision@top30%": 0.04730949801372336,
+    "avg_roc_auc": 0.5312802421018157,
+    "std_roc_auc": 0.020211000462625806,
+    "avg_trading_return": 3.466749339104048,
+    "avg_trading_win_rate": 0.45506001091107473,
+    "avg_win_rate_lift": 0.16556206621913755
+  }
+}
