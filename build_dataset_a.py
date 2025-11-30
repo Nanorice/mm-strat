@@ -35,7 +35,8 @@ def build_dataset_a(
     end_date: str,
     mode: str = 'lightweight',
     tickers: list = None,
-    validate_temporal: bool = True
+    validate_temporal: bool = True,
+    include_fundamentals: bool = False
 ) -> pd.DataFrame:
     """
     Build Dataset A - daily feature snapshots.
@@ -46,6 +47,7 @@ def build_dataset_a(
         mode: 'lightweight' or 'full' (includes heavyweight alphas)
         tickers: Optional list of tickers (default: use universe)
         validate_temporal: If True, run temporal validation checks
+        include_fundamentals: If True, merge fundamental data (growth, ratios, P/E, etc.)
     
     Returns:
         DataFrame with columns: date, ticker, Close, Volume, features...
@@ -62,6 +64,13 @@ def build_dataset_a(
         return pd.DataFrame()
     
     feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
+    
+    # Initialize fundamental merger if requested
+    fundamental_merger = None
+    if include_fundamentals:
+        from src.fundamental_merger import FundamentalMerger
+        fundamental_merger = FundamentalMerger()
+        logger.info("Fundamental enrichment enabled")
     
     if validate_temporal:
         validator = TemporalValidator()
@@ -116,6 +125,10 @@ def build_dataset_a(
                 # Calculate heavyweight features if requested
                 if mode == 'full':
                     df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
+                
+                # Merge fundamental data if requested
+                if fundamental_merger is not None:
+                    df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
                 
                 # Extract daily snapshots
                 for date in date_range:
@@ -242,6 +255,12 @@ def main():
         help='Skip temporal validation checks'
     )
     
+    parser.add_argument(
+        '--include-fundamentals',
+        action='store_true',
+        help='Include fundamental data (growth metrics, ratios, P/E, etc.)'
+    )
+    
     args = parser.parse_args()
     
     print("=" * 80)
@@ -288,7 +307,8 @@ def main():
         end_date=args.end,
         mode=args.mode,
         tickers=args.tickers,
-        validate_temporal=not args.no_validate
+        validate_temporal=not args.no_validate,
+        include_fundamentals=args.include_fundamentals
     )
     
     if dataset_a.empty:
