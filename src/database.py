@@ -73,6 +73,10 @@ class DatabaseManager:
                 ma200 REAL,
                 high_52w REAL,
                 low_52w REAL,
+                ml_probability REAL,
+                ml_rank INTEGER,
+                ml_model_version TEXT,
+                ml_score_date DATE,
                 last_updated DATE,
                 status TEXT DEFAULT 'active',
                 notes TEXT
@@ -230,10 +234,12 @@ class DatabaseManager:
     def add_to_buy_list(self, ticker: str, signal_date: str, signal_price: float,
                        current_price: float, entry_price: Optional[float] = None,
                        stop_price: Optional[float] = None, target_price: Optional[float] = None,
-                       atr: Optional[float] = None, rs: Optional[float] = None, 
+                       atr: Optional[float] = None, rs: Optional[float] = None,
                        vol_ratio: Optional[float] = None, ma50: Optional[float] = None,
                        ma150: Optional[float] = None, ma200: Optional[float] = None,
-                       high_52w: Optional[float] = None, low_52w: Optional[float] = None):
+                       high_52w: Optional[float] = None, low_52w: Optional[float] = None,
+                       ml_probability: Optional[float] = None, ml_rank: Optional[int] = None,
+                       ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None):
         """
         Adds or updates a ticker on the buy list (active buy signals).
 
@@ -253,20 +259,26 @@ class DatabaseManager:
             ma200: 200-day moving average
             high_52w: 52-week high
             low_52w: 52-week low
+            ml_probability: ML success probability (0.0-1.0)
+            ml_rank: ML rank (1=best)
+            ml_model_version: Model version identifier
+            ml_score_date: Date ML score was generated
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         last_updated = datetime.now().strftime('%Y-%m-%d')
 
         cursor.execute("""
             INSERT OR REPLACE INTO buy_list
-            (ticker, signal_date, signal_price, current_price, entry_price, stop_price, 
+            (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
              target_price, atr, rs, volume_ratio, ma50, ma150, ma200, high_52w, low_52w,
+             ml_probability, ml_rank, ml_model_version, ml_score_date,
              last_updated, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-        """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price, 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
               target_price, atr, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
+              ml_probability, ml_rank, ml_model_version, ml_score_date,
               last_updated))
 
         conn.commit()

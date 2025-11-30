@@ -27,14 +27,20 @@ The Quantamental SEPA System (QSS) is a **meta-labeling ML framework** for ranki
    └── trade_simulator.py       → Historical simulation
 
 4. MACHINE LEARNING LAYER
-   ├── Dataset A (features)     → Daily technical indicators
-   ├── Dataset B (labels)       → Trade outcomes
-   └── Model (future)           → Meta-labeling classifier
+   ├── Dataset A (features)     → Daily technical + fundamental indicators
+   ├── Dataset B (labels)       → Trade outcomes from simulation
+   ├── Model Training           → XGBoost with walk-forward validation
+   │   ├── model_preparation.py → Temporal splitting & feature selection
+   │   ├── train_model.py       → XGBoost training with Optuna
+   │   └── evaluate_model.py    → Comprehensive evaluation suite
+   └── Production Inference     → ML scoring for live signals
+       └── ml_scorer.py         → MLScorer class for scoring
 
 5. APPLICATION LAYER
-   ├── scanner_v0.py            → Daily signal scanner
-   ├── build_dataset_a.py       → Feature store builder  
-   └── build_dataset_b.py       → Trade history builder
+   ├── optimized_scanner.py     → ML-enhanced scanner (--use-ml flag)
+   ├── build_dataset_a.py       → Feature store builder
+   ├── build_dataset_b.py       → Trade history builder
+   └── prepare_training_dataset.py → Dataset A + B merger
 ```
 
 ## Module Breakdown
@@ -462,8 +468,278 @@ export(path, format='parquet')
 
 ---
 
+#### `src/ml_scorer.py`
+**Purpose**: Production ML inference for SEPA signal ranking and filtering
+
+**Key Classes**:
+- `MLScorer`: XGBoost model loader and batch scorer
+
+**Key Methods**:
+```python
+# MLScorer
+__init__(model_path, metadata_path=None, log_predictions=True)
+score_batch(X, ticker_column='ticker', date_column=None) → (probabilities, ranks)
+filter_by_threshold(X, probabilities, ranks, threshold=0.6, top_n=None) → DataFrame
+get_model_info() → dict
+
+# Utility functions
+update_prediction_log_with_outcome(ticker, prediction_date, actual_return_pct, actual_label)
+analyze_prediction_accuracy(log_path) → dict
+```
+
+**Key Features**:
+- **Strict Feature Alignment**: Automatically reorders features to match training
+- **Missing Feature Handling**: Fills missing features with NaN
+- **Infinite Value Handling**: Replaces inf with NaN (XGBoost compatible)
+- **Metadata Validation**: Ensures model version and feature compatibility
+- **Prediction Logging**: Automatic logging to `data/predictions_log.parquet`
+- **Batch Processing**: Efficient vectorized scoring
+- **Ranking**: Calculates ranks (1=best) for prioritization
+
+**Usage**:
+```python
+from src.ml_scorer import MLScorer
+
+# Initialize
+scorer = MLScorer(model_path='models/model_fold_1.json')
+
+# Score batch
+probabilities, ranks = scorer.score_batch(candidates_df, ticker_column='ticker')
+
+# Filter by threshold
+filtered = scorer.filter_by_threshold(
+    candidates_df,
+    probabilities,
+    ranks,
+    threshold=0.6
+)
+
+# Get model info
+info = scorer.get_model_info()
+print(f"Model version: {info['model_version']}")
+print(f"Features: {len(info['feature_names'])}")
+```
+
+**Prediction Logging Schema**:
+```python
+# Logged to data/predictions_log.parquet
+{
+    'ticker': str,
+    'prediction_date': datetime,
+    'ml_probability': float,       # 0.0-1.0
+    'ml_rank': int,                 # 1=best
+    'model_version': str,           # Training date
+    'model_path': str,              # Model filename
+    'actual_return_pct': float,     # Filled when trade closes
+    'actual_label': int,            # Filled when trade closes
+    'logged_at': datetime
+}
+```
+
+**Feedback Loop**:
+```python
+# When trade closes, update outcomes
+from src.ml_scorer import update_prediction_log_with_outcome
+
+update_prediction_log_with_outcome(
+    ticker='AAPL',
+    prediction_date='2025-11-20',
+    actual_return_pct=5.2,
+    actual_label=1  # 1=success, 0=failure
+)
+
+# Analyze model performance
+from src.ml_scorer import analyze_prediction_accuracy
+
+results = analyze_prediction_accuracy()
+print(f"Overall accuracy: {results['overall_accuracy']:.2%}")
+print(f"Top-10 precision: {results['top_10_precision']:.2%}")
+print(f"Calibration: {results['calibration']}")
+```
+
+---
+
+#### `src/model_preparation.py`
+**Purpose**: Temporal train/test splitting and feature selection for ML training
+
+**Key Classes**:
+- `TemporalSplitter`: Walk-forward validation with purge gap
+- `FeatureSelector`: Correlation filter + SHAP importance
+
+**Key Methods**:
+```python
+# TemporalSplitter
+__init__(purge_gap_days=60)
+create_folds(df, date_column='entry_date') → List[dict]
+get_fold_data(df, fold_idx) → (X_train, X_val, y_train, y_val)
+
+# FeatureSelector
+__init__(correlation_threshold=0.95, top_n=None)
+fit_transform(X, y) → DataFrame
+transform(X) → DataFrame
+get_selected_features() → List[str]
+calculate_feature_importance_shap(model, X) → DataFrame
+```
+
+**Temporal Splitting Logic**:
+```
+Fold 1: Train 2021-01-01 to 2022-12-31 (2 years)
+        → [60-day purge gap] →
+        Test 2023-03-01 to 2023-12-31 (10 months)
+
+Fold 2: Train 2021-01-01 to 2023-12-31 (3 years)
+        → [60-day purge gap] →
+        Test 2024-02-29 to 2025-12-31 (22 months)
+```
+
+**Feature Selection Pipeline**:
+```
+130 numeric features
+  ↓
+Remove 100% missing features (3 features: current_ratio, quick_ratio, ps_ratio)
+  ↓
+Correlation filter at 0.95 threshold (~42 features removed)
+  ↓
+Optional: Top-N by SHAP importance
+  ↓
+Final: ~85 features (or top-N if specified)
+```
+
+**Usage**:
+```python
+from src.model_preparation import TemporalSplitter, FeatureSelector
+
+# Create temporal folds
+splitter = TemporalSplitter(purge_gap_days=60)
+folds = splitter.create_folds(df, date_column='entry_date')
+
+# Get fold data
+X_train, X_val, y_train, y_val = splitter.get_fold_data(df, fold_idx=0)
+
+# Feature selection
+selector = FeatureSelector(correlation_threshold=0.95)
+X_train_selected = selector.fit_transform(X_train, y_train)
+X_val_selected = selector.transform(X_val)
+
+print(f"Selected {len(selector.get_selected_features())} features")
+```
+
+---
+
+#### `src/train_model.py`
+**Purpose**: XGBoost model training with custom Precision@k metric and Optuna optimization
+
+**Key Classes**:
+- `SEPAModelTrainer`: XGBoost trainer with meta-labeling focus
+- `PrecisionAtK`: Custom metric for top-k% prediction quality
+
+**Key Methods**:
+```python
+# SEPAModelTrainer
+__init__(scale_pos_weight='auto', max_depth=3, learning_rate=0.01)
+train_baseline(X_train, y_train, X_val=None, y_val=None) → None
+optimize_hyperparameters(X_train, y_train, X_val, y_val, n_trials=50) → dict
+predict_proba(X) → np.ndarray
+save_model(path, metadata=None)
+load_model(path) → None
+
+# PrecisionAtK
+__init__(k_pct=0.2)  # Top 20%
+xgb_metric(preds, dtrain) → (name, value)
+calculate(y_true, y_pred_proba) → float
+```
+
+**Training Features**:
+- **Class Imbalance Handling**: `scale_pos_weight` calculated from data (9:1 ratio)
+- **Custom Metric**: Precision@Top-20% instead of AUC-ROC
+- **Bayesian Optimization**: Optuna for hyperparameter tuning
+- **Infinite Value Handling**: Automatic inf→NaN replacement
+- **Early Stopping**: Prevents overfitting
+- **Metadata Saving**: Stores feature names, model version, hyperparameters
+
+**Usage**:
+```python
+from src.train_model import SEPAModelTrainer
+
+# Initialize
+trainer = SEPAModelTrainer(max_depth=3)
+
+# Quick training (default params)
+trainer.train_baseline(X_train, y_train, X_val, y_val)
+
+# Optimized training (Optuna)
+best_params = trainer.optimize_hyperparameters(
+    X_train, y_train, X_val, y_val,
+    n_trials=50
+)
+
+# Save model
+trainer.save_model(
+    'models/model_fold_1.json',
+    metadata={'fold': 1, 'features': feature_names}
+)
+
+# Predict
+probabilities = trainer.predict_proba(X_test)
+```
+
+---
+
+#### `src/evaluate_model.py`
+**Purpose**: Comprehensive model evaluation and performance analysis
+
+**Key Classes**:
+- `ModelEvaluator`: Evaluation suite with multiple metrics
+
+**Key Methods**:
+```python
+__init__(model, X_test, y_test, fold_name='fold_1')
+evaluate_all() → dict
+calculate_precision_at_k(k_values=[10, 20, 30]) → dict
+calculate_classification_metrics() → dict
+trading_simulation(threshold=0.6) → dict
+plot_roc_curve(save_path=None)
+plot_precision_recall_curve(save_path=None)
+plot_feature_importance(save_path=None)
+compare_to_baseline(baseline_win_rate=0.097) → dict
+```
+
+**Evaluation Metrics**:
+- **Precision@k**: Top 10%, 20%, 30% prediction quality
+- **Classification**: Accuracy, Precision, Recall, F1, AUC-ROC
+- **Trading Simulation**: Win rate, avg return at various thresholds
+- **Baseline Comparison**: Improvement over SEPA-only (9.7% baseline)
+- **Feature Importance**: SHAP values and gain-based
+
+**Usage**:
+```python
+from src.evaluate_model import ModelEvaluator
+
+# Initialize
+evaluator = ModelEvaluator(
+    model=trainer.model,
+    X_test=X_test,
+    y_test=y_test,
+    fold_name='fold_1'
+)
+
+# Comprehensive evaluation
+results = evaluator.evaluate_all()
+
+# Generate plots
+evaluator.plot_roc_curve('evaluation/roc_fold_1.png')
+evaluator.plot_precision_recall_curve('evaluation/pr_fold_1.png')
+evaluator.plot_feature_importance('evaluation/importance_fold_1.png')
+
+# Compare to baseline
+improvement = evaluator.compare_to_baseline(baseline_win_rate=0.097)
+print(f"Precision@20% improvement: {improvement['precision_improvement']:.1%}")
+```
+
+---
+
 #### `src/database.py`
-**Purpose**: SQLite database for buy list tracking and trade logging
+**Purpose**: SQLite database for buy list tracking and trade logging (ML-enhanced)
 
 **Key Classes**:
 - `DatabaseManager`: Manages database operations and schema
@@ -471,7 +747,7 @@ export(path, format='parquet')
 **Database Schema**:
 
 ```sql
--- Buy List: Active buy signals with price tracking
+-- Buy List: Active buy signals with price tracking and ML scores
 CREATE TABLE buy_list (
     ticker TEXT PRIMARY KEY,
     signal_date DATE NOT NULL,
@@ -488,6 +764,11 @@ CREATE TABLE buy_list (
     ma200 REAL,
     high_52w REAL,                   -- 52-week high/low
     low_52w REAL,
+    -- ML scoring columns (NEW)
+    ml_probability REAL,             -- ML success probability (0.0-1.0)
+    ml_rank INTEGER,                 -- ML rank (1=best)
+    ml_model_version TEXT,           -- Model version identifier
+    ml_score_date DATE,              -- Date ML score was generated
     last_updated DATE,               -- Last metrics update
     status TEXT DEFAULT 'active',    -- 'active' or 'removed'
     notes TEXT
@@ -529,8 +810,10 @@ CREATE TABLE trades (
 
 **Key Methods**:
 ```python
-# Buy List Management
-add_to_buy_list(ticker, signal_date, signal_price, current_price, ...)
+# Buy List Management (ML-enhanced)
+add_to_buy_list(ticker, signal_date, signal_price, current_price,
+                ml_probability=None, ml_rank=None,
+                ml_model_version=None, ml_score_date=None, ...)
 update_buy_list_metrics(ticker, scan_date, current_price, rs, vol_ratio, ...)
 remove_from_buy_list(ticker, reason='trend_broken')
 get_buy_list(active_only=True, as_of_date=None) → DataFrame
@@ -606,21 +889,28 @@ db.log_buy_list_activity('AAPL', 'REMOVED', '2024-11-20', reason='trend_broken')
 ### 🛠️ Application Scripts
 
 #### `optimized_scanner.py`
-**Purpose**: Batch-optimized daily buy signal scanner with temporal consistency
+**Purpose**: Batch-optimized daily buy signal scanner with ML integration
 
 **What it does**:
 1. Fetches S&P 500 universe (~500 tickers)
 2. Batch updates price cache (vectorized operations)
 3. Batch calculates features for all tickers
 4. Scans for SEPA signals (qualifying stocks + new triggers)
-5. Manages buy list:
+5. **ML Scoring** (if --use-ml enabled):
+   - Loads fundamental data for SEPA candidates
+   - Scores candidates with XGBoost model
+   - Filters by ML probability threshold (default: 0.6)
+   - Calculates ranks (1=best)
+   - Logs predictions to `data/predictions_log.parquet`
+6. Manages buy list:
    - **Detects backward scans** (scan_date < earliest_signal_date)
    - **Clears future signals** automatically for temporal consistency
-   - **Adds** new triggers not in buy_list
+   - **Adds** new triggers (ML-filtered if enabled)
    - **Updates** existing tickers still qualifying
    - **Removes** tickers with broken trends
-6. Logs all activity to `buy_list_activity` table
-7. Optional CSV export of buy_list and activity
+   - **Stores ML metadata** (probability, rank, model version)
+7. Logs all activity to `buy_list_activity` table
+8. Optional CSV export of buy_list and activity
 
 **Scanner Workflow**:
 ```
@@ -628,10 +918,17 @@ db.log_buy_list_activity('AAPL', 'REMOVED', '2024-11-20', reason='trend_broken')
 [2/4] Batch Update Cache → Download OHLCV data
 [3/4] Batch Load Data → Load all parquet files
 [4/4] Batch Process → Features + SEPA screening
+[ML]  ML Scoring (if --use-ml):
+    ├── Load fundamental data for candidates
+    ├── Score with XGBoost model
+    ├── Filter by threshold (default: 0.6)
+    ├── Calculate ranks
+    └── Log predictions to parquet
 [5/5] Manage Buy List:
     ├── Temporal Check (backward scan detection)
     ├── Load existing buy_list (as of scan_date)
-    ├── Determine: ADD, UPDATE, REMOVE
+    ├── Determine: ADD (ML-filtered), UPDATE, REMOVE
+    ├── Store ML metadata (prob, rank, version, date)
     ├── Execute changes
     └── Log activity
 ```
@@ -650,28 +947,39 @@ if scan_date < earliest_signal_date:
 ```
 
 **CLI**:
-```python
-# In-script configuration
-run_optimized_scanner(
-    scan_date='2024-11-15',  # None = today
-    csv_output=True           # Export to CSV
-)
+```bash
+# Basic scanner (SEPA only)
+python optimized_scanner.py
 
-# Date range mode (backfilling)
-start_date = datetime(2024, 11, 1)
-end_date = datetime(2024, 11, 30)
-for date in date_range(start_date, end_date):
-    run_optimized_scanner(scan_date=date.strftime('%Y-%m-%d'))
+# ML-enhanced scanner
+python optimized_scanner.py --use-ml
+
+# Custom ML configuration
+python optimized_scanner.py \
+    --use-ml \
+    --model-path models/model_fold_1.json \
+    --ml-threshold 0.65 \
+    --scan-date 2025-11-28 \
+    --csv-output
+
+# Date range backtesting with ML
+python optimized_scanner.py \
+    --use-ml \
+    --ml-threshold 0.6 \
+    --date-range 2025-11-01 2025-11-28
 ```
 
 **Performance**:
 ```
 Typical run (500 tickers):
 - Cache update: 0.3s
-- Data loading: 0.9s  
+- Data loading: 0.9s
 - Feature calc: 2.7s (185 tickers/sec)
 - SEPA screening: 0.4s (1200+ tickers/sec)
-Total: ~4.5s
+- ML scoring (5 candidates): ~2-3s (if --use-ml)
+  ├── Fundamental data loading: 1-2s
+  └── XGBoost inference: 0.5-1s
+Total: ~4.5s (SEPA-only) or ~7-8s (ML-enhanced)
 ```
 
 **Output**:
@@ -853,20 +1161,28 @@ quantamental/
 │   ├── fundamental_engine.py     # Fundamental data acquisition
 │   ├── fundamental_processor.py  # Fundamental preprocessing
 │   ├── fundamental_merger.py     # Fundamental-Price merging
+│   ├── fundamental_data.py       # Fundamental data manager
 │   ├── temporal_validator.py     # Data leakage prevention
 │   ├── strategy.py               # SEPA signals
 │   ├── trade_simulator.py        # Historical simulation
 │   ├── trading_config.py         # Configuration
-│   ├── database.py               # SQLite operations
-│   └── dataset_merger.py         # Dataset merging
+│   ├── database.py               # SQLite operations (ML-enhanced)
+│   ├── dataset_merger.py         # Dataset merging
+│   ├── model_preparation.py      # Temporal splitting & feature selection
+│   ├── train_model.py            # XGBoost training
+│   ├── evaluate_model.py         # Model evaluation
+│   └── ml_scorer.py              # Production ML inference
 │
 ├── build_dataset_a.py            # Dataset A builder
 ├── build_dataset_b.py            # Dataset B builder
-├── merge_datasets.py             # Dataset merger CLI
-├── inspect_merged.py             # Merged dataset inspector
-├── verify_merge.py               # Quick verification script
-├── scanner_v0.py                 # Daily scanner
-├── inspect_dataset_b.py          # Dataset B inspection
+├── prepare_training_dataset.py   # Dataset A + B merger
+├── train_sepa_model.py           # Master training orchestrator
+├── test_training_setup.py        # Pre-flight validation
+├── diagnose_inf_values.py        # Diagnostic tool
+├── migrate_database_ml.py        # Database migration for ML
+│
+├── optimized_scanner.py          # ML-enhanced scanner (--use-ml)
+├── view_buy_list.py              # Buy list inspector
 │
 ├── WorldQuant_101.py             # Alpha factor library
 ├── config.py                     # Global configuration
@@ -876,20 +1192,36 @@ quantamental/
 │
 ├── data/
 │   ├── price/                    # Parquet cache (OHLCV)
-│   ├── ml/                       # Datasets for ML training
+│   ├── fundamental_cache/        # FMP fundamental data
+│   ├── ml/                       # ML datasets
 │   │   ├── dataset_a.parquet    # Feature store
-│   │   └── dataset_b.parquet    # Trade history
-│   └── fundamentals/             # Future: fundamental data
+│   │   ├── dataset_b.parquet    # Trade history
+│   │   └── training_dataset_final.parquet  # Merged dataset
+│   ├── predictions_log.parquet   # ML prediction tracking
+│   └── scanner_output/           # Scanner CSV exports
+│
+├── models/                       # Trained ML models
+│   ├── model_fold_1.json         # XGBoost model (Fold 1)
+│   ├── model_metadata_fold_1.json # Model metadata
+│   ├── model_fold_2.json         # XGBoost model (Fold 2)
+│   └── model_metadata_fold_2.json
+│
+├── evaluation/                   # Model evaluation outputs
+│   ├── evaluation_report.json    # Comprehensive metrics
+│   ├── roc_curve_fold_*.png      # ROC curves
+│   ├── pr_curve_fold_*.png       # Precision-recall curves
+│   └── feature_importance_fold_*.png
 │
 ├── database/
-│   └── trades.db                 # SQLite database
+│   └── qss_scanner.db            # SQLite database (ML columns)
 │
 └── docs/
+    ├── ARCHITECTURE.md           # This file (system architecture)
     ├── DATASET_A_GUIDE.md        # Dataset A usage
     ├── DATASET_B_GUIDE.md        # Dataset B usage
-    ├── ARCHITECTURE.md           # This file
-    ├── sprint_1.md               # Sprint progress
-    └── sprint_plan.md            # Project roadmap
+    ├── MODEL_TRAINING_GUIDE.md   # ML training guide
+    ├── ML_SCANNER_INTEGRATION.md # Scanner integration guide
+    └── IMPLEMENTATION_SUMMARY.md # Training implementation summary
 ```
 
 ---
@@ -1018,25 +1350,42 @@ LOOKBACK_PERIOD = '2y'    # History needed for 200-day MA
 
 ---
 
-## Next Steps / Future Development
+## ML Integration Status
 
-### Sprint 2: Model Training & Deployment
-- [ ] `merge_datasets.py` - Join Dataset A + B
-- [ ] `train_model.py` - Train Random Forest classifier
-- [ ] `evaluate_model.py` - AUC-ROC, feature importance
-- [ ] `scanner_ml.py` - ML-enhanced scanner
+### ✅ Completed (Sprint 2)
+- [x] Dataset merging (Dataset A + B)
+- [x] Fundamental data integration (FMP financial statements)
+- [x] Model training pipeline (XGBoost with walk-forward validation)
+- [x] Feature selection (correlation filter + SHAP)
+- [x] Model evaluation suite (Precision@k, ROC, PR curves)
+- [x] Production inference module (MLScorer)
+- [x] ML-enhanced scanner (--use-ml flag)
+- [x] Database schema updates (ML columns)
+- [x] Prediction logging and feedback loop
+- [x] Comprehensive documentation
 
-### Sprint 3: Advanced Features
-- [ ] Fundamental data integration (FMP earnings, sales)
-- [ ] Cross-sectional ranking alphas
-- [ ] Online learning (update model with new data)
-- [ ] Multi-class labeling (0=loss, 1=small, 2=big win)
+### 🚀 Next Steps / Future Development
 
-### Sprint 4: Production
-- [ ] Real-time scanner (market hours)
-- [ ] Trade execution interface
-- [ ] Performance monitoring dashboard
-- [ ] Automated daily reports
+### Sprint 3: Production Hardening
+- [ ] Automated model retraining pipeline (monthly)
+- [ ] Model performance monitoring dashboard
+- [ ] A/B testing framework (compare model versions)
+- [ ] Alerting system for model drift
+- [ ] Automated outcome updates from broker API
+
+### Sprint 4: Advanced Features
+- [ ] Multi-class labeling (0=loss, 1=small win, 2=big win, 3=home run)
+- [ ] Ensemble models (XGBoost + LightGBM + CatBoost)
+- [ ] Cross-sectional ranking alphas (requires full universe data)
+- [ ] Online learning (incremental updates)
+- [ ] Alternative feature sets (sentiment, news, options flow)
+
+### Sprint 5: Production Deployment
+- [ ] Real-time scanner (market hours with live data)
+- [ ] Trade execution interface (Interactive Brokers API)
+- [ ] Portfolio management dashboard
+- [ ] Automated daily reports (email/Slack)
+- [ ] Risk management module
 
 ---
 
@@ -1060,9 +1409,19 @@ pytest test_temporal_integrity.py::TestTemporalValidator::test_perturbation_test
 
 ## Support & Documentation
 
+### Core Documentation
 - **Architecture**: `docs/ARCHITECTURE.md` (this file)
-- **Dataset A**: `docs/DATASET_A_GUIDE.md`
-- **Dataset B**: `docs/DATASET_B_GUIDE.md`
-- **Sprint Plan**: `docs/sprint_plan.md`
-- **Sprint Progress**: `docs/sprint_1.md`
-- **QSS Overview**: `QSS.md`
+- **Dataset A Guide**: `docs/DATASET_A_GUIDE.md` - Feature store documentation
+- **Dataset B Guide**: `docs/DATASET_B_GUIDE.md` - Trade labels documentation
+- **QSS Overview**: `QSS.md` - System overview
+
+### ML Documentation
+- **Model Training Guide**: `docs/MODEL_TRAINING_GUIDE.md` - Complete training documentation
+- **ML Scanner Integration**: `ML_SCANNER_INTEGRATION.md` - Scanner integration guide
+- **Implementation Summary**: `IMPLEMENTATION_SUMMARY.md` - Training setup summary
+- **Training Quick Start**: `TRAINING_QUICK_START.md` - Quick reference
+- **ML Integration Summary**: `ML_INTEGRATION_SUMMARY.md` - Scanner integration summary
+
+### Project Planning
+- **Sprint Plan**: `docs/sprint_plan.md` - Project roadmap
+- **Sprint Progress**: `docs/sprint_1.md` - Sprint 1 progress

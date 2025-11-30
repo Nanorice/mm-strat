@@ -10,11 +10,13 @@ Performance improvements:
 """
 
 import pandas as pd
+import numpy as np
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import time
+import argparse
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
@@ -34,16 +36,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = False):
+def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = False,
+                         use_ml: bool = False, model_path: Optional[str] = None,
+                         ml_threshold: float = 0.6):
     """
     Optimized scanner using batch processing and vectorized operations.
-    
+
     Args:
         scan_date: Optional date to scan (YYYY-MM-DD). If None, uses today.
                    Enables historical backtesting by using only data up to scan_date.
         csv_output: If True, exports buy_list and activity to CSV files
+        use_ml: If True, scores SEPA candidates with ML model
+        model_path: Path to ML model (default: models/model_fold_1.json)
+        ml_threshold: Minimum ML probability to keep signal (default: 0.6)
     """
     start_time = time.time()
+
+    # Initialize ML scorer if requested
+    ml_scorer = None
+    if use_ml:
+        from src.ml_scorer import MLScorer
+
+        if model_path is None:
+            model_path = 'models/model_fold_1.json'
+
+        try:
+            ml_scorer = MLScorer(model_path=model_path, log_predictions=True)
+            # Extract just filename from path
+            import os
+            model_name = os.path.basename(model_path)
+            print(f"\n[ML] Loaded model: {model_name}")
+            print(f"[ML] Model version: {ml_scorer.model_version}")
+            print(f"[ML] Features required: {len(ml_scorer.feature_names)}")
+            print(f"[ML] Threshold: {ml_threshold:.2f}")
+        except Exception as e:
+            print(f"\n[WARN] ML model loading failed: {e}")
+            print("        Proceeding without ML scoring...\n")
+            use_ml = False
+            ml_scorer = None
     
     # Determine scan date
     if scan_date:
@@ -120,14 +150,156 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     qualifying_stocks = results['qualifying_stocks']
     new_triggers_today = results['new_triggers']
     actual_latest_date = results['summary']['latest_date']
-    
+
     print(f"       Screening complete in {screen_time:.1f}s")
     print(f"       {len(qualifying_stocks)} qualifying stocks ({len(new_triggers_today)} new triggers)")
     print(f"       Total scan time: {scan_time:.1f}s")
+
+    # ML Scoring (if enabled)
+    ml_scores = {}  # Dictionary: ticker -> {'probability': float, 'rank': int}
+    if use_ml and ml_scorer and len(new_triggers_today) > 0:
+        print("\n" + "="*80)
+        print(" ML SCORING LAYER")
+        print("="*80)
+        print(f"\n[5/7] ML Model Inference...")
+        print(f"       Candidates to score: {len(new_triggers_today)}")
+        ml_start = time.time()
+
+        try:
+            # Prepare feature DataFrame for ML scoring
+            # Need to load fundamental data for ML features
+            from src.fundamental_merger import FundamentalMerger
+
+            print("       Loading fundamental data merger...")
+            fund_merger = FundamentalMerger()
+
+            # Create feature DataFrame (matching training dataset structure)
+            print("       Extracting features for ML candidates...")
+            ml_candidates = []
+            for trigger in new_triggers_today:
+                ticker = trigger['ticker']
+                ticker_df = enriched_data.get(ticker)
+
+                if ticker_df is None or len(ticker_df) == 0:
+                    continue
+
+                # Get latest row (or row at scan_date)
+                if scan_date_obj in ticker_df.index:
+                    row_date = scan_date_obj
+                    row = ticker_df.loc[scan_date_obj]
+                else:
+                    # Use last available date
+                    available_dates = ticker_df.index[ticker_df.index <= scan_date_obj]
+                    if len(available_dates) > 0:
+                        row_date = available_dates[-1]
+                        row = ticker_df.loc[row_date]
+                    else:
+                        continue
+
+                # Get fundamental data by creating a small price DataFrame for this single date
+                # This allows the merger to do an as-of join
+                single_date_df = pd.DataFrame({
+                    'Date': [row_date],
+                    'Close': [row.get('Close', np.nan)]
+                }).set_index('Date')
+
+                # Merge with fundamentals
+                try:
+                    merged_df = fund_merger.merge_ticker_data(ticker, single_date_df)
+                    # Extract fundamental columns (exclude Date and price columns)
+                    fund_cols = [c for c in merged_df.columns if c not in ['Date', 'Close', 'Open', 'High', 'Low', 'Volume', 'Adj Close']]
+                    fund_data = merged_df[fund_cols].iloc[0] if len(merged_df) > 0 else None
+                    if fund_data is None:
+                        logger.debug(f"       [{ticker}] No fundamental data available")
+                    else:
+                        logger.debug(f"       [{ticker}] Fundamental data loaded: {len(fund_cols)} features")
+                except Exception as e:
+                    logger.warning(f"       [{ticker}] Failed to load fundamentals: {e}")
+                    fund_data = None
+
+                # Merge technical + fundamental features
+                candidate_features = {
+                    'ticker': ticker,
+                    'date': scan_date_obj,
+                    **row.to_dict(),  # All technical indicators
+                }
+
+                # Add fundamental features if available
+                if fund_data is not None:
+                    candidate_features.update(fund_data.to_dict())
+
+                ml_candidates.append(candidate_features)
+
+            if len(ml_candidates) > 0:
+                candidates_df = pd.DataFrame(ml_candidates)
+                print(f"       Successfully prepared {len(candidates_df)} candidates for scoring")
+                logger.debug(f"       Feature count per candidate: {len(candidates_df.columns) - 2}")  # Exclude ticker, date
+
+                # Score batch
+                print("       Running ML model predictions...")
+                probabilities, ranks = ml_scorer.score_batch(
+                    candidates_df,
+                    ticker_column='ticker',
+                    date_column='date'
+                )
+                
+                # Check for NaN values
+                nan_prob_count = np.isnan(probabilities).sum()
+                nan_rank_count = np.isnan(ranks).sum()
+                if nan_prob_count > 0 or nan_rank_count > 0:
+                    print(f"       [WARN]  NaN values detected - Prob: {nan_prob_count}, Rank: {nan_rank_count}")
+                    logger.warning(f"ML scoring produced {nan_prob_count} NaN probabilities and {nan_rank_count} NaN ranks")
+
+                # Store scores (no filtering - all SEPA signals are kept)
+                for i, ticker in enumerate(candidates_df['ticker']):
+                    prob = probabilities[i]
+                    rank = ranks[i]
+                    
+                    # Convert NaN to None AND numpy types to Python types
+                    # SQLite stores numpy.float64 as bytes, causing display issues
+                    if np.isnan(prob):
+                        prob = None
+                    else:
+                        prob = float(prob)  # Convert numpy.float64 -> Python float
+                    
+                    if np.isnan(rank):
+                        rank = None
+                    else:
+                        rank = int(rank)  # Convert numpy.int64 -> Python int
+                    
+                    ml_scores[ticker] = {
+                        'probability': prob,
+                        'rank': rank
+                    }
+                    
+                    logger.debug(f"       [{ticker}] ML Score: prob={prob}, rank={rank}")
+
+                ml_time = time.time() - ml_start
+
+                # Calculate valid scores
+                valid_probs = probabilities[~np.isnan(probabilities)]
+                if len(valid_probs) > 0:
+                    print(f"       ✓ Scored {len(candidates_df)} candidates in {ml_time:.1f}s")
+                    print(f"       ✓ Valid predictions: {len(valid_probs)}/{len(probabilities)}")
+                    print(f"       ✓ Probability range: [{valid_probs.min():.3f}, {valid_probs.max():.3f}]")
+                    print(f"       ✓ All SEPA signals retained (ML is informational only)")
+                else:
+                    print(f"       [WARN]  All {len(probabilities)} predictions resulted in NaN")
+                    print(f"       [WARN]  This may indicate missing features or model incompatibility")
+            else:
+                print("       [WARN]  No candidates with sufficient data for ML scoring")
+
+        except Exception as e:
+            print(f"\n       [ERROR] ML scoring failed: {e}")
+            print(f"       Proceeding with all SEPA signals (no ML filter)...")
+            logger.error(f"ML scoring error: {e}", exc_info=True)
+    elif use_ml and ml_scorer and len(new_triggers_today) == 0:
+        print("\n[5/7] ML Scoring: Skipped (no new triggers)")
     
     
-    # Update Database - Buy List Management
-    print("\n[5/5] Managing Buy List...")
+    # Update Database - Buy List Management  
+    step_num = "6/7" if use_ml else "5/5"
+    print(f"\n[{step_num}] Managing Buy List...")
     
     # Temporal Consistency Check - Detect backward scans
     all_signals = db.get_buy_list(active_only=False)
@@ -135,7 +307,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         earliest_signal_date = pd.to_datetime(all_signals['signal_date']).min()
         
         if pd.Timestamp(scan_date_str) < earliest_signal_date:
-            print(f"\n       ⚠️  BACKWARD SCAN DETECTED")
+            print(f"\n       [WARN]  BACKWARD SCAN DETECTED")
             print(f"       Scan date: {scan_date_str} is before earliest signal: {earliest_signal_date.date()}")
             print(f"       Clearing future signals to maintain temporal consistency...")
             
@@ -147,11 +319,11 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
                 
                 backup_path = backup_dir / f'buy_list_activity_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
                 db.export_to_csv('buy_list_activity', str(backup_path))
-                print(f"       📁 Activity backup saved: {backup_path.name}")
+                print(f"       [FILE] Activity backup saved: {backup_path.name}")
             
             # Clear future signals
             deleted = db.clear_future_signals(scan_date_str)
-            print(f"       ✓ Cleared {deleted['buy_list_deleted']} signals and {deleted['activity_deleted']} activity records")
+            print(f"       [OK] Cleared {deleted['buy_list_deleted']} signals and {deleted['activity_deleted']} activity records")
     
     
     # Step 1: Load current active buy list (as of scan_date for historical accuracy)
@@ -172,10 +344,10 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     for trigger in tickers_to_add:
         ticker = trigger['ticker']
         signal_price = trigger['entry_price']  # Close price on signal date
-        
+
         # Extract indicator values from enriched data
         ticker_df = enriched_data.get(ticker)
-        
+
         # Get indicator values - use scan_date if available, otherwise use last available
         if ticker_df is not None:
             if scan_date_obj in ticker_df.index:
@@ -187,7 +359,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
                     row = ticker_df.loc[available_dates[-1]]
                 else:
                     row = None
-            
+
             if row is not None:
                 ma50 = row.get('SMA_50')
                 ma150 = row.get('SMA_150')
@@ -198,7 +370,20 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
                 ma50 = ma150 = ma200 = high_52w = low_52w = None
         else:
             ma50 = ma150 = ma200 = high_52w = low_52w = None
-        
+
+        # Get ML scores if available
+        ml_prob = None
+        ml_rank = None
+        ml_model_ver = None
+        ml_score_date = None
+
+        if ticker in ml_scores:
+            ml_prob = ml_scores[ticker]['probability']
+            ml_rank = ml_scores[ticker]['rank']
+            ml_model_ver = ml_scorer.model_version if ml_scorer else None
+            ml_score_date = scan_date_str
+            logger.debug(f"Adding {ticker} to buy_list with ML: prob={ml_prob}, rank={ml_rank}")
+
         db.add_to_buy_list(
             ticker=ticker,
             signal_date=scan_date_str,
@@ -211,7 +396,12 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             ma150=ma150,
             ma200=ma200,
             high_52w=high_52w,
-            low_52w=low_52w
+            low_52w=low_52w,
+            # ML scores
+            ml_probability=ml_prob,
+            ml_rank=ml_rank,
+            ml_model_version=ml_model_ver,
+            ml_score_date=ml_score_date
         )
         db.log_buy_list_activity(
             ticker=ticker,
@@ -302,13 +492,15 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         activity_path = output_dir / f'buy_list_activity_{scan_date_str}.csv'
         db.export_to_csv('buy_list_activity', str(activity_path))
         
-        print(f"\n       📁 Exported to CSV:")
+        print(f"\n       [FILE] Exported to CSV:")
         print(f"          {buy_list_path}")
         print(f"          {activity_path}")
 
     # Performance Summary
     total_time = time.time() - start_time
-    print("\n" + "=" * 80)
+    step_num = "7/7" if use_ml else "6/6"
+    print(f"\n[{step_num}] Scan Complete!\n")
+    print("=" * 80)
     print(" PERFORMANCE METRICS")
     print("=" * 80)
     print(f"Total scan time: {total_time:.1f}s")
@@ -316,6 +508,8 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     print(f"  - Data loading: {load_time:.1f}s")
     print(f"  - Feature calc: {feature_time:.1f}s ({len(enriched_data)/feature_time:.1f} tickers/sec)")
     print(f"  - SEPA screening: {screen_time:.1f}s ({len(enriched_data)/screen_time:.1f} tickers/sec)")
+    if use_ml and 'ml_time' in locals():
+        print(f"  - ML scoring: {ml_time:.1f}s")
     print(f"Throughput: {len(valid_ticker_data)/total_time:.1f} tickers/sec overall")
     
     # Display Results
@@ -345,21 +539,21 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     
     if not buy_list_df.empty:
         print(f"\nTotal Active Signals: {len(buy_list_df)}\n")
-        
+
         # Calculate price changes
         if 'signal_price' in buy_list_df.columns and 'current_price' in buy_list_df.columns:
             buy_list_df['price_change_$'] = buy_list_df['current_price'] - buy_list_df['signal_price']
             buy_list_df['price_change_%'] = ((buy_list_df['current_price'] - buy_list_df['signal_price']) / buy_list_df['signal_price'] * 100)
-        
-        # Select columns to display (basic info + price metrics + indicator values)
+
+        # Select columns to display (basic info + price metrics + indicator values + ML)
         display_cols = ['ticker', 'signal_date', 'signal_price', 'current_price', 'price_change_$', 'price_change_%',
-                       'rs', 'volume_ratio', 'ma50', 'ma150', 'ma200', 'high_52w', 'low_52w', 'last_updated']
+                       'rs', 'volume_ratio', 'ml_probability', 'ml_rank', 'ma50', 'ma150', 'ma200', 'high_52w', 'low_52w', 'last_updated']
         available_cols = [col for col in display_cols if col in buy_list_df.columns]
         
         # Round numeric columns for cleaner display
         display_df = buy_list_df[available_cols].copy()
-        numeric_cols = ['signal_price', 'current_price', 'price_change_$', 'price_change_%', 
-                       'rs', 'volume_ratio', 'ma50', 'ma150', 'ma200', 'high_52w', 'low_52w']
+        numeric_cols = ['signal_price', 'current_price', 'price_change_$', 'price_change_%',
+                       'rs', 'volume_ratio', 'ml_probability', 'ma50', 'ma150', 'ma200', 'high_52w', 'low_52w']
         for col in numeric_cols:
             if col in display_df.columns:
                 # Convert to numeric first (handles object dtypes with None/NaN)
@@ -372,7 +566,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         
         buy_list_df['days_on_list'] = (pd.Timestamp(scan_date_str) - pd.to_datetime(buy_list_df['signal_date'])).dt.days
         
-        print(f"\n📊 Statistics:")
+        print(f"\n[STATS] Statistics:")
         print(f"   Average days on list: {buy_list_df['days_on_list'].mean():.1f}")
         print(f"   Newest signal: {buy_list_df['signal_date'].max()}")
         print(f"   Oldest signal: {buy_list_df['signal_date'].min()}")
@@ -385,12 +579,12 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         print("=" * 80)
         
         if tickers_to_add:
-            print(f"\n✅ ADDED ({len(tickers_to_add)}):")
+            print(f"\n[+] ADDED ({len(tickers_to_add)}):")
             for t in tickers_to_add:
                 print(f"   {t['ticker']} @ ${t['entry_price']:.2f}")
         
         if tickers_to_remove:
-            print(f"\n❌ REMOVED ({len(tickers_to_remove)}):")
+            print(f"\n[-] REMOVED ({len(tickers_to_remove)}):")
             for ticker in tickers_to_remove:
                 print(f"   {ticker} (trend broken)")
 
@@ -400,27 +594,51 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="QSS Optimized Scanner with ML Integration")
+    parser.add_argument('--scan-date', type=str, help='Scan date (YYYY-MM-DD). Default: today')
+    parser.add_argument('--csv-output', action='store_true', help='Export results to CSV')
+    parser.add_argument('--use-ml', action='store_true', help='Enable ML scoring')
+    parser.add_argument('--model-path', type=str, default='models/model_fold_1.json',
+                       help='Path to ML model (default: models/model_fold_1.json)')
+    parser.add_argument('--ml-threshold', type=float, default=0.6,
+                       help='ML probability threshold (default: 0.6)')
+    parser.add_argument('--date-range', nargs=2, metavar=('START', 'END'),
+                       help='Scan date range (YYYY-MM-DD YYYY-MM-DD)')
+
+    args = parser.parse_args()
+
     try:
-        # Import for date range mode
-        from datetime import datetime, timedelta
-        
-        # === SINGLE DAY MODE ===
-        # Uncomment to run for a single date:
-        # run_optimized_scanner(scan_date='2025-11-27')
-        
-        # === DATE RANGE MODE (for backtesting) ===
-        start_date = datetime(2025, 11, 1)
-        end_date = datetime(2025, 11, 28)
-        current = start_date
-        
-        while current <= end_date:
-            date_str = current.strftime('%Y-%m-%d')
-            print(f"\n{'='*80}")
-            print(f"SCANNING DATE: {date_str}")
-            print(f"{'='*80}\n")
-            run_optimized_scanner(scan_date=date_str, csv_output=False)
-            current += timedelta(days=1)
-        
+        if args.date_range:
+            # Date range mode
+            from datetime import datetime, timedelta
+
+            start_date = datetime.strptime(args.date_range[0], '%Y-%m-%d')
+            end_date = datetime.strptime(args.date_range[1], '%Y-%m-%d')
+            current = start_date
+
+            while current <= end_date:
+                date_str = current.strftime('%Y-%m-%d')
+                print(f"\n{'='*80}")
+                print(f"SCANNING DATE: {date_str}")
+                print(f"{'='*80}\n")
+                run_optimized_scanner(
+                    scan_date=date_str,
+                    csv_output=args.csv_output,
+                    use_ml=args.use_ml,
+                    model_path=args.model_path,
+                    ml_threshold=args.ml_threshold
+                )
+                current += timedelta(days=1)
+        else:
+            # Single day mode
+            run_optimized_scanner(
+                scan_date=args.scan_date,
+                csv_output=args.csv_output,
+                use_ml=args.use_ml,
+                model_path=args.model_path,
+                ml_threshold=args.ml_threshold
+            )
+
     except KeyboardInterrupt:
         print("\n\nScanner interrupted by user.")
     except Exception as e:
