@@ -283,7 +283,7 @@ class Alphas(object):
         
     # Alpha#1	 (rank(Ts_ArgMax(SignedPower(((returns < 0) ? stddev(returns, 20) : close), 2.), 5)) -0.5)
     def alpha001(self):
-        inner = self.close
+        inner = self.close.copy()
         inner[self.returns < 0] = stddev(self.returns, 20)
         return rank(ts_argmax(inner ** 2, 5))
     

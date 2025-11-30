@@ -431,6 +431,37 @@ config = TradingConfig(
 
 ---
 
+#### `src/dataset_merger.py`
+**Purpose**: OOP-based module for merging Dataset A (features) and Dataset B (labels)
+
+**Key Classes**:
+- `DatasetLoader`: Handles loading and validation of datasets
+- `SnapshotExtractor`: Performs fast (ticker, date) feature extraction
+- `DatasetMerger`: Orchestrates the merge process
+
+**Key Methods**:
+```python
+# DatasetLoader
+load_dataset_a(path) → DataFrame
+load_dataset_b(path) → DataFrame
+
+# SnapshotExtractor
+extract_snapshot(ticker, date) → Series
+batch_extract(trades_df) → DataFrame
+
+# DatasetMerger
+merge(strategy='left') → DataFrame
+get_merge_statistics() → dict
+export(path, format='parquet')
+```
+
+**Merge Logic**:
+- **Snapshot Join**: Extracts features from Dataset A exactly on the trade entry date
+- **MultiIndex**: Uses `(ticker, date)` index for O(1) lookups
+- **Validation**: Checks for date/ticker overlap and missing snapshots
+
+---
+
 #### `src/database.py`
 **Purpose**: SQLite database for buy list tracking and trade logging
 
@@ -738,6 +769,41 @@ python scanner_v0.py --date 2024-11-15
 
 ---
 
+#### `merge_datasets.py`
+**Purpose**: CLI tool for merging Dataset A and Dataset B
+
+**What it does**:
+1. Loads both datasets
+2. Validates temporal compatibility
+3. Performs snapshot merge
+4. Exports merged dataset and statistics report
+
+**CLI**:
+```bash
+python merge_datasets.py \
+  --dataset-a data/ml/dataset_a.parquet \
+  --dataset-b data/ml/dataset_b.parquet \
+  --output data/ml/merged_dataset.parquet
+```
+
+---
+
+#### `inspect_merged.py`
+**Purpose**: Quality validation tool for merged datasets
+
+**What it does**:
+1. Analyzes label distribution
+2. Checks feature completeness
+3. Reports missing values
+4. Validates merge quality (match rate)
+
+**CLI**:
+```bash
+python inspect_merged.py data/ml/merged_dataset.parquet
+```
+
+---
+
 ## Data Flow Diagrams
 
 ### Dataset A Generation Flow
@@ -777,32 +843,6 @@ python scanner_v0.py --date 2024-11-15
        ↓
 4. Label Trades
    └── Apply labeling_function (default: return >= 15%)
-       ↓
-5. Export
-   └── DataFrame.to_parquet()
-```
-
-### Model Training Flow (Future)
-
-```
-Dataset A (features) + Dataset B (labels)
-    ↓
-Merge on (ticker, entry_date)
-    ↓
-Feature Selection
-    ↓
-Train/Test Split (temporal!)
-    ↓
-Train Model (Random Forest / XGBoost)
-    ↓
-Evaluate (AUC-ROC, Precision-Recall)
-    ↓
-Deploy to Scanner
-```
-
----
-
-## File Organization
 
 ```
 quantamental/
@@ -817,10 +857,14 @@ quantamental/
 │   ├── strategy.py               # SEPA signals
 │   ├── trade_simulator.py        # Historical simulation
 │   ├── trading_config.py         # Configuration
-│   └── database.py               # SQLite operations
+│   ├── database.py               # SQLite operations
+│   └── dataset_merger.py         # Dataset merging
 │
 ├── build_dataset_a.py            # Dataset A builder
 ├── build_dataset_b.py            # Dataset B builder
+├── merge_datasets.py             # Dataset merger CLI
+├── inspect_merged.py             # Merged dataset inspector
+├── verify_merge.py               # Quick verification script
 ├── scanner_v0.py                 # Daily scanner
 ├── inspect_dataset_b.py          # Dataset B inspection
 │
@@ -892,7 +936,13 @@ python build_dataset_a.py \
   --mode full \
   --output data/ml/dataset_a_2023_2024.parquet
 
-# 3. Merge and train (Python script)
+# 3. Merge Datasets
+python merge_datasets.py \
+  --dataset-a data/ml/dataset_a_2023_2024.parquet \
+  --dataset-b data/ml/dataset_b_2023_2024.parquet \
+  --output data/ml/merged_dataset.parquet
+
+# 4. Train Model (Python script)
 # See docs/ML_TRAINING_GUIDE.md (future)
 ```
 

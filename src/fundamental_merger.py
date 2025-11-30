@@ -247,11 +247,14 @@ class FundamentalMerger:
         
         df['has_fundamentals'] = has_any_fundamental
         
-        # Growth metrics: fill with 0
+        # Determine which rows truly have no fundamental data
+        no_fund_mask = df['has_fundamentals'] == False
+        
+        # Growth metrics: fill with 0 (only for rows without fundamentals)
         growth_cols = ['revenue_growth_yoy', 'eps_growth_yoy', 'net_income_growth_yoy']
         for col in growth_cols:
             if col in df.columns:
-                df[col] = df[col].fillna(0)
+                df.loc[no_fund_mask, col] = df.loc[no_fund_mask, col].fillna(0)
         
         # Ratios: fill with median (or 0 if all NaN)
         # Suppress warnings for empty slice (when all values are NaN)
@@ -265,16 +268,18 @@ class FundamentalMerger:
                     warnings.simplefilter("ignore", category=RuntimeWarning)
                     median_val = df[col].median()
                 fill_val = median_val if not pd.isna(median_val) else 0
-                df[col] = df[col].fillna(fill_val)
+                df.loc[no_fund_mask, col] = df.loc[no_fund_mask, col].fillna(fill_val)
         
-        # Raw values: fill with 0
+        # Raw values: fill with 0 (ONLY for rows without fundamentals)
+        # This prevents overwriting real merged data with zeros
         raw_cols = [
             'revenue', 'netIncome', 'eps', 'totalAssets', 'totalLiabilities',
             'totalEquity', 'totalDebt', 'cash', 'currentAssets', 'currentLiabilities'
         ]
         for col in raw_cols:
             if col in df.columns:
-                df[col] = df[col].fillna(0)
+                # Only fill rows that have NO fundamental data
+                df.loc[no_fund_mask, col] = df.loc[no_fund_mask, col].fillna(0)
         
         return df
     

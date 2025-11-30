@@ -15,7 +15,7 @@
 2. ✅ **Temporal Integrity** - Ensure no look-ahead bias in simulation
 3. ✅ **Flexible Labeling** - Lambda-based success criteria
 4. ✅ **Dataset A Construction** - Build feature store with daily indicators & alphas
-5. 🟡 **Data Merging** - Combine Dataset A + B for ML training
+5. ✅ **Data Merging** - Combine Dataset A + B for ML training
 6. 🟡 **Model Training** - Train and validate meta-labeling classifier
 7. 🟡 **Scanner Integration** - Deploy model to rank buy signals
 
@@ -234,11 +234,14 @@ Each ticker's parquet file contains:
 **Test Results**:
 - ✅ Successfully enriched AAPL Q1 2024: 65 rows × 165 features (18.73% NaN, expected)
 - ✅ Full dataset (274 tickers, 2023-2025): 142,901 rows × 165 features (20.85% NaN)
+- ✅ **5-year dataset (274 tickers, 2021-2025): 350,994 rows × 165 features** ⭐
+- ✅ **347,871 rows with REAL fundamental data** (EPS, revenue non-zero after bug fix)
 - ✅ Fiscal year trap prevention verified (no look-ahead bias)
 - ✅ Forward fill verified (fundamentals constant until next filing)
 - ✅ Staleness detection working (flags data >400 days old)
 - ✅ All technical indicators fully populated (SMA_200, 52W high/low)
-- ✅ NaN values only from fundamentals (expected behavior)
+- ✅ NaN values only from expected sources (early dates, missing fundamentals)
+- ✅ **Critical bug fixed (2025-11-30)**: NaN handling no longer overwrites real data with zeros
 - ✅ 100% success rate on test batch
 - ✅ ~71 KB per ticker (40 rows = 20 periods × 2 statement types)
 - ✅ Correct filing dates (~1 month after fiscal period end)

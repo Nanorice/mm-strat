@@ -8,6 +8,7 @@ import numpy as np
 import yfinance as yf
 import requests
 import json
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict
@@ -31,6 +32,10 @@ class DataRepository:
         self.price_dir = config.PRICE_DATA_DIR
         self.benchmark_ticker = config.BENCHMARK_TICKER
         self.cache_days = config.DATA_CACHE_DAYS
+        
+        # API call tracking for rate limiting (300 calls/minute like fundamentals)
+        self._call_timestamps = []
+        self.rate_limit = 300  # FMP Starter tier rate limit
 
     def update_universe(self) -> List[str]:
         """
@@ -86,48 +91,67 @@ class DataRepository:
         age_days = (datetime.now() - file_mtime).days
         return age_days >= self.cache_days
 
-    def _fetch_fmp_historical(self, tickers: List[str]) -> Dict[str, any]:
+    def _rate_limit_check(self):
         """
-        Batch fetch historical OHLCV data from FMP API.
+        Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
+        Pauses execution if approaching rate limit.
+        """
+        now = time.time()
+        # Keep only timestamps from last 60 seconds
+        self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
+        
+        # If approaching limit, wait
+        if len(self._call_timestamps) >= self.rate_limit - 5:  # 5-call buffer
+            sleep_time = 60 - (now - self._call_timestamps[0])
+            if sleep_time > 0:
+                logger.warning(f"Rate limit approaching, sleeping {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
+                self._call_timestamps = []
+        
+        self._call_timestamps.append(now)
+    
+    def _fetch_fmp_historical(self, ticker: str) -> Optional[dict]:
+        """
+        Fetch historical OHLCV data from FMP API for a single ticker.
+        NOTE: FMP Starter tier does NOT support batch requests for historical data.
         
         Args:
-            tickers: List of ticker symbols (up to 100)
+            ticker: Single ticker symbol
             
         Returns:
-            Dict mapping ticker -> historical data (JSON response)
+            JSON response dict with historical data, or None if failed
         """
         if not config.FMP_API_KEY:
             raise ValueError("FMP_API_KEY not set in environment")
         
-        # FMP accepts comma-separated tickers
-        tickers_str = ','.join(tickers[:100])  # Limit to 100 per API docs
+        # Rate limiting
+        self._rate_limit_check()
         
-        url = f"{config.FMP_BASE_URL}/historical-price-full/{tickers_str}"
-        params = {'apikey': config.FMP_API_KEY}
+        # Use the correct FMP endpoint format
+        url = f"{config.FMP_BASE_URL}/historical-price-eod/full"
+        params = {
+            'symbol': ticker,
+            'apikey': config.FMP_API_KEY
+        }
         
         try:
             response = requests.get(url, params=params, timeout=30)
             response.raise_for_status()
             data = response.json()
             
-            # FMP returns different structure for single vs multiple tickers
-            if isinstance(data, dict) and 'historical' in data:
-                # Single ticker response
-                ticker = tickers[0]
-                return {ticker: data}
-            elif isinstance(data, list):
-                # Multiple tickers response - each is a dict with 'symbol' and 'historical'
-                return {item['symbol']: item for item in data if 'symbol' in item}
+            # FMP returns a list of historical data directly
+            if isinstance(data, list) and len(data) > 0:
+                return {'historical': data}
             else:
-                logger.warning(f"Unexpected FMP response format: {type(data)}")
-                return {}
+                logger.warning(f"Unexpected FMP response format for {ticker}: {type(data)}")
+                return None
                 
         except requests.exceptions.RequestException as e:
-            logger.error(f"FMP API request failed: {e}")
-            return {}
+            logger.error(f"FMP API request failed for {ticker}: {e}")
+            return None
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse FMP response: {e}")
-            return {}
+            logger.error(f"Failed to parse FMP response for {ticker}: {e}")
+            return None
     
     def _parse_fmp_response(self, response_data: dict, ticker: str) -> Optional[pd.DataFrame]:
         """
@@ -141,12 +165,18 @@ class DataRepository:
             DataFrame with OHLCV data, or None if parsing fails
         """
         try:
-            if 'historical' not in response_data:
+            if not response_data or 'historical' not in response_data:
                 return None
             
             historical = response_data['historical']
             if not historical:
                 return None
+            
+            # Filter data to start from 2010-01-01
+            historical = [
+                record for record in historical
+                if pd.to_datetime(record.get('date', '1900-01-01')) >= pd.Timestamp('2010-01-01')
+            ]
             
             # Convert to DataFrame
             df = pd.DataFrame(historical)
@@ -266,14 +296,14 @@ class DataRepository:
             DataFrame with OHLCV data, or None if failed
         """
         try:
-            # Fetch from FMP
-            fmp_data = self._fetch_fmp_historical([ticker])
+            # Fetch from FMP (single ticker, non-batch)
+            fmp_data = self._fetch_fmp_historical(ticker)
             
-            if ticker not in fmp_data:
+            if not fmp_data:
                 return None
             
             # Parse response
-            df = self._parse_fmp_response(fmp_data[ticker], ticker)
+            df = self._parse_fmp_response(fmp_data, ticker)
             return df
             
         except Exception as e:
@@ -295,7 +325,7 @@ class DataRepository:
             logger.debug(f"Downloading {ticker} from yfinance...")
             data = yf.download(
                 ticker,
-                period=config.LOOKBACK_PERIOD,
+                start='2010-01-01',
                 auto_adjust=True,
                 progress=False
             )
@@ -339,7 +369,7 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'yfinance') -> Dict[str, bool]:
+    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp') -> Dict[str, bool]:
         """
         Smart batch update of Parquet cache.
         Only downloads tickers that are missing or stale.
@@ -395,7 +425,9 @@ class DataRepository:
     
     def _update_cache_fmp(self, tickers: List[str]) -> Dict[str, bool]:
         """
-        Update cache using FMP API batch requests.
+        Update cache using FMP API (non-batch, individual requests).
+        NOTE: FMP Starter tier does NOT support batch requests for historical data.
+        Rate limited to 300 calls/minute.
         
         Args:
             tickers: List of ticker symbols
@@ -404,41 +436,54 @@ class DataRepository:
             Dict mapping ticker -> success status
         """
         results = {}
-        batch_size = config.FMP_BATCH_SIZE
+        total_tickers = len(tickers)
+        success_count = 0
+        fail_count = 0
         
-        for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (len(tickers) - 1) // batch_size + 1
-            logger.info(f"Processing FMP batch {batch_num}/{total_batches} ({len(batch)} tickers)")
-            
+        logger.info(f"Fetching {total_tickers} tickers from FMP (non-batch, rate limited to 300/min)...")
+        start_time = time.time()
+        
+        for idx, ticker in enumerate(tickers, 1):
             try:
-                # Fetch batch from FMP
-                fmp_data = self._fetch_fmp_historical(batch)
+                # Fetch single ticker from FMP (with rate limiting)
+                fmp_data = self._fetch_fmp_historical(ticker)
                 
-                # Save each ticker
-                for ticker in batch:
-                    try:
-                        if ticker in fmp_data:
-                            df = self._parse_fmp_response(fmp_data[ticker], ticker)
-                            if df is not None and not df.empty:
-                                cache_file = self.price_dir / f"{ticker}.parquet"
-                                df.to_parquet(cache_file)
-                                results[ticker] = True
-                            else:
-                                logger.debug(f"No data parsed for {ticker}")
-                                results[ticker] = False
-                        else:
-                            logger.debug(f"{ticker} not in FMP response")
-                            results[ticker] = False
-                    except Exception as e:
-                        logger.debug(f"Failed to cache {ticker}: {e}")
+                if fmp_data:
+                    df = self._parse_fmp_response(fmp_data, ticker)
+                    if df is not None and not df.empty:
+                        cache_file = self.price_dir / f"{ticker}.parquet"
+                        df.to_parquet(cache_file)
+                        results[ticker] = True
+                        success_count += 1
+                        logger.debug(f"Successfully cached {ticker}")
+                    else:
+                        logger.debug(f"No data parsed for {ticker}")
                         results[ticker] = False
-                        
-            except Exception as e:
-                logger.error(f"FMP batch {batch_num} failed: {e}")
-                for ticker in batch:
+                        fail_count += 1
+                else:
+                    logger.debug(f"No FMP response for {ticker}")
                     results[ticker] = False
+                    fail_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Failed to fetch {ticker}: {e}")
+                results[ticker] = False
+                fail_count += 1
+            
+            # Progress update every 25 tickers or at milestones
+            if idx % 25 == 0 or idx == total_tickers:
+                pct_complete = (idx / total_tickers) * 100
+                elapsed = time.time() - start_time
+                rate = idx / elapsed if elapsed > 0 else 0
+                eta_seconds = (total_tickers - idx) / rate if rate > 0 else 0
+                eta_minutes = eta_seconds / 60
+                
+                logger.info(
+                    f"Progress: {idx}/{total_tickers} ({pct_complete:.1f}%) | "
+                    f"✓ {success_count} ✗ {fail_count} | "
+                    f"Rate: {rate:.1f} tickers/sec | "
+                    f"ETA: {eta_minutes:.1f} min"
+                )
         
         return results
     
@@ -463,7 +508,7 @@ class DataRepository:
                 # Batch download
                 data = yf.download(
                     batch,
-                    period=config.LOOKBACK_PERIOD,
+                    start='2000-01-01',
                     group_by='ticker',
                     auto_adjust=True,
                     progress=False,

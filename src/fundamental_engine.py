@@ -105,8 +105,9 @@ class FundamentalEngine:
         url = f"{self.base_url}/{statement_type}"
         params = {
             'symbol': ticker,
+            'period': 'quarter',
             'apikey': self.api_key,
-            'limit': self.lookback_years * 4  # Quarterly reports: 4 per year
+            'limit': 100 # self.lookback_years * 4  # Quarterly reports: 4 per year
         }
         
         try:
