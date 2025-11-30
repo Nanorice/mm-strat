@@ -42,10 +42,14 @@ class FeatureEngineer:
         
         # Feature definitions
         self.lightweight_features = [
-            'SMA_50', 'SMA_150', 'SMA_200',      # Trend indicators
-            'ATR',                                # Volatility
+            'SMA_50', 'SMA_150', 'SMA_200',      # Trend indicators (raw for ordering)
+            'Price_vs_SMA_50', 'Price_vs_SMA_150', 'Price_vs_SMA_200',  # Normalized distances
+            'ATR', 'nATR',                        # Volatility (absolute + normalized)
+            'VCP_Ratio',                          # Volatility contraction
+            'Consolidation_Width',                # Base tightness
             'RS', 'RS_MA',                        # Relative strength
             'Vol_MA', 'Vol_Ratio',                # Volume metrics
+            'Dry_Up_Volume',                      # Seller exhaustion
             'High_52W', 'Low_52W',                # 52-week range
             'High_20D', 'Breakout'                # Breakout detection
         ]
@@ -99,7 +103,18 @@ class FeatureEngineer:
         else:
             logger.warning("No benchmark data provided. RS indicators will be missing.")
         
-        logger.debug(f"Lightweight features calculated: {len(df)} rows, {len(df.columns)} columns")
+        # NEW VCP-SPECIFIC FEATURES
+        # Normalized ATR (price-relative volatility)
+        df = self.ta.add_normalized_atr(df, period=14)
+        
+        # VCP Ratio (volatility contraction detector)
+        df = self.ta.add_vcp_ratio(df, short=10, long=50)
+        
+        # Consolidation Width (base tightness)
+        df = self.ta.add_consolidation_width(df, period=20)
+        
+        # Dry Up Volume (seller exhaustion)
+        df = self.ta.add_dry_up_volume(df, short=5, long=50)
         
         return df
     
@@ -110,7 +125,7 @@ class FeatureEngineer:
         This method is only called on stocks that pass the SEPA screen (5-10 candidates).
         It calculates computationally expensive features:
         - WorldQuant Alpha Factors (intraday correlations, momentum decay)
-        - Fundamental Metrics (EPS growth, sales acceleration, earnings surprises)
+        - Future: Fundamental Metrics (EPS growth, sales acceleration, earnings surprises)
         
         Args:
             df: DataFrame with OHLCV + lightweight features
@@ -118,21 +133,28 @@ class FeatureEngineer:
         
         Returns:
             DataFrame with heavyweight features added
-            
-        Note:
-            This is a PLACEHOLDER for Phase 2 implementation.
-            Current version returns the input DataFrame unmodified.
         """
-        logger.info(f"[PHASE 2 TODO] Heavyweight features for {ticker} - Not yet implemented")
+        logger.info(f"Calculating heavyweight features for {ticker}")
         
-        # Phase 2 will add:
-        # - WorldQuant Alpha#101 (intraday strength)
-        # - WorldQuant Alpha#9 (momentum decay)
-        # - EPS Growth (QoQ, YoY) from FMP API
-        # - Sales Acceleration
-        # - Earnings Surprises
+        try:
+            # Import AlphaEngine (lazy import to avoid circular dependencies)
+            from src.alpha_factors import AlphaEngine
+            
+            # Calculate WorldQuant alpha factors
+            alpha_engine = AlphaEngine(alpha_list=[1, 6, 9, 12, 41, 101])
+            df = alpha_engine.calculate_alphas(df)
+            
+            logger.debug(f"Heavyweight features calculated for {ticker}: {alpha_engine.get_alpha_names()}")
+            
+            # Future Phase 2 additions:
+            # - Fundamental metrics from FMP API
+            # - Earnings surprises
+            # - Analyst estimates
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate heavyweight features for {ticker}: {e}")
+            # Continue with lightweight features only if alpha calculation fails
         
-        # For now, return df as-is
         return df
     
     def process_universe_batch(self, ticker_data_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:

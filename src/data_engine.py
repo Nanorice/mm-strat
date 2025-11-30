@@ -213,7 +213,7 @@ class DataRepository:
                         continue
         return None
 
-    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'fmp') -> Optional[pd.DataFrame]:
+    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'yfinance') -> Optional[pd.DataFrame]:
         """
         Returns OHLCV data for a single ticker.
         First checks Parquet cache, then downloads if needed.
@@ -221,7 +221,7 @@ class DataRepository:
         Args:
             ticker: Stock symbol
             use_cache: If True, uses cached data when available
-            source: Data source - 'fmp' (default) or 'yfinance'
+            source: Data source - 'yfinance' (default) or 'fmp'
 
         Returns:
             DataFrame with OHLCV data (adjusted), or None if failed
@@ -339,7 +339,7 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp') -> Dict[str, bool]:
+    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'yfinance') -> Dict[str, bool]:
         """
         Smart batch update of Parquet cache.
         Only downloads tickers that are missing or stale.
@@ -347,7 +347,7 @@ class DataRepository:
         Args:
             tickers: List of ticker symbols to update
             force: If True, re-downloads all tickers regardless of cache
-            source: Data source - 'fmp' (default) or 'yfinance'
+            source: Data source - 'yfinance' (default) or 'fmp'
 
         Returns:
             Dict mapping ticker -> success status
@@ -369,7 +369,7 @@ class DataRepository:
 
         logger.info(f"Updating cache for {len(to_download)}/{len(tickers)} tickers...")
 
-        # Use FMP batch endpoint if requested and API key is available
+        # Use FMP batch endpoint if explicitly requested and API key is available
         if source == 'fmp' and config.FMP_API_KEY:
             try:
                 logger.info(f"Using FMP API for batch update...")
@@ -426,13 +426,13 @@ class DataRepository:
                                 df.to_parquet(cache_file)
                                 results[ticker] = True
                             else:
-                                logger.warning(f"No data parsed for {ticker}")
+                                logger.debug(f"No data parsed for {ticker}")
                                 results[ticker] = False
                         else:
-                            logger.warning(f"{ticker} not in FMP response")
+                            logger.debug(f"{ticker} not in FMP response")
                             results[ticker] = False
                     except Exception as e:
-                        logger.warning(f"Failed to cache {ticker}: {e}")
+                        logger.debug(f"Failed to cache {ticker}: {e}")
                         results[ticker] = False
                         
             except Exception as e:
@@ -481,11 +481,11 @@ class DataRepository:
                         else:
                             results[ticker] = False
                     except Exception as e:
-                        logger.warning(f"Failed to cache {ticker}: {e}")
+                        logger.debug(f"Failed to cache {ticker}: {e}")
                         results[ticker] = False
 
             except Exception as e:
-                logger.error(f"Batch download failed: {e}")
+                logger.error(f"Batch download failed for {len(batch)} tickers: {e}")
                 for ticker in batch:
                     results[ticker] = False
 

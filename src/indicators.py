@@ -32,14 +32,19 @@ class TechnicalAnalysis:
             periods: List of SMA periods (default: [50, 150, 200])
 
         Returns:
-            DataFrame with SMA_{period} columns added
+            DataFrame with SMA_{period} and Price_vs_SMA_{period} columns added
         """
         if periods is None:
             periods = [config.SMA_FAST, config.SMA_MEDIUM, config.SMA_SLOW]
 
         df = df.copy()
         for period in periods:
+            # Raw SMA (for ordering comparisons like SMA_50 > SMA_150)
             df[f'SMA_{period}'] = df['Close'].rolling(window=period).mean()
+            
+            # Normalized distance from SMA (for ML model)
+            # Tells model "stock is X% above/below trend"
+            df[f'Price_vs_SMA_{period}'] = ((df['Close'] - df[f'SMA_{period}']) / df[f'SMA_{period}']) * 100
 
         return df
 
@@ -159,6 +164,122 @@ class TechnicalAnalysis:
         df['Breakout'] = df['Close'] > df[f'High_{period}D']
 
         return df
+
+    @staticmethod
+    def add_normalized_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """
+        Adds Normalized ATR (nATR) - ATR relative to price.
+        
+        Makes volatility comparable across different price levels.
+        Lower values indicate tighter price action (better for VCP setups).
+        
+        Args:
+            df: OHLCV DataFrame
+            period: ATR period (default: 14)
+        
+        Returns:
+            DataFrame with nATR column added
+        """
+        df = df.copy()
+        
+        # Ensure ATR exists
+        if 'ATR' not in df.columns:
+            df = TechnicalAnalysis.add_atr(df, period=period)
+        
+        # nATR = (ATR / Close) * 100
+        df['nATR'] = (df['ATR'] / df['Close']) * 100
+        
+        return df
+    
+    @staticmethod
+    def add_vcp_ratio(df: pd.DataFrame, short: int = 10, long: int = 50) -> pd.DataFrame:
+        """
+        Adds VCP Ratio - detects volatility contraction (the squeeze).
+        
+        Ratio of short-term ATR to long-term ATR. Values < 1.0 indicate
+        volatility is contracting (ideal for VCP setups).
+        
+        Args:
+            df: OHLCV DataFrame
+            short: Short-term ATR period (default: 10)
+            long: Long-term ATR periode (default: 50)
+        
+        Returns:
+            DataFrame with VCP_Ratio column added
+        """
+        df = df.copy()
+        
+        # Calculate short-term ATR
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        prev_close = close.shift(1)
+        
+        tr1 = high - low
+        tr2 = (high - prev_close).abs()
+        tr3 = (low - prev_close).abs()
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        atr_short = true_range.rolling(window=short).mean()
+        atr_long = true_range.rolling(window=long).mean()
+        
+        # VCP Ratio = ATR_short / ATR_long
+        df['VCP_Ratio'] = atr_short / atr_long
+        df['VCP_Ratio'] = df['VCP_Ratio'].replace([np.inf, -np.inf], np.nan)
+        
+        return df
+    
+    @staticmethod
+    def add_consolidation_width(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """
+        Adds Consolidation Width - measures how tight the base is.
+        
+        Calculates the price range over N days as a percentage of current price.
+        Lower values indicate tighter consolidation (superperformer setups).
+        
+        Args:
+            df: OHLCV DataFrame
+            period: Consolidation period (default: 20)
+        
+        Returns:
+            DataFrame with Consolidation_Width column added
+        """
+        df = df.copy()
+        
+        # Range = (High_N - Low_N) / Close * 100
+        high_period = df['High'].rolling(window=period).max()
+        low_period = df['Low'].rolling(window=period).min()
+        
+        df['Consolidation_Width'] = ((high_period - low_period) / df['Close']) * 100
+        
+        return df
+    
+    @staticmethod
+    def add_dry_up_volume(df: pd.DataFrame, short: int = 5, long: int = 50) -> pd.DataFrame:
+        """
+        Adds Dry Up Volume - detects seller exhaustion.
+        
+        Ratio of short-term to long-term average volume. Low values
+        indicate reduced selling pressure before breakout.
+        
+        Args:
+            df: OHLCV DataFrame
+            short: Short-term volume period (default: 5)
+            long: Long-term volume period (default: 50)
+        
+        Returns:
+            DataFrame with Dry_Up_Volume column added
+        """
+        df = df.copy()
+        
+        vol_short = df['Volume'].rolling(window=short).mean()
+        vol_long = df['Volume'].rolling(window=long).mean()
+        
+        df['Dry_Up_Volume'] = vol_short / vol_long
+        df['Dry_Up_Volume'] = df['Dry_Up_Volume'].replace([np.inf, -np.inf], np.nan)
+        
+        return df
+
 
     @staticmethod
     def calculate_all_indicators(df: pd.DataFrame, benchmark: Optional[pd.Series] = None) -> pd.DataFrame:

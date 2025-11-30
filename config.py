@@ -38,8 +38,8 @@ DATA_CACHE_DAYS = 1  # Re-download if data older than N days
 
 # Financial Modeling Prep API Settings
 FMP_API_KEY = os.getenv('FMP_API_KEY', '')  # Load from .env file
-FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3'
-FMP_BATCH_SIZE = 100  # Maximum tickers per FMP batch request
+FMP_BASE_URL = 'https://financialmodelingprep.com/stable'
+FMP_BATCH_SIZE = 50  # Target tickers per batch (actual batch size varies by URL length)
 
 # ==============================================================================
 # STRATEGY PARAMETERS - SEPA (Specific Entry Point Analysis)
@@ -116,9 +116,18 @@ METRICS_TO_CALCULATE = [
 ]
 
 # ==============================================================================
+# FUNDAMENTAL DATA SETTINGS
+# ==============================================================================
+FUNDAMENTAL_CACHE_DAYS = 90  # Refresh quarterly (fundamentals update every ~90 days)
+FUNDAMENTAL_LOOKBACK_YEARS = 5  # Historical fundamental data to fetch
+FMP_FUNDAMENTAL_RATE_LIMIT = 300  # FMP Starter tier: 300 calls/minute
+FMP_FUNDAMENTAL_BATCH_SIZE = 10  # Process 10 tickers at a time
+FMP_FUNDAMENTAL_BATCH_DELAY = 2.5  # Delay between batches (seconds) to respect rate limits
+
+# ==============================================================================
 # FUNDAMENTAL FILTERS (PLACEHOLDER FOR FUTURE)
 # ==============================================================================
-# TODO: Implement fundamental data integration
+# TODO: Implement fundamental filters once data is available
 MIN_EARNINGS_GROWTH = None  # Placeholder: e.g., 0.15 for 15% YoY growth
 MIN_SALES_GROWTH = None     # Placeholder: e.g., 0.10 for 10% YoY growth
 EXCLUDED_SECTORS = []       # Placeholder: e.g., ['Utilities', 'Real Estate']
