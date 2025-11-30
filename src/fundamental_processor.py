@@ -218,17 +218,44 @@ class FundamentalProcessor:
         if 'filing_date' in merged.columns:
             merged = merged.sort_values('filing_date', ascending=False)
         
-        # Clean up duplicate columns: Drop _income versions (they're all NaN for balance sheet columns)
-        # Keep _balance versions and rename them back to original names
-        cols_to_drop = [col for col in merged.columns if col.endswith('_income') and merged[col].isna().all()]
-        if cols_to_drop:
-            merged = merged.drop(columns=cols_to_drop)
-            logger.debug(f"Dropped {len(cols_to_drop)} empty _income duplicate columns")
+        # Clean up duplicate columns: Combine _income and _balance versions
+        # Strategy: For each base column name, coalesce _income and _balance values
+        # (revenue from _income, totalAssets from _balance, etc.)
         
-        # Rename _balance columns back to original names
-        rename_map = {col: col.replace('_balance', '') for col in merged.columns if col.endswith('_balance')}
-        if rename_map:
-            merged = merged.rename(columns=rename_map)
+        # Find all columns with suffixes
+        income_cols = [col for col in merged.columns if col.endswith('_income')]
+        balance_cols = [col for col in merged.columns if col.endswith('_balance')]
+        
+        # Get base names
+        income_bases = {col.replace('_income', '') for col in income_cols}
+        balance_bases = {col.replace('_balance', '') for col in balance_cols}
+        
+        # Find columns that have both _income and _balance versions
+        duplicate_bases = income_bases & balance_bases
+        
+        # Combine them: use fillna to merge (income statement data fills balance sheet NaN and vice versa)
+        for base in duplicate_bases:
+            income_col = f'{base}_income'
+            balance_col = f'{base}_balance'
+            
+            if income_col in merged.columns and balance_col in merged.columns:
+                # Combine: take non-null values from either column
+                merged[base] = merged[income_col].fillna(merged[balance_col])
+                # Drop the suffixed versions
+                merged = merged.drop(columns=[income_col, balance_col])
+                logger.debug(f"Combined {income_col} and {balance_col} into {base}")
+        
+        # Rename remaining _income columns (exist only in income statement)
+        rename_income = {col: col.replace('_income', '') for col in merged.columns if col.endswith('_income')}
+        if rename_income:
+            merged = merged.rename(columns=rename_income)
+            logger.debug(f"Renamed {len(rename_income)} income-only columns")
+        
+        # Rename remaining _balance columns (exist only in balance sheet)
+        rename_balance = {col: col.replace('_balance', '') for col in merged.columns if col.endswith('_balance')}
+        if rename_balance:
+            merged = merged.rename(columns=rename_balance)
+            logger.debug(f"Renamed {len(rename_balance)} balance-only columns")
         
         return merged
     
@@ -277,7 +304,8 @@ class FundamentalProcessor:
         else:
             df['quick_ratio'] = np.nan
         
-        return df
+        # Defragment DataFrame after adding multiple columns
+        return df.copy()
     
     def _calculate_operating_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -335,7 +363,8 @@ class FundamentalProcessor:
         else:
             df['roa'] = np.nan
         
-        return df
+        # Defragment DataFrame after adding multiple columns
+        return df.copy()
     
     def get_processed_fundamentals_summary(self, df: pd.DataFrame) -> Dict:
         """

@@ -48,7 +48,7 @@ class AlphaEngine:
             alpha_list: List of alpha numbers to calculate (default: [1, 6, 12, 41, 101])
         """
         self.alpha_list = alpha_list if alpha_list is not None else self.DEFAULT_ALPHAS
-        logger.info(f"AlphaEngine initialized with alphas: {self.alpha_list}")
+        logger.debug(f"AlphaEngine initialized with alphas: {self.alpha_list}")
     
     def _prepare_wq_format(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -196,7 +196,7 @@ class AlphaEngine:
                     # Add column of zeros as fallback
                     result[column_name] = 0.0
             
-            logger.info(
+            logger.debug(
                 f"Alpha calculation complete: {len(successful_alphas)}/{len(self.alpha_list)} successful"
             )
             

@@ -134,7 +134,7 @@ class FeatureEngineer:
         Returns:
             DataFrame with heavyweight features added
         """
-        logger.info(f"Calculating heavyweight features for {ticker}")
+        logger.debug(f"Calculating heavyweight features for {ticker}")
         
         try:
             # Import AlphaEngine (lazy import to avoid circular dependencies)
