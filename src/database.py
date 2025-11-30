@@ -60,14 +60,39 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS buy_list (
                 ticker TEXT PRIMARY KEY,
                 signal_date DATE NOT NULL,
-                entry_price REAL NOT NULL,
-                stop_price REAL NOT NULL,
-                target_price REAL NOT NULL,
+                signal_price REAL NOT NULL,
+                current_price REAL NOT NULL,
+                entry_price REAL,
+                stop_price REAL,
+                target_price REAL,
                 atr REAL,
                 rs REAL,
                 volume_ratio REAL,
+                ma50 REAL,
+                ma150 REAL,
+                ma200 REAL,
+                high_52w REAL,
+                low_52w REAL,
+                last_updated DATE,
                 status TEXT DEFAULT 'active',
                 notes TEXT
+            )
+        """)
+
+        # Buy List Activity table - tracks additions and removals
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS buy_list_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                action TEXT NOT NULL,
+                action_date DATE NOT NULL,
+                reason TEXT,
+                entry_price REAL,
+                stop_price REAL,
+                target_price REAL,
+                rs REAL,
+                vol_ratio REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -202,30 +227,47 @@ class DatabaseManager:
 
     # ==================== BUY LIST METHODS ====================
 
-    def add_to_buy_list(self, ticker: str, signal_date: str, entry_price: float,
-                       stop_price: float, target_price: float, atr: Optional[float] = None,
-                       rs: Optional[float] = None, vol_ratio: Optional[float] = None):
+    def add_to_buy_list(self, ticker: str, signal_date: str, signal_price: float,
+                       current_price: float, entry_price: Optional[float] = None,
+                       stop_price: Optional[float] = None, target_price: Optional[float] = None,
+                       atr: Optional[float] = None, rs: Optional[float] = None, 
+                       vol_ratio: Optional[float] = None, ma50: Optional[float] = None,
+                       ma150: Optional[float] = None, ma200: Optional[float] = None,
+                       high_52w: Optional[float] = None, low_52w: Optional[float] = None):
         """
         Adds or updates a ticker on the buy list (active buy signals).
 
         Args:
             ticker: Stock symbol
             signal_date: Date signal triggered
-            entry_price: Entry price
-            stop_price: Stop loss price
-            target_price: Profit target price
+            signal_price: Price when signal triggered
+            current_price: Current price
+            entry_price: Planned entry price (optional)
+            stop_price: Stop loss price (optional)
+            target_price: Profit target price (optional)
             atr: ATR value
             rs: Relative strength
             vol_ratio: Volume ratio
+            ma50: 50-day moving average
+            ma150: 150-day moving average
+            ma200: 200-day moving average
+            high_52w: 52-week high
+            low_52w: 52-week low
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+        
+        last_updated = datetime.now().strftime('%Y-%m-%d')
 
         cursor.execute("""
             INSERT OR REPLACE INTO buy_list
-            (ticker, signal_date, entry_price, stop_price, target_price, atr, rs, volume_ratio, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
-        """, (ticker, signal_date, entry_price, stop_price, target_price, atr, rs, vol_ratio))
+            (ticker, signal_date, signal_price, current_price, entry_price, stop_price, 
+             target_price, atr, rs, volume_ratio, ma50, ma150, ma200, high_52w, low_52w,
+             last_updated, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price, 
+              target_price, atr, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
+              last_updated))
 
         conn.commit()
         conn.close()
@@ -250,12 +292,50 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
-    def get_buy_list(self, active_only: bool = True) -> pd.DataFrame:
+    def update_buy_list_metrics(self, ticker: str, scan_date: str, current_price: float,
+                                rs: Optional[float] = None, vol_ratio: Optional[float] = None,
+                                ma50: Optional[float] = None, ma150: Optional[float] = None,
+                                ma200: Optional[float] = None, high_52w: Optional[float] = None,
+                                low_52w: Optional[float] = None):
         """
-        Retrieves current buy list.
+        Updates metrics for an existing buy list entry.
+
+        Args:
+            ticker: Stock symbol
+            scan_date: Date of the update
+            current_price: Current price
+            rs: Relative strength
+            vol_ratio: Volume ratio
+            ma50: 50-day moving average
+            ma150: 150-day moving average
+            ma200: 200-day moving average
+            high_52w: 52-week high
+            low_52w: 52-week low
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE buy_list
+            SET current_price = ?, rs = ?, volume_ratio = ?,
+                ma50 = ?, ma150 = ?, ma200 = ?, high_52w = ?, low_52w = ?,
+                last_updated = ?
+            WHERE ticker = ? AND status = 'active'
+        """, (current_price, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
+              scan_date, ticker))
+
+        conn.commit()
+        conn.close()
+
+
+    def get_buy_list(self, active_only: bool = True, as_of_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        Retrieves buy list, optionally filtered to a specific point in time.
 
         Args:
             active_only: If True, only returns active signals
+            as_of_date: Optional date string (YYYY-MM-DD). If provided, returns buy list
+                       as it would have appeared on that date (signal_date <= as_of_date)
 
         Returns:
             DataFrame of buy list entries
@@ -263,14 +343,98 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
 
         query = "SELECT * FROM buy_list"
+        conditions = []
+        
         if active_only:
-            query += " WHERE status = 'active'"
+            conditions.append("status = 'active'")
+        
+        if as_of_date:
+            conditions.append(f"signal_date <= '{as_of_date}'")
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        
         query += " ORDER BY signal_date DESC"
 
         df = pd.read_sql_query(query, conn)
         conn.close()
 
         return df
+
+    def log_buy_list_activity(self, ticker: str, action: str, action_date: str,
+                              reason: Optional[str] = None, entry_price: Optional[float] = None,
+                              stop_price: Optional[float] = None, target_price: Optional[float] = None,
+                              rs: Optional[float] = None, vol_ratio: Optional[float] = None):
+        """
+        Logs buy list activity (additions/removals) for historical tracking.
+
+        Args:
+            ticker: Stock symbol
+            action: Action type ('ADDED' or 'REMOVED')
+            action_date: Date of the action
+            reason: Reason for the action
+            entry_price: Entry price (for ADDED actions)
+            stop_price: Stop price (for ADDED actions)
+            target_price: Target price (for ADDED actions)
+            rs: Relative strength
+            vol_ratio: Volume ratio
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO buy_list_activity
+            (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, volume_ratio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio))
+
+        conn.commit()
+        conn.close()
+
+    def clear_future_signals(self, cutoff_date: str) -> dict:
+        """
+        Clears buy_list entries and activity records that occur after the cutoff date.
+        Used for backward scans to maintain temporal consistency.
+
+        Args:
+            cutoff_date: Date string (YYYY-MM-DD). Signals after this date will be removed.
+
+        Returns:
+            Dictionary with counts of deleted records
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Count what will be deleted (for reporting)
+        cursor.execute("""
+            SELECT COUNT(*) FROM buy_list WHERE signal_date > ?
+        """, (cutoff_date,))
+        buy_list_count = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM buy_list_activity WHERE action_date > ?
+        """, (cutoff_date,))
+        activity_count = cursor.fetchone()[0]
+
+        # Delete future signals from buy_list
+        cursor.execute("""
+            DELETE FROM buy_list WHERE signal_date > ?
+        """, (cutoff_date,))
+
+        # Delete future activity records
+        cursor.execute("""
+            DELETE FROM buy_list_activity WHERE action_date > ?
+        """, (cutoff_date,))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Cleared {buy_list_count} buy_list entries and {activity_count} activity records after {cutoff_date}")
+        
+        return {
+            'buy_list_deleted': buy_list_count,
+            'activity_deleted': activity_count
+        }
 
     def clean_old_buy_signals(self, days_threshold: int = 7):
         """

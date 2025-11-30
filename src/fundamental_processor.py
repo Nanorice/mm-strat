@@ -218,6 +218,18 @@ class FundamentalProcessor:
         if 'filing_date' in merged.columns:
             merged = merged.sort_values('filing_date', ascending=False)
         
+        # Clean up duplicate columns: Drop _income versions (they're all NaN for balance sheet columns)
+        # Keep _balance versions and rename them back to original names
+        cols_to_drop = [col for col in merged.columns if col.endswith('_income') and merged[col].isna().all()]
+        if cols_to_drop:
+            merged = merged.drop(columns=cols_to_drop)
+            logger.debug(f"Dropped {len(cols_to_drop)} empty _income duplicate columns")
+        
+        # Rename _balance columns back to original names
+        rename_map = {col: col.replace('_balance', '') for col in merged.columns if col.endswith('_balance')}
+        if rename_map:
+            merged = merged.rename(columns=rename_map)
+        
         return merged
     
     def _calculate_safety_ratios(self, df: pd.DataFrame) -> pd.DataFrame:

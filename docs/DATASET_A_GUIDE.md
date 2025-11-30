@@ -35,6 +35,7 @@ python build_dataset_a.py \
 - `--use-universe`: Use entire S&P 500 universe instead of Dataset B tickers
 - `--from-dataset-b`: Path to Dataset B file to extract tickers from
 - `--no-validate`: Skip temporal validation checks
+- `--include-fundamentals`: **NEW** Include fundamental data enrichment (growth, ratios, P/E, etc.) ✨
 
 ## Default Behavior
 
@@ -91,6 +92,29 @@ python build_dataset_a.py \
   --mode full \
   --output data/ml/dataset_a_2023.parquet
 ```
+
+### Example 5: Include Fundamental Data (Complete Feature Set)
+
+```bash
+# Generate Dataset A with fundamentals enrichment
+python build_dataset_a.py \
+  --start 2024-01-01 \
+  --end 2024-12-31 \
+  --mode full \
+  --include-fundamentals \
+  --output data/ml/dataset_a_2024_with_fundamentals.parquet
+```
+
+**Expected Output**:
+- ~165 total features (25 technical + ~30 fundamental)
+- ~20% missing values (expected from fundamentals)
+- Additional fundamental features:
+  - **Metadata**: filing_date_matched, days_since_report, is_stale, has_fundamentals
+  - **Raw**: revenue, eps, netIncome, totalAssets, totalDebt, etc.
+  - **Growth**: revenue_growth_yoy, eps_growth_yoy (YoY %)
+  - **Ratios**: debt_to_equity, current_ratio, quick_ratio
+  - **Margins**: gross_margin, operating_margin, roe, roa
+  - **Hybrid**: pe_ratio, pb_ratio (price × fundamentals)
 
 ## Dataset A Schema
 

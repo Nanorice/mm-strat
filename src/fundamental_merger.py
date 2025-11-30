@@ -233,6 +233,8 @@ class FundamentalMerger:
         Returns:
             Dataframe with NaN handling applied
         """
+        import warnings
+        
         # Check if any fundamental data exists
         fundamental_cols = [
             'revenue', 'eps', 'netIncome', 'totalAssets', 'totalDebt'
@@ -252,13 +254,16 @@ class FundamentalMerger:
                 df[col] = df[col].fillna(0)
         
         # Ratios: fill with median (or 0 if all NaN)
+        # Suppress warnings for empty slice (when all values are NaN)
         ratio_cols = [
             'debt_to_equity', 'current_ratio', 'quick_ratio',
             'gross_margin', 'operating_margin', 'roe', 'roa'
         ]
         for col in ratio_cols:
             if col in df.columns:
-                median_val = df[col].median()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    median_val = df[col].median()
                 fill_val = median_val if not pd.isna(median_val) else 0
                 df[col] = df[col].fillna(fill_val)
         

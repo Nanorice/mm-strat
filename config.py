@@ -32,7 +32,7 @@ UNIVERSE_SOURCE = 'SSGA'  # State Street S&P 500 Holdings
 SSGA_URL = 'https://www.ssga.com/us/en/intermediary/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx'
 
 # Data Download Settings
-LOOKBACK_PERIOD = '2y'  # History needed for 200-day MA
+LOOKBACK_PERIOD = '5y'  # History needed for technical indicators (SMA_200, 52W high/low, etc.)
 BATCH_SIZE = 50  # Number of tickers to download per batch
 DATA_CACHE_DAYS = 1  # Re-download if data older than N days
 

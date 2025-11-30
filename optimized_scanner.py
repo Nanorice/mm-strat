@@ -34,13 +34,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_optimized_scanner(scan_date: Optional[str] = None):
+def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = False):
     """
     Optimized scanner using batch processing and vectorized operations.
     
     Args:
         scan_date: Optional date to scan (YYYY-MM-DD). If None, uses today.
                    Enables historical backtesting by using only data up to scan_date.
+        csv_output: If True, exports buy_list and activity to CSV files
     """
     start_time = time.time()
     
@@ -127,6 +128,30 @@ def run_optimized_scanner(scan_date: Optional[str] = None):
     
     # Update Database - Buy List Management
     print("\n[5/5] Managing Buy List...")
+    
+    # Temporal Consistency Check - Detect backward scans
+    all_signals = db.get_buy_list(active_only=False)
+    if not all_signals.empty:
+        earliest_signal_date = pd.to_datetime(all_signals['signal_date']).min()
+        
+        if pd.Timestamp(scan_date_str) < earliest_signal_date:
+            print(f"\n       ⚠️  BACKWARD SCAN DETECTED")
+            print(f"       Scan date: {scan_date_str} is before earliest signal: {earliest_signal_date.date()}")
+            print(f"       Clearing future signals to maintain temporal consistency...")
+            
+            # Optional: Backup to CSV before clearing
+            if csv_output:
+                from pathlib import Path
+                backup_dir = Path(config.DATA_DIR) / 'scanner_output' / 'backups'
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                
+                backup_path = backup_dir / f'buy_list_activity_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+                db.export_to_csv('buy_list_activity', str(backup_path))
+                print(f"       📁 Activity backup saved: {backup_path.name}")
+            
+            # Clear future signals
+            deleted = db.clear_future_signals(scan_date_str)
+            print(f"       ✓ Cleared {deleted['buy_list_deleted']} signals and {deleted['activity_deleted']} activity records")
     
     
     # Step 1: Load current active buy list (as of scan_date for historical accuracy)
@@ -261,6 +286,25 @@ def run_optimized_scanner(scan_date: Optional[str] = None):
     
     print(f"       +{len(tickers_to_add)} added, -{len(tickers_to_remove)} removed")
     print(f"       Active buy list: {len(tickers_in_buy_list) + len(tickers_to_add) - len(tickers_to_remove)} tickers")
+    
+    # CSV Export (optional)
+    if csv_output:
+        from pathlib import Path
+        output_dir = Path(config.DATA_DIR) / 'scanner_output'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Export buy_list
+        buy_list_path = output_dir / f'buy_list_{scan_date_str}.csv'
+        buy_list_current = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+        buy_list_current.to_csv(buy_list_path, index=False)
+        
+        # Export buy_list_activity (all history)
+        activity_path = output_dir / f'buy_list_activity_{scan_date_str}.csv'
+        db.export_to_csv('buy_list_activity', str(activity_path))
+        
+        print(f"\n       📁 Exported to CSV:")
+        print(f"          {buy_list_path}")
+        print(f"          {activity_path}")
 
     # Performance Summary
     total_time = time.time() - start_time
@@ -365,8 +409,8 @@ if __name__ == "__main__":
         # run_optimized_scanner(scan_date='2025-11-27')
         
         # === DATE RANGE MODE (for backtesting) ===
-        start_date = datetime(2025, 11, 17)
-        end_date = datetime(2025, 11, 27)
+        start_date = datetime(2025, 11, 1)
+        end_date = datetime(2025, 11, 28)
         current = start_date
         
         while current <= end_date:
@@ -374,7 +418,7 @@ if __name__ == "__main__":
             print(f"\n{'='*80}")
             print(f"SCANNING DATE: {date_str}")
             print(f"{'='*80}\n")
-            run_optimized_scanner(scan_date=date_str)
+            run_optimized_scanner(scan_date=date_str, csv_output=False)
             current += timedelta(days=1)
         
     except KeyboardInterrupt:

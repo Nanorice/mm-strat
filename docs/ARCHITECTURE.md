@@ -19,6 +19,7 @@ The Quantamental SEPA System (QSS) is a **meta-labeling ML framework** for ranki
 2. FEATURE ENGINEERING LAYER
    ├── features.py              → Technical indicators (SMA, ATR, RS, etc.)
    ├── alpha_factors.py         → WorldQuant alpha factors
+   ├── fundamental_merger.py    → Fundamental integration (P/E, Growth)
    └── temporal_validator.py    → Prevents data leakage
 
 3. STRATEGY LAYER
@@ -172,6 +173,48 @@ engine = AlphaEngine(alpha_list=[1, 6, 101])
 df_with_alphas = engine.calculate_alphas(price_data)
 print(df_with_alphas[['Close', 'alpha001', 'alpha006', 'alpha101']].tail())
 ```
+
+---
+
+#### `src/fundamental_processor.py`
+**Purpose**: Preprocessing and standardization of sparse quarterly fundamental data
+
+**Key Classes**:
+- `FundamentalProcessor`: Handles growth, ratios, and metric calculations
+
+**Key Methods**:
+```python
+process_ticker_fundamentals(ticker, df) → DataFrame  # Main pipeline
+_calculate_growth_metrics(df) → DataFrame            # YoY Revenue, EPS, Net Income
+_calculate_safety_ratios(df) → DataFrame             # Debt/Equity, Current Ratio
+_calculate_operating_metrics(df) → DataFrame         # Margins, ROE, ROA
+```
+
+**Features**:
+- **Date Standardization**: Aligns fiscal vs filing dates
+- **Growth Calculation**: 4-quarter lookback for YoY changes
+- **Metric Derivation**: Calculates 15+ derived ratios from raw data
+
+---
+
+#### `src/fundamental_merger.py`
+**Purpose**: Merging sparse fundamentals with dense daily price data (Point-in-Time)
+
+**Key Classes**:
+- `FundamentalMerger`: Performs as-of joins and hybrid feature calculation
+
+**Key Methods**:
+```python
+merge_ticker_data(ticker, price_df) → DataFrame      # Main merge logic
+_as_of_join(price_df, fund_df) → DataFrame           # Temporal join on filing_date
+calculate_hybrid_features(df) → DataFrame            # P/E, P/B, P/S calculation
+_handle_missing_fundamentals(df) → DataFrame         # NaN handling strategy
+```
+
+**Key Concepts**:
+- **Fiscal Year Trap Prevention**: Joins on `filing_date` (public release) NOT `fiscal_date`
+- **Staleness Detection**: Flags data older than 400 days
+- **Hybrid Features**: Combines daily Price with quarterly EPS/Book Value
 
 ---
 
@@ -388,7 +431,252 @@ config = TradingConfig(
 
 ---
 
+#### `src/database.py`
+**Purpose**: SQLite database for buy list tracking and trade logging
+
+**Key Classes**:
+- `DatabaseManager`: Manages database operations and schema
+
+**Database Schema**:
+
+```sql
+-- Buy List: Active buy signals with price tracking
+CREATE TABLE buy_list (
+    ticker TEXT PRIMARY KEY,
+    signal_date DATE NOT NULL,
+    signal_price REAL NOT NULL,      -- Price when signal triggered
+    current_price REAL NOT NULL,     -- Latest price (updated daily)
+    entry_price REAL,                -- Planned entry price
+    stop_price REAL,                 -- Stop loss price
+    target_price REAL,               -- Profit target
+    atr REAL,
+    rs REAL,                         -- Relative strength
+    volume_ratio REAL,
+    ma50 REAL,                       -- Moving averages (for monitoring)
+    ma150 REAL,
+    ma200 REAL,
+    high_52w REAL,                   -- 52-week high/low
+    low_52w REAL,
+    last_updated DATE,               -- Last metrics update
+    status TEXT DEFAULT 'active',    -- 'active' or 'removed'
+    notes TEXT
+);
+
+-- Buy List Activity: Audit trail of all changes
+CREATE TABLE buy_list_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    action TEXT NOT NULL,            -- 'ADDED' or 'REMOVED'
+    action_date DATE NOT NULL,
+    reason TEXT,                     -- 'new_trigger' or 'trend_broken'
+    entry_price REAL,
+    stop_price REAL,
+    target_price REAL,
+    rs REAL,
+    volume_ratio REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Trades: Historical trade log (for future use)
+CREATE TABLE trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    entry_date DATE NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_date DATE,
+    exit_price REAL,
+    shares INTEGER NOT NULL,
+    pnl_dollars REAL,
+    pnl_percent REAL,
+    exit_reason TEXT,
+    stop_price REAL,
+    target_price REAL,
+    days_held INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**Key Methods**:
+```python
+# Buy List Management
+add_to_buy_list(ticker, signal_date, signal_price, current_price, ...)
+update_buy_list_metrics(ticker, scan_date, current_price, rs, vol_ratio, ...)
+remove_from_buy_list(ticker, reason='trend_broken')
+get_buy_list(active_only=True, as_of_date=None) → DataFrame
+
+# Activity Logging
+log_buy_list_activity(ticker, action, action_date, reason, ...)
+
+# Temporal Consistency
+clear_future_signals(cutoff_date) → dict  # For backward scans
+
+# Export
+export_to_csv(table_name, output_path)
+```
+
+**Temporal Consistency Feature**:
+
+The scanner supports historical backtesting with automatic temporal consistency:
+
+```python
+# When scanning a date BEFORE the earliest signal in database
+if scan_date < earliest_signal_date:
+    # Automatically clears "future" signals
+    deleted = db.clear_future_signals(scan_date)
+    # Prevents temporal inconsistency
+```
+
+**Scanner vs Dataset B Separation**:
+
+| System | Purpose | Storage | Lifecycle |
+|--------|---------|---------|-----------|
+| **Scanner** | Track active buy signals | Database (`buy_list` tables) | Persistent state |
+| **Dataset B** | Generate ML training data | In-memory → CSV export | Ephemeral simulation |
+
+**No overlap** - Scanner uses database for state management, Dataset B uses in-memory Trade objects.
+
+**Usage**:
+```python
+db = DatabaseManager()
+
+# Add signal
+db.add_to_buy_list(
+    ticker='AAPL',
+    signal_date='2024-11-15',
+    signal_price=150.00,
+    current_price=150.00,
+    rs=0.85,
+    vol_ratio=1.4,
+    ma50=145.00
+)
+
+# Update daily
+db.update_buy_list_metrics(
+    ticker='AAPL',
+    scan_date='2024-11-16',
+    current_price=152.50,
+    rs=0.87,
+    ma50=145.20
+)
+
+# Get active signals
+buy_list = db.get_buy_list(active_only=True)
+
+# Historical query
+historical = db.get_buy_list(active_only=True, as_of_date='2024-11-01')
+
+# Remove when trend breaks
+db.remove_from_buy_list('AAPL', reason='trend_broken')
+db.log_buy_list_activity('AAPL', 'REMOVED', '2024-11-20', reason='trend_broken')
+```
+
+---
+
 ### 🛠️ Application Scripts
+
+#### `optimized_scanner.py`
+**Purpose**: Batch-optimized daily buy signal scanner with temporal consistency
+
+**What it does**:
+1. Fetches S&P 500 universe (~500 tickers)
+2. Batch updates price cache (vectorized operations)
+3. Batch calculates features for all tickers
+4. Scans for SEPA signals (qualifying stocks + new triggers)
+5. Manages buy list:
+   - **Detects backward scans** (scan_date < earliest_signal_date)
+   - **Clears future signals** automatically for temporal consistency
+   - **Adds** new triggers not in buy_list
+   - **Updates** existing tickers still qualifying
+   - **Removes** tickers with broken trends
+6. Logs all activity to `buy_list_activity` table
+7. Optional CSV export of buy_list and activity
+
+**Scanner Workflow**:
+```
+[1/4] Fetch Universe → 504 tickers
+[2/4] Batch Update Cache → Download OHLCV data
+[3/4] Batch Load Data → Load all parquet files
+[4/4] Batch Process → Features + SEPA screening
+[5/5] Manage Buy List:
+    ├── Temporal Check (backward scan detection)
+    ├── Load existing buy_list (as of scan_date)
+    ├── Determine: ADD, UPDATE, REMOVE
+    ├── Execute changes
+    └── Log activity
+```
+
+**Temporal Consistency**:
+```python
+# Automatic backward scan detection
+all_signals = db.get_buy_list(active_only=False)
+earliest_signal_date = all_signals['signal_date'].min()
+
+if scan_date < earliest_signal_date:
+    print("⚠️  BACKWARD SCAN DETECTED")
+    print("Clearing future signals...")
+    deleted = db.clear_future_signals(scan_date)
+    # Now database only has signals <= scan_date
+```
+
+**CLI**:
+```python
+# In-script configuration
+run_optimized_scanner(
+    scan_date='2024-11-15',  # None = today
+    csv_output=True           # Export to CSV
+)
+
+# Date range mode (backfilling)
+start_date = datetime(2024, 11, 1)
+end_date = datetime(2024, 11, 30)
+for date in date_range(start_date, end_date):
+    run_optimized_scanner(scan_date=date.strftime('%Y-%m-%d'))
+```
+
+**Performance**:
+```
+Typical run (500 tickers):
+- Cache update: 0.3s
+- Data loading: 0.9s  
+- Feature calc: 2.7s (185 tickers/sec)
+- SEPA screening: 0.4s (1200+ tickers/sec)
+Total: ~4.5s
+```
+
+**Output**:
+```
+Database:
+  - buy_list table (43 active signals)
+  - buy_list_activity table (audit trail)
+
+CSV (if csv_output=True):
+  - data/scanner_output/buy_list_YYYY-MM-DD.csv
+  - data/scanner_output/buy_list_activity_YYYY-MM-DD.csv
+```
+
+**Inspection**:
+```bash
+# View current buy list
+python view_buy_list.py
+
+# Query database directly
+sqlite3 database/trades.db "SELECT * FROM buy_list WHERE status='active'"
+```
+
+---
+
+#### `view_buy_list.py`
+**Purpose**: Quick inspection of current buy list from database
+
+**What it shows**:
+- All active signals with ticker, dates, prices
+- Price changes since signal
+- Days on list
+- Summary statistics (total, average days, win rate)
+
+**CLI**:
+```bash
+python view_buy_list.py
 
 #### `build_dataset_a.py`
 **Purpose**: Generate daily feature snapshots (Dataset A)
@@ -522,7 +810,10 @@ quantamental/
 │   ├── data_engine.py            # Data acquisition
 │   ├── features.py               # Feature engineering
 │   ├── alpha_factors.py          # WorldQuant alphas
-│   ├── temporal_validator.py    # Data leakage prevention
+│   ├── fundamental_engine.py     # Fundamental data acquisition
+│   ├── fundamental_processor.py  # Fundamental preprocessing
+│   ├── fundamental_merger.py     # Fundamental-Price merging
+│   ├── temporal_validator.py     # Data leakage prevention
 │   ├── strategy.py               # SEPA signals
 │   ├── trade_simulator.py        # Historical simulation
 │   ├── trading_config.py         # Configuration
