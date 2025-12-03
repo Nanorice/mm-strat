@@ -154,29 +154,35 @@ class TradeSimulator:
         dataset_b = simulator.run_simulation()
     """
     
-    def __init__(self, 
+    def __init__(self,
                  data_repo: DataRepository,
                  strategy: SEPAStrategy,
                  feature_engine: FeatureEngineer,
                  start_date: str,
                  end_date: str,
-                 config: Optional[TradingConfig] = None):
+                 config: Optional[TradingConfig] = None,
+                 outcome_end: Optional[str] = None):
         """
         Initialize trade simulator.
-        
+
         Args:
             data_repo: Data repository for loading price data
             strategy: SEPA strategy instance
             feature_engine: Feature engineer for indicators
             start_date: Simulation start date (YYYY-MM-DD)
-            end_date: Simulation end date (YYYY-MM-DD)
+            end_date: Simulation end date (for new entries, YYYY-MM-DD)
             config: Trading configuration (default: TradingConfig.default())
+            outcome_end: Extended end date for natural trade exits (YYYY-MM-DD).
+                        If provided, new entries stop at end_date but existing trades
+                        can exit naturally until outcome_end. Prevents artificial
+                        end-of-period exits that don't happen in real trading.
         """
         self.data_repo = data_repo
         self.strategy = strategy
         self.feature_engine = feature_engine
         self.start_date = pd.Timestamp(start_date)
         self.end_date = pd.Timestamp(end_date)
+        self.outcome_end = pd.Timestamp(outcome_end) if outcome_end else self.end_date
         self.config = config or TradingConfig.default()
         
         # State tracking
@@ -190,9 +196,12 @@ class TradeSimulator:
         logger.info(f"Initialized TradeSimulator from {start_date} to {end_date}")
         logger.info(f"Configuration:\n{self.config}")
     
-    def run_simulation(self) -> pd.DataFrame:
+    def run_simulation(self, show_progress=True) -> pd.DataFrame:
         """
         Runs the event-driven simulation.
+        
+        Args:
+            show_progress: If True, displays progress bar (default: True)
         
         Returns:
             DataFrame with completed trades (Dataset B)
@@ -214,7 +223,7 @@ class TradeSimulator:
         
         # Step 2: Calculate features for all tickers
         logger.info("Calculating features...")
-        enriched_data = self.feature_engine.process_universe_batch(valid_ticker_data)
+        enriched_data = self.feature_engine.process_universe_batch(valid_ticker_data, show_progress=show_progress)
         logger.info(f"Features calculated for {len(enriched_data)} tickers")
         
         # Step 3: Get all unique trading dates
@@ -222,34 +231,75 @@ class TradeSimulator:
         for df in enriched_data.values():
             all_dates.update(df.index)
         
+        # Use outcome_end for simulation range (allows natural exits after end_date)
         trading_dates = sorted([
-            d for d in all_dates 
-            if self.start_date <= d <= self.end_date
+            d for d in all_dates
+            if self.start_date <= d <= self.outcome_end
         ])
         
         logger.info(f"Simulating {len(trading_dates)} trading days...")
         
-        # Step 4: Day-by-day simulation loop
-        for i, date in enumerate(trading_dates):
-            if i % 50 == 0:
-                logger.info(f"Progress: {i}/{len(trading_dates)} days ({i/len(trading_dates)*100:.1f}%)")
+        # Track statistics for progress display
+        stats = {
+            'total_signals': 0,
+            'signals_added': 0,
+            'signals_removed': 0,
+            'last_update': 0
+        }
+        
+        # Step 4: Day-by-day simulation loop with progress bar
+        try:
+            from tqdm import tqdm
+            iterator = tqdm(trading_dates, desc="Trading Days", disable=not show_progress, 
+                          bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+        except ImportError:
+            iterator = trading_dates
+            logger.warning("tqdm not installed, progress bar disabled")
+        
+        for i, date in enumerate(iterator):
+            # Track active trades before this day
+            trades_before = len(self.active_trades)
             
             # Check exits first (path dependency: exits before new entries)
             self._check_for_exits(date, enriched_data)
             
-            # Check for new entries
-            self._check_for_entries(date, enriched_data)
+            # Track removals
+            exits_this_day = trades_before - len(self.active_trades)
+            stats['signals_removed'] += exits_this_day
+            
+            # Check for new entries (only until end_date, not outcome_end)
+            trades_before_entry = len(self.active_trades)
+            if date <= self.end_date:
+                self._check_for_entries(date, enriched_data)
+            
+            # Track additions
+            entries_this_day = len(self.active_trades) - trades_before_entry
+            stats['signals_added'] += entries_this_day
+            stats['total_signals'] = len(self.completed_trades) + len(self.active_trades)
+            
+            # Update progress bar postfix every 10 days
+            if show_progress and hasattr(iterator, 'set_postfix') and i - stats['last_update'] >= 10:
+                iterator.set_postfix({
+                    'Signals': stats['total_signals'],
+                    'Added': stats['signals_added'],
+                    'Removed': stats['signals_removed'],
+                    'Active': len(self.active_trades)
+                })
+                stats['last_update'] = i
         
-        # Step 5: Close any remaining open trades at end of period
+        # Step 5: Close any remaining open trades at end of outcome window
         if self.active_trades:
-            logger.info(f"Closing {len(self.active_trades)} open positions at end of period")
+            logger.info(f"Closing {len(self.active_trades)} open positions at end of outcome window")
             for ticker, trade in list(self.active_trades.items()):
                 ticker_df = enriched_data.get(ticker)
-                if ticker_df is not None and self.end_date in ticker_df.index:
-                    exit_price = ticker_df.loc[self.end_date, 'Close']
-                    self._close_trade(trade, self.end_date, exit_price, 'end_of_period', enriched_data)
+                if ticker_df is not None and self.outcome_end in ticker_df.index:
+                    exit_price = ticker_df.loc[self.outcome_end, 'Close']
+                    self._close_trade(trade, self.outcome_end, exit_price, 'end_of_outcome_window', enriched_data)
         
         logger.info(f"Simulation complete! Generated {len(self.completed_trades)} trades")
+        logger.info(f"  Total signals processed: {stats['total_signals']}")
+        logger.info(f"  Signals added: {stats['signals_added']}")
+        logger.info(f"  Signals removed: {stats['signals_removed']}")
         
         # Convert to DataFrame
         return self.get_dataset_b()
@@ -349,7 +399,7 @@ class TradeSimulator:
                 'ma150': row.get('SMA_150'),
                 'ma200': row.get('SMA_200'),
                 'rs': row.get('RS'),
-                'vol_ratio': row.get('Volume_Ratio'),
+                'vol_ratio': row.get('Vol_Ratio'),  # Changed from Volume_Ratio to Vol_Ratio
                 'high_52w': row.get('High_52W'),
                 'low_52w': row.get('Low_52W'),
             }

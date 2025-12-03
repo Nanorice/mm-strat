@@ -78,7 +78,7 @@ class FeatureEngineer:
             raise ValueError(f"Missing required columns. Need: {required_cols}")
         
         if len(df) < 200:
-            logger.warning(f"Insufficient data ({len(df)} rows). Need 200+ for accurate indicators.")
+            logger.debug(f"Insufficient data ({len(df)} rows). Need 200+ for accurate indicators.")
         
         df = df.copy()
         
@@ -115,6 +115,24 @@ class FeatureEngineer:
         
         # Dry Up Volume (seller exhaustion)
         df = self.ta.add_dry_up_volume(df, short=5, long=50)
+        
+        # NEW MINERVINI-ALIGNED FEATURES
+        # RSI (Relative Strength Index) - momentum oscillator
+        df['RSI_14'] = self.ta.calculate_rsi(df, period=14)
+        
+        # RSI Regime - context-aware RSI interpretation (bull vs bear market)
+        is_bull_market = df['SMA_200'] > df['SMA_200'].shift(20)
+        df['RSI_Regime'] = ((df['RSI_14'] > 40) & is_bull_market).astype(int)
+        
+        # Distance from 52-week high (Minervini's sweet spot: -5% to -15%)
+        df['Dist_From_52W_High'] = (df['Close'] - df['High_52W']) / df['High_52W'] * 100
+        
+        # Green Days Ratio - proportion of green days in last 20 (accumulation indicator)
+        df['Is_Green_Day'] = (df['Close'] > df['Open']).astype(int)
+        df['Green_Days_Ratio_20D'] = df['Is_Green_Day'].rolling(window=20).mean()
+        
+        # SMA 50 Slope - trend strength (percentage change per day)
+        df['SMA_50_Slope'] = (df['SMA_50'] - df['SMA_50'].shift(10)) / df['SMA_50'].shift(10) / 10 * 100
         
         return df
     
@@ -157,7 +175,7 @@ class FeatureEngineer:
         
         return df
     
-    def process_universe_batch(self, ticker_data_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    def process_universe_batch(self, ticker_data_dict: Dict[str, pd.DataFrame], show_progress: bool = True) -> Dict[str, pd.DataFrame]:
         """
         Batch processing of multiple tickers with lightweight features.
         
@@ -165,6 +183,7 @@ class FeatureEngineer:
         
         Args:
             ticker_data_dict: Dict mapping ticker symbol -> raw OHLCV DataFrame
+            show_progress: If True, displays progress bar
         
         Returns:
             Dict mapping ticker symbol -> enriched DataFrame with lightweight features
@@ -181,7 +200,19 @@ class FeatureEngineer:
         enriched_data = {}
         failed_tickers = []
         
-        for ticker, df in ticker_data_dict.items():
+        # Try to show progress bar
+        if show_progress:
+            try:
+                from tqdm import tqdm
+                ticker_iterator = tqdm(ticker_data_dict.items(), desc="Computing Features", unit="ticker",
+                                     total=len(ticker_data_dict))
+            except ImportError:
+                ticker_iterator = ticker_data_dict.items()
+                logger.info(f"Processing {len(ticker_data_dict)} tickers...")
+        else:
+            ticker_iterator = ticker_data_dict.items()
+        
+        for ticker, df in ticker_iterator:
             try:
                 enriched_data[ticker] = self.calculate_lightweight_features(df)
             except Exception as e:

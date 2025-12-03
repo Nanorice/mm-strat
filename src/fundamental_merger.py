@@ -274,7 +274,7 @@ class FundamentalMerger:
         # This prevents overwriting real merged data with zeros
         raw_cols = [
             'revenue', 'netIncome', 'eps', 'totalAssets', 'totalLiabilities',
-            'totalEquity', 'totalDebt', 'cash', 'currentAssets', 'currentLiabilities'
+            'totalEquity', 'totalDebt', 'cash', 'totalCurrentAssets', 'totalCurrentLiabilities'
         ]
         for col in raw_cols:
             if col in df.columns:
@@ -289,7 +289,7 @@ class FundamentalMerger:
         
         Phase 3: Hybrid Features
         - pe_ratio: Close / EPS
-        - ps_ratio: Market Cap / Revenue (if market cap available)
+        - ps_ratio: Market Cap / Revenue = (Close × Shares Outstanding) / Revenue
         - pb_ratio: Market Cap / Book Value
         
         Args:
@@ -306,11 +306,36 @@ class FundamentalMerger:
                 np.nan
             )
             
-            # Cap extreme P/E values (> 1000 is unrealistic noise)
+            # Cap extreme P/E values (>1000 is unrealistic noise)
             df.loc[df['pe_ratio'] > 1000, 'pe_ratio'] = np.nan
             df.loc[df['pe_ratio'] < -1000, 'pe_ratio'] = np.nan
         else:
             df['pe_ratio'] = np.nan
+        
+        # P/S Ratio: Market Cap / Revenue
+        # Market Cap = Close × Shares Outstanding
+        shares_col = None
+        if 'weightedAverageShsOut' in df.columns:
+            shares_col = 'weightedAverageShsOut'
+        elif 'weightedAverageShsOutDil' in df.columns:
+            shares_col = 'weightedAverageShsOutDil'
+        
+        if shares_col and 'Close' in df.columns and 'revenue' in df.columns:
+            # Calculate market cap
+            market_cap = df['Close'] * df[shares_col]
+            
+            # Calculate P/S ratio
+            df['ps_ratio'] = np.where(
+                df['revenue'] != 0,
+                market_cap / df['revenue'],
+                np.nan
+            )
+            
+            # Cap extreme P/S values (>100 is unrealistic)
+            df.loc[df['ps_ratio'] > 100, 'ps_ratio'] = np.nan
+            df.loc[df['ps_ratio'] < 0, 'ps_ratio'] = np.nan
+        else:
+            df['ps_ratio'] = np.nan
         
         # P/B Ratio: Close / Book Value per Share
         # Note: We'd need shares outstanding for this. For now, use proxy.
@@ -343,9 +368,23 @@ class FundamentalMerger:
         else:
             df['pb_ratio'] = np.nan
         
-        # For P/S ratio, we'd need market cap which requires shares outstanding
-        # Skip for now unless data is available
-        df['ps_ratio'] = np.nan
+        # NEW MINERVINI VALUATION - PEG Ratio (Price/Earnings to Growth)
+        # Peter Lynch's favorite: PEG < 1.0-1.5 = undervalued growth
+        # Only calculated for stocks with positive growth (> 0%)
+        if 'pe_ratio' in df.columns and 'eps_growth_yoy' in df.columns:
+            df['peg_adjusted'] = np.where(
+                df['eps_growth_yoy'] > 0,
+                np.clip(df['pe_ratio'] / df['eps_growth_yoy'], 0, 10),
+                np.nan
+            )
+        else:
+            df['peg_adjusted'] = np.nan
+        
+        # Separate flag for declining earnings (model can branch on this)
+        if 'eps_growth_yoy' in df.columns:
+            df['is_declining_earnings'] = (df['eps_growth_yoy'] <= 0).astype(int)
+        else:
+            df['is_declining_earnings'] = 0
         
         return df
     
@@ -380,7 +419,7 @@ class FundamentalMerger:
         raw_cols = [
             'revenue', 'netIncome', 'eps', 'grossProfit', 'operatingIncome',
             'totalAssets', 'totalLiabilities', 'totalEquity', 'totalDebt',
-            'cash', 'currentAssets', 'currentLiabilities'
+            'cash', 'totalCurrentAssets', 'totalCurrentLiabilities'
         ]
         for col in raw_cols:
             df[col] = 0.0

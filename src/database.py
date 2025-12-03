@@ -339,6 +339,27 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def update_buy_list_ml_rank(self, ticker: str, ml_rank: int):
+        """
+        Updates only the ML rank for a ticker in buy_list.
+        Used for recalculating ranks across entire buy list.
+        
+        Args:
+            ticker: Stock symbol
+            ml_rank: New ML rank (1=best)
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE buy_list
+            SET ml_rank = ?
+            WHERE ticker = ? AND status = 'active'
+        """, (ml_rank, ticker))
+        
+        conn.commit()
+        conn.close()
+
 
     def get_buy_list(self, active_only: bool = True, as_of_date: Optional[str] = None) -> pd.DataFrame:
         """

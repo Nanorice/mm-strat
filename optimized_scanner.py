@@ -14,7 +14,7 @@ import numpy as np
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 import time
 import argparse
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = False,
                          use_ml: bool = False, model_path: Optional[str] = None,
-                         ml_threshold: float = 0.6):
+                         skip_cache_update: bool = False, preloaded_data: Optional[Dict[str, pd.DataFrame]] = None):
     """
     Optimized scanner using batch processing and vectorized operations.
 
@@ -46,9 +46,10 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         scan_date: Optional date to scan (YYYY-MM-DD). If None, uses today.
                    Enables historical backtesting by using only data up to scan_date.
         csv_output: If True, exports buy_list and activity to CSV files
-        use_ml: If True, scores SEPA candidates with ML model
+        use_ml: If True, adds ML probability scores to SEPA candidates (informational only)
         model_path: Path to ML model (default: models/model_fold_1.json)
-        ml_threshold: Minimum ML probability to keep signal (default: 0.6)
+        skip_cache_update: If True, skips cache update step (for date-range mode optimization)
+        preloaded_data: Optional pre-loaded price data dict (for date-range mode optimization)
     """
     start_time = time.time()
 
@@ -68,7 +69,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             print(f"\n[ML] Loaded model: {model_name}")
             print(f"[ML] Model version: {ml_scorer.model_version}")
             print(f"[ML] Features required: {len(ml_scorer.feature_names)}")
-            print(f"[ML] Threshold: {ml_threshold:.2f}")
+            print(f"[ML] Scoring mode: Informational (all SEPA signals retained)")
         except Exception as e:
             print(f"\n[WARN] ML model loading failed: {e}")
             print("        Proceeding without ML scoring...\n")
@@ -85,40 +86,69 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     print("=" * 80)
     print(f" QSS OPTIMIZED SCANNER | {scan_date_str}")
     print("=" * 80)
+    
+    # Determine total steps based on ML usage
+    total_steps = 6 if use_ml else 4
+
 
     # Initialize components
     data_repo = DataRepository()
     db = DatabaseManager()
 
     # Step 1: Get Universe
-    print("\n[1/4] Fetching S&P 500 Universe...")
+    print(f"\n[1/{total_steps}] Loading Universe...")
     tickers = data_repo.update_universe()
     print(f"       Loaded {len(tickers)} tickers")
 
-    # Step 2: Batch Cache Update (FMP batches up to 100 tickers per API call)
-    print("\n[2/4] Batch Updating Cache...")
-    update_start = time.time()
-    results = data_repo.update_cache(tickers, force=False, source='yf')
-    success_count = sum(results.values())
-    update_time = time.time() - update_start
-    print(f"       Updated {success_count}/{len(tickers)} tickers in {update_time:.1f}s")
+    # Step 2: Batch Cache Update (skipped if already done in date-range mode)
+    if not skip_cache_update:
+        print(f"\n[2/{total_steps}] Batch Updating Cache...")
+        update_start = time.time()
+        results = data_repo.update_cache(tickers, force=False, source='yf')
+        success_count = sum(results.values())
+        update_time = time.time() - update_start
+        print(f"       Updated {success_count}/{len(tickers)} tickers in {update_time:.1f}s")
+    else:
+        print(f"\n[2/{total_steps}] Cache Update: Skipped (already updated in pre-scan)")
+        update_time = 0.0
 
-    # Step 3: Batch Load All Data
-    print("\n[3/4] Batch Loading Price Data...")
-    load_start = time.time()
-    ticker_data = data_repo.get_batch_data(tickers)
-    load_time = time.time() - load_start
-    print(f"       Loaded {len(ticker_data)} tickers in {load_time:.1f}s")
+    # Step 3: Batch Load All Data (or use preloaded data for date-range mode)
+    if preloaded_data is None:
+        print(f"\n[3/{total_steps}] Batch Loading Price Data...")
+        load_start = time.time()
+        ticker_data = data_repo.get_batch_data(tickers)
+        load_time = time.time() - load_start
+        print(f"       Loaded {len(ticker_data)} tickers in {load_time:.1f}s")
+    else:
+        # Use pre-loaded data (date-range optimization)
+        ticker_data = preloaded_data
+        load_time = 0.0
+        print(f"\n[3/{total_steps}] Using Pre-loaded Price Data...")
+        print(f"       {len(ticker_data)} tickers available")
     
-    # Filter out tickers with insufficient data
-    valid_ticker_data = {
-        ticker: df for ticker, df in ticker_data.items() 
-        if df is not None and len(df) >= 200
-    }
-    print(f"       {len(valid_ticker_data)} tickers have sufficient data (200+ bars)")
+    # Filter data by scan_date if specified (for historical accuracy)
+    if scan_date:
+        filtered_data = {}
+        for ticker, df in ticker_data.items():
+            if df is not None and len(df) > 0:
+                # Only include data up to scan_date
+                mask = df.index <= pd.Timestamp(scan_date)
+                filtered_df = df[mask]
+                if len(filtered_df) > 0:
+                    filtered_data[ticker] = filtered_df
+        valid_ticker_data = filtered_data
+    else:
+        # No date filtering for live scans
+        valid_ticker_data = {
+            ticker: df for ticker, df in ticker_data.items() 
+            if df is not None and len(df) > 0
+        }
+    
+    print(f"       {len(valid_ticker_data)} tickers have data available (filtered to {scan_date_str})")
+
 
     # Step 4: Batch Feature Calculation & SEPA Scanning
-    print("\n[4/4] Batch Processing Features & SEPA Screening...")
+    print(f"\n[4/{total_steps}] Batch Processing Features & SEPA Screening...")
     scan_start = time.time()
     
     # Initialize QSS components
@@ -161,7 +191,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         print("\n" + "="*80)
         print(" ML SCORING LAYER")
         print("="*80)
-        print(f"\n[5/7] ML Model Inference...")
+        print(f"\n[5/{total_steps}] ML Model Inference...")
         print(f"       Candidates to score: {len(new_triggers_today)}")
         ml_start = time.time()
 
@@ -294,12 +324,11 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             print(f"       Proceeding with all SEPA signals (no ML filter)...")
             logger.error(f"ML scoring error: {e}", exc_info=True)
     elif use_ml and ml_scorer and len(new_triggers_today) == 0:
-        print("\n[5/7] ML Scoring: Skipped (no new triggers)")
+        print(f"\n[5/{total_steps}] ML Scoring: Skipped (no new triggers)")
     
     
     # Update Database - Buy List Management  
-    step_num = "6/7" if use_ml else "5/5"
-    print(f"\n[{step_num}] Managing Buy List...")
+    print(f"\n[{total_steps}/{total_steps}] Managing Buy List...")
     
     # Temporal Consistency Check - Detect backward scans
     all_signals = db.get_buy_list(active_only=False)
@@ -474,6 +503,34 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             reason='trend_broken'
         )
     
+    # Step 8: Recalculate ML Ranks Across Entire Buy List (if ML enabled)
+    if use_ml and ml_scorer:
+        # Get all active buy list entries
+        buy_list_df = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+        
+        if not buy_list_df.empty and 'ml_probability' in buy_list_df.columns:
+            # Filter to entries that have ML probabilities
+            ml_entries = buy_list_df[buy_list_df['ml_probability'].notna()].copy()
+            
+            if len(ml_entries) > 0:
+                # Extract probabilities and calculate ranks
+                # Higher probability = lower/better rank (1 = highest probability)
+                probabilities = ml_entries['ml_probability'].values
+                
+                # argsort gives indices from low to high, reverse for high to low
+                sorted_indices = np.argsort(probabilities)[::-1]
+                
+                # Create rank array
+                ranks = np.empty(len(probabilities), dtype=int)
+                ranks[sorted_indices] = np.arange(1, len(probabilities) + 1)
+                
+                # Update ranks in database
+                for ticker, rank in zip(ml_entries['ticker'], ranks):
+                    db.update_buy_list_ml_rank(ticker, int(rank))
+                
+                logger.info(f"Recalculated ML ranks for {len(ml_entries)} buy list entries")
+
+    
     print(f"       +{len(tickers_to_add)} added, -{len(tickers_to_remove)} removed")
     print(f"       Active buy list: {len(tickers_in_buy_list) + len(tickers_to_add) - len(tickers_to_remove)} tickers")
     
@@ -498,8 +555,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
 
     # Performance Summary
     total_time = time.time() - start_time
-    step_num = "7/7" if use_ml else "6/6"
-    print(f"\n[{step_num}] Scan Complete!\n")
+    print(f"\n[✓] Scan Complete!\n")
     print("=" * 80)
     print(" PERFORMANCE METRICS")
     print("=" * 80)
@@ -600,8 +656,6 @@ if __name__ == "__main__":
     parser.add_argument('--use-ml', action='store_true', help='Enable ML scoring')
     parser.add_argument('--model-path', type=str, default='models/model_fold_1.json',
                        help='Path to ML model (default: models/model_fold_1.json)')
-    parser.add_argument('--ml-threshold', type=float, default=0.6,
-                       help='ML probability threshold (default: 0.6)')
     parser.add_argument('--date-range', nargs=2, metavar=('START', 'END'),
                        help='Scan date range (YYYY-MM-DD YYYY-MM-DD)')
 
@@ -609,13 +663,37 @@ if __name__ == "__main__":
 
     try:
         if args.date_range:
-            # Date range mode
+            # Date range mode - optimize by updating cache once before scanning all dates
             from datetime import datetime, timedelta
 
             start_date = datetime.strptime(args.date_range[0], '%Y-%m-%d')
             end_date = datetime.strptime(args.date_range[1], '%Y-%m-%d')
+            
+            print(f"\n{'='*80}")
+            print(f"DATE RANGE MODE: {args.date_range[0]} to {args.date_range[1]}")
+            print(f"{'='*80}")
+            
+            # PRE-SCAN: Update cache once for all dates (major performance improvement)
+            print("\n[PRE-SCAN] Updating cache for date range...")
+            data_repo = DataRepository()
+            tickers = data_repo.update_universe()
+            cache_start = time.time()
+            results = data_repo.update_cache(tickers, force=False, source='yf')
+            success_count = sum(results.values())
+            cache_time = time.time() - cache_start
+            print(f"            Updated {success_count}/{len(tickers)} tickers in {cache_time:.1f}s")
+            print(f"            Cache is now ready for {(end_date - start_date).days + 1} day(s) of scanning\n")
+            
+            # PRE-LOAD: Load all price data once for entire date range (major optimization)
+            print("\n[PRE-SCAN] Loading price data for date range...")
+            load_start = time.time()
+            all_ticker_data = data_repo.get_batch_data(tickers)
+            load_time = time.time() - load_start
+            print(f"            Loaded {len(all_ticker_data)} tickers in {load_time:.1f}s")
+            print(f"            Data will be filtered by date for each scan (in-memory operation)\n")
+            
+            # Scan each date in range
             current = start_date
-
             while current <= end_date:
                 date_str = current.strftime('%Y-%m-%d')
                 print(f"\n{'='*80}")
@@ -626,7 +704,8 @@ if __name__ == "__main__":
                     csv_output=args.csv_output,
                     use_ml=args.use_ml,
                     model_path=args.model_path,
-                    ml_threshold=args.ml_threshold
+                    skip_cache_update=True,  # Cache already updated in pre-scan
+                    preloaded_data=all_ticker_data  # Pass pre-loaded data
                 )
                 current += timedelta(days=1)
         else:
@@ -635,8 +714,7 @@ if __name__ == "__main__":
                 scan_date=args.scan_date,
                 csv_output=args.csv_output,
                 use_ml=args.use_ml,
-                model_path=args.model_path,
-                ml_threshold=args.ml_threshold
+                model_path=args.model_path
             )
 
     except KeyboardInterrupt:
@@ -644,5 +722,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Scanner failed with error: {e}", exc_info=True)
         print(f"\n[ERROR]: {e}")
+
 
 

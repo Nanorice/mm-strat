@@ -37,16 +37,96 @@ class DataRepository:
         self._call_timestamps = []
         self.rate_limit = 300  # FMP Starter tier rate limit
 
-    def update_universe(self) -> List[str]:
+    def get_screener_universe(self) -> List[str]:
         """
-        Fetches the current S&P 500 ticker list from SSGA.
+        Fetch ticker universe from FMP stock screener API.
+        Applies filters for market cap, price, volume, exchange, etc.
+        
+        Returns:
+            List of ticker symbols matching screener criteria
+        """
+        if not config.FMP_API_KEY:
+            logger.warning("FMP_API_KEY not set, cannot use screener")
+            return []
+        
+        logger.info("Fetching ticker universe from FMP stock screener...")
+        
+        try:
+            url = f"{config.FMP_BASE_URL}/company-screener"
+            params = config.FMP_SCREENER_PARAMS.copy()
+            params['apikey'] = config.FMP_API_KEY
+            
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not isinstance(data, list):
+                logger.warning(f"Unexpected screener response format: {type(data)}")
+                return []
+            
+            # Extract ticker symbols from response
+            tickers = []
+            for company in data:
+                if isinstance(company, dict) and 'symbol' in company:
+                    symbol = str(company['symbol']).strip()
+                    # Filter out invalid symbols (e.g., too long, has special chars)
+                    if len(symbol) > 0 and len(symbol) <= 5 and symbol.isalnum():
+                        tickers.append(symbol.replace('.', '-'))
+            
+            unique_tickers = list(set(tickers))
+            logger.info(f"Successfully loaded {len(unique_tickers)} tickers from FMP screener")
+            return unique_tickers
+            
+        except Exception as e:
+            logger.error(f"FMP screener failed: {e}")
+            return []
 
+    def update_universe(self, source: str = None) -> List[str]:
+        """
+        Fetches ticker universe from specified source.
+        
+        Args:
+            source: Universe source - 'PRICE_FOLDER' (cached tickers), 'SSGA' (S&P 500), or 'FMP_SCREENER'. 
+                   If None, defaults to PRICE_FOLDER
+        
         Returns:
             List of clean ticker symbols
         """
-        logger.info("Fetching S&P 500 universe from SSGA...")
-
+        # Default to price folder (largest population)
+        if source is None:
+            source = 'PRICE_FOLDER'
+        
+        logger.info(f"Fetching ticker universe from source: {source}")
+        
+        # Try price folder first (default - uses all cached tickers)
+        if source == 'PRICE_FOLDER':
+            try:
+                logger.info("Scanning data/price folder for tickers...")
+                price_files = list(self.price_dir.glob('*.parquet'))
+                if price_files:
+                    tickers_from_files = [f.stem for f in price_files]
+                    # Filter out benchmark if present
+                    tickers_from_files = [t for t in tickers_from_files if t != self.benchmark_ticker]
+                    logger.info(f"Found {len(tickers_from_files)} tickers from price folder")
+                    return tickers_from_files
+                else:
+                    logger.warning("Price folder is empty, falling back to S&P 500...")
+                    # Fall through to S&P 500 fallback
+            except Exception as e:
+                logger.warning(f"Failed to scan price folder: {e}, falling back to S&P 500...")
+                # Fall through to S&P 500 fallback
+        
+        # FMP Screener (if explicitly requested)
+        if source == 'FMP_SCREENER':
+            tickers = self.get_screener_universe()
+            if tickers:
+                return tickers
+            logger.warning("FMP screener failed, falling back to S&P 500...")
+            # Fall through to S&P 500 fallback
+        
+        # S&P 500 from SSGA (either explicit request or fallback)
         try:
+            logger.info("Fetching S&P 500 universe from SSGA...")
             df = pd.read_excel(config.SSGA_URL, engine='openpyxl', skiprows=4)
             tickers = df['Ticker'].dropna().tolist()
 
@@ -58,38 +138,71 @@ class DataRepository:
                     clean_tickers.append(t.replace('.', '-'))
 
             unique_tickers = list(set(clean_tickers))
-            logger.info(f"Successfully loaded {len(unique_tickers)} unique tickers")
+            logger.info(f"Successfully loaded {len(unique_tickers)} unique tickers from S&P 500")
             return unique_tickers
 
         except Exception as e:
             logger.warning(f"Failed to fetch SSGA data: {e}")
             
-            # Fallback 1: Scan data/price folder for existing tickers
-            logger.info("Attempting to scan data/price folder for tickers...")
-            try:
-                price_files = list(self.price_dir.glob('*.parquet'))
-                if price_files:
-                    tickers_from_files = [f.stem for f in price_files]
-                    # Filter out benchmark if present
-                    tickers_from_files = [t for t in tickers_from_files if t != self.benchmark_ticker]
-                    logger.info(f"Found {len(tickers_from_files)} tickers from price folder")
-                    return tickers_from_files
-            except Exception as scan_error:
-                logger.warning(f"Failed to scan price folder: {scan_error}")
-            
-            # Fallback 2: Use hardcoded tech-heavy subset
+            # Last resort: Use hardcoded tech-heavy subset
             logger.warning("Using hardcoded fallback ticker list")
             return ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA',
                     'AMD', 'PLTR', 'SMCI', 'JPM', 'V', 'MA', 'LLY', 'AVGO']
 
-    def _is_cache_stale(self, file_path: Path) -> bool:
-        """Check if cached Parquet file is older than cache_days."""
+
+    def _is_cache_stale(self, file_path: Path, min_date: str = '2000-01-01') -> bool:
+        """
+        Check if cached Parquet file is stale or doesn't have required date range.
+        
+        Args:
+            file_path: Path to cached file
+            min_date: Minimum required start date (default: 2000-01-01)
+            
+        Returns:
+            True if cache should be refreshed, False otherwise
+        """
         if not file_path.exists():
             return True
 
+        # Check file age (quick check before loading data)
         file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
         age_days = (datetime.now() - file_mtime).days
-        return age_days >= self.cache_days
+        if age_days >= self.cache_days:
+            logger.debug(f"{file_path.name}: Stale (file age: {age_days} days)")
+            return True
+        
+        # Check date range coverage and latest data date
+        try:
+            df = pd.read_parquet(file_path)
+            if df.empty:
+                logger.debug(f"{file_path.name}: Empty cache file")
+                return True
+            
+            # Check if historical data goes back far enough
+            cache_start = df.index.min()
+            required_start = pd.Timestamp(min_date)
+            
+            if cache_start > required_start:
+                logger.debug(f"{file_path.name}: Insufficient range (has {cache_start.date()}, need {required_start.date()})")
+                return True
+            
+            # Check if latest data is current (most recent trading day)
+            cache_end = df.index.max()
+            today = pd.Timestamp.now().normalize()
+            
+            # If latest data is from yesterday or older, cache is stale
+            # (Accounts for intraday scans - if market hasn't closed yet, yesterday's data is acceptable)
+            days_since_last_data = (today - cache_end).days
+            if days_since_last_data > 1:
+                logger.debug(f"{file_path.name}: Outdated (latest data: {cache_end.date()}, need: {today.date()} or yesterday)")
+                return True
+                
+            logger.debug(f"{file_path.name}: Valid cache (from {cache_start.date()} to {cache_end.date()})")
+            return False
+            
+        except Exception as e:
+            logger.warning(f"{file_path.name}: Cache validation failed ({e}), treating as stale")
+            return True
 
     def _rate_limit_check(self):
         """
@@ -172,11 +285,8 @@ class DataRepository:
             if not historical:
                 return None
             
-            # Filter data to start from 2010-01-01
-            historical = [
-                record for record in historical
-                if pd.to_datetime(record.get('date', '1900-01-01')) >= pd.Timestamp('2010-01-01')
-            ]
+            # No date filtering - allow full historical data for ML training
+            # (Filter was previously set to 2010-01-01 but removed for comprehensive training)
             
             # Convert to DataFrame
             df = pd.DataFrame(historical)
@@ -243,7 +353,7 @@ class DataRepository:
                         continue
         return None
 
-    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'yfinance') -> Optional[pd.DataFrame]:
+    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'yfinance', min_date: str = '2000-01-01') -> Optional[pd.DataFrame]:
         """
         Returns OHLCV data for a single ticker.
         First checks Parquet cache, then downloads if needed.
@@ -252,14 +362,15 @@ class DataRepository:
             ticker: Stock symbol
             use_cache: If True, uses cached data when available
             source: Data source - 'yfinance' (default) or 'fmp'
+            min_date: Minimum required start date for cache validation (default: 2000-01-01)
 
         Returns:
             DataFrame with OHLCV data (adjusted), or None if failed
         """
         cache_file = self.price_dir / f"{ticker}.parquet"
 
-        # Try cache first
-        if use_cache and cache_file.exists() and not self._is_cache_stale(cache_file):
+        # Try cache first (with date range validation)
+        if use_cache and cache_file.exists() and not self._is_cache_stale(cache_file, min_date=min_date):
             try:
                 df = pd.read_parquet(cache_file)
                 logger.debug(f"Loaded {ticker} from cache")
@@ -325,7 +436,7 @@ class DataRepository:
             logger.debug(f"Downloading {ticker} from yfinance...")
             data = yf.download(
                 ticker,
-                start='2010-01-01',
+                period='max',  # Get full historical data (yfinance ignores start= param by default)
                 auto_adjust=True,
                 progress=False
             )
@@ -369,7 +480,7 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp') -> Dict[str, bool]:
+    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', min_date: str = '2000-01-01') -> Dict[str, bool]:
         """
         Smart batch update of Parquet cache.
         Only downloads tickers that are missing or stale.
@@ -378,6 +489,7 @@ class DataRepository:
             tickers: List of ticker symbols to update
             force: If True, re-downloads all tickers regardless of cache
             source: Data source - 'yfinance' (default) or 'fmp'
+            min_date: Minimum required start date for cache validation (default: 2000-01-01)
 
         Returns:
             Dict mapping ticker -> success status
@@ -388,7 +500,7 @@ class DataRepository:
         # Determine which tickers need updating
         for ticker in tickers:
             cache_file = self.price_dir / f"{ticker}.parquet"
-            if force or self._is_cache_stale(cache_file):
+            if force or self._is_cache_stale(cache_file, min_date=min_date):
                 to_download.append(ticker)
             else:
                 results[ticker] = True  # Already cached
@@ -505,10 +617,10 @@ class DataRepository:
             logger.info(f"Processing batch {i//batch_size + 1}/{(len(tickers)-1)//batch_size + 1}")
 
             try:
-                # Batch download
+                # Batch download - use period='max' for full history
                 data = yf.download(
                     batch,
-                    start='2000-01-01',
+                    period='max',  # Get full historical data (start= param is often ignored)
                     group_by='ticker',
                     auto_adjust=True,
                     progress=False,

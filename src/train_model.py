@@ -238,13 +238,16 @@ class SEPAModelTrainer:
         """
         Optimize hyperparameters using Optuna (Bayesian optimization).
 
-        Search space:
-        - max_depth: [2, 3, 4] (constrained)
+        Search space (anti-feature-collapse ranges):
+        - max_depth: [3, 4] (RAISED minimum: prevent overly simple models)
         - learning_rate: [0.01, 0.1]
-        - n_estimators: [100, 500]
+        - n_estimators: [200, 500] (MORE trees for feature exploration)
         - subsample: [0.6, 1.0]
-        - colsample_bytree: [0.6, 1.0]
-        - min_child_weight: [1, 10]
+        - colsample_bytree: [0.3, 0.6] (LOWERED max: force diversity)
+        - min_child_weight: [0.1, 5.0] (LOWERED max: allow subtle patterns)
+        - gamma: [0.0, 1.0] (LOWERED max: reduce aggressive pruning)
+        - reg_alpha: [0.0, 0.5] (REDUCED: less aggressive L1)
+        - reg_lambda: [0.0, 2.0] (REDUCED: less aggressive L2)
 
         Args:
             X_train, y_train: Training data
@@ -271,15 +274,23 @@ class SEPAModelTrainer:
 
         # Objective function
         def objective(trial: optuna.Trial) -> float:
+            # Suggest hyperparameters
+            n_estimators = trial.suggest_int('n_estimators', 200, 500, step=100)
+            
             params = {
                 'objective': 'binary:logistic',
                 'eval_metric': 'logloss',
-                'max_depth': trial.suggest_int('max_depth', 2, self.max_depth_limit),
+                # Prevent overly simple models
+                'max_depth': trial.suggest_int('max_depth', 3, self.max_depth_limit),  # Min 3
                 'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-                'n_estimators': trial.suggest_int('n_estimators', 100, 500, step=100),
                 'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
-                'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+                # Anti-feature-collapse: Force model to use diverse features
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.6),  # Lower max
+                'min_child_weight': trial.suggest_float('min_child_weight', 0.1, 5.0),  # Lower max
+                'gamma': trial.suggest_float('gamma', 0.0, 1.0),  # REDUCED: less pruning
+                # Regularization to prevent overfitting to dominant features
+                'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 0.5),  # L1 (Lasso)
+                'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 2.0),  # L2 (Ridge)
                 'scale_pos_weight': self.pos_weight,
                 'seed': self.random_state,
                 'tree_method': 'hist'
@@ -293,10 +304,11 @@ class SEPAModelTrainer:
             dtrain = xgb.DMatrix(X_train_clean, label=y_train)
             dval = xgb.DMatrix(X_val_clean, label=y_val)
 
+            # Train model (note: n_estimators is NOT in params, it's num_boost_round)
             model = xgb.train(
                 params=params,
                 dtrain=dtrain,
-                num_boost_round=params['n_estimators'],
+                num_boost_round=n_estimators,  # FIXED: was using params['n_estimators']
                 evals=[(dval, 'val')],
                 early_stopping_rounds=30,
                 verbose_eval=False
@@ -326,6 +338,16 @@ class SEPAModelTrainer:
 
         # Get best parameters
         self.best_params = study.best_params
+        
+        # Log optimization results
+        logger.info(f"\n{'='*80}")
+        logger.info(f"OPTIMIZATION STATISTICS")
+        logger.info(f"{'='*80}")
+        logger.info(f"Trials completed: {len(study.trials)}")
+        logger.info(f"Best trial number: {study.best_trial.number}")
+        logger.info(f"Best value (Precision@{int(self.precision_k_pct*100)}%): {study.best_value:.4f}")
+        logger.info(f"{'='*80}")
+        
         self.best_params.update({
             'objective': 'binary:logistic',
             'eval_metric': 'logloss',
@@ -352,8 +374,11 @@ class SEPAModelTrainer:
             'learning_rate': 0.05,
             'n_estimators': 300,
             'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'min_child_weight': 5,
+            'colsample_bytree': 0.5,  # LOWERED: Force feature diversity
+            'min_child_weight': 1.0,  # LOWERED: Allow subtle signals
+            'gamma': 0.5,  # NEW: Moderate tree pruning
+            'reg_alpha': 0.1,  # NEW: Light L1 regularization
+            'reg_lambda': 1.0,  # NEW: Moderate L2 regularization
             'scale_pos_weight': self.pos_weight,
             'seed': self.random_state,
             'tree_method': 'hist'

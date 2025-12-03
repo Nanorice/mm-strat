@@ -40,7 +40,8 @@ class TemporalSplitter:
     def __init__(
         self,
         purge_gap_days: int = 60,
-        min_train_years: float = 2.0
+        min_train_years: float = 2.0,
+        outcome_extension_days: int = 90
     ):
         """
         Initialize temporal splitter.
@@ -48,9 +49,12 @@ class TemporalSplitter:
         Args:
             purge_gap_days: Gap between train and test to prevent overlap (default: 60)
             min_train_years: Minimum training period in years (default: 2.0)
+            outcome_extension_days: Extra days after test_end for trades to naturally exit (default: 90)
+                                   This allows trades entered near end of test period to complete naturally.
         """
         self.purge_gap_days = purge_gap_days
         self.min_train_years = min_train_years
+        self.outcome_extension_days = outcome_extension_days
         self.folds = []
 
     def create_folds(
@@ -74,11 +78,20 @@ class TemporalSplitter:
         # Ensure date column is datetime
         df[date_column] = pd.to_datetime(df[date_column])
 
-        # Default fold specification
+        # Default fold specification - 9-fold walk-forward validation
+        # Fold 9 (last) is the production model trained on all available historical data (2003-2025)
         if fold_specs is None:
             fold_specs = [
-                ('2021-01-01', '2022-12-31', '2023-12-31'),  # Fold 1: 2y train → 1y test
-                ('2021-01-01', '2023-12-31', '2025-12-31')   # Fold 2: 3y train → 1.9y test
+                ('2003-01-01', '2016-12-31', '2017-12-31'),  # Fold 1: Test 2017
+                ('2003-01-01', '2017-12-31', '2018-12-31'),  # Fold 2: Test 2018 (Correction)
+                ('2003-01-01', '2018-12-31', '2019-12-31'),  # Fold 3: Test 2019 (Recovery)
+                ('2003-01-01', '2019-12-31', '2020-12-31'),  # Fold 4: Test 2020 (COVID crash)
+                ('2003-01-01', '2020-12-31', '2021-12-31'),  # Fold 5: Test 2021 (Bull)
+                ('2003-01-01', '2021-12-31', '2022-12-31'),  # Fold 6: Test 2022 (Bear)
+                ('2003-01-01', '2022-12-31', '2023-12-31'),  # Fold 7: Test 2023 (Recovery)
+                ('2003-01-01', '2023-12-31', '2024-12-31'),  # Fold 8: Test 2024 (Bull)
+                ('2003-01-01', '2024-12-31', '2025-11-28'),  # Fold 9: Test 2025 YTD
+                ('2003-01-01', '2025-11-28', '2025-12-31'),  # Fold 10: Production model (all data, 22.9 years)
             ]
 
         logger.info(f"Creating {len(fold_specs)} temporal folds with {self.purge_gap_days}-day purge gap")
@@ -101,14 +114,22 @@ class TemporalSplitter:
             test_mask = (df[date_column] > test_start_dt) & (df[date_column] <= test_end_dt)
             test_indices = df[test_mask].index.tolist()
 
+            # Detect production fold (test period extends to/beyond current date or into future)
+            current_date = pd.Timestamp.now()
+            is_production = test_end_dt > current_date or len(test_indices) == 0 and test_end_dt > train_end_dt
+
             # Validate fold
             if len(train_indices) == 0:
                 logger.warning(f"Fold {fold_idx}: No training samples!")
                 continue
 
-            if len(test_indices) == 0:
+            if len(test_indices) == 0 and not is_production:
                 logger.warning(f"Fold {fold_idx}: No test samples!")
                 continue
+            
+            # Production folds are expected to have no test data
+            if is_production:
+                logger.info(f"Fold {fold_idx}: Identified as PRODUCTION FOLD (test period: {test_end_dt.date()})")
 
             # Check minimum training period
             train_years = (train_end_dt - train_start_dt).days / 365.25
@@ -118,25 +139,33 @@ class TemporalSplitter:
                     f"< minimum ({self.min_train_years}y)"
                 )
 
-            # Sanity check: Ensure no overlap
-            train_max_date = df.loc[train_indices, date_column].max()
-            test_min_date = df.loc[test_indices, date_column].min()
-            actual_gap = (test_min_date - train_max_date).days
+            # Sanity check: Ensure no overlap (skip for production folds)
+            if not is_production and len(test_indices) > 0:
+                train_max_date = df.loc[train_indices, date_column].max()
+                test_min_date = df.loc[test_indices, date_column].min()
+                actual_gap = (test_min_date - train_max_date).days
 
-            if actual_gap < self.purge_gap_days:
-                logger.error(
-                    f"Fold {fold_idx}: Actual gap ({actual_gap} days) "
-                    f"< purge gap ({self.purge_gap_days} days)!"
-                )
-                raise ValueError("Temporal leakage detected! Check fold specifications.")
+                if actual_gap < self.purge_gap_days:
+                    logger.error(
+                        f"Fold {fold_idx}: Actual gap ({actual_gap} days) "
+                        f"< purge gap ({self.purge_gap_days} days)!"
+                    )
+                    raise ValueError("Temporal leakage detected! Check fold specifications.")
+            else:
+                actual_gap = self.purge_gap_days  # Default for production folds
+
+            # Calculate outcome window end (for natural trade exits)
+            outcome_end_dt = test_end_dt + timedelta(days=self.outcome_extension_days)
 
             # Store fold
             fold = {
                 'fold_id': fold_idx,
+                'is_production': is_production,
                 'train_start': train_start_dt,
                 'train_end': train_end_dt,
                 'test_start': test_start_dt,
                 'test_end': test_end_dt,
+                'outcome_end': outcome_end_dt,  # Extended window for trade outcomes
                 'train_indices': train_indices,
                 'test_indices': test_indices,
                 'train_size': len(train_indices),
@@ -147,11 +176,14 @@ class TemporalSplitter:
 
             self.folds.append(fold)
 
+            fold_type = "PRODUCTION" if is_production else "Validation"
             logger.info(
-                f"Fold {fold_idx}: Train {train_start_dt.date()} to {train_end_dt.date()} "
+                f"Fold {fold_idx} ({fold_type}): Train {train_start_dt.date()} to {train_end_dt.date()} "
                 f"({len(train_indices)} samples) → "
                 f"Test {test_start_dt.date()} to {test_end_dt.date()} "
-                f"({len(test_indices)} samples) | Gap: {actual_gap} days"
+                f"({len(test_indices)} samples) | "
+                f"Gap: {actual_gap} days | "
+                f"Outcome window: to {outcome_end_dt.date()} (+{self.outcome_extension_days}d)"
             )
 
         return self.folds
@@ -207,13 +239,21 @@ class TemporalSplitter:
         test_indices = fold['test_indices']
 
         X_train = df.loc[train_indices, feature_columns]
-        X_test = df.loc[test_indices, feature_columns]
         y_train = df.loc[train_indices, 'label']
-        y_test = df.loc[test_indices, 'label']
+        
+        # For production folds, create empty test sets
+        if len(test_indices) == 0:
+            X_test = pd.DataFrame(columns=feature_columns)
+            y_test = pd.Series(dtype=float, name='label')
+            win_rate_msg = f"Win rate (train): {y_train.mean():.1%}, Win rate (test): N/A (production fold)"
+        else:
+            X_test = df.loc[test_indices, feature_columns]
+            y_test = df.loc[test_indices, 'label']
+            win_rate_msg = f"Win rate (train): {y_train.mean():.1%}, Win rate (test): {y_test.mean():.1%}"
 
         logger.info(
             f"Fold {fold_idx}: X_train {X_train.shape}, X_test {X_test.shape}, "
-            f"Win rate (train): {y_train.mean():.1%}, Win rate (test): {y_test.mean():.1%}"
+            f"{win_rate_msg}"
         )
 
         return X_train, X_test, y_train, y_test

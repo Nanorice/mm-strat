@@ -38,7 +38,7 @@ class FundamentalProcessor:
         ]
         self.balance_sheet_cols = [
             'totalAssets', 'totalLiabilities', 'totalEquity', 
-            'totalDebt', 'cash', 'currentAssets', 'currentLiabilities',
+            'totalDebt', 'cash', 'totalCurrentAssets', 'totalCurrentLiabilities',
             'inventory', 'cashAndCashEquivalents'
         ]
     
@@ -162,9 +162,37 @@ class FundamentalProcessor:
         for base_col, growth_col in growth_metrics.items():
             if base_col in df.columns:
                 # YoY: compare to 4 quarters ago
-                df[growth_col] = df[base_col].pct_change(periods=4) * 100
+                df[growth_col] = df[base_col].pct_change(periods=4, fill_method=None) * 100
             else:
                 df[growth_col] = np.nan
+        
+        # NEW MINERVINI ACCELERATION FEATURES
+        # Acceleration = Change in growth rate (current quarter vs previous quarter)
+        # Example: If Q1 growth was 10% and Q2 is 30%, acceleration = +20
+        
+        if 'eps_growth_yoy' in df.columns:
+            df['eps_accel'] = df['eps_growth_yoy'].diff(periods=1)
+        else:
+            df['eps_accel'] = np.nan
+        
+        if 'revenue_growth_yoy' in df.columns:
+            df['revenue_accel'] = df['revenue_growth_yoy'].diff(periods=1)
+        else:
+            df['revenue_accel'] = np.nan
+        
+        # NEW MINERVINI QUALITY CHECK - Inventory vs Sales Spread
+        # Positive value = Red flag (inventory growing faster than sales)
+        # Negative value = Healthy (sales outpacing inventory growth)
+        if 'inventory' in df.columns:
+            df['inventory_growth_yoy'] = df['inventory'].pct_change(periods=4, fill_method=None) * 100
+            
+            if 'revenue_growth_yoy' in df.columns:
+                df['inventory_vs_sales_spread'] = df['inventory_growth_yoy'] - df['revenue_growth_yoy']
+            else:
+                df['inventory_vs_sales_spread'] = np.nan
+        else:
+            df['inventory_growth_yoy'] = np.nan
+            df['inventory_vs_sales_spread'] = np.nan
         
         # Sort back to original order (newest first)
         df = df.sort_values('filing_date', ascending=False)
@@ -265,8 +293,8 @@ class FundamentalProcessor:
         
         Ratios:
         - debt_to_equity: totalDebt / totalEquity
-        - current_ratio: currentAssets / currentLiabilities
-        - quick_ratio: (currentAssets - inventory) / currentLiabilities
+        - current_ratio: totalCurrentAssets / totalCurrentLiabilities
+        - quick_ratio: (totalCurrentAssets - inventory) / totalCurrentLiabilities
         
         Args:
             df: Merged fundamental dataframe
@@ -284,21 +312,24 @@ class FundamentalProcessor:
         else:
             df['debt_to_equity'] = np.nan
         
-        # Current Ratio
-        if 'currentAssets' in df.columns and 'currentLiabilities' in df.columns:
+        # Current Ratio - FMP uses totalCurrentAssets and totalCurrentLiabilities
+        current_assets_col = 'totalCurrentAssets' if 'totalCurrentAssets' in df.columns else 'currentAssets'
+        current_liab_col = 'totalCurrentLiabilities' if 'totalCurrentLiabilities' in df.columns else 'currentLiabilities'
+        
+        if current_assets_col in df.columns and current_liab_col in df.columns:
             df['current_ratio'] = np.where(
-                df['currentLiabilities'] != 0,
-                df['currentAssets'] / df['currentLiabilities'],
+                df[current_liab_col] != 0,
+                df[current_assets_col] / df[current_liab_col],
                 np.nan
             )
         else:
             df['current_ratio'] = np.nan
         
         # Quick Ratio
-        if all(col in df.columns for col in ['currentAssets', 'inventory', 'currentLiabilities']):
+        if all(col in df.columns for col in [current_assets_col, 'inventory', current_liab_col]):
             df['quick_ratio'] = np.where(
-                df['currentLiabilities'] != 0,
-                (df['currentAssets'] - df['inventory']) / df['currentLiabilities'],
+                df[current_liab_col] != 0,
+                (df[current_assets_col] - df['inventory']) / df[current_liab_col],
                 np.nan
             )
         else:

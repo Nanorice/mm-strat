@@ -28,8 +28,22 @@ for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
 # DATA SETTINGS
 # ==============================================================================
 BENCHMARK_TICKER = 'SPY'
-UNIVERSE_SOURCE = 'SSGA'  # State Street S&P 500 Holdings
+
+# Universe Selection Settings
+UNIVERSE_SOURCE = 'FMP_SCREENER'  # Options: 'SSGA' (S&P 500), 'FMP_SCREENER'
 SSGA_URL = 'https://www.ssga.com/us/en/intermediary/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx'
+
+# FMP Stock Screener Filters (used when UNIVERSE_SOURCE = 'FMP_SCREENER')
+FMP_SCREENER_PARAMS = {
+    "marketCapMoreThan": 300000000,      # $300M minimum market cap
+    "priceMoreThan": 5,                  # $5 minimum price
+    "volumeMoreThan": 200000,            # 200K minimum daily volume
+    "isEtf": "false",                    # Exclude ETFs
+    "isActivelyTrading": "true",         # Only actively trading stocks
+    "country": "US",                     # US stocks only
+    "exchange": "NYSE,NASDAQ,AMEX",      # Major US exchanges
+    "limit": 10000,                      # Max results (get all in one request)
+}
 
 # Data Download Settings
 LOOKBACK_PERIOD = '5y'  # History needed for technical indicators (SMA_200, 52W high/low, etc.)

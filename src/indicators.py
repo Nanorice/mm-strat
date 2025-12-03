@@ -166,6 +166,38 @@ class TechnicalAnalysis:
         return df
 
     @staticmethod
+    def calculate_rsi(df: pd.DataFrame, period: int = 14, column: str = 'Close') -> pd.Series:
+        """
+        Calculate Relative Strength Index (RSI).
+        
+        RSI is a momentum oscillator that measures speed and magnitude of price changes.
+        Bounded between 0-100, typically oversold < 30, overbought > 70.
+        
+        Args:
+            df: OHLCV DataFrame
+            period: RSI period (default: 14)
+            column: Column to calculate RSI on (default: 'Close')
+        
+        Returns:
+            Series with RSI values
+        """
+        delta = df[column].diff()
+        
+        # Separate gains and losses
+        gain = delta.where(delta > 0, 0)
+        loss = (-delta.where(delta < 0, 0))
+        
+        # Calculate average gain and loss using rolling window
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
+        
+        # Calculate RS and RSI
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
+
+    @staticmethod
     def add_normalized_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         """
         Adds Normalized ATR (nATR) - ATR relative to price.

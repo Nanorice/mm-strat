@@ -193,8 +193,9 @@ Examples:
     trained_models = []
 
     for fold_idx, fold in enumerate(folds):
+        fold_type = "PRODUCTION" if fold.get('is_production', False) else "Validation"
         logger.info(f"\n{'='*80}")
-        logger.info(f"TRAINING FOLD {fold['fold_id']}")
+        logger.info(f"TRAINING FOLD {fold['fold_id']} ({fold_type})")
         logger.info(f"{'='*80}")
 
         # Get train/test data
@@ -210,23 +211,35 @@ Examples:
 
         # Get corresponding test DataFrame (for returns)
         test_indices = fold['test_indices']
-        df_test = df.loc[test_indices]
+        df_test = df.loc[test_indices] if len(test_indices) > 0 else None
 
-        # Split train into train/val
-        train_size = int(len(X_train) * 0.8)
-        X_train_split = X_train.iloc[:train_size]
-        y_train_split = y_train.iloc[:train_size]
-        X_val_split = X_train.iloc[train_size:]
-        y_val_split = y_train.iloc[train_size:]
-
-        logger.info(f"Data splits: Train={len(X_train_split)}, Val={len(X_val_split)}, Test={len(X_test)}")
+        # For production folds, use all training data (no train/val split)
+        if fold.get('is_production', False):
+            logger.info("Production fold: Using ALL training data (no validation split)")
+            X_train_split = X_train
+            y_train_split = y_train
+            X_val_split = None
+            y_val_split = None
+            logger.info(f"Data: Train={len(X_train_split)} (100%)")
+        else:
+            # Split train into train/val for validation folds
+            train_size = int(len(X_train) * 0.8)
+            X_train_split = X_train.iloc[:train_size]
+            y_train_split = y_train.iloc[:train_size]
+            X_val_split = X_train.iloc[train_size:]
+            y_val_split = y_train.iloc[train_size:]
+            logger.info(f"Data splits: Train={len(X_train_split)}, Val={len(X_val_split)}, Test={len(X_test)}")
 
         # Initialize trainer
         trainer = SEPAModelTrainer(precision_k_pct=args.precision_k)
 
         # Optimize hyperparameters (only on first fold to save time)
+        logger.info(f"\nFold {fold_idx}: args.optimize={args.optimize}, fold_idx={fold_idx}")
         if args.optimize and fold_idx == 0:
-            logger.info("\nOptimizing hyperparameters with Optuna...")
+            logger.info(f"\n{'='*80}")
+            logger.info(f"STARTING HYPERPARAMETER OPTIMIZATION - {args.n_trials} TRIALS")
+            logger.info(f"{'='*80}")
+            logger.info(f"\nOptimizing hyperparameters with Optuna...")
             best_params = trainer.optimize_hyperparameters(
                 X_train_split,
                 y_train_split,
@@ -234,10 +247,15 @@ Examples:
                 y_val_split,
                 n_trials=args.n_trials
             )
+            logger.info(f"\n{'='*80}")
+            logger.info(f"OPTIMIZATION COMPLETE - Best precision: {trainer.best_params}")
+            logger.info(f"{'='*80}")
         elif fold_idx > 0 and args.optimize:
             # Reuse parameters from first fold
             logger.info("Reusing hyperparameters from Fold 1")
             trainer.best_params = trained_models[0].best_params
+        else:
+            logger.warning(f"SKIPPING OPTIMIZATION - Using default parameters")
 
         # Train model
         logger.info("\nTraining final model...")
@@ -262,6 +280,11 @@ Examples:
     evaluator = ModelEvaluator(output_dir=args.eval_dir)
 
     for fold_idx, fold in enumerate(folds):
+        # Skip evaluation for production folds (no test data)
+        if fold.get('is_production', False):
+            logger.info(f"\nSkipping evaluation for Fold {fold['fold_id']} (PRODUCTION - no test data)")
+            continue
+            
         logger.info(f"\nEvaluating Fold {fold['fold_id']}...")
 
         # Get test data
@@ -304,7 +327,13 @@ Examples:
     print("\n" + "=" * 80)
     print(" TRAINING PIPELINE COMPLETE")
     print("=" * 80)
-    print(f"\n✅ Models trained: {len(trained_models)} folds")
+    
+    validation_folds = [f for f in folds if not f.get('is_production', False)]
+    production_folds = [f for f in folds if f.get('is_production', False)]
+    
+    print(f"\n✅ Validation models trained: {len(validation_folds)} folds (with evaluation)")
+    print(f"✅ Production models trained: {len(production_folds)} folds (no test data)")
+    print(f"✅ Total models: {len(trained_models)}")
     print(f"✅ Models saved: {Path(args.output_dir).resolve()}")
     print(f"✅ Evaluation report: {Path(args.eval_dir).resolve()}")
     print(f"✅ Training log: training.log")

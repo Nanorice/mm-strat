@@ -48,7 +48,7 @@ The Quantamental SEPA System (QSS) is a **meta-labeling ML framework** for ranki
 ### 📦 Core Modules
 
 #### `src/data_engine.py`
-**Purpose**: Data acquisition, caching, and management
+**Purpose**: Data acquisition, caching, and universe management
 
 **Key Classes**:
 - `DataRepository`: Central hub for all market data operations
@@ -56,8 +56,8 @@ The Quantamental SEPA System (QSS) is a **meta-labeling ML framework** for ranki
 **Key Methods**:
 ```python
 # Ticker universe management
-update_universe() → List[str]                    # Get S&P 500 tickers
-get_ticker_list_from_ssga() → List[str]         # Download from SSGA
+update_universe(source=None) → List[str]           # Flexible universe selection
+get_screener_universe() → List[str]                # FMP stock screener (NEW)
 
 # Price data retrieval
 get_ticker_data(ticker, source='yfinance') → DataFrame   # Single ticker
@@ -67,6 +67,19 @@ update_cache(tickers, force=False) → Dict[str, bool]     # Batch download
 # Benchmark data
 get_benchmark_data() → DataFrame                 # SPY for relative strength
 ```
+
+**Universe Sources**:
+1. **FMP Stock Screener** (Default) - ~1730 tickers
+   - Market Cap: >= $300M
+   - Price: >= $5
+   - Volume: >= 200K shares/day
+   - Exchanges: NYSE, NASDAQ, AMEX
+   - Active trading only, no ETFs
+   - Endpoint: `https://financialmodelingprep.com/stable/company-screener`
+
+2. **S&P 500 (SSGA)** - ~504 tickers
+   - Fallback if screener fails
+   - Source: State Street S&P 500 Holdings
 
 **Data Flow**:
 ```
@@ -82,9 +95,17 @@ get_ticker_data() → Returns DataFrame
 **Usage**:
 ```python
 repo = DataRepository()
-tickers = repo.update_universe()        # ~500 S&P 500 tickers
-repo.update_cache(tickers, force=False) # Cache price data
-price_data = repo.get_ticker_data('AAPL')  # Get AAPL OHLCV
+
+# Use default universe (FMP screener, ~1730 tickers)
+tickers = repo.update_universe()
+
+# Explicitly choose source
+sp500_tickers = repo.update_universe(source='SSGA')      # S&P 500 only
+screener_tickers = repo.update_universe(source='FMP_SCREENER')  # Full screener
+
+# Update cache with expanded universe
+repo.update_cache(tickers, force=False, source='fmp')
+price_data = repo.get_ticker_data('AAPL')
 ```
 
 ---
@@ -1107,17 +1128,6 @@ python merge_datasets.py \
 
 **CLI**:
 ```bash
-python inspect_merged.py data/ml/merged_dataset.parquet
-```
-
----
-
-## Data Flow Diagrams
-
-### Dataset A Generation Flow
-
-```
-1. Load Tickers
    ├── From Dataset B (default)
    ├── From --tickers argument
    └── From universe (--use-universe)
@@ -1404,6 +1414,39 @@ pytest -m "not integration"
 # Run specific test
 pytest test_temporal_integrity.py::TestTemporalValidator::test_perturbation_test -v
 ```
+
+---
+
+## Recent Updates
+
+### FMP Stock Screener Integration (2025-12-01)
+
+**Summary**: Expanded ticker universe from S&P 500 (~504 tickers) to ~1730 tickers using FMP's company screener API.
+
+**Configuration** (`config.py`):
+```python
+# Universe Selection
+UNIVERSE_SOURCE = 'FMP_SCREENER'  # Options: 'SSGA', 'FMP_SCREENER'
+
+# FMP Stock Screener Filters
+FMP_SCREENER_PARAMS = {
+    "marketCapMoreThan": 300000000,      # $300M minimum
+    "priceMoreThan": 5,                  # $5 minimum
+    "volumeMoreThan": 200000,            # 200K shares/day minimum
+    "isEtf": "false",                    # Exclude ETFs
+    "isActivelyTrading": "true",         # Active stocks only
+    "country": "US",                     # US market
+    "exchange": "NYSE,NASDAQ,AMEX",      # Major exchanges
+    "limit": 10000,                      # Max results
+}
+```
+
+**Impact**:
+- All scanners, backtests, and dataset builders automatically use expanded universe
+- Backward compatible: Can revert to S&P 500 via `config.UNIVERSE_SOURCE = 'SSGA'`
+- 3.4x universe expansion enables discovery of mid-cap growth stocks beyond S&P 500
+
+**Test Script**: `test_fmp_screener.py` - Validates screener integration and compares universe sizes
 
 ---
 

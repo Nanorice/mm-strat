@@ -173,7 +173,21 @@ class SnapshotExtractor:
         
         # Create MultiIndex on (ticker, date)
         self.dataset_a = self.dataset_a.set_index(['ticker', 'date'])
-        self.dataset_a = self.dataset_a.sort_index()
+        
+        # Check for duplicates before sorting
+        num_duplicates = self.dataset_a.index.duplicated().sum()
+        if num_duplicates > 0:
+            logger.warning(f"⚠️  Found {num_duplicates} duplicate (ticker, date) pairs in Dataset A")
+            logger.warning(f"   Removing duplicates, keeping first occurrence...")
+            self.dataset_a = self.dataset_a[~self.dataset_a.index.duplicated(keep='first')]
+        
+        # Sort index to avoid lexsort depth warning
+        self.dataset_a = self.dataset_a.sort_index(level=['ticker', 'date'])
+        
+        # Verify index is sorted
+        if not self.dataset_a.index.is_monotonic_increasing:
+            logger.warning("Index not monotonic after sort, resorting...")
+            self.dataset_a = self.dataset_a.sort_index()
         
         logger.info(f"✅ Indexed {len(self.dataset_a):,} rows for O(1) lookup")
     
@@ -189,7 +203,14 @@ class SnapshotExtractor:
             pd.Series with features, or None if not found
         """
         try:
-            return self.dataset_a.loc[(ticker, date)]
+            result = self.dataset_a.loc[(ticker, date)]
+            
+            # If multiple rows returned (duplicates that slipped through), take first
+            if isinstance(result, pd.DataFrame):
+                logger.warning(f"⚠️  Multiple rows found for ({ticker}, {date}), taking first")
+                return result.iloc[0]
+            
+            return result
         except KeyError:
             return None
     

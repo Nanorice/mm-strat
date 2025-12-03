@@ -147,7 +147,8 @@ class AlphaEngine:
                 raise ValueError(f"Missing required columns: {missing_cols}")
             
             if len(df) < 50:
-                logger.warning(f"Insufficient data ({len(df)} rows). Alphas may be unstable.")
+                logger.debug(f"Insufficient data ({len(df)} rows). Alphas may be unstable.")
+
             
             # Create output dataframe
             result = df.copy()

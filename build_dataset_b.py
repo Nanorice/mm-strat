@@ -22,12 +22,18 @@ from src.database import DatabaseManager
 from src.trade_simulator import TradeSimulator
 from src.trading_config import TradingConfig
 
-# Setup logging
+# Setup logging - reduced verbosity for long runs
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Changed from INFO to WARNING for less noise
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Set specific loggers to WARNING to reduce output
+logging.getLogger('src.data_engine').setLevel(logging.WARNING)
+logging.getLogger('src.features').setLevel(logging.WARNING)
+logging.getLogger('src.strategy').setLevel(logging.WARNING)
+logging.getLogger('src.trade_simulator').setLevel(logging.INFO)  # Keep simulator messages
 
 
 def print_summary_statistics(simulator: TradeSimulator, output_path: str = None):
@@ -98,9 +104,16 @@ def main():
         '--end',
         type=str,
         required=True,
-        help='End date for simulation (YYYY-MM-DD)'
+        help='End date for simulation (YYYY-MM-DD) - stops new entries at this date'
     )
-    
+
+    parser.add_argument(
+        '--outcome-end',
+        type=str,
+        default=None,
+        help='Extended end date for natural trade exits (YYYY-MM-DD). If not provided, uses --end + 90 days'
+    )
+
     parser.add_argument(
         '--threshold',
         type=float,
@@ -141,17 +154,49 @@ def main():
         default=None,
         help='Custom labeling rule (e.g., "trade.return_pct >= 20 and trade.days_held <= 30")'
     )
-    
+
+    parser.add_argument(
+        '--slow',
+        action='store_true',
+        help='Use event-driven TradeSimulator (slower but useful for debugging). Default is fast vectorized simulator.'
+    )
+
+    parser.add_argument(
+        '--n-jobs',
+        type=int,
+        default=1,
+        help='Number of parallel workers (1=sequential, -1=all CPUs, default: 1). Only used in fast mode (default).'
+    )
+
     args = parser.parse_args()
     
+    # Calculate outcome_end if not provided
+    if args.outcome_end is None:
+        from datetime import timedelta
+        end_date = pd.to_datetime(args.end)
+        outcome_end = (end_date + timedelta(days=90)).strftime('%Y-%m-%d')
+    else:
+        outcome_end = args.outcome_end
+
     print("=" * 80)
     print(" DATASET B BUILDER - ML Training Data Generation")
     print("=" * 80)
-    print(f"\n📅 Simulation Period: {args.start} to {args.end}")
+    print(f"\n📅 Entry Period: {args.start} to {args.end}")
+    print(f"📅 Outcome Window: {args.start} to {outcome_end} (exits allowed until here)")
     print(f"🎯 Success Threshold: {args.threshold}%")
     print(f"💾 Output: {args.output}")
     if args.label_rule:
         print(f"🏷️  Custom Label Rule: {args.label_rule}")
+    
+    # Show simulator type
+    if args.slow:
+        print(f"\n⚠️  Mode: Event-Driven Simulator (SLOW - for debugging only)")
+        print(f"   Tip: Remove --slow flag for 10-20x speedup")
+    else:
+        print(f"\n⚡ Mode: Vectorized Fast Simulator (10-20x faster)")
+        if args.n_jobs != 1:
+            n_jobs_display = "ALL CPUs" if args.n_jobs == -1 else f"{args.n_jobs} workers"
+            print(f"   Parallel Processing: {n_jobs_display}")
     
     # Create output directory if needed
     output_path = Path(args.output)
@@ -193,23 +238,43 @@ def main():
     
     print(f"\n⚙️  Trading Configuration:")
     print(f"   {trading_config}")
-    
-    # Initialize simulator
+
+    # Initialize simulator with outcome window
     logger.info("Initializing trade simulator...")
-    simulator = TradeSimulator(
-        data_repo=data_repo,
-        strategy=strategy,
-        feature_engine=feature_engine,
-        start_date=args.start,
-        end_date=args.end,
-        config=trading_config
-    )
-    
-    # Run simulation
-    print("\n🚀 Starting simulation...")
-    print("   (This may take several minutes for large date ranges)\n")
-    
-    dataset_b = simulator.run_simulation()
+
+    if args.slow:
+        # Event-driven simulator (for debugging/validation)
+        simulator = TradeSimulator(
+            data_repo=data_repo,
+            strategy=strategy,
+            feature_engine=feature_engine,
+            start_date=args.start,
+            end_date=args.end,
+            outcome_end=outcome_end,  # Extended window for natural exits
+            config=trading_config
+        )
+
+        # Run simulation
+        print("\n🚀 Starting event-driven simulation...")
+        print("   (This may take several minutes for large date ranges)\n")
+        dataset_b = simulator.run_simulation()
+    else:
+        # Fast vectorized simulator (DEFAULT)
+        from src.trade_simulator_fast import FastTradeSimulator
+        
+        simulator = FastTradeSimulator(
+            data_repo=data_repo,
+            strategy=strategy,
+            feature_engine=feature_engine,
+            start_date=args.start,
+            end_date=args.end,
+            outcome_end=outcome_end,  # Extended window for natural exits
+            config=trading_config
+        )
+
+        # Run simulation with parallelization
+        print("\n🚀 Starting vectorized simulation...\n")
+        dataset_b = simulator.run_simulation(show_progress=True, n_jobs=args.n_jobs)
     
     if dataset_b.empty:
         print("\n❌ No trades generated!")

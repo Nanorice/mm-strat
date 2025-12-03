@@ -1,269 +1,1144 @@
 {
-  "timestamp": "2025-11-30T21:17:08.862542",
-  "n_folds": 2,
+  "timestamp": "2025-12-02T23:27:21.485511",
+  "n_folds": 9,
   "fold_results": [
     {
       "fold_id": 1,
-      "test_size": 237,
+      "test_size": 5289,
       "precision_at_k": {
-        "precision@top10%": 0.2608695652173913,
-        "precision@top20%": 0.2553191489361702,
-        "precision@top30%": 0.19718309859154928
+        "precision@top10%": 0.11174242424242424,
+        "precision@top20%": 0.09082308420056764,
+        "precision@top30%": 0.07440100882723834
       },
       "classification_metrics": {
-        "roc_auc": 0.5110692416391899,
-        "pr_auc": 0.20628250020339733,
-        "true_positive": 1,
-        "false_positive": 5,
-        "true_negative": 188,
-        "false_negative": 43,
-        "precision": 0.16666666666666666,
-        "recall": 0.022727272727272728,
-        "specificity": 0.9740932642487047,
-        "f1_score": 0.04
+        "roc_auc": 0.7182669598655623,
+        "pr_auc": 0.10379455145701193,
+        "true_positive": 96,
+        "false_positive": 1001,
+        "true_negative": 4080,
+        "false_negative": 112,
+        "precision": 0.08751139471285324,
+        "recall": 0.46153846153846156,
+        "specificity": 0.8029915370989963,
+        "f1_score": 0.1471264367816092
       },
       "trading_simulation": {
-        "n_trades": 47,
-        "avg_return": 7.0352646834347885,
-        "median_return": 0.4767364976219288,
-        "total_return": 330.65744012143506,
-        "win_rate": 0.5319148936170213,
-        "avg_winner": 18.85851745318739,
-        "avg_loser": -6.400249827647713,
-        "best_trade": 127.8615760921618,
-        "worst_trade": -20.3451656268224,
-        "sharpe_ratio": 0.30203474329558955
+        "n_trades": 1057,
+        "avg_return": 2.02404618431514,
+        "median_return": -1.8899610440105032,
+        "total_return": 2139.4168168211027,
+        "win_rate": 0.30368968779564803,
+        "avg_winner": 16.782134427324895,
+        "avg_loser": -4.4488333347262845,
+        "best_trade": 344.46029309643944,
+        "worst_trade": -49.315071497110935,
+        "sharpe_ratio": 0.09460935403664768
       },
       "baseline_comparison": {
-        "baseline_win_rate": 0.18565400843881857,
-        "baseline_avg_return": 5.852789310598115,
-        "model_win_rate": 0.2553191489361702,
-        "model_avg_return": 7.0352646834347885,
-        "win_rate_improvement": 0.06966514049735162,
-        "return_improvement": 1.1824753728366737,
-        "win_rate_lift": 0.3752417794970986,
-        "return_lift": 0.2020362104433644
+        "baseline_win_rate": 0.03932690489695594,
+        "baseline_avg_return": 0.8265582330066288,
+        "model_win_rate": 0.09082308420056764,
+        "model_avg_return": 2.02404618431514,
+        "win_rate_improvement": 0.0514961793036117,
+        "return_improvement": 1.197487951308511,
+        "win_rate_lift": 1.3094389054653957,
+        "return_lift": 1.4487641686812736
       },
       "top_features": [
         {
-          "feature": "interestExpense",
-          "importance": 0.24645152688026428
-        },
-        {
-          "feature": "interestIncome",
-          "importance": 0.21982350945472717
-        },
-        {
-          "feature": "eps_growth_yoy",
-          "importance": 0.2196037620306015
-        },
-        {
-          "feature": "Vol_Ratio",
-          "importance": 0.16426686942577362
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.0488545224070549
         },
         {
           "feature": "nATR",
-          "importance": 0.1641583889722824
+          "importance": 0.04704294726252556
         },
         {
-          "feature": "incomeTaxExpense",
-          "importance": 0.13545694947242737
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.03461514413356781
         },
         {
-          "feature": "Volume",
-          "importance": 0.1213279515504837
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.03047240898013115
         },
         {
-          "feature": "days_since_report",
-          "importance": 0.10907769203186035
+          "feature": "Consolidation_Width",
+          "importance": 0.023361843079328537
         },
         {
-          "feature": "intangibleAssets",
-          "importance": 0.10866506397724152
+          "feature": "SMA_50",
+          "importance": 0.018609527498483658
         },
         {
-          "feature": "alpha001",
-          "importance": 0.10408790409564972
+          "feature": "Dist_From_52W_High",
+          "importance": 0.01597125455737114
         },
         {
-          "feature": "otherNonCurrentLiabilities",
-          "importance": 0.09602172672748566
+          "feature": "RSI_14",
+          "importance": 0.01052273903042078
         },
         {
-          "feature": "prepaids",
-          "importance": 0.09430557489395142
+          "feature": "SMA_50_Slope",
+          "importance": 0.010389212518930435
         },
         {
-          "feature": "roa",
-          "importance": 0.08914133906364441
+          "feature": "VCP_Ratio",
+          "importance": 0.004483588971197605
         },
         {
-          "feature": "cashAndCashEquivalents",
-          "importance": 0.08621585369110107
+          "feature": "alpha101",
+          "importance": 0.0034564989618957043
         },
         {
-          "feature": "otherExpenses",
-          "importance": 0.08427973091602325
+          "feature": "Vol_Ratio",
+          "importance": 0.002968941815197468
         },
         {
-          "feature": "accountsReceivables",
-          "importance": 0.08306236565113068
-        },
-        {
-          "feature": "inventory",
-          "importance": 0.07671792060136795
-        },
-        {
-          "feature": "ebit",
-          "importance": 0.07089176028966904
-        },
-        {
-          "feature": "taxPayables",
-          "importance": 0.06904415786266327
+          "feature": "alpha012",
+          "importance": 0.0029602583963423967
         },
         {
           "feature": "alpha009",
-          "importance": 0.05801275372505188
+          "importance": 0.0027314182370901108
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.0023064580745995045
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0022066200617700815
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0018217158503830433
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0017235389677807689
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.0013383536133915186
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.00100241182371974
         }
       ]
     },
     {
       "fold_id": 2,
-      "test_size": 780,
+      "test_size": 4676,
       "precision_at_k": {
-        "precision@top10%": 0.07692307692307693,
-        "precision@top20%": 0.08333333333333333,
-        "precision@top30%": 0.10256410256410256
+        "precision@top10%": 0.11349036402569593,
+        "precision@top20%": 0.07700534759358289,
+        "precision@top30%": 0.06419400855920114
       },
       "classification_metrics": {
-        "roc_auc": 0.5514912425644415,
-        "pr_auc": 0.0940927022847454,
-        "true_positive": 3,
-        "false_positive": 48,
-        "true_negative": 664,
-        "false_negative": 65,
-        "precision": 0.058823529411764705,
-        "recall": 0.04411764705882353,
-        "specificity": 0.9325842696629213,
-        "f1_score": 0.0504201680672269
+        "roc_auc": 0.781501912078243,
+        "pr_auc": 0.09872004116700181,
+        "true_positive": 81,
+        "false_positive": 1024,
+        "true_negative": 3522,
+        "false_negative": 49,
+        "precision": 0.07330316742081448,
+        "recall": 0.6230769230769231,
+        "specificity": 0.7747470303563573,
+        "f1_score": 0.1311740890688259
       },
       "trading_simulation": {
-        "n_trades": 156,
-        "avg_return": -0.10176600522669278,
-        "median_return": -1.7138968646508976,
-        "total_return": -15.875496815364073,
-        "win_rate": 0.3782051282051282,
-        "avg_winner": 9.355099322389911,
-        "avg_loser": -5.8538799673852475,
-        "best_trade": 57.51756344988047,
-        "worst_trade": -23.45091952810674,
-        "sharpe_ratio": -0.009372998864065896
+        "n_trades": 935,
+        "avg_return": 0.08122373940712771,
+        "median_return": -2.689381201428393,
+        "total_return": 75.94419634566441,
+        "win_rate": 0.23850267379679144,
+        "avg_winner": 15.998111530712263,
+        "avg_loser": -4.938662906652292,
+        "best_trade": 148.00531470523316,
+        "worst_trade": -84.10326079914385,
+        "sharpe_ratio": 0.0054488909950089846
       },
       "baseline_comparison": {
-        "baseline_win_rate": 0.08717948717948718,
-        "baseline_avg_return": 2.033945857304815,
-        "model_win_rate": 0.08333333333333333,
-        "model_avg_return": -0.10176600522669278,
-        "win_rate_improvement": -0.0038461538461538464,
-        "return_improvement": -2.1357118625315077,
-        "win_rate_lift": -0.044117647058823484,
-        "return_lift": -1.0500337827878776
+        "baseline_win_rate": 0.027801539777587682,
+        "baseline_avg_return": -0.11011766416845467,
+        "model_win_rate": 0.07700534759358289,
+        "model_avg_return": 0.08122373940712771,
+        "win_rate_improvement": 0.04920380781599521,
+        "return_improvement": 0.19134140357558238,
+        "win_rate_lift": 1.7698231180584125,
+        "return_lift": -1.737608630009388
       },
       "top_features": [
         {
-          "feature": "SMA_50",
-          "importance": 0.0792313739657402
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.05988234654068947
         },
         {
-          "feature": "accountsReceivables",
-          "importance": 0.06917790323495865
-        },
-        {
-          "feature": "netDebt",
-          "importance": 0.04901399463415146
-        },
-        {
-          "feature": "otherPayables",
-          "importance": 0.02554037794470787
-        },
-        {
-          "feature": "eps_growth_yoy",
-          "importance": 0.024044442921876907
-        },
-        {
-          "feature": "Price_vs_SMA_150",
-          "importance": 0.0
-        },
-        {
-          "feature": "Volume",
-          "importance": 0.0
-        },
-        {
-          "feature": "VCP_Ratio",
-          "importance": 0.0
-        },
-        {
-          "feature": "Consolidation_Width",
-          "importance": 0.0
-        },
-        {
-          "feature": "Dry_Up_Volume",
-          "importance": 0.0
-        },
-        {
-          "feature": "alpha001",
-          "importance": 0.0
-        },
-        {
-          "feature": "alpha006",
-          "importance": 0.0
-        },
-        {
-          "feature": "ATR",
-          "importance": 0.0
-        },
-        {
-          "feature": "Vol_Ratio",
-          "importance": 0.0
+          "feature": "nATR",
+          "importance": 0.04206480458378792
         },
         {
           "feature": "Price_vs_SMA_50",
-          "importance": 0.0
+          "importance": 0.03945457935333252
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.032432135194540024
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.02587280608713627
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.023546665906906128
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.013976654037833214
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.01396696362644434
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.012486732564866543
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.005425720941275358
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.005356004927307367
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.004851454868912697
         },
         {
           "feature": "alpha101",
-          "importance": 0.0
+          "importance": 0.0043099732138216496
         },
         {
-          "feature": "revenue_growth_yoy",
-          "importance": 0.0
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0034625432454049587
         },
         {
-          "feature": "additionalPaidInCapital",
-          "importance": 0.0
+          "feature": "Volume",
+          "importance": 0.00276161078363657
         },
         {
-          "feature": "taxPayables",
-          "importance": 0.0
+          "feature": "VCP_Ratio",
+          "importance": 0.0025470820255577564
         },
         {
-          "feature": "depreciationAndAmortization",
-          "importance": 0.0
+          "feature": "alpha001",
+          "importance": 0.0025397231802344322
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.002135621616616845
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.002065521664917469
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.002060954226180911
+        }
+      ]
+    },
+    {
+      "fold_id": 3,
+      "test_size": 4486,
+      "precision_at_k": {
+        "precision@top10%": 0.09375,
+        "precision@top20%": 0.0713489409141583,
+        "precision@top30%": 0.0654275092936803
+      },
+      "classification_metrics": {
+        "roc_auc": 0.7541065737068511,
+        "pr_auc": 0.07863675607705554,
+        "true_positive": 53,
+        "false_positive": 616,
+        "true_negative": 3733,
+        "false_negative": 84,
+        "precision": 0.07922272047832586,
+        "recall": 0.38686131386861317,
+        "specificity": 0.858358243274316,
+        "f1_score": 0.1315136476426799
+      },
+      "trading_simulation": {
+        "n_trades": 897,
+        "avg_return": 0.3600774718526939,
+        "median_return": -1.9272504902022343,
+        "total_return": 322.9894922518664,
+        "win_rate": 0.2842809364548495,
+        "avg_winner": 12.09326328191005,
+        "avg_loser": -4.300300069525227,
+        "best_trade": 165.65125734739908,
+        "worst_trade": -31.156717065209705,
+        "sharpe_ratio": 0.030145894559531573
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.030539456085599645,
+        "baseline_avg_return": 0.3699304820639321,
+        "model_win_rate": 0.0713489409141583,
+        "model_avg_return": 0.3600774718526939,
+        "win_rate_improvement": 0.04080948482855866,
+        "return_improvement": -0.009853010211238189,
+        "win_rate_lift": 1.3362872185468184,
+        "return_lift": -0.026634761634850568
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.022175060585141182
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.017521696165204048
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.015727609395980835
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.014861108735203743
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.011356883682310581
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.011284594424068928
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.0070595149882137775
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.006686902604997158
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.005767531227320433
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.0024093601386994123
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.001330354018136859
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.0012512634275481105
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.001245110877789557
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.0012007796904072165
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0010871904669329524
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.0010309708304703236
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0009806427406147122
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.0009364021825604141
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0007879844051785767
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.0006810607737861574
+        }
+      ]
+    },
+    {
+      "fold_id": 4,
+      "test_size": 3471,
+      "precision_at_k": {
+        "precision@top10%": 0.39481268011527376,
+        "precision@top20%": 0.3256484149855908,
+        "precision@top30%": 0.26993275696445723
+      },
+      "classification_metrics": {
+        "roc_auc": 0.7328795345932442,
+        "pr_auc": 0.3206665022201584,
+        "true_positive": 393,
+        "false_positive": 1365,
+        "true_negative": 1611,
+        "false_negative": 102,
+        "precision": 0.2235494880546075,
+        "recall": 0.793939393939394,
+        "specificity": 0.5413306451612904,
+        "f1_score": 0.3488681757656457
+      },
+      "trading_simulation": {
+        "n_trades": 694,
+        "avg_return": 17.768918705213682,
+        "median_return": 1.8121831373121589,
+        "total_return": 12331.629581418296,
+        "win_rate": 0.5389048991354467,
+        "avg_winner": 39.43144785290628,
+        "avg_loser": -7.549162236152048,
+        "best_trade": 1297.8339405862982,
+        "worst_trade": -38.029931340209615,
+        "sharpe_ratio": 0.2646559047923631
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.14261019878997408,
+        "baseline_avg_return": 5.777527009865642,
+        "model_win_rate": 0.3256484149855908,
+        "model_avg_return": 17.768918705213682,
+        "win_rate_improvement": 0.1830382161956167,
+        "return_improvement": 11.99139169534804,
+        "win_rate_lift": 1.283486158414112,
+        "return_lift": 2.075523260189294
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.01116912066936493
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.010887904092669487
+        },
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.006931045558303595
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.005738789681345224
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.005730167031288147
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.0054746572859585285
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.005268278066068888
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.0037612994201481342
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.0017007256392389536
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.0013825750211253762
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0012236903421580791
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.001143101486377418
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.0011176492553204298
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0008737504831515253
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.0007611454930156469
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0006332371849566698
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.0004895463935099542
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.0003400818386580795
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.00015849331975914538
+        },
+        {
+          "feature": "Green_Days_Ratio_20D",
+          "importance": 4.5827120629837736e-05
+        }
+      ]
+    },
+    {
+      "fold_id": 5,
+      "test_size": 7506,
+      "precision_at_k": {
+        "precision@top10%": 0.08933333333333333,
+        "precision@top20%": 0.0759493670886076,
+        "precision@top30%": 0.061750333185251
+      },
+      "classification_metrics": {
+        "roc_auc": 0.6723724701841974,
+        "pr_auc": 0.07034302469626921,
+        "true_positive": 146,
+        "false_positive": 2224,
+        "true_negative": 5017,
+        "false_negative": 119,
+        "precision": 0.06160337552742616,
+        "recall": 0.5509433962264151,
+        "specificity": 0.6928601021958293,
+        "f1_score": 0.1108159392789374
+      },
+      "trading_simulation": {
+        "n_trades": 1501,
+        "avg_return": -0.3897214464374525,
+        "median_return": -3.045529823503421,
+        "total_return": -584.9718911026162,
+        "win_rate": 0.2285143237841439,
+        "avg_winner": 15.801057639928276,
+        "avg_loser": -5.20792251656376,
+        "best_trade": 190.17713924428145,
+        "worst_trade": -90.0,
+        "sharpe_ratio": -0.025526684688403543
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.03530508926192379,
+        "baseline_avg_return": -0.08346509771143625,
+        "model_win_rate": 0.0759493670886076,
+        "model_avg_return": -0.3897214464374525,
+        "win_rate_improvement": 0.040644277826683804,
+        "return_improvement": -0.30625634872601626,
+        "win_rate_lift": 1.1512299976116553,
+        "return_lift": 3.669274428753871
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.017667436972260475
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.014590676873922348
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.013048720546066761
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.010920848697423935
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.009980701841413975
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.009509410709142685
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.008823389187455177
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.004567718133330345
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.004377272445708513
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.003501585451886058
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.002608871553093195
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.0017086068401113153
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.0014934355858713388
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.001351585378870368
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0011077492963522673
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.001007036305963993
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0009411997743882239
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0007908073021098971
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.00041534198680892587
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.0003875955881085247
+        }
+      ]
+    },
+    {
+      "fold_id": 6,
+      "test_size": 2761,
+      "precision_at_k": {
+        "precision@top10%": 0.08695652173913043,
+        "precision@top20%": 0.05615942028985507,
+        "precision@top30%": 0.04710144927536232
+      },
+      "classification_metrics": {
+        "roc_auc": 0.8222796016230174,
+        "pr_auc": 0.14807722018616346,
+        "true_positive": 39,
+        "false_positive": 763,
+        "true_negative": 1948,
+        "false_negative": 11,
+        "precision": 0.048628428927680795,
+        "recall": 0.78,
+        "specificity": 0.7185540390999631,
+        "f1_score": 0.09154929577464788
+      },
+      "trading_simulation": {
+        "n_trades": 552,
+        "avg_return": -1.4259176876940995,
+        "median_return": -3.267879880274336,
+        "total_return": -787.1065636071429,
+        "win_rate": 0.21920289855072464,
+        "avg_winner": 13.828603114937694,
+        "avg_loser": -5.72178497794094,
+        "best_trade": 143.6046504374773,
+        "worst_trade": -42.10264044719581,
+        "sharpe_ratio": -0.10404556925463464
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.018109380659181457,
+        "baseline_avg_return": -0.9194311011600502,
+        "model_win_rate": 0.05615942028985507,
+        "model_avg_return": -1.4259176876940995,
+        "win_rate_improvement": 0.03805003963067362,
+        "return_improvement": -0.5064865865340493,
+        "win_rate_lift": 2.101123188405797,
+        "return_lift": 0.5508695386690889
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.027203591540455818
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.020201053470373154
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.01691390573978424
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.014506960287690163
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.013777180574834347
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.011359653435647488
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.009001955389976501
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.008292736485600471
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.008019085973501205
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.004620348569005728
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.0022745446767657995
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.0014619902940467
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.0012963771587237716
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.0012700153747573495
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0009361759875901043
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0009148358949460089
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.0007762045133858919
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0007214195793494582
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0003916702407877892
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.00029297248693183064
+        }
+      ]
+    },
+    {
+      "fold_id": 7,
+      "test_size": 4643,
+      "precision_at_k": {
+        "precision@top10%": 0.13577586206896552,
+        "precision@top20%": 0.10991379310344827,
+        "precision@top30%": 0.09985632183908046
+      },
+      "classification_metrics": {
+        "roc_auc": 0.7219234991293817,
+        "pr_auc": 0.11078277313062605,
+        "true_positive": 155,
+        "false_positive": 1405,
+        "true_negative": 2998,
+        "false_negative": 85,
+        "precision": 0.09935897435897435,
+        "recall": 0.6458333333333334,
+        "specificity": 0.6808993867817397,
+        "f1_score": 0.1722222222222222
+      },
+      "trading_simulation": {
+        "n_trades": 928,
+        "avg_return": 2.463866173635569,
+        "median_return": -3.39928616311549,
+        "total_return": 2286.467809133808,
+        "win_rate": 0.2834051724137931,
+        "avg_winner": 25.320360244668482,
+        "avg_loser": -6.5855224927921725,
+        "best_trade": 1394.8214302736196,
+        "worst_trade": -39.40039426855245,
+        "sharpe_ratio": 0.049157068008032476
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.05169071720870127,
+        "baseline_avg_return": 0.9886367738420778,
+        "model_win_rate": 0.10991379310344827,
+        "model_avg_return": 2.463866173635569,
+        "win_rate_improvement": 0.058223075894747005,
+        "return_improvement": 1.475229399793491,
+        "win_rate_lift": 1.126373922413793,
+        "return_lift": 1.4921854404225714
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.044114597141742706
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.043194301426410675
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.029742076992988586
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.02688366360962391
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.02383503131568432
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.016668478026986122
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.015827732160687447
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.013712022453546524
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.011067451909184456
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.00476848566904664
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.003774211509153247
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.0036206855438649654
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.0025718205142766237
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.0024010080378502607
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0023471235763281584
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.001956500578671694
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0017155546229332685
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.0013973151799291372
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0013408141676336527
+        },
+        {
+          "feature": "RSI_Regime",
+          "importance": 0.0008618284482508898
+        }
+      ]
+    },
+    {
+      "fold_id": 8,
+      "test_size": 6608,
+      "precision_at_k": {
+        "precision@top10%": 0.1393939393939394,
+        "precision@top20%": 0.11279333838001514,
+        "precision@top30%": 0.10090817356205853
+      },
+      "classification_metrics": {
+        "roc_auc": 0.7023442386076905,
+        "pr_auc": 0.13255415161232995,
+        "true_positive": 198,
+        "false_positive": 1755,
+        "true_negative": 4497,
+        "false_negative": 158,
+        "precision": 0.10138248847926268,
+        "recall": 0.5561797752808989,
+        "specificity": 0.7192898272552783,
+        "f1_score": 0.1715028150714595
+      },
+      "trading_simulation": {
+        "n_trades": 1321,
+        "avg_return": 1.708933629630847,
+        "median_return": -3.061227592911475,
+        "total_return": 2257.501324742349,
+        "win_rate": 0.28160484481453446,
+        "avg_winner": 21.931318919065234,
+        "avg_loser": -6.2312030761878745,
+        "best_trade": 216.7382127078539,
+        "worst_trade": -65.72379593464998,
+        "sharpe_ratio": 0.07845503745912026
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.05387409200968523,
+        "baseline_avg_return": 0.852793111890878,
+        "model_win_rate": 0.11279333838001514,
+        "model_avg_return": 1.708933629630847,
+        "win_rate_improvement": 0.05891924637032991,
+        "return_improvement": 0.856140517739969,
+        "win_rate_lift": 1.0936471348739887,
+        "return_lift": 1.0039252261802032
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.04229950159788132
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.035548899322748184
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.032790519297122955
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.023228855803608894
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.018288196995854378
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.014828542247414589
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.01390774454921484
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.01317484863102436
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.009931201115250587
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.0035715950652956963
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.003436978906393051
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0033233717549592257
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.003052667248994112
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.002524345414713025
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.0021992314141243696
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0013302360894158483
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0012256671907380223
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0010872728889808059
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.001077289809472859
+        },
+        {
+          "feature": "Vol_MA",
+          "importance": 0.00035060811205767095
+        }
+      ]
+    },
+    {
+      "fold_id": 9,
+      "test_size": 3599,
+      "precision_at_k": {
+        "precision@top10%": 0.11142061281337047,
+        "precision@top20%": 0.1168289290681502,
+        "precision@top30%": 0.09082483781278962
+      },
+      "classification_metrics": {
+        "roc_auc": 0.7950538876058506,
+        "pr_auc": 0.14004697571948435,
+        "true_positive": 120,
+        "false_positive": 1638,
+        "true_negative": 1826,
+        "false_negative": 15,
+        "precision": 0.06825938566552901,
+        "recall": 0.8888888888888888,
+        "specificity": 0.5271362586605081,
+        "f1_score": 0.12678288431061807
+      },
+      "trading_simulation": {
+        "n_trades": 719,
+        "avg_return": 3.119179497487688,
+        "median_return": -4.620156300468346,
+        "total_return": 2242.6900586936476,
+        "win_rate": 0.2795549374130737,
+        "avg_winner": 31.517997035304568,
+        "avg_loser": -7.900438890738552,
+        "best_trade": 349.99999177866994,
+        "worst_trade": -39.68189361444271,
+        "sharpe_ratio": 0.09320732329564005
+      },
+      "baseline_comparison": {
+        "baseline_win_rate": 0.03751041956098916,
+        "baseline_avg_return": 0.19852044217387135,
+        "model_win_rate": 0.1168289290681502,
+        "model_avg_return": 3.119179497487688,
+        "win_rate_improvement": 0.07931850950716104,
+        "return_improvement": 2.9206590553138163,
+        "win_rate_lift": 2.1145727090094266,
+        "return_lift": 14.712132530693228
+      },
+      "top_features": [
+        {
+          "feature": "Price_vs_SMA_200",
+          "importance": 0.11003179103136063
+        },
+        {
+          "feature": "Price_vs_SMA_50",
+          "importance": 0.08355642110109329
+        },
+        {
+          "feature": "nATR",
+          "importance": 0.08094596862792969
+        },
+        {
+          "feature": "Price_vs_SMA_150",
+          "importance": 0.06378652155399323
+        },
+        {
+          "feature": "Consolidation_Width",
+          "importance": 0.03348132595419884
+        },
+        {
+          "feature": "Dist_From_52W_High",
+          "importance": 0.03272074833512306
+        },
+        {
+          "feature": "SMA_50_Slope",
+          "importance": 0.02856893092393875
+        },
+        {
+          "feature": "RSI_14",
+          "importance": 0.022450676187872887
+        },
+        {
+          "feature": "SMA_50",
+          "importance": 0.02066143974661827
+        },
+        {
+          "feature": "alpha012",
+          "importance": 0.00946933962404728
+        },
+        {
+          "feature": "alpha009",
+          "importance": 0.008784324862062931
+        },
+        {
+          "feature": "VCP_Ratio",
+          "importance": 0.0067820013500750065
+        },
+        {
+          "feature": "ATR",
+          "importance": 0.0043168156407773495
+        },
+        {
+          "feature": "alpha006",
+          "importance": 0.0042106229811906815
+        },
+        {
+          "feature": "alpha101",
+          "importance": 0.00420459546148777
+        },
+        {
+          "feature": "Vol_Ratio",
+          "importance": 0.004151842091232538
+        },
+        {
+          "feature": "alpha001",
+          "importance": 0.0028995804022997618
+        },
+        {
+          "feature": "Volume",
+          "importance": 0.0023050233721733093
+        },
+        {
+          "feature": "RSI_Regime",
+          "importance": 0.0021781849209219217
+        },
+        {
+          "feature": "Dry_Up_Volume",
+          "importance": 0.0017851443262770772
         }
       ]
     }
   ],
   "summary": {
-    "avg_precision@top10%": 0.1688963210702341,
-    "std_precision@top10%": 0.09197324414715718,
-    "avg_precision@top20%": 0.16932624113475175,
-    "std_precision@top20%": 0.08599290780141844,
-    "avg_precision@top30%": 0.14987360057782592,
-    "std_precision@top30%": 0.04730949801372336,
-    "avg_roc_auc": 0.5312802421018157,
-    "std_roc_auc": 0.020211000462625806,
-    "avg_trading_return": 3.466749339104048,
-    "avg_trading_win_rate": 0.45506001091107473,
-    "avg_win_rate_lift": 0.16556206621913755
+    "avg_precision@top10%": 0.1418528597480148,
+    "std_precision@top10%": 0.09113764422339193,
+    "avg_precision@top20%": 0.11516340395821954,
+    "std_precision@top20%": 0.07697567858722561,
+    "avg_precision@top30%": 0.09715515547990211,
+    "std_precision@top30%": 0.06349388493408943,
+    "avg_roc_auc": 0.7445254085993376,
+    "std_roc_auc": 0.045189943208367916,
+    "avg_trading_return": 2.856734029712355,
+    "avg_trading_win_rate": 0.29529559712877834,
+    "avg_win_rate_lift": 1.4762202614221556
   }
 }

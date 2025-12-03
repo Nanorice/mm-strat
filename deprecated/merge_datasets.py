@@ -136,21 +136,21 @@ Examples:
     parser.add_argument(
         '--dataset-a',
         type=str,
-        required=True,
+        default='data/ml/dataset_a.parquet',
         help='Path to Dataset A (feature store) - Parquet or CSV'
     )
     
     parser.add_argument(
         '--dataset-b',
         type=str,
-        required=True,
+        default='data/ml/dataset_b.parquet',
         help='Path to Dataset B (trade labels) - Parquet or CSV'
     )
     
     parser.add_argument(
         '--output',
         type=str,
-        required=True,
+        default='data/ml/merged_dataset.parquet',
         help='Output path for merged dataset'
     )
     

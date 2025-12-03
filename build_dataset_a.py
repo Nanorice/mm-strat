@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 import logging
 from tqdm import tqdm
+from typing import Optional
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
@@ -30,13 +31,63 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _process_ticker_for_dataset_a(
+    ticker: str, 
+    df: pd.DataFrame,
+    mode: str,
+    feature_engine: FeatureEngineer,
+    fundamental_merger: Optional['FundamentalMerger']
+) -> pd.DataFrame:
+    """
+    Process a single ticker - calculate features and prepare records.
+    
+    Args:
+        ticker: Stock symbol
+        df: Price dataframe
+        mode: 'lightweight' or 'full'
+        feature_engine: Feature engine instance
+        fundamental_merger: Optional fundamental merger instance
+        
+    Returns:
+        DataFrame with features for this ticker
+    """
+    try:
+        # Calculate lightweight features
+        df_features = feature_engine.calculate_lightweight_features(df)
+        
+        # Calculate heavyweight features if requested
+        if mode == 'full':
+            df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
+        
+        # Merge fundamental data if requested
+        if fundamental_merger is not None:
+            df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
+        
+        # OPTIMIZATION: Instead of looping through dates, just add ticker column
+        # The dataframe already has all the dates as index
+        df_features['ticker'] = ticker
+        df_features['date'] = df_features.index
+        
+        # Reorder columns: date, ticker, Close, Volume, then features
+        cols = ['date', 'ticker', 'Close', 'Volume']
+        feature_cols = [c for c in df_features.columns if c not in cols + ['Open', 'High', 'Low']]
+        df_features = df_features[cols + feature_cols]
+        
+        return df_features
+        
+    except Exception as e:
+        logger.warning(f"Failed to process {ticker}: {e}")
+        return pd.DataFrame()
+
+
 def build_dataset_a(
     start_date: str,
     end_date: str,
     mode: str = 'lightweight',
     tickers: list = None,
     validate_temporal: bool = True,
-    include_fundamentals: bool = False
+    include_fundamentals: bool = False,
+    n_jobs: int = 1
 ) -> pd.DataFrame:
     """
     Build Dataset A - daily feature snapshots.
@@ -48,12 +99,14 @@ def build_dataset_a(
         tickers: Optional list of tickers (default: use universe)
         validate_temporal: If True, run temporal validation checks
         include_fundamentals: If True, merge fundamental data (growth, ratios, P/E, etc.)
+        n_jobs: Number of parallel jobs (1 = sequential, -1 = all CPUs)
     
     Returns:
         DataFrame with columns: date, ticker, Close, Volume, features...
     """
     logger.info(f"Building Dataset A from {start_date} to {end_date}")
     logger.info(f"Mode: {mode}")
+    logger.info(f"Parallel jobs: {n_jobs}")
     
     # Initialize components
     data_repo = DataRepository()
@@ -77,24 +130,10 @@ def build_dataset_a(
     
     # Get tickers to process
     if tickers is None:
-        # Default: use tickers from Dataset B (not entire universe)
-        logger.info("No tickers specified - loading from Dataset B...")
-        try:
-            dataset_b_path = Path('data/ml/dataset_b_2025.parquet')
-            if not dataset_b_path.exists():
-                dataset_b_path = Path('data/ml/dataset_b.parquet')
-            
-            if dataset_b_path.exists():
-                dataset_b = pd.read_parquet(dataset_b_path)
-                tickers = sorted(dataset_b['ticker'].unique().tolist())
-                logger.info(f"Loaded {len(tickers)} tickers from {dataset_b_path}")
-            else:
-                logger.warning("Dataset B not found, loading entire universe")
-                tickers = data_repo.update_universe()
-        except Exception as e:
-            logger.error(f"Failed to load Dataset B: {e}")
-            logger.info("Falling back to entire universe")
-            tickers = data_repo.update_universe()
+        # Default: use full universe from FMP screener (~1730 tickers)
+        logger.info("No tickers specified - loading full universe from FMP screener...")
+        tickers = data_repo.update_universe()
+        logger.info(f"Loaded {len(tickers)} tickers from FMP stock screener")
     
     logger.info(f"Processing {len(tickers)} tickers")
     
@@ -111,65 +150,64 @@ def build_dataset_a(
     date_range = pd.bdate_range(start_date, end_date)
     logger.info(f"Processing {len(date_range)} trading days")
     
-    # Build feature snapshots
-    rows = []
-    total_iterations = len(ticker_data) * len(date_range)
-    
-    with tqdm(total=total_iterations, desc="Building Dataset A") as pbar:
-        for ticker, df in ticker_data.items():
-            # Calculate features once for entire history
-            try:
-                # Calculate lightweight features
-                df_features = feature_engine.calculate_lightweight_features(df)
-                
-                # Calculate heavyweight features if requested
-                if mode == 'full':
-                    df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
-                
-                # Merge fundamental data if requested
-                if fundamental_merger is not None:
-                    df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
-                
-                # Extract daily snapshots
-                for date in date_range:
-                    # Get data available up to this date
-                    df_subset = df_features[df_features.index <= date]
-                    
-                    if len(df_subset) == 0:
-                        pbar.update(1)
-                        continue
-                    
-                    # Extract last row (features as of 'date')
-                    last_row = df_subset.iloc[-1]
-                    
-                    # Create record
-                    record = {
-                        'date': date,
-                        'ticker': ticker,
-                        'Close': last_row['Close'],
-                        'Volume': last_row['Volume'],
-                    }
-                    
-                    # Add all feature columns
-                    for col in df_features.columns:
-                        if col not in ['Open', 'High', 'Low']:  # Already have Close/Volume
-                            record[col] = last_row.get(col, np.nan)
-                    
-                    rows.append(record)
+    # Process tickers (sequential or parallel)
+    if n_jobs == 1:
+        # Sequential processing
+        logger.info("Processing tickers sequentially...")
+        results = []
+        with tqdm(total=len(ticker_data), desc="Building Dataset A", unit="ticker") as pbar:
+            for ticker, df in ticker_data.items():
+                result = _process_ticker_for_dataset_a(
+                    ticker, df, mode, feature_engine, fundamental_merger
+                )
+                if not result.empty:
+                    results.append(result)
+                pbar.update(1)
+    else:
+        # Parallel processing
+        from multiprocessing import Pool, cpu_count
+        
+        if n_jobs == -1:
+            n_jobs = cpu_count()
+        
+        logger.info(f"Processing tickers in parallel using {n_jobs} workers...")
+        
+        # Prepare arguments: (ticker, df, mode, feature_engine, fundamental_merger)
+        args_list = [
+            (ticker, df, mode, feature_engine, fundamental_merger)
+            for ticker, df in ticker_data.items()
+        ]
+        
+        # Use multiprocessing Pool
+        with Pool(processes=n_jobs) as pool:
+            results = []
+            with tqdm(total=len(args_list), desc="Building Dataset A", unit="ticker") as pbar:
+                for result in pool.starmap(_process_ticker_for_dataset_a, args_list):
+                    if not result.empty:
+                        results.append(result)
                     pbar.update(1)
-                
-            except Exception as e:
-                logger.warning(f"Failed to process {ticker}: {e}")
-                pbar.update(len(date_range))
-                continue
     
-    # Convert to DataFrame
-    logger.info("Converting to DataFrame...")
-    dataset_a = pd.DataFrame(rows)
-    
-    if len(dataset_a) == 0:
+    # Concatenate all results
+    logger.info("Concatenating results...")
+    if not results:
         logger.error("No data generated!")
-        return dataset_a
+        return pd.DataFrame()
+    
+    # Convert categorical and problematic object columns to string to avoid ordering issues
+    for df in results:
+        # Convert categorical columns
+        for col in df.select_dtypes(include=['category']).columns:
+            df[col] = df[col].astype(str)
+        
+        # Also convert object columns that might have mixed types (except date/ticker)
+        for col in df.select_dtypes(include=['object']).columns:
+            if col not in ['date', 'ticker']:
+                try:
+                    df[col] = df[col].astype(str)
+                except:
+                    pass  # Skip if conversion fails
+    
+    dataset_a = pd.concat(results, ignore_index=True)
     
     # Sort by date and ticker
     dataset_a = dataset_a.sort_values(['date', 'ticker']).reset_index(drop=True)
@@ -233,20 +271,13 @@ def main():
         type=str,
         nargs='+',
         default=None,
-        help='Optional: Specific tickers to process (default: tickers from Dataset B)'
+        help='Optional: Specific tickers to process (e.g., AAPL MSFT TSLA)'
     )
     
     parser.add_argument(
-        '--use-universe',
+        '--from-price-cache',
         action='store_true',
-        help='Use entire S&P 500 universe instead of Dataset B tickers'
-    )
-    
-    parser.add_argument(
-        '--from-dataset-b',
-        type=str,
-        default=None,
-        help='Path to Dataset B parquet file (default: auto-detect data/ml/dataset_b*.parquet)'
+        help='Use tickers from price cache folder (data/price/*.parquet) instead of full universe'
     )
     
     parser.add_argument(
@@ -261,6 +292,13 @@ def main():
         help='Include fundamental data (growth metrics, ratios, P/E, etc.)'
     )
     
+    parser.add_argument(
+        '--n-jobs',
+        type=int,
+        default=1,
+        help='Number of parallel jobs (1=sequential, -1=use all CPUs, default: 1)'
+    )
+    
     args = parser.parse_args()
     
     print("=" * 80)
@@ -269,30 +307,37 @@ def main():
     print(f"\n📅 Date Range: {args.start} to {args.end}")
     print(f"⚙️  Mode: {args.mode}")
     print(f"💾 Output: {args.output}")
+    if args.n_jobs != 1:
+        print(f"⚡ Parallel Jobs: {args.n_jobs if args.n_jobs > 0 else 'ALL CPUs'}")
     
     # Determine ticker list
     tickers = args.tickers
-    if tickers is None and not args.use_universe:
-        # Load from Dataset B
-        dataset_b_path = args.from_dataset_b
-        if dataset_b_path is None:
-            # Auto-detect
-            for candidate in ['data/ml/dataset_b_2025.parquet', 'data/ml/dataset_b.parquet']:
-                if Path(candidate).exists():
-                    dataset_b_path = candidate
-                    break
-        
-        if dataset_b_path and Path(dataset_b_path).exists():
-            dataset_b = pd.read_parquet(dataset_b_path)
-            tickers = sorted(dataset_b['ticker'].unique().tolist())
-            print(f"🎯 Using {len(tickers)} tickers from {dataset_b_path}")
+
+    if tickers:
+        # User specified explicit tickers
+        print(f"🎯 Using {len(tickers)} user-specified tickers: {', '.join(tickers[:5])}{' ...' if len(tickers) > 5 else ''}")
+    elif args.from_price_cache:
+        # Load from price cache folder
+        price_cache_dir = Path('data/price')
+        if price_cache_dir.exists():
+            # Get all .parquet files and extract ticker names
+            price_files = list(price_cache_dir.glob('*.parquet'))
+            tickers = sorted([f.stem for f in price_files])  # .stem removes the .parquet extension
+            print(f"🎯 Using {len(tickers)} tickers from price cache (data/price/)")
+            if len(tickers) > 0:
+                print(f"   Sample tickers: {', '.join(tickers[:5])}{' ...' if len(tickers) > 5 else ''}")
+            else:
+                print(f"⚠️  No price files found in data/price/")
+                print(f"   Falling back to full universe")
+                tickers = None
         else:
-            print(f"⚠️  Dataset B not found, using entire universe")
+            print(f"❌ Price cache directory not found: data/price/")
+            print(f"   Falling back to full universe")
             tickers = None
-    elif tickers:
-        print(f"🎯 Tickers: {', '.join(tickers[:5])}{' ...' if len(tickers) > 5 else ''}")
     else:
-        print(f"🌍 Using entire S&P 500 universe (~500 tickers)")
+        # Default: Use full universe
+        print(f"🌍 Using FMP stock screener universe (~1,730 tickers)")
+        tickers = None
     
     # Create output directory
     output_path = Path(args.output)
@@ -306,9 +351,10 @@ def main():
         start_date=args.start,
         end_date=args.end,
         mode=args.mode,
-        tickers=args.tickers,
+        tickers=tickers,
         validate_temporal=not args.no_validate,
-        include_fundamentals=args.include_fundamentals
+        include_fundamentals=args.include_fundamentals,
+        n_jobs=args.n_jobs
     )
     
     if dataset_a.empty:
@@ -356,10 +402,10 @@ def main():
     # Show source of tickers
     if args.tickers:
         print(f"   Source: User-specified tickers")
-    elif not args.use_universe:
-        print(f"   Source: Tickers from Dataset B ({dataset_b_path})")
+    elif args.from_price_cache:
+        print(f"   Source: Tickers from price cache (data/price/)")
     else:
-        print(f"   Source: Full S&P 500 Universe")
+        print(f"   Source: FMP Stock Screener Universe")
     
     print("=" * 80 + "\n")
 
