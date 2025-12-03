@@ -297,12 +297,28 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
                     else:
                         rank = int(rank)  # Convert numpy.int64 -> Python int
                     
+                    # Extract feature values for this ticker
+                    # Use ml_scorer.feature_names to get only the features used by the model
+                    features_dict = {}
+                    candidate_row = candidates_df.iloc[i]
+                    for feature_name in ml_scorer.feature_names:
+                        if feature_name in candidate_row.index:
+                            value = candidate_row[feature_name]
+                            # Convert numpy types to Python types for JSON serialization
+                            if pd.isna(value):
+                                features_dict[feature_name] = None
+                            elif isinstance(value, (np.integer, np.floating)):
+                                features_dict[feature_name] = float(value)
+                            else:
+                                features_dict[feature_name] = value
+                    
                     ml_scores[ticker] = {
                         'probability': prob,
-                        'rank': rank
+                        'rank': rank,
+                        'features': features_dict
                     }
                     
-                    logger.debug(f"       [{ticker}] ML Score: prob={prob}, rank={rank}")
+                    logger.debug(f"       [{ticker}] ML Score: prob={prob}, rank={rank}, features={len(features_dict)}")
 
                 ml_time = time.time() - ml_start
 
@@ -400,18 +416,20 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         else:
             ma50 = ma150 = ma200 = high_52w = low_52w = None
 
-        # Get ML scores if available
+        # Get ML scores and features if available
         ml_prob = None
         ml_rank = None
         ml_model_ver = None
         ml_score_date = None
+        ml_features_dict = None
 
         if ticker in ml_scores:
             ml_prob = ml_scores[ticker]['probability']
             ml_rank = ml_scores[ticker]['rank']
+            ml_features_dict = ml_scores[ticker].get('features')  # Extract features
             ml_model_ver = ml_scorer.model_version if ml_scorer else None
             ml_score_date = scan_date_str
-            logger.debug(f"Adding {ticker} to buy_list with ML: prob={ml_prob}, rank={ml_rank}")
+            logger.debug(f"Adding {ticker} to buy_list with ML: prob={ml_prob}, rank={ml_rank}, features={len(ml_features_dict) if ml_features_dict else 0}")
 
         db.add_to_buy_list(
             ticker=ticker,
@@ -426,11 +444,12 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             ma200=ma200,
             high_52w=high_52w,
             low_52w=low_52w,
-            # ML scores
+            # ML scores and features
             ml_probability=ml_prob,
             ml_rank=ml_rank,
             ml_model_version=ml_model_ver,
-            ml_score_date=ml_score_date
+            ml_score_date=ml_score_date,
+            ml_features=ml_features_dict
         )
         db.log_buy_list_activity(
             ticker=ticker,

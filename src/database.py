@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from pathlib import Path
 import logging
+import json
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
@@ -77,6 +78,7 @@ class DatabaseManager:
                 ml_rank INTEGER,
                 ml_model_version TEXT,
                 ml_score_date DATE,
+                ml_features TEXT,
                 last_updated DATE,
                 status TEXT DEFAULT 'active',
                 notes TEXT
@@ -122,7 +124,43 @@ class DatabaseManager:
 
         conn.commit()
         conn.close()
+        
+        # Ensure columns exist (flexible schema evolution)
+        self._ensure_columns_exist('buy_list_activity', {'vol_ratio': 'REAL', 'volume_ratio': 'REAL'})
+        self._ensure_columns_exist('buy_list', {'ml_features': 'TEXT'})
+        
         logger.info(f"Database initialized at {self.db_path}")
+
+    def _ensure_columns_exist(self, table_name: str, columns: Dict[str, str]):
+        """
+        Ensures that the specified columns exist in the table.
+        Adds them if they are missing.
+        
+        Args:
+            table_name: Name of the table
+            columns: Dictionary of {column_name: sql_type}
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get existing columns
+        try:
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            
+            for col_name, col_type in columns.items():
+                if col_name not in existing_cols:
+                    try:
+                        logger.info(f"Adding missing column '{col_name}' to table '{table_name}'")
+                        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
+                    except sqlite3.OperationalError as e:
+                        logger.warning(f"Could not add column {col_name}: {e}")
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Error checking columns for {table_name}: {e}")
+        finally:
+            conn.close()
 
     # ==================== WATCHLIST METHODS ====================
 
@@ -239,7 +277,8 @@ class DatabaseManager:
                        ma150: Optional[float] = None, ma200: Optional[float] = None,
                        high_52w: Optional[float] = None, low_52w: Optional[float] = None,
                        ml_probability: Optional[float] = None, ml_rank: Optional[int] = None,
-                       ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None):
+                       ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None,
+                       ml_features: Optional[Dict] = None):
         """
         Adds or updates a ticker on the buy list (active buy signals).
 
@@ -263,22 +302,26 @@ class DatabaseManager:
             ml_rank: ML rank (1=best)
             ml_model_version: Model version identifier
             ml_score_date: Date ML score was generated
+            ml_features: Dictionary of ML model features (stored as JSON)
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         last_updated = datetime.now().strftime('%Y-%m-%d')
+        
+        # Convert ml_features dict to JSON string if provided
+        ml_features_json = json.dumps(ml_features) if ml_features else None
 
         cursor.execute("""
             INSERT OR REPLACE INTO buy_list
             (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
              target_price, atr, rs, volume_ratio, ma50, ma150, ma200, high_52w, low_52w,
-             ml_probability, ml_rank, ml_model_version, ml_score_date,
+             ml_probability, ml_rank, ml_model_version, ml_score_date, ml_features,
              last_updated, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
               target_price, atr, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
-              ml_probability, ml_rank, ml_model_version, ml_score_date,
+              ml_probability, ml_rank, ml_model_version, ml_score_date, ml_features_json,
               last_updated))
 
         conn.commit()
@@ -391,6 +434,12 @@ class DatabaseManager:
 
         df = pd.read_sql_query(query, conn)
         conn.close()
+        
+        # Parse ml_features JSON back to dict
+        if not df.empty and 'ml_features' in df.columns:
+            df['ml_features'] = df['ml_features'].apply(
+                lambda x: json.loads(x) if x and isinstance(x, str) else None
+            )
 
         return df
 
@@ -417,7 +466,7 @@ class DatabaseManager:
 
         cursor.execute("""
             INSERT INTO buy_list_activity
-            (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, volume_ratio)
+            (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio))
 

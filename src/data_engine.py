@@ -9,6 +9,7 @@ import yfinance as yf
 import requests
 import json
 import time
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict
@@ -698,19 +699,36 @@ class DataRepository:
             return None
         return self._safe_extract_close(df)
 
-    def get_batch_data(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
+    def get_batch_data(self, tickers: List[str], max_workers: int = 8) -> Dict[str, pd.DataFrame]:
         """
-        Loads multiple tickers from cache efficiently.
-
+        Loads multiple tickers from cache efficiently using parallel execution.
+        
         Args:
             tickers: List of ticker symbols
+            max_workers: Number of parallel threads (default: 8)
 
         Returns:
             Dict mapping ticker -> DataFrame
         """
         data = {}
-        for ticker in tickers:
-            df = self.get_ticker_data(ticker, use_cache=True)
-            if df is not None:
-                data[ticker] = df
+        
+        # Helper function for parallel execution
+        def load_single(ticker):
+            return ticker, self.get_ticker_data(ticker, use_cache=True)
+            
+        # Use ThreadPoolExecutor for IO-bound file reading
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_ticker = {executor.submit(load_single, ticker): ticker for ticker in tickers}
+            
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_ticker):
+                ticker = future_to_ticker[future]
+                try:
+                    t, df = future.result()
+                    if df is not None:
+                        data[t] = df
+                except Exception as e:
+                    logger.warning(f"Failed to load {ticker}: {e}")
+                    
         return data

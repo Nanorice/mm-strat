@@ -78,20 +78,41 @@ class TemporalSplitter:
         # Ensure date column is datetime
         df[date_column] = pd.to_datetime(df[date_column])
 
-        # Default fold specification - 9-fold walk-forward validation
-        # Fold 9 (last) is the production model trained on all available historical data (2003-2025)
+        # Default fold specification - Enhanced 17-fold walk-forward validation
+        # Strategy A: Annual validation from 2012-2024 (Deep History)
+        # Strategy B: Quarterly validation for 2024 (Current Regime)
+        # Strategy C: Live 2025 test (Live Fire)
         if fold_specs is None:
             fold_specs = [
-                ('2003-01-01', '2016-12-31', '2017-12-31'),  # Fold 1: Test 2017
-                ('2003-01-01', '2017-12-31', '2018-12-31'),  # Fold 2: Test 2018 (Correction)
-                ('2003-01-01', '2018-12-31', '2019-12-31'),  # Fold 3: Test 2019 (Recovery)
-                ('2003-01-01', '2019-12-31', '2020-12-31'),  # Fold 4: Test 2020 (COVID crash)
-                ('2003-01-01', '2020-12-31', '2021-12-31'),  # Fold 5: Test 2021 (Bull)
-                ('2003-01-01', '2021-12-31', '2022-12-31'),  # Fold 6: Test 2022 (Bear)
-                ('2003-01-01', '2022-12-31', '2023-12-31'),  # Fold 7: Test 2023 (Recovery)
-                ('2003-01-01', '2023-12-31', '2024-12-31'),  # Fold 8: Test 2024 (Bull)
-                ('2003-01-01', '2024-12-31', '2025-11-28'),  # Fold 9: Test 2025 YTD
-                ('2003-01-01', '2025-11-28', '2025-12-31'),  # Fold 10: Production model (all data, 22.9 years)
+                # STRATEGY A: The "Deep History" Validation (Annual Steps)
+                # Prove the model survives 2012, 2015, 2018, 2022 (Bear/Chop years)
+                ('2003-01-01', '2011-12-31', '2012-12-31'),  # History_Test_2012
+                ('2003-01-01', '2012-12-31', '2013-12-31'),  # History_Test_2013
+                ('2003-01-01', '2013-12-31', '2014-12-31'),  # History_Test_2014
+                ('2003-01-01', '2014-12-31', '2015-12-31'),  # History_Test_2015
+                ('2003-01-01', '2015-12-31', '2016-12-31'),  # History_Test_2016
+                ('2003-01-01', '2016-12-31', '2017-12-31'),  # History_Test_2017
+                ('2003-01-01', '2017-12-31', '2018-12-31'),  # History_Test_2018
+                ('2003-01-01', '2018-12-31', '2019-12-31'),  # History_Test_2019
+                ('2003-01-01', '2019-12-31', '2020-12-31'),  # History_Test_2020 (COVID)
+                ('2003-01-01', '2020-12-31', '2021-12-31'),  # History_Test_2021
+                ('2003-01-01', '2021-12-31', '2022-12-31'),  # History_Test_2022 (Bear)
+                ('2003-01-01', '2022-12-31', '2023-12-31'),  # History_Test_2023
+                ('2003-01-01', '2023-12-31', '2024-12-31'),  # History_Test_2024
+                # STRATEGY B: The "Current Regime" Tune (Quarterly Steps for 2024)
+                # Zoom in on 2024 to see if the model is adapting to current market
+                ('2016-01-01', '2023-12-31', '2024-03-31'),  # Recent_2024_Q1 (Modern Era Start: 2016+)
+                ('2016-01-01', '2024-03-31', '2024-06-30'),  # Recent_2024_Q2
+                ('2016-01-01', '2024-06-30', '2024-09-30'),  # Recent_2024_Q3
+                # STRATEGY C: The "Live Fire" Test (2025 YTD) - Most important fold
+                ('2003-01-01', '2024-12-31', '2025-12-02'),  # LIVE_Regime_2025 (Train on EVERYTHING)
+                # STRATEGY D: Training Window Comparison (all test on 2025 YTD)
+                # Compare how different training windows affect model performance on same test period
+                ('2003-01-01', '2024-12-31', '2025-12-02'),  # Train_Full_History_2003 (21.0 years)
+                ('2010-01-01', '2024-12-31', '2025-12-02'),  # Train_PostCrisis_2010 (14.0 years)
+                ('2016-01-01', '2024-12-31', '2025-12-02'),  # Train_Modern_2016 (8.0 years)
+                ('2020-01-01', '2024-12-31', '2025-12-02'),  # Train_PostCOVID_2020 (4.0 years)
+                ('2016-01-01', '2025-12-02', '2025-12-31'),  # Production, sweet spot training data is from 2016
             ]
 
         logger.info(f"Creating {len(fold_specs)} temporal folds with {self.purge_gap_days}-day purge gap")
