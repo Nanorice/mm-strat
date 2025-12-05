@@ -7,6 +7,8 @@ import pandas as pd
 import requests
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -26,30 +28,33 @@ class FundamentalEngine:
     Fetches income statements and balance sheets, stores in parquet cache.
     """
 
-    def __init__(self, api_key: str = None, fundamentals_dir: Path = None):
+    def __init__(self, api_key: str = None, fundamentals_dir: Path = None, force_cache_only: bool = False):
         """
         Initialize Fundamental Engine.
-        
+
         Args:
             api_key: FMP API key (defaults to config.FMP_API_KEY)
             fundamentals_dir: Directory for parquet storage (defaults to config.FUNDAMENTALS_DIR)
+            force_cache_only: If True, always use cached data without staleness checks or API calls
         """
         self.api_key = api_key or config.FMP_API_KEY
-        if not self.api_key:
+        if not self.api_key and not force_cache_only:
             raise ValueError("FMP_API_KEY is required. Set it in .env file or pass to constructor.")
-        
+
         self.fundamentals_dir = fundamentals_dir or config.FUNDAMENTALS_DIR
         self.fundamentals_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.base_url = config.FMP_BASE_URL
         self.cache_days = config.FUNDAMENTAL_CACHE_DAYS
         self.lookback_years = config.FUNDAMENTAL_LOOKBACK_YEARS
         self.rate_limit = config.FMP_FUNDAMENTAL_RATE_LIMIT
         self.batch_size = config.FMP_FUNDAMENTAL_BATCH_SIZE
         self.batch_delay = config.FMP_FUNDAMENTAL_BATCH_DELAY
-        
-        # API call tracking for rate limiting
+        self.force_cache_only = force_cache_only
+
+        # API call tracking for rate limiting (thread-safe)
         self._call_timestamps = []
+        self._rate_limit_lock = None  # Will be created on first use to avoid pickle issues
 
     def _is_cache_stale(self, file_path: Path) -> bool:
         """
@@ -72,35 +77,35 @@ class FundamentalEngine:
         """
         Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
         Pauses execution if approaching rate limit.
+        Thread-safe for parallel execution.
         """
-        now = time.time()
-        # Keep only timestamps from last 60 seconds
-        self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
-        
-        # If approaching limit, wait
-        if len(self._call_timestamps) >= self.rate_limit - 5:  # 5-call buffer
-            sleep_time = 60 - (now - self._call_timestamps[0])
-            if sleep_time > 0:
-                logger.warning(f"Rate limit approaching, sleeping {sleep_time:.1f}s...")
-                time.sleep(sleep_time)
-                self._call_timestamps = []
-        
-        self._call_timestamps.append(now)
+        with self._rate_limit_lock:
+            now = time.time()
+            # Keep only timestamps from last 60 seconds
+            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
 
-    def _fetch_statement(self, ticker: str, statement_type: str) -> Optional[pd.DataFrame]:
+            # If approaching limit, wait
+            if len(self._call_timestamps) >= self.rate_limit - 5:  # 5-call buffer
+                sleep_time = 60 - (now - self._call_timestamps[0])
+                if sleep_time > 0:
+                    logger.warning(f"Rate limit approaching, sleeping {sleep_time:.1f}s...")
+                    time.sleep(sleep_time)
+                    self._call_timestamps = []
+
+            self._call_timestamps.append(now)
+
+    def _fetch_statement(self, ticker: str, statement_type: str, max_retries: int = 3) -> Optional[pd.DataFrame]:
         """
-        Fetch a single financial statement from FMP API.
-        
+        Fetch a single financial statement from FMP API with retry logic.
+
         Args:
             ticker: Stock symbol
             statement_type: 'income-statement' or 'balance-sheet-statement'
-            
+            max_retries: Maximum number of retry attempts (default: 3)
+
         Returns:
             DataFrame with financial statement data, or None if failed
         """
-        # Rate limiting
-        self._rate_limit_check()
-        
         # Build URL - FMP stable endpoint uses query parameters
         url = f"{self.base_url}/{statement_type}"
         params = {
@@ -109,33 +114,76 @@ class FundamentalEngine:
             'apikey': self.api_key,
             'limit': 100 # self.lookback_years * 4  # Quarterly reports: 4 per year
         }
-        
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            if not data or not isinstance(data, list):
-                logger.debug(f"No {statement_type} data for {ticker}")
+
+        for attempt in range(max_retries):
+            # Rate limiting
+            self._rate_limit_check()
+
+            try:
+                response = requests.get(url, params=params, timeout=30)
+
+                # Handle rate limit (429) with exponential backoff
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                        logger.warning(f"{ticker} {statement_type}: Rate limit (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"{ticker} {statement_type}: Rate limit (429), max retries exceeded")
+                        return None
+
+                response.raise_for_status()
+                data = response.json()
+
+                if not data or not isinstance(data, list):
+                    logger.debug(f"No {statement_type} data for {ticker}")
+                    return None
+
+                # Convert to DataFrame
+                df = pd.DataFrame(data)
+
+                # Add statement type column
+                if 'income' in statement_type:
+                    df['statement_type'] = 'income'
+                elif 'cash-flow' in statement_type or 'cash_flow' in statement_type:
+                    df['statement_type'] = 'cash_flow'
+                else:
+                    df['statement_type'] = 'balance_sheet'
+
+                return df
+
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2  # 2s, 4s, 8s
+                    logger.warning(f"{ticker} {statement_type}: Timeout, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"API timeout for {ticker} {statement_type}: {e}")
+                    return None
+            except requests.exceptions.RequestException as e:
+                # Don't retry on client errors (400-499 except 429)
+                if hasattr(e, 'response') and e.response is not None and 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+                    logger.error(f"API client error for {ticker} {statement_type}: {e}")
+                    return None
+                # Retry on server errors (500+) and network errors
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3  # 3s, 6s, 12s
+                    logger.warning(f"{ticker} {statement_type}: Request error, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"API request failed for {ticker} {statement_type}: {e}")
+                    return None
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse response for {ticker} {statement_type}: {e}")
                 return None
-            
-            # Convert to DataFrame
-            df = pd.DataFrame(data)
-            
-            # Add statement type column
-            df['statement_type'] = 'income' if 'income' in statement_type else 'balance_sheet'
-            
-            return df
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for {ticker} {statement_type}: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse response for {ticker} {statement_type}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error fetching {ticker} {statement_type}: {e}")
-            return None
+            except Exception as e:
+                logger.error(f"Unexpected error fetching {ticker} {statement_type}: {e}")
+                return None
+
+        return None
 
     def fetch_income_statement(self, ticker: str) -> Optional[pd.DataFrame]:
         """
@@ -161,36 +209,61 @@ class FundamentalEngine:
         """
         return self._fetch_statement(ticker, 'balance-sheet-statement')
 
-    def fetch_all_fundamentals(self, ticker: str) -> Optional[pd.DataFrame]:
+    def fetch_cash_flow_statement(self, ticker: str) -> Optional[pd.DataFrame]:
         """
-        Fetch both income statement and balance sheet, merge into single DataFrame.
+        Fetch cash flow statement data for a ticker.
         
         Args:
             ticker: Stock symbol
             
         Returns:
-            Combined DataFrame with all fundamental data
+            DataFrame with cash flow statement data
+        """
+        return self._fetch_statement(ticker, 'cash-flow-statement')
+
+    def fetch_all_fundamentals(self, ticker: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch income statement, balance sheet, and cash flow statement, merge into single DataFrame.
+        
+        Args:
+            ticker: Stock symbol
+            
+        Returns:
+            Combined DataFrame with all fundamental data (3 statement types)
         """
         logger.debug(f"Fetching fundamentals for {ticker}...")
         
-        # Fetch both statements
+        # Fetch all three statements
         income_df = self.fetch_income_statement(ticker)
         balance_df = self.fetch_balance_sheet(ticker)
+        cash_flow_df = self.fetch_cash_flow_statement(ticker)
+        
+        # Collect available statements
+        statements = []
+        if income_df is not None:
+            statements.append(income_df)
+        if balance_df is not None:
+            statements.append(balance_df)
+        if cash_flow_df is not None:
+            statements.append(cash_flow_df)
         
         # Handle missing data
-        if income_df is None and balance_df is None:
+        if not statements:
             logger.warning(f"No fundamental data available for {ticker}")
             return None
         
-        if income_df is None:
-            logger.warning(f"Missing income statement for {ticker}, using balance sheet only")
-            combined = balance_df
-        elif balance_df is None:
-            logger.warning(f"Missing balance sheet for {ticker}, using income statement only")
-            combined = income_df
-        else:
-            # Merge on date and period
-            combined = pd.concat([income_df, balance_df], axis=0, ignore_index=True)
+        # Log what we got
+        statement_types = []
+        if income_df is not None:
+            statement_types.append('income')
+        if balance_df is not None:
+            statement_types.append('balance')
+        if cash_flow_df is not None:
+            statement_types.append('cash_flow')
+        logger.debug(f"{ticker}: Fetched {len(statements)}/3 statements: {', '.join(statement_types)}")
+        
+        # Concatenate all available statements
+        combined = pd.concat(statements, axis=0, ignore_index=True)
         
         # Standardize columns
         combined = self._standardize_columns(combined, ticker)
@@ -237,28 +310,33 @@ class FundamentalEngine:
     def get_ticker_fundamentals(self, ticker: str, use_cache: bool = True) -> Optional[pd.DataFrame]:
         """
         Get fundamental data for a ticker, from cache or API.
-        
+
         Args:
             ticker: Stock symbol
             use_cache: If True, use cached data when available
-            
+
         Returns:
             DataFrame with fundamental data, or None if failed
         """
         cache_file = self.fundamentals_dir / f"{ticker}.parquet"
-        
+
         # Try cache first
-        if use_cache and cache_file.exists() and not self._is_cache_stale(cache_file):
+        if use_cache and cache_file.exists() and (self.force_cache_only or not self._is_cache_stale(cache_file)):
             try:
                 df = pd.read_parquet(cache_file)
                 logger.debug(f"Loaded {ticker} fundamentals from cache")
                 return df
             except Exception as e:
                 logger.warning(f"Cache read failed for {ticker}: {e}")
-        
+
+        # If force_cache_only is True and cache doesn't exist, return None
+        if self.force_cache_only:
+            logger.warning(f"{ticker}: Cache-only mode enabled but no cached data found")
+            return None
+
         # Fetch from API
         df = self.fetch_all_fundamentals(ticker)
-        
+
         if df is not None and not df.empty:
             # Save to cache
             try:
@@ -266,29 +344,51 @@ class FundamentalEngine:
                 logger.debug(f"Cached {ticker} fundamentals to {cache_file}")
             except Exception as e:
                 logger.warning(f"Failed to cache {ticker}: {e}")
-        
+
         return df
 
+    def _fetch_ticker_worker(self, ticker: str) -> tuple[str, bool]:
+        """
+        Worker function for parallel ticker fetching.
+
+        Args:
+            ticker: Stock symbol to fetch
+
+        Returns:
+            Tuple of (ticker, success_status)
+        """
+        try:
+            df = self.get_ticker_fundamentals(ticker, use_cache=False)
+            if df is not None and not df.empty:
+                return (ticker, True)
+            else:
+                return (ticker, False)
+        except Exception as e:
+            logger.error(f"Failed to fetch {ticker}: {e}")
+            return (ticker, False)
+
     def update_fundamentals_cache(
-        self, 
-        tickers: List[str], 
+        self,
+        tickers: List[str],
         force: bool = False,
-        show_progress: bool = True
+        show_progress: bool = True,
+        max_workers: int = 10
     ) -> Dict[str, bool]:
         """
-        Batch update fundamental data cache for multiple tickers.
-        
+        Batch update fundamental data cache for multiple tickers using parallel execution.
+
         Args:
             tickers: List of ticker symbols
             force: If True, re-fetch all tickers regardless of cache
             show_progress: If True, display progress information
-            
+            max_workers: Maximum number of parallel workers (default: 10, ~100 API calls/min with 3 calls per ticker)
+
         Returns:
             Dict mapping ticker -> success status
         """
         results = {}
         to_fetch = []
-        
+
         # Determine which tickers need updating
         for ticker in tickers:
             cache_file = self.fundamentals_dir / f"{ticker}.parquet"
@@ -296,45 +396,74 @@ class FundamentalEngine:
                 to_fetch.append(ticker)
             else:
                 results[ticker] = True  # Already cached
-        
+
         if not to_fetch:
             logger.info("All tickers are up to date in cache")
             return results
-        
+
         logger.info(f"Updating fundamental cache for {len(to_fetch)}/{len(tickers)} tickers...")
-        
-        # Process in batches
-        total_batches = (len(to_fetch) - 1) // self.batch_size + 1
-        
-        for i in range(0, len(to_fetch), self.batch_size):
-            batch = to_fetch[i:i + self.batch_size]
-            batch_num = i // self.batch_size + 1
-            
-            if show_progress:
-                logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} tickers)")
-            
-            # Fetch each ticker in batch
-            for ticker in batch:
-                try:
-                    df = self.get_ticker_fundamentals(ticker, use_cache=False)
-                    if df is not None and not df.empty:
-                        results[ticker] = True
+        logger.info(f"Estimated: {len(to_fetch) * 3} API calls with {max_workers} parallel workers")
+        logger.info(f"Expected rate: ~{max_workers * 3 * 60 / 60:.0f} calls/minute (rate limit: {self.rate_limit}/min)")
+
+        # Process tickers in parallel with ThreadPoolExecutor
+        success_count = 0
+        fail_count = 0
+
+        if show_progress:
+            try:
+                from tqdm import tqdm
+                use_tqdm = True
+            except ImportError:
+                use_tqdm = False
+                logger.info("Install tqdm for progress bar: pip install tqdm")
+        else:
+            use_tqdm = False
+
+        # Use ThreadPoolExecutor for parallel fetching
+        start_time = time.time()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_ticker = {executor.submit(self._fetch_ticker_worker, ticker): ticker for ticker in to_fetch}
+
+            # Process completed tasks with progress tracking
+            if use_tqdm:
+                with tqdm(total=len(to_fetch), desc="Fetching fundamentals", unit="ticker") as pbar:
+                    for future in as_completed(future_to_ticker):
+                        ticker, success = future.result()
+                        results[ticker] = success
+                        if success:
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                        pbar.update(1)
+            else:
+                completed = 0
+                for future in as_completed(future_to_ticker):
+                    ticker, success = future.result()
+                    results[ticker] = success
+                    if success:
+                        success_count += 1
                     else:
-                        results[ticker] = False
-                except Exception as e:
-                    logger.error(f"Failed to fetch {ticker}: {e}")
-                    results[ticker] = False
-            
-            # Delay between batches (except for last batch)
-            if batch_num < total_batches:
-                if show_progress:
-                    logger.info(f"Batch {batch_num} complete. Waiting {self.batch_delay}s before next batch...")
-                time.sleep(self.batch_delay)
-        
+                        fail_count += 1
+
+                    completed += 1
+                    # Log progress every 25 tickers
+                    if completed % 25 == 0 or completed == len(to_fetch):
+                        elapsed = time.time() - start_time
+                        rate = completed / elapsed if elapsed > 0 else 0
+                        eta_seconds = (len(to_fetch) - completed) / rate if rate > 0 else 0
+                        logger.info(
+                            f"Progress: {completed}/{len(to_fetch)} ({completed/len(to_fetch)*100:.1f}%) | "
+                            f"✓ {success_count} ✗ {fail_count} | "
+                            f"Rate: {rate:.1f} tickers/sec | "
+                            f"ETA: {eta_seconds/60:.1f} min"
+                        )
+
         # Summary
-        success_count = sum(results.values())
-        logger.info(f"Cache update complete: {success_count}/{len(to_fetch)} successful")
-        
+        elapsed_total = time.time() - start_time
+        logger.info(f"Cache update complete: {success_count}/{len(to_fetch)} successful, {fail_count} failed")
+        logger.info(f"Total time: {elapsed_total/60:.1f} minutes ({len(to_fetch)/elapsed_total*60:.1f} tickers/min)")
+
         return results
 
     def get_available_tickers(self) -> List[str]:

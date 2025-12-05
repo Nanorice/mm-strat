@@ -60,13 +60,17 @@ class TradingConfig:
             raise ValueError("position_size_pct must be between 0 and 100")
         if self.reentry_cooldown_days < 0:
            raise ValueError("reentry_cooldown_days cannot be negative")
-        
+
         # Set default labeling function if not provided
         if self.labeling_function is None:
-            threshold = self.success_threshold_pct
-            self.labeling_function = lambda trade: (
-                1 if trade.return_pct >= threshold else 0
-            )
+            self.labeling_function = self._default_labeling_function
+
+    def _default_labeling_function(self, trade: 'Trade') -> int:
+        """
+        Default labeling function based on return threshold.
+        This is a proper method (not lambda) so it can be pickled for multiprocessing.
+        """
+        return 1 if trade.return_pct >= self.success_threshold_pct else 0
     
     @classmethod
     def conservative(cls) -> 'TradingConfig':

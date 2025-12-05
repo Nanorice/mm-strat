@@ -211,7 +211,10 @@ class TradeSimulator:
         # Step 1: Load universe and price data
         logger.info("Loading price data for universe...")
         tickers = self.data_repo.update_universe()
-        self.data_repo.update_cache(tickers, force=False)
+
+        # Skip cache update - just load existing cached data directly
+        # (Cache validation is slow for large universes - update cache separately if needed)
+        logger.info(f"Loading cached data for {len(tickers)} tickers (skipping cache update)...")
         ticker_data = self.data_repo.get_batch_data(tickers)
         
         # Filter valid data

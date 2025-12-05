@@ -26,7 +26,9 @@ class AlphaEngine:
     """
     Wrapper around WorldQuant 101 Alphas with temporal integrity enforcement.
     
-    Selected Alphas (Sprint 1 - Time-Series Only):
+    Comprehensive Alpha Set (13 total):
+    
+    Legacy Alphas (Time-Series):
         - Alpha #001: Signed power of volatility-adjusted close
         - Alpha #006: -1 × correlation(open, volume, 10)
         - Alpha #009: Trend sustainability (consistent momentum)
@@ -34,18 +36,26 @@ class AlphaEngine:
         - Alpha #041: √(high × low) - vwap
         - Alpha #101: (close - open) / (high - low + 0.001)
     
-    Note: Cross-sectional ranking alphas are excluded for simplicity in Sprint 1.
+    Priority Alphas (Cross-Sectional + Time-Series):
+        - Alpha #002: -1 × correlation(rank(delta(log(volume), 2)), rank((close - open) / open), 6)
+        - Alpha #004: -1 × Ts_Rank(rank(low), 9)
+        - Alpha #011: ((rank(ts_max((vwap - close), 3)) + rank(ts_min((vwap - close), 3))) * rank(delta(volume, 3)))
+        - Alpha #013: -1 × rank(covariance(rank(close), rank(volume), 5))
+        - Alpha #015: -1 × sum(rank(correlation(rank(high), rank(volume), 3)), 3)
+        - Alpha #054: ((-1 * ((low - close) * (open^5)) / ((low - high) * (close^5))))
+        - Alpha #060: ((2 * scale(rank(((((close - low) - (high - close)) / (high - low)) * volume)))) - scale(rank(ts_argmax(close, 10))))
     """
     
-    # Default alpha list (time-series only, no rank())
-    DEFAULT_ALPHAS = [1, 6, 9, 12, 41, 101]
+    # Default alpha list - comprehensive set (legacy + priority)
+    DEFAULT_ALPHAS = [1, 6, 9, 12, 41, 101,  # Legacy alphas
+                      2, 4, 11, 13, 15, 54, 60]  # Priority alphas
     
     def __init__(self, alpha_list: Optional[List[int]] = None):
         """
         Initialize Alpha Engine.
         
         Args:
-            alpha_list: List of alpha numbers to calculate (default: [1, 6, 12, 41, 101])
+            alpha_list: List of alpha numbers to calculate (default: all 13 alphas)
         """
         self.alpha_list = alpha_list if alpha_list is not None else self.DEFAULT_ALPHAS
         logger.debug(f"AlphaEngine initialized with alphas: {self.alpha_list}")
@@ -173,9 +183,11 @@ class AlphaEngine:
                     continue
                 
                 try:
-                    # Calculate alpha
-                    alpha_values = getattr(alpha_calculator, method_name)()
-                    
+                    # Calculate alpha (suppress divide-by-zero warnings from log operations)
+                    # These are handled by subsequent inf/nan cleaning in _sanitize_alpha_output
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        alpha_values = getattr(alpha_calculator, method_name)()
+
                     # Convert to Series if DataFrame
                     if isinstance(alpha_values, pd.DataFrame):
                         if len(alpha_values.columns) == 1:
@@ -183,7 +195,7 @@ class AlphaEngine:
                         else:
                             logger.warning(f"Alpha {alpha_num} returned multi-column DataFrame")
                             alpha_values = alpha_values.iloc[:, 0]
-                    
+
                     # Sanitize output
                     alpha_values = self._sanitize_alpha_output(alpha_values, column_name)
                     
@@ -251,14 +263,15 @@ def add_alpha_factors(
     
     Args:
         df: OHLCV DataFrame
-        alpha_list: Optional list of alpha numbers (default: [1, 6, 12, 41, 101])
+        alpha_list: Optional list of alpha numbers (default: all 13 alphas)
     
     Returns:
         DataFrame with alpha columns added
     
     Example:
         >>> df = pd.read_parquet('data/price/AAPL.parquet')
-        >>> df_with_alphas = add_alpha_factors(df, alpha_list=[1, 6, 101])
+        >>> df_with_alphas = add_alpha_factors(df)  # All 13 alphas
+        >>> df_with_subset = add_alpha_factors(df, alpha_list=[1, 2, 4])
     """
     engine = AlphaEngine(alpha_list=alpha_list)
     return engine.calculate_alphas(df)

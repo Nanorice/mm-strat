@@ -17,11 +17,12 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
 PRICE_DATA_DIR = DATA_DIR / 'price'
 FUNDAMENTALS_DIR = DATA_DIR / 'fundamentals'
+COMPANY_INFO_DIR = DATA_DIR / 'company_info'
 DATABASE_DIR = BASE_DIR / 'database'
 NOTEBOOKS_DIR = BASE_DIR / 'notebooks'
 
 # Ensure directories exist
-for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
+for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # ==============================================================================
@@ -135,8 +136,8 @@ METRICS_TO_CALCULATE = [
 FUNDAMENTAL_CACHE_DAYS = 90  # Refresh quarterly (fundamentals update every ~90 days)
 FUNDAMENTAL_LOOKBACK_YEARS = 5  # Historical fundamental data to fetch
 FMP_FUNDAMENTAL_RATE_LIMIT = 300  # FMP Starter tier: 300 calls/minute
-FMP_FUNDAMENTAL_BATCH_SIZE = 10  # Process 10 tickers at a time
-FMP_FUNDAMENTAL_BATCH_DELAY = 2.5  # Delay between batches (seconds) to respect rate limits
+FMP_FUNDAMENTAL_BATCH_SIZE = 95  # Process 95 tickers at a time (95 * 3 calls = 285 calls, safe buffer)
+FMP_FUNDAMENTAL_BATCH_DELAY = 5  # Small delay between batches (rate limiting is handled by _rate_limit_check)
 
 # ==============================================================================
 # FUNDAMENTAL FILTERS (PLACEHOLDER FOR FUTURE)
@@ -145,6 +146,11 @@ FMP_FUNDAMENTAL_BATCH_DELAY = 2.5  # Delay between batches (seconds) to respect 
 MIN_EARNINGS_GROWTH = None  # Placeholder: e.g., 0.15 for 15% YoY growth
 MIN_SALES_GROWTH = None     # Placeholder: e.g., 0.10 for 10% YoY growth
 EXCLUDED_SECTORS = []       # Placeholder: e.g., ['Utilities', 'Real Estate']
+
+# ==============================================================================
+# COMPANY PROFILE SETTINGS
+# ==============================================================================
+COMPANY_PROFILE_CACHE_DAYS = 30  # Company info changes infrequently
 
 # ==============================================================================
 # MACHINE LEARNING SETTINGS (PLACEHOLDER FOR FUTURE)

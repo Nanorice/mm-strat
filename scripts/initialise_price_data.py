@@ -13,7 +13,7 @@ def main():
     
     # 2. Update Price Data (Force update to ensure we get the new 2010 history)
     print("Updating Price Data (Source: FMP, Start: 2000)...")
-    repo.update_cache(tickers, force=True, source='yfinance')
+    repo.update_cache(tickers, force=True, source='fmp')
     
     print("Done!")
 

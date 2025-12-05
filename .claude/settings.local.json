@@ -3,7 +3,12 @@
     "allow": [
       "Bash(python test_fix.py:*)",
       "Bash(.venv/Scripts/python.exe test_fix.py)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(ls:*)",
+      "Bash(dir:*)",
+      "Bash(python -c:*)",
+      "Bash(python:*)",
+      "Bash(.venvScriptspython.exe -c \"import sys; print(sys.stdout.encoding)\")"
     ],
     "deny": [],
     "ask": []

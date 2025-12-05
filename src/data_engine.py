@@ -18,6 +18,7 @@ import logging
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 import config
+from src.utils import get_latest_trading_day
 
 logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
 logger = logging.getLogger(__name__)
@@ -187,15 +188,14 @@ class DataRepository:
                 logger.debug(f"{file_path.name}: Insufficient range (has {cache_start.date()}, need {required_start.date()})")
                 return True
             
-            # Check if latest data is current (most recent trading day)
+            # Check if latest data is current (most recent closed trading day)
             cache_end = df.index.max()
-            today = pd.Timestamp.now().normalize()
+            latest_trading_day = get_latest_trading_day()
             
-            # If latest data is from yesterday or older, cache is stale
-            # (Accounts for intraday scans - if market hasn't closed yet, yesterday's data is acceptable)
-            days_since_last_data = (today - cache_end).days
-            if days_since_last_data > 1:
-                logger.debug(f"{file_path.name}: Outdated (latest data: {cache_end.date()}, need: {today.date()} or yesterday)")
+            # Cache is stale if latest data is older than the most recent closed trading day
+            # This accounts for weekends, holidays, and market hours
+            if cache_end < latest_trading_day:
+                logger.debug(f"{file_path.name}: Outdated (latest data: {cache_end.date()}, need: {latest_trading_day.date()})")
                 return True
                 
             logger.debug(f"{file_path.name}: Valid cache (from {cache_start.date()} to {cache_end.date()})")
@@ -215,58 +215,81 @@ class DataRepository:
         self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
         
         # If approaching limit, wait
-        if len(self._call_timestamps) >= self.rate_limit - 5:  # 5-call buffer
+        if len(self._call_timestamps) >= self.rate_limit - 10:  # 10-call buffer
             sleep_time = 60 - (now - self._call_timestamps[0])
             if sleep_time > 0:
-                logger.warning(f"Rate limit approaching, sleeping {sleep_time:.1f}s...")
+                logger.debug(f"Rate limit approaching, sleeping {sleep_time:.1f}s...")
                 time.sleep(sleep_time)
                 self._call_timestamps = []
         
         self._call_timestamps.append(now)
     
-    def _fetch_fmp_historical(self, ticker: str) -> Optional[dict]:
+    def _fetch_fmp_historical(self, ticker: str, from_date: str = '1990-01-01', max_retries: int = 3) -> Optional[dict]:
         """
-        Fetch historical OHLCV data from FMP API for a single ticker.
+        Fetch historical OHLCV data from FMP API for a single ticker with retry logic.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
-        
+
         Args:
             ticker: Single ticker symbol
-            
+            from_date: Start date for historical data (default: 1990-01-01)
+            max_retries: Maximum number of retries for 429 errors (default: 3)
+
         Returns:
             JSON response dict with historical data, or None if failed
         """
         if not config.FMP_API_KEY:
             raise ValueError("FMP_API_KEY not set in environment")
-        
-        # Rate limiting
-        self._rate_limit_check()
-        
-        # Use the correct FMP endpoint format
+
         url = f"{config.FMP_BASE_URL}/historical-price-eod/full"
         params = {
             'symbol': ticker,
+            'from': from_date,
             'apikey': config.FMP_API_KEY
         }
         
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+        for attempt in range(max_retries):
+            # Rate limiting
+            self._rate_limit_check()
             
-            # FMP returns a list of historical data directly
-            if isinstance(data, list) and len(data) > 0:
-                return {'historical': data}
-            else:
-                logger.warning(f"Unexpected FMP response format for {ticker}: {type(data)}")
-                return None
+            try:
+                response = requests.get(url, params=params, timeout=30)
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"FMP API request failed for {ticker}: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse FMP response for {ticker}: {e}")
-            return None
-    
+                # Handle 429 rate limit errors with progressive backoff
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        # Sleep intervals: 5s, 10s, 15s
+                        wait_time = 5 * (attempt + 1)
+                        logger.warning(f"{ticker}: Rate limit hit (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"{ticker}: Rate limit hit (429), max retries exceeded")
+                        return None
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # FMP returns a list of historical data directly
+                if isinstance(data, list) and len(data) > 0:
+                    return {'historical': data}
+                else:
+                    logger.warning(f"Unexpected FMP response format for {ticker}: {type(data)}")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1 and "429" in str(e):
+                    wait_time = 5 * (attempt + 1)
+                    logger.warning(f"{ticker}: Request error (likely 429), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"FMP API request failed for {ticker}: {e}")
+                return None
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse FMP response for {ticker}: {e}")
+                return None
+        
+        return None
+
     def _parse_fmp_response(self, response_data: dict, ticker: str) -> Optional[pd.DataFrame]:
         """
         Convert FMP JSON response to DataFrame.
@@ -322,7 +345,7 @@ class DataRepository:
             return df[required_cols]
             
         except Exception as e:
-            logger.warning(f"Failed to parse FMP data for {ticker}: {e}")
+            logger.debug(f"Failed to parse FMP data for {ticker}: {e}")
             return None
 
     def _safe_extract_close(self, df) -> Optional[pd.Series]:
@@ -390,12 +413,12 @@ class DataRepository:
                     logger.debug(f"Cached {ticker} to {cache_file}")
                     return data
                 else:
-                    logger.warning(f"FMP returned no data for {ticker}, falling back to yfinance")
+                    logger.warning(f"FMP returned no data for {ticker}")
             except Exception as e:
-                logger.warning(f"FMP failed for {ticker}: {e}, falling back to yfinance")
+                logger.warning(f"FMP failed for {ticker}: {e}")
         
-        # Use yfinance (either explicitly requested or as fallback)
-        return self._get_ticker_data_yfinance(ticker, cache_file)
+        # # Use yfinance (either explicitly requested or as fallback)
+        # return self._get_ticker_data_yfinance(ticker, cache_file)
 
     def _get_ticker_data_fmp(self, ticker: str) -> Optional[pd.DataFrame]:
         """
@@ -481,7 +504,7 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', min_date: str = '2000-01-01') -> Dict[str, bool]:
+    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', min_date: str = '1900-01-01') -> Dict[str, bool]:
         """
         Smart batch update of Parquet cache.
         Only downloads tickers that are missing or stale.
@@ -525,7 +548,7 @@ class DataRepository:
                 return results
                 
             except Exception as e:
-                logger.error(f"FMP batch update failed: {e}, falling back to yfinance")
+                logger.warning(f"FMP batch update failed: {e}")
         
         # Use yfinance batch download (fallback or explicit)
         logger.info(f"Using yfinance for batch update...")
@@ -699,30 +722,45 @@ class DataRepository:
             return None
         return self._safe_extract_close(df)
 
-    def get_batch_data(self, tickers: List[str], max_workers: int = 8) -> Dict[str, pd.DataFrame]:
+    def get_batch_data(self, tickers: List[str], max_workers: int = 8, show_progress: bool = False) -> Dict[str, pd.DataFrame]:
         """
         Loads multiple tickers from cache efficiently using parallel execution.
-        
+
         Args:
             tickers: List of ticker symbols
             max_workers: Number of parallel threads (default: 8)
+            show_progress: If True, display progress bar (default: False)
 
         Returns:
             Dict mapping ticker -> DataFrame
         """
         data = {}
-        
+
         # Helper function for parallel execution
         def load_single(ticker):
             return ticker, self.get_ticker_data(ticker, use_cache=True)
-            
+
         # Use ThreadPoolExecutor for IO-bound file reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_ticker = {executor.submit(load_single, ticker): ticker for ticker in tickers}
-            
+
             # Process results as they complete
-            for future in concurrent.futures.as_completed(future_to_ticker):
+            if show_progress:
+                try:
+                    from tqdm import tqdm
+                    futures_iter = tqdm(
+                        concurrent.futures.as_completed(future_to_ticker),
+                        total=len(future_to_ticker),
+                        desc="Loading price data",
+                        unit="ticker"
+                    )
+                except ImportError:
+                    futures_iter = concurrent.futures.as_completed(future_to_ticker)
+            else:
+                futures_iter = concurrent.futures.as_completed(future_to_ticker)
+
+            for future in futures_iter:
                 ticker = future_to_ticker[future]
                 try:
                     t, df = future.result()
@@ -730,5 +768,5 @@ class DataRepository:
                         data[t] = df
                 except Exception as e:
                     logger.warning(f"Failed to load {ticker}: {e}")
-                    
+
         return data

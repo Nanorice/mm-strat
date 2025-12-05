@@ -40,19 +40,22 @@ class FundamentalMerger:
         self,
         fundamental_engine: Optional[FundamentalEngine] = None,
         fundamental_processor: Optional[FundamentalProcessor] = None,
-        staleness_threshold_days: int = 400
+        staleness_threshold_days: int = 400,
+        force_cache_only: bool = False
     ):
         """
         Initialize Fundamental Merger.
-        
+
         Args:
             fundamental_engine: Engine for loading fundamental data
             fundamental_processor: Processor for calculating growth/ratios
             staleness_threshold_days: Days before data is considered stale
+            force_cache_only: If True, only use cached fundamental data (no API updates)
         """
-        self.fundamental_engine = fundamental_engine or FundamentalEngine()
+        self.fundamental_engine = fundamental_engine or FundamentalEngine(force_cache_only=force_cache_only)
         self.fundamental_processor = fundamental_processor or FundamentalProcessor()
         self.staleness_threshold_days = staleness_threshold_days
+        self.force_cache_only = force_cache_only
     
     def merge_ticker_data(
         self,
@@ -110,32 +113,39 @@ class FundamentalMerger:
     def _prepare_price_dataframe(self, price_df: pd.DataFrame) -> tuple:
         """
         Prepare price dataframe for merging.
-        
+
         Ensures 'Date' is a column (not index) for merge_asof.
-        
+
         Args:
             price_df: Price dataframe
-            
+
         Returns:
             Tuple of (prepared dataframe, was_index flag)
         """
         df = price_df.copy()
         was_index = False
-        
+
         # If Date is the index, reset it
         if df.index.name == 'Date' or isinstance(df.index, pd.DatetimeIndex):
+            # Check if 'Date' column already exists before reset_index
+            if 'Date' in df.columns:
+                # Date column already exists, drop it to avoid duplicates
+                df = df.drop(columns=['Date'])
             df = df.reset_index()
             was_index = True
-        
+
         # Ensure Date column exists and is datetime
         if 'Date' not in df.columns:
             raise ValueError("Price dataframe must have a 'Date' column or DatetimeIndex")
-        
+
         df['Date'] = pd.to_datetime(df['Date'])
-        
+
         # Sort by Date for merge_asof
         df = df.sort_values('Date')
-        
+
+        # Validate no duplicate columns
+        self._check_duplicate_columns(df, "after _prepare_price_dataframe")
+
         return df, was_index
     
     def _as_of_join(
@@ -205,6 +215,9 @@ class FundamentalMerger:
                 df['Date'] - df['filing_date_matched']
             ).dt.days
             
+            # Add intuitive alias for ML/analysis
+            df['days_since_earnings'] = df['days_since_report']
+            
             # Flag stale data
             df['is_stale'] = df['days_since_report'] > self.staleness_threshold_days
             
@@ -213,6 +226,7 @@ class FundamentalMerger:
             df.loc[df['days_since_report'] < 0, 'is_stale'] = True
         else:
             df['days_since_report'] = np.nan
+            df['days_since_earnings'] = np.nan
             df['is_stale'] = True
         
         return df
@@ -395,18 +409,21 @@ class FundamentalMerger:
     ) -> pd.DataFrame:
         """
         Add empty fundamental columns when no data is available.
-        
+
         Args:
             price_df: Price dataframe
             ticker: Stock symbol
-            
+
         Returns:
             Price dataframe with NaN fundamental columns
         """
         df = price_df.copy()
-        
+
         # Ensure Date column exists
         if df.index.name == 'Date' or isinstance(df.index, pd.DatetimeIndex):
+            # Check if 'Date' column already exists before reset_index
+            if 'Date' in df.columns:
+                df = df.drop(columns=['Date'])
             df = df.reset_index()
         
         # Add metadata columns
@@ -424,9 +441,25 @@ class FundamentalMerger:
         for col in raw_cols:
             df[col] = 0.0
         
+        # Add cash flow columns (RAW)
+        cash_flow_cols = [
+            'operatingCashFlow', 'freeCashFlow', 'capitalExpenditure',
+            'changeInWorkingCapital', 'cashFlowFromInvesting', 'cashFlowFromFinancing'
+        ]
+        for col in cash_flow_cols:
+            df[col] = 0.0
+        
         # Add growth columns
         growth_cols = ['revenue_growth_yoy', 'eps_growth_yoy', 'net_income_growth_yoy']
         for col in growth_cols:
+            df[col] = 0.0
+        
+        # Add additional growth/quality metrics
+        additional_growth_cols = [
+            'eps_accel', 'revenue_accel',
+            'inventory_growth_yoy', 'inventory_vs_sales_spread'
+        ]
+        for col in additional_growth_cols:
             df[col] = 0.0
         
         # Add ratio columns
@@ -437,15 +470,42 @@ class FundamentalMerger:
         for col in ratio_cols:
             df[col] = 0.0
         
+        # Add advanced fundamental metrics (cash flow based)
+        advanced_cols = [
+            'operating_leverage', 'accruals_ratio', 'roic',
+            'reinvestment_rate', 'efficient_growth'
+        ]
+        for col in advanced_cols:
+            df[col] = 0.0
+        
         # Add hybrid columns
         df['pe_ratio'] = np.nan
         df['pb_ratio'] = np.nan
         df['ps_ratio'] = np.nan
+        df['peg_adjusted'] = np.nan
+        df['is_declining_earnings'] = 0
         
         logger.debug(f"{ticker}: Added empty fundamental columns")
-        
+
         return df
-    
+
+    def _check_duplicate_columns(self, df: pd.DataFrame, context: str = "") -> None:
+        """
+        Check for duplicate column names and raise error if found.
+
+        Args:
+            df: DataFrame to check
+            context: Context string for error message
+
+        Raises:
+            ValueError: If duplicate columns are detected
+        """
+        duplicate_cols = df.columns[df.columns.duplicated()].tolist()
+        if duplicate_cols:
+            error_msg = f"Duplicate columns detected {context}: {duplicate_cols}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
     def get_merge_statistics(self, df: pd.DataFrame) -> Dict:
         """
         Get statistics about the merged dataframe.

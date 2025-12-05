@@ -3,6 +3,11 @@ Build Dataset A - Daily Feature Snapshots for ML Training
 
 Generates time-series of technical indicators and alpha factors for all tickers.
 Each row represents features available for a specific ticker on a specific date.
+
+Performance Note:
+- Use --skip-updates flag when local cache is already up-to-date (e.g., after running daily scanner)
+- This skips price and fundamental data updates, significantly reducing build time
+- Data updates should be handled separately via scanner or dedicated update scripts
 """
 
 import pandas as pd
@@ -14,6 +19,7 @@ from datetime import datetime
 import logging
 from tqdm import tqdm
 from typing import Optional
+import time
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
@@ -32,47 +38,81 @@ logger = logging.getLogger(__name__)
 
 
 def _process_ticker_for_dataset_a(
-    ticker: str, 
+    ticker: str,
     df: pd.DataFrame,
     mode: str,
-    feature_engine: FeatureEngineer,
-    fundamental_merger: Optional['FundamentalMerger']
+    benchmark_data: Optional[pd.Series] = None,
+    include_fundamentals: bool = False,
+    skip_data_updates: bool = True
 ) -> pd.DataFrame:
     """
     Process a single ticker - calculate features and prepare records.
-    
+
+    This function is designed to be pickle-safe for multiprocessing.
+    It creates its own FeatureEngine and FundamentalMerger instances
+    instead of receiving them as parameters (which would fail pickling).
+
     Args:
         ticker: Stock symbol
         df: Price dataframe
         mode: 'lightweight' or 'full'
-        feature_engine: Feature engine instance
-        fundamental_merger: Optional fundamental merger instance
-        
+        benchmark_data: Benchmark series for RS calculation
+        include_fundamentals: Whether to include fundamental data
+        skip_data_updates: Skip data cache updates
+
     Returns:
         DataFrame with features for this ticker
     """
     try:
+        # Create fresh instances (pickle-safe)
+        # Suppress initialization logs in worker processes to reduce noise
+        import logging
+        worker_logger = logging.getLogger('src.features')
+        original_level = worker_logger.level
+        worker_logger.setLevel(logging.WARNING)
+
+        feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
+
+        worker_logger.setLevel(original_level)
+
         # Calculate lightweight features
         df_features = feature_engine.calculate_lightweight_features(df)
-        
+
         # Calculate heavyweight features if requested
         if mode == 'full':
             df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
-        
+
         # Merge fundamental data if requested
-        if fundamental_merger is not None:
+        if include_fundamentals:
+            from src.fundamental_merger import FundamentalMerger
+            fundamental_merger = FundamentalMerger(force_cache_only=skip_data_updates)
             df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
         
         # OPTIMIZATION: Instead of looping through dates, just add ticker column
         # The dataframe already has all the dates as index
         df_features['ticker'] = ticker
-        df_features['date'] = df_features.index
-        
+
+        # Handle date column carefully to avoid duplicates
+        # Use lowercase 'date' to match standard convention across codebase
+        if 'date' not in df_features.columns:
+            # If date doesn't exist as column, create it from index
+            df_features['date'] = df_features.index
+        elif df_features.index.name == 'date' or isinstance(df_features.index, pd.DatetimeIndex):
+            # If date exists as column AND index is date, reset index (drop it)
+            df_features = df_features.reset_index(drop=True)
+
+        # Check for duplicate columns before proceeding
+        duplicate_cols = df_features.columns[df_features.columns.duplicated()].tolist()
+        if duplicate_cols:
+            logger.error(f"{ticker}: Duplicate columns detected: {duplicate_cols}")
+            # Remove duplicate columns (keep first occurrence)
+            df_features = df_features.loc[:, ~df_features.columns.duplicated()]
+
         # Reorder columns: date, ticker, Close, Volume, then features
         cols = ['date', 'ticker', 'Close', 'Volume']
         feature_cols = [c for c in df_features.columns if c not in cols + ['Open', 'High', 'Low']]
         df_features = df_features[cols + feature_cols]
-        
+
         return df_features
         
     except Exception as e:
@@ -87,11 +127,13 @@ def build_dataset_a(
     tickers: list = None,
     validate_temporal: bool = True,
     include_fundamentals: bool = False,
-    n_jobs: int = 1
+    include_cross_sectional: bool = False,
+    n_jobs: int = 1,
+    skip_data_updates: bool = True
 ) -> pd.DataFrame:
     """
     Build Dataset A - daily feature snapshots.
-    
+
     Args:
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
@@ -99,8 +141,12 @@ def build_dataset_a(
         tickers: Optional list of tickers (default: use universe)
         validate_temporal: If True, run temporal validation checks
         include_fundamentals: If True, merge fundamental data (growth, ratios, P/E, etc.)
+        include_cross_sectional: If True, add cross-sectional features
         n_jobs: Number of parallel jobs (1 = sequential, -1 = all CPUs)
-    
+        skip_data_updates: If True, skip price and fundamental data cache updates (default: True)
+                          For training datasets, data should already be up-to-date in cache.
+                          Set to False only if you need to fetch fresh market data.
+
     Returns:
         DataFrame with columns: date, ticker, Close, Volume, features...
     """
@@ -122,8 +168,10 @@ def build_dataset_a(
     fundamental_merger = None
     if include_fundamentals:
         from src.fundamental_merger import FundamentalMerger
-        fundamental_merger = FundamentalMerger()
+        fundamental_merger = FundamentalMerger(force_cache_only=skip_data_updates)
         logger.info("Fundamental enrichment enabled")
+        if skip_data_updates:
+            logger.info("Cache-only mode enabled for fundamentals (no API updates)")
     
     if validate_temporal:
         validator = TemporalValidator()
@@ -136,14 +184,17 @@ def build_dataset_a(
         logger.info(f"Loaded {len(tickers)} tickers from FMP stock screener")
     
     logger.info(f"Processing {len(tickers)} tickers")
-    
-    # Update cache for all tickers
-    logger.info("Updating price data cache...")
-    data_repo.update_cache(tickers, force=False)
-    
+
+    # Update cache for all tickers (unless skip_data_updates is True)
+    if skip_data_updates:
+        logger.info("Skipping price data cache update (using existing cache)")
+    else:
+        logger.info("Updating price data cache...")
+        data_repo.update_cache(tickers, force=False)
+
     # Load all ticker data
     logger.info("Loading ticker data...")
-    ticker_data = data_repo.get_batch_data(tickers)
+    ticker_data = data_repo.get_batch_data(tickers, show_progress=True)
     logger.info(f"Successfully loaded {len(ticker_data)}/{len(tickers)} tickers")
     
     # Generate business day range
@@ -152,32 +203,64 @@ def build_dataset_a(
     
     # Process tickers (sequential or parallel)
     if n_jobs == 1:
-        # Sequential processing
+        # Sequential processing - use pre-created instances for efficiency
         logger.info("Processing tickers sequentially...")
         results = []
         with tqdm(total=len(ticker_data), desc="Building Dataset A", unit="ticker") as pbar:
             for ticker, df in ticker_data.items():
-                result = _process_ticker_for_dataset_a(
-                    ticker, df, mode, feature_engine, fundamental_merger
-                )
-                if not result.empty:
-                    results.append(result)
+                try:
+                    # Calculate lightweight features
+                    df_features = feature_engine.calculate_lightweight_features(df)
+
+                    # Calculate heavyweight features if requested
+                    if mode == 'full':
+                        df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
+
+                    # Merge fundamental data if requested
+                    if fundamental_merger is not None:
+                        df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
+
+                    # Add ticker column
+                    df_features['ticker'] = ticker
+
+                    # Handle date column carefully to avoid duplicates
+                    if 'date' not in df_features.columns:
+                        df_features['date'] = df_features.index
+                    elif df_features.index.name == 'date' or isinstance(df_features.index, pd.DatetimeIndex):
+                        df_features = df_features.reset_index(drop=True)
+
+                    # Check for duplicate columns
+                    duplicate_cols = df_features.columns[df_features.columns.duplicated()].tolist()
+                    if duplicate_cols:
+                        logger.error(f"{ticker}: Duplicate columns detected: {duplicate_cols}")
+                        df_features = df_features.loc[:, ~df_features.columns.duplicated()]
+
+                    # Reorder columns
+                    cols = ['date', 'ticker', 'Close', 'Volume']
+                    feature_cols = [c for c in df_features.columns if c not in cols + ['Open', 'High', 'Low']]
+                    df_features = df_features[cols + feature_cols]
+
+                    if not df_features.empty:
+                        results.append(df_features)
+                except Exception as e:
+                    logger.warning(f"Failed to process {ticker}: {e}")
+
                 pbar.update(1)
     else:
-        # Parallel processing
+        # Parallel processing - pass pickle-safe parameters
         from multiprocessing import Pool, cpu_count
-        
+
         if n_jobs == -1:
             n_jobs = cpu_count()
-        
+
         logger.info(f"Processing tickers in parallel using {n_jobs} workers...")
-        
-        # Prepare arguments: (ticker, df, mode, feature_engine, fundamental_merger)
+
+        # Prepare arguments: (ticker, df, mode, benchmark_data, include_fundamentals, skip_data_updates)
         args_list = [
-            (ticker, df, mode, feature_engine, fundamental_merger)
+            (ticker, df, mode, benchmark_data, include_fundamentals, skip_data_updates)
             for ticker, df in ticker_data.items()
         ]
-        
+
         # Use multiprocessing Pool
         with Pool(processes=n_jobs) as pool:
             results = []
@@ -208,10 +291,63 @@ def build_dataset_a(
                     pass  # Skip if conversion fails
     
     dataset_a = pd.concat(results, ignore_index=True)
-    
-    # Sort by date and ticker
+
+    # CRITICAL: Sort by ticker AND date before shifting to ensure proper groupby boundaries
+    dataset_a = dataset_a.sort_values(['ticker', 'date']).reset_index(drop=True)
+
+    # Apply lagged features using groupby to respect ticker boundaries
+    logger.info("\n" + "="*80)
+    logger.info(" APPLYING LAGGED FEATURES (Setup Conditions at T-1)")
+    logger.info("="*80)
+    logger.info("Creating lagged features with groupby to prevent cross-ticker contamination...")
+    lag_start = time.time()
+
+    FEATURES_TO_LAG = [
+        'nATR', 'ATR', 'VCP_Ratio', 'Consolidation_Width',
+        'Price_vs_SMA_50', 'Price_vs_SMA_150', 'Price_vs_SMA_200',
+        'RS', 'RS_MA', 'Dry_Up_Volume',
+        'High_52W', 'Low_52W', 'RSI_14', 'Dist_From_52W_High'
+    ]
+
+    lagged_count = 0
+    for feature in FEATURES_TO_LAG:
+        if feature in dataset_a.columns:
+            lag_col_name = f"{feature}_Lag1"
+            dataset_a[lag_col_name] = dataset_a.groupby('ticker')[feature].shift(1)
+            lagged_count += 1
+            logger.debug(f"  Added {lag_col_name}")
+        else:
+            logger.warning(f"  Feature '{feature}' not found in dataset. Skipping lag.")
+
+    lag_time = time.time() - lag_start
+    logger.info(f"Created {lagged_count}/{len(FEATURES_TO_LAG)} lagged features in {lag_time:.1f}s")
+
+    # Validation: Check first row per ticker has NaN lags (prevents data leakage)
+    logger.info("Validating groupby boundaries (first row per ticker should have NaN lags)...")
+    sample_tickers = dataset_a['ticker'].unique()[:3]
+    lag_cols = [c for c in dataset_a.columns if c.endswith('_Lag1')]
+
+    validation_passed = True
+    for ticker in sample_tickers:
+        ticker_data = dataset_a[dataset_a['ticker'] == ticker].sort_values('date')
+        if len(ticker_data) > 0:
+            first_row = ticker_data.iloc[0]
+            nan_lags = first_row[lag_cols].isna().sum()
+
+            if nan_lags == len(lag_cols):
+                logger.debug(f"  ✓ {ticker}: First row has NaN lags (correct)")
+            else:
+                logger.warning(f"  ✗ {ticker}: First row has {len(lag_cols) - nan_lags}/{len(lag_cols)} non-NaN lags (DATA LEAK!)")
+                validation_passed = False
+
+    if validation_passed:
+        logger.info("✓ Lag validation passed: No cross-ticker contamination detected")
+    else:
+        logger.warning("✗ Lag validation FAILED: Potential data leakage detected!")
+
+    # Re-sort by date and ticker for consistency with expected output format
     dataset_a = dataset_a.sort_values(['date', 'ticker']).reset_index(drop=True)
-    
+
     # Summary statistics
     logger.info(f"\nDataset A Summary:")
     logger.info(f"  Total rows: {len(dataset_a):,}")
@@ -219,6 +355,30 @@ def build_dataset_a(
     logger.info(f"  Tickers: {dataset_a['ticker'].nunique()}")
     logger.info(f"  Features: {len(dataset_a.columns) - 2}")  # Exclude date, ticker
     logger.info(f"  Missing values: {dataset_a.isnull().sum().sum()} ({dataset_a.isnull().sum().sum() / dataset_a.size * 100:.2f}%)")
+    
+    # Add cross-sectional features if requested (post-processing after concatenation)
+    if include_cross_sectional:
+        logger.info("\n" + "="*80)
+        logger.info(" POST-PROCESSING: CROSS-SECTIONAL FEATURES")
+        logger.info("="*80)
+        
+        try:
+            from src.cross_sectional_features import add_cross_sectional_features
+            
+            dataset_a = add_cross_sectional_features(
+                dataset_a,
+                company_profile_path='data/company_info/company_profiles.parquet',
+                rs_column='RS'
+            )
+            
+            # Update feature count
+            logger.info(f"\nUpdated Dataset A Summary:")
+            logger.info(f"  Total features: {len(dataset_a.columns) - 2}")  # Exclude date, ticker
+            logger.info(f"  New cross-sectional features: RS_Universe_Rank, Sector_Momentum, Industry_Momentum")
+            
+        except Exception as e:
+            logger.error(f"Failed to add cross-sectional features: {e}")
+            logger.warning("Continuing without cross-sectional features...")
     
     return dataset_a
 
@@ -293,12 +453,24 @@ def main():
     )
     
     parser.add_argument(
+        '--include-cross-sectional',
+        action='store_true',
+        help='Add cross-sectional features (RS_Universe_Rank, Sector/Industry_Momentum)'
+    )
+    
+    parser.add_argument(
         '--n-jobs',
         type=int,
         default=1,
         help='Number of parallel jobs (1=sequential, -1=use all CPUs, default: 1)'
     )
-    
+
+    parser.add_argument(
+        '--update-cache',
+        action='store_true',
+        help='Force price and fundamental data cache updates (default: skip updates and use existing cache)'
+    )
+
     args = parser.parse_args()
     
     print("=" * 80)
@@ -354,7 +526,9 @@ def main():
         tickers=tickers,
         validate_temporal=not args.no_validate,
         include_fundamentals=args.include_fundamentals,
-        n_jobs=args.n_jobs
+        include_cross_sectional=args.include_cross_sectional,
+        n_jobs=args.n_jobs,
+        skip_data_updates=not args.update_cache  # Inverted: skip by default unless --update-cache is used
     )
     
     if dataset_a.empty:

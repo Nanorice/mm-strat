@@ -33,13 +33,21 @@ class FeatureEngineer:
     def __init__(self, benchmark_data: Optional[pd.Series] = None):
         """
         Initialize the Feature Engineer.
-        
+
         Args:
             benchmark_data: Benchmark (SPY) close prices for relative strength calculation
         """
         self.benchmark_data = benchmark_data
         self.ta = TechnicalAnalysis()
-        
+
+        # Initialize company profile engine for sector/industry features
+        from src.company_profile_engine import CompanyProfileEngine
+        try:
+            self.profile_engine = CompanyProfileEngine()
+        except ValueError as e:
+            logger.warning(f"CompanyProfileEngine initialization failed: {e}")
+            self.profile_engine = None
+
         # Feature definitions
         self.lightweight_features = [
             'SMA_50', 'SMA_150', 'SMA_200',      # Trend indicators (raw for ordering)
@@ -53,7 +61,7 @@ class FeatureEngineer:
             'High_52W', 'Low_52W',                # 52-week range
             'High_20D', 'Breakout'                # Breakout detection
         ]
-        
+
         logger.info("FeatureEngineer initialized in dual-stage mode")
     
     def calculate_lightweight_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -133,9 +141,98 @@ class FeatureEngineer:
         
         # SMA 50 Slope - trend strength (percentage change per day)
         df['SMA_50_Slope'] = (df['SMA_50'] - df['SMA_50'].shift(10)) / df['SMA_50'].shift(10) / 10 * 100
-        
+
+        # Add lagged features (setup conditions at T-1)
+        df = self.add_lagged_features(df, lag_periods=1)
+
         return df
-    
+
+    def add_lagged_features(self, df: pd.DataFrame, lag_periods: int = 1) -> pd.DataFrame:
+        """
+        Add lagged versions of setup features to separate "cause" (T-1) from "effect" (T).
+
+        Strategy: We want to know if the stock was "Quiet, Tight, and Trending"
+        BEFORE it exploded, not during. This separates the BASE (setup) from the
+        BREAKOUT (trigger).
+
+        Features to Lag (Setup Conditions at T-1):
+        - Volatility (The "Coil"): nATR, ATR, VCP_Ratio, Consolidation_Width
+        - Trend Structure: Price_vs_SMA_50/150/200
+        - Relative Strength: RS, RS_MA
+        - Supply Dynamics: Dry_Up_Volume
+        - Geometry: High_52W, Low_52W
+        - Momentum: RSI_14, Dist_From_52W_High
+
+        Features NOT Lagged (Trigger Conditions at T):
+        - Vol_Ratio (today's volume surge - the trigger itself)
+        - Close, Volume (current price/volume)
+        - Green_Days_Ratio_20D (recent price action)
+        - Breakout (today's breakout signal)
+        - Alpha factors (fast mean-reversion signals)
+
+        Args:
+            df: DataFrame with calculated features (single-ticker context)
+            lag_periods: Number of periods to lag (default: 1)
+
+        Returns:
+            DataFrame with lagged features added (e.g., nATR_Lag1, RS_Lag1)
+
+        Notes:
+            - Uses .shift(lag_periods) for backward shift
+            - First N rows will have NaN lags (XGBoost handles this naturally)
+            - For multi-ticker DataFrames, use .groupby('ticker').shift() externally
+            - This method assumes single-ticker context (as used in calculate_lightweight_features)
+
+        Example:
+            >>> # Single ticker
+            >>> df = feature_eng.calculate_lightweight_features(aapl_df)
+            >>> # Lagged features already included automatically
+            >>> print(df[['nATR', 'nATR_Lag1']].tail())
+        """
+        FEATURES_TO_LAG = [
+            # --- VOLATILITY (The "Coil") ---
+            'nATR',                 # CRITICAL: Must be measured before the explosion
+            'ATR',
+            'VCP_Ratio',            # The definition of the pattern
+            'Consolidation_Width',  # Depth of the base
+
+            # --- TREND STRUCTURE ---
+            'Price_vs_SMA_50',      # Was it extended or properly set up?
+            'Price_vs_SMA_150',
+            'Price_vs_SMA_200',
+
+            # --- RELATIVE STRENGTH ---
+            'RS',                   # Was it a leader leading INTO the breakout?
+            'RS_MA',
+
+            # --- SUPPLY DYNAMICS ---
+            'Dry_Up_Volume',        # Volume dry up YESTERDAY
+
+            # --- GEOMETRY ---
+            'High_52W',             # Context for where we are in the range
+            'Low_52W',
+
+            # --- MOMENTUM ---
+            'RSI_14',               # Momentum oscillator
+            'Dist_From_52W_High'    # Distance from 52-week high
+        ]
+
+        df = df.copy()
+        lagged_count = 0
+
+        for feature in FEATURES_TO_LAG:
+            if feature in df.columns:
+                lag_col_name = f"{feature}_Lag{lag_periods}"
+                df[lag_col_name] = df[feature].shift(lag_periods)
+                lagged_count += 1
+                logger.debug(f"  Created {lag_col_name}")
+            else:
+                logger.warning(f"Feature '{feature}' not found in DataFrame. Skipping lag.")
+
+        logger.debug(f"Added {lagged_count}/{len(FEATURES_TO_LAG)} lagged features with lag={lag_periods}")
+
+        return df
+
     def calculate_heavyweight_features(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         """
         Stage 2: Calculate heavyweight features for qualified candidates.
@@ -158,8 +255,8 @@ class FeatureEngineer:
             # Import AlphaEngine (lazy import to avoid circular dependencies)
             from src.alpha_factors import AlphaEngine
             
-            # Calculate WorldQuant alpha factors
-            alpha_engine = AlphaEngine(alpha_list=[1, 6, 9, 12, 41, 101])
+            # Calculate WorldQuant alpha factors with new enhanced alpha set
+            alpha_engine = AlphaEngine()  # Uses default: [2, 4, 11, 13, 15, 54, 60]
             df = alpha_engine.calculate_alphas(df)
             
             logger.debug(f"Heavyweight features calculated for {ticker}: {alpha_engine.get_alpha_names()}")
@@ -256,10 +353,10 @@ class FeatureEngineer:
     def get_feature_summary(self, df: pd.DataFrame) -> Dict:
         """
         Generate a summary of calculated features for debugging.
-        
+
         Args:
             df: DataFrame with calculated features
-        
+
         Returns:
             Dict with feature statistics
         """
@@ -270,5 +367,61 @@ class FeatureEngineer:
             'lightweight_present': self.validate_features(df, mode='lightweight'),
             'null_counts': df[self.lightweight_features].isnull().sum().to_dict()
         }
-        
+
         return summary
+
+    def add_company_features(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+        """
+        Add company profile features to DataFrame for ML model.
+
+        Adds sector, industry, market cap, and beta features from company profile data.
+        These features enable sector-wise analysis and provide fundamental context
+        to the technical indicators.
+
+        Args:
+            df: DataFrame with OHLCV + technical features
+            ticker: Stock symbol
+
+        Returns:
+            DataFrame with added company features:
+            - sector_id: int (encoded sector, -1 if missing)
+            - industry_id: int (encoded industry, -1 if missing)
+            - mktCap_log: float (log10 of market cap for scale normalization, 0 if missing)
+            - beta: float (volatility vs market, 1.0 if missing)
+
+        Example:
+            >>> df = feature_eng.calculate_lightweight_features(price_df)
+            >>> df = feature_eng.add_company_features(df, 'AAPL')
+            >>> print(df[['Close', 'sector_id', 'industry_id']].tail())
+        """
+        if self.profile_engine is None:
+            logger.warning("CompanyProfileEngine not available, filling with default values")
+            df['sector_id'] = -1
+            df['industry_id'] = -1
+            df['mktCap_log'] = 0.0
+            df['beta'] = 1.0
+            return df
+
+        # Get profile for ticker
+        profile = self.profile_engine.get_ticker_profile(ticker)
+
+        if profile is None:
+            logger.debug(f"No profile found for {ticker}, using default values")
+            # Fill with neutral/default values
+            df['sector_id'] = -1
+            df['industry_id'] = -1
+            df['mktCap_log'] = 0.0
+            df['beta'] = 1.0
+        else:
+            # Broadcast scalar values to entire DataFrame
+            df['sector_id'] = int(profile['sector_id'])
+            df['industry_id'] = int(profile['industry_id'])
+
+            # Log scale market cap for better ML feature scaling
+            mkt_cap = float(profile['mktCap'])
+            df['mktCap_log'] = np.log10(mkt_cap + 1) if mkt_cap > 0 else 0.0
+
+            # Beta (default to 1.0 if missing)
+            df['beta'] = float(profile['beta']) if pd.notna(profile['beta']) else 1.0
+
+        return df

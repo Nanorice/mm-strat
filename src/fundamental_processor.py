@@ -67,16 +67,17 @@ class FundamentalProcessor:
         if df.empty:
             return df
         
-        # Step 2: Separate income and balance sheet
+        # Step 2: Separate income, balance sheet, and cash flow
         income_df = df[df['statement_type'] == 'income'].copy()
         balance_df = df[df['statement_type'] == 'balance_sheet'].copy()
+        cash_flow_df = df[df['statement_type'] == 'cash_flow'].copy()
         
         # Step 3: Calculate growth metrics (income statement)
         if not income_df.empty:
             income_df = self._calculate_growth_metrics(income_df)
         
         # Step 4: Calculate safety ratios (balance sheet + income)
-        combined_df = self._merge_statements(income_df, balance_df)
+        combined_df = self._merge_statements(income_df, balance_df, cash_flow_df)
         
         if not combined_df.empty:
             combined_df = self._calculate_safety_ratios(combined_df)
@@ -202,17 +203,19 @@ class FundamentalProcessor:
     def _merge_statements(
         self, 
         income_df: pd.DataFrame, 
-        balance_df: pd.DataFrame
+        balance_df: pd.DataFrame,
+        cash_flow_df: pd.DataFrame = None
     ) -> pd.DataFrame:
         """
-        Merge income statement and balance sheet on fiscal_date and filing_date.
+        Merge income statement, balance sheet, and cash flow on fiscal_date and filing_date.
         
         Args:
             income_df: Processed income statement
             balance_df: Balance sheet dataframe
+            cash_flow_df: Cash flow statement dataframe (optional)
             
         Returns:
-            Merged dataframe with both statement types
+            Merged dataframe with all statement types
         """
         if income_df.empty and balance_df.empty:
             return pd.DataFrame()
@@ -241,6 +244,22 @@ class FundamentalProcessor:
                 how='outer',
                 suffixes=('_income', '_balance')
             )
+            
+            # CRITICAL FIX: Also merge cash_flow if it exists
+            if cash_flow_df is not None and not cash_flow_df.empty:
+                # Find common columns between merged result and cash_flow
+                cf_common_cols = [col for col in common_cols if col in cash_flow_df.columns]
+                if cf_common_cols:
+                    merged = pd.merge(
+                        merged,
+                        cash_flow_df,
+                        on=cf_common_cols,
+                        how='outer',
+                        suffixes=('', '_cashflow')
+                    )
+                    logger.debug(f"Merged cash flow statement with {len(cf_common_cols)} common columns")
+                else:
+                    logger.warning("Cash flow has no common merge columns, skipping")
         
         # Sort by filing_date if it exists
         if 'filing_date' in merged.columns:
@@ -253,16 +272,18 @@ class FundamentalProcessor:
         # Find all columns with suffixes
         income_cols = [col for col in merged.columns if col.endswith('_income')]
         balance_cols = [col for col in merged.columns if col.endswith('_balance')]
+        cashflow_cols = [col for col in merged.columns if col.endswith('_cashflow')]
         
         # Get base names
         income_bases = {col.replace('_income', '') for col in income_cols}
         balance_bases = {col.replace('_balance', '') for col in balance_cols}
+        cashflow_bases = {col.replace('_cashflow', '') for col in cashflow_cols}
         
-        # Find columns that have both _income and _balance versions
-        duplicate_bases = income_bases & balance_bases
+        # Find ALL columns that have ANY suffix version (not just income+balance)
+        all_suffixed_bases = income_bases | balance_bases | cashflow_bases
         
         # Combine them: use fillna to merge (income statement data fills balance sheet NaN and vice versa)
-        for base in duplicate_bases:
+        for base in all_suffixed_bases:
             income_col = f'{base}_income'
             balance_col = f'{base}_balance'
             
@@ -290,112 +311,118 @@ class FundamentalProcessor:
     def _calculate_safety_ratios(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate fundamental safety ratios.
-        
+
         Ratios:
         - debt_to_equity: totalDebt / totalEquity
         - current_ratio: totalCurrentAssets / totalCurrentLiabilities
         - quick_ratio: (totalCurrentAssets - inventory) / totalCurrentLiabilities
-        
+
         Args:
             df: Merged fundamental dataframe
-            
+
         Returns:
             Dataframe with ratio columns added
         """
+        # Prepare new columns as a dict to avoid fragmentation
+        new_cols = {}
+
         # Debt to Equity
         if 'totalDebt' in df.columns and 'totalEquity' in df.columns:
-            df['debt_to_equity'] = np.where(
+            new_cols['debt_to_equity'] = np.where(
                 df['totalEquity'] != 0,
                 df['totalDebt'] / df['totalEquity'],
                 np.nan
             )
         else:
-            df['debt_to_equity'] = np.nan
-        
+            new_cols['debt_to_equity'] = np.nan
+
         # Current Ratio - FMP uses totalCurrentAssets and totalCurrentLiabilities
         current_assets_col = 'totalCurrentAssets' if 'totalCurrentAssets' in df.columns else 'currentAssets'
         current_liab_col = 'totalCurrentLiabilities' if 'totalCurrentLiabilities' in df.columns else 'currentLiabilities'
-        
+
         if current_assets_col in df.columns and current_liab_col in df.columns:
-            df['current_ratio'] = np.where(
+            new_cols['current_ratio'] = np.where(
                 df[current_liab_col] != 0,
                 df[current_assets_col] / df[current_liab_col],
                 np.nan
             )
         else:
-            df['current_ratio'] = np.nan
-        
+            new_cols['current_ratio'] = np.nan
+
         # Quick Ratio
         if all(col in df.columns for col in [current_assets_col, 'inventory', current_liab_col]):
-            df['quick_ratio'] = np.where(
+            new_cols['quick_ratio'] = np.where(
                 df[current_liab_col] != 0,
                 (df[current_assets_col] - df['inventory']) / df[current_liab_col],
                 np.nan
             )
         else:
-            df['quick_ratio'] = np.nan
-        
-        # Defragment DataFrame after adding multiple columns
-        return df.copy()
+            new_cols['quick_ratio'] = np.nan
+
+        # Add all columns at once to avoid fragmentation
+        return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
     
     def _calculate_operating_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate operating performance metrics.
-        
+
         Metrics:
         - gross_margin: grossProfit / revenue
         - operating_margin: operatingIncome / revenue
         - roe: netIncome / totalEquity (Return on Equity)
         - roa: netIncome / totalAssets (Return on Assets)
-        
+
         Args:
             df: Merged fundamental dataframe
-            
+
         Returns:
             Dataframe with operating metric columns added
         """
+        # Prepare new columns as a dict to avoid fragmentation
+        new_cols = {}
+
         # Gross Margin
         if 'grossProfit' in df.columns and 'revenue' in df.columns:
-            df['gross_margin'] = np.where(
+            new_cols['gross_margin'] = np.where(
                 df['revenue'] != 0,
                 (df['grossProfit'] / df['revenue']) * 100,
                 np.nan
             )
         else:
-            df['gross_margin'] = np.nan
-        
+            new_cols['gross_margin'] = np.nan
+
         # Operating Margin
         if 'operatingIncome' in df.columns and 'revenue' in df.columns:
-            df['operating_margin'] = np.where(
+            new_cols['operating_margin'] = np.where(
                 df['revenue'] != 0,
                 (df['operatingIncome'] / df['revenue']) * 100,
                 np.nan
             )
         else:
-            df['operating_margin'] = np.nan
-        
+            new_cols['operating_margin'] = np.nan
+
         # ROE (Return on Equity)
         if 'netIncome' in df.columns and 'totalEquity' in df.columns:
-            df['roe'] = np.where(
+            new_cols['roe'] = np.where(
                 df['totalEquity'] != 0,
                 (df['netIncome'] / df['totalEquity']) * 100,
                 np.nan
             )
         else:
-            df['roe'] = np.nan
-        
+            new_cols['roe'] = np.nan
+
         # ROA (Return on Assets)
         if 'netIncome' in df.columns and 'totalAssets' in df.columns:
-            df['roa'] = np.where(
+            new_cols['roa'] = np.where(
                 df['totalAssets'] != 0,
                 (df['netIncome'] / df['totalAssets']) * 100,
                 np.nan
             )
         else:
-            df['roa'] = np.nan
-        
-        # Defragment DataFrame after adding multiple columns
-        return df.copy()
+            new_cols['roa'] = np.nan
+
+        # Add all columns at once to avoid fragmentation
+        return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
     
     def get_processed_fundamentals_summary(self, df: pd.DataFrame) -> Dict:
         """

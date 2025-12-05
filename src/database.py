@@ -74,6 +74,23 @@ class DatabaseManager:
                 ma200 REAL,
                 high_52w REAL,
                 low_52w REAL,
+
+                -- Lagged features (setup conditions at T-1)
+                nATR_lag1 REAL,
+                atr_lag1 REAL,
+                vcp_ratio_lag1 REAL,
+                consolidation_width_lag1 REAL,
+                price_vs_sma50_lag1 REAL,
+                price_vs_sma150_lag1 REAL,
+                price_vs_sma200_lag1 REAL,
+                rs_lag1 REAL,
+                rs_ma_lag1 REAL,
+                dry_up_volume_lag1 REAL,
+                high_52w_lag1 REAL,
+                low_52w_lag1 REAL,
+                rsi14_lag1 REAL,
+                dist_from_52w_high_lag1 REAL,
+
                 ml_probability REAL,
                 ml_rank INTEGER,
                 ml_model_version TEXT,
@@ -276,6 +293,15 @@ class DatabaseManager:
                        vol_ratio: Optional[float] = None, ma50: Optional[float] = None,
                        ma150: Optional[float] = None, ma200: Optional[float] = None,
                        high_52w: Optional[float] = None, low_52w: Optional[float] = None,
+                       # Lagged features (setup conditions at T-1)
+                       nATR_lag1: Optional[float] = None, atr_lag1: Optional[float] = None,
+                       vcp_ratio_lag1: Optional[float] = None, consolidation_width_lag1: Optional[float] = None,
+                       price_vs_sma50_lag1: Optional[float] = None, price_vs_sma150_lag1: Optional[float] = None,
+                       price_vs_sma200_lag1: Optional[float] = None, rs_lag1: Optional[float] = None,
+                       rs_ma_lag1: Optional[float] = None, dry_up_volume_lag1: Optional[float] = None,
+                       high_52w_lag1: Optional[float] = None, low_52w_lag1: Optional[float] = None,
+                       rsi14_lag1: Optional[float] = None, dist_from_52w_high_lag1: Optional[float] = None,
+                       # ML scores
                        ml_probability: Optional[float] = None, ml_rank: Optional[int] = None,
                        ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None,
                        ml_features: Optional[Dict] = None):
@@ -298,6 +324,20 @@ class DatabaseManager:
             ma200: 200-day moving average
             high_52w: 52-week high
             low_52w: 52-week low
+            nATR_lag1: Lagged normalized ATR (T-1)
+            atr_lag1: Lagged ATR (T-1)
+            vcp_ratio_lag1: Lagged VCP ratio (T-1)
+            consolidation_width_lag1: Lagged consolidation width (T-1)
+            price_vs_sma50_lag1: Lagged price vs SMA50 (T-1)
+            price_vs_sma150_lag1: Lagged price vs SMA150 (T-1)
+            price_vs_sma200_lag1: Lagged price vs SMA200 (T-1)
+            rs_lag1: Lagged relative strength (T-1)
+            rs_ma_lag1: Lagged RS moving average (T-1)
+            dry_up_volume_lag1: Lagged dry up volume indicator (T-1)
+            high_52w_lag1: Lagged 52-week high (T-1)
+            low_52w_lag1: Lagged 52-week low (T-1)
+            rsi14_lag1: Lagged RSI 14 (T-1)
+            dist_from_52w_high_lag1: Lagged distance from 52W high (T-1)
             ml_probability: ML success probability (0.0-1.0)
             ml_rank: ML rank (1=best)
             ml_model_version: Model version identifier
@@ -316,11 +356,19 @@ class DatabaseManager:
             INSERT OR REPLACE INTO buy_list
             (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
              target_price, atr, rs, volume_ratio, ma50, ma150, ma200, high_52w, low_52w,
+             nATR_lag1, atr_lag1, vcp_ratio_lag1, consolidation_width_lag1,
+             price_vs_sma50_lag1, price_vs_sma150_lag1, price_vs_sma200_lag1,
+             rs_lag1, rs_ma_lag1, dry_up_volume_lag1,
+             high_52w_lag1, low_52w_lag1, rsi14_lag1, dist_from_52w_high_lag1,
              ml_probability, ml_rank, ml_model_version, ml_score_date, ml_features,
              last_updated, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
               target_price, atr, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
+              nATR_lag1, atr_lag1, vcp_ratio_lag1, consolidation_width_lag1,
+              price_vs_sma50_lag1, price_vs_sma150_lag1, price_vs_sma200_lag1,
+              rs_lag1, rs_ma_lag1, dry_up_volume_lag1,
+              high_52w_lag1, low_52w_lag1, rsi14_lag1, dist_from_52w_high_lag1,
               ml_probability, ml_rank, ml_model_version, ml_score_date, ml_features_json,
               last_updated))
 
@@ -329,7 +377,7 @@ class DatabaseManager:
 
     def remove_from_buy_list(self, ticker: str, reason: str = 'executed'):
         """
-        Removes a ticker from buy list.
+        Removes a ticker from buy list and logs to activity table.
 
         Args:
             ticker: Stock symbol
@@ -337,7 +385,26 @@ class DatabaseManager:
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+        
+        # Get the signal_date before removing
+        cursor.execute("""
+            SELECT signal_date, entry_price, stop_price, target_price, rs, volume_ratio
+            FROM buy_list
+            WHERE ticker = ? AND status = 'active'
+        """, (ticker,))
+        row = cursor.fetchone()
+        
+        if row:
+            signal_date, entry_price, stop_price, target_price, rs, vol_ratio = row
+            
+            # Log to activity table
+            cursor.execute("""
+                INSERT INTO buy_list_activity 
+                (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio)
+                VALUES (?, 'removed', DATE('now'), ?, ?, ?, ?, ?, ?)
+            """, (ticker, reason, entry_price, stop_price, target_price, rs, vol_ratio))
 
+        # Update buy_list to mark as removed
         cursor.execute("""
             UPDATE buy_list
             SET status = 'removed', notes = ?
@@ -351,7 +418,10 @@ class DatabaseManager:
                                 rs: Optional[float] = None, vol_ratio: Optional[float] = None,
                                 ma50: Optional[float] = None, ma150: Optional[float] = None,
                                 ma200: Optional[float] = None, high_52w: Optional[float] = None,
-                                low_52w: Optional[float] = None):
+                                low_52w: Optional[float] = None,
+                                ml_probability: Optional[float] = None, ml_rank: Optional[int] = None,
+                                ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None,
+                                ml_features: Optional[str] = None):
         """
         Updates metrics for an existing buy list entry.
 
@@ -366,18 +436,45 @@ class DatabaseManager:
             ma200: 200-day moving average
             high_52w: 52-week high
             low_52w: 52-week low
+            ml_probability: ML model probability score
+            ml_rank: ML rank among all active candidates
+            ml_model_version: Version of the ML model used
+            ml_score_date: Date when ML score was calculated
+            ml_features: JSON string of feature values used for scoring
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        # Build dynamic SQL to only update provided ML fields
+        sql = """
             UPDATE buy_list
             SET current_price = ?, rs = ?, volume_ratio = ?,
                 ma50 = ?, ma150 = ?, ma200 = ?, high_52w = ?, low_52w = ?,
                 last_updated = ?
-            WHERE ticker = ? AND status = 'active'
-        """, (current_price, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
-              scan_date, ticker))
+        """
+        params = [current_price, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w, scan_date]
+        
+        # Add ML fields if provided
+        if ml_probability is not None:
+            sql += ", ml_probability = ?"
+            params.append(ml_probability)
+        if ml_rank is not None:
+            sql += ", ml_rank = ?"
+            params.append(ml_rank)
+        if ml_model_version is not None:
+            sql += ", ml_model_version = ?"
+            params.append(ml_model_version)
+        if ml_score_date is not None:
+            sql += ", ml_score_date = ?"
+            params.append(ml_score_date)
+        if ml_features is not None:
+            sql += ", ml_features = ?"
+            params.append(ml_features)
+        
+        sql += " WHERE ticker = ? AND status = 'active'"
+        params.append(ticker)
+
+        cursor.execute(sql, tuple(params))
 
         conn.commit()
         conn.close()
