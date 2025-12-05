@@ -162,19 +162,24 @@ class FastTradeSimulator(TradeSimulator):
             if df_outcome_window.empty:
                 continue
             
-            # Vectorized SEPA screening for all dates at once
-            sepa_mask_full = self._vectorized_sepa_screen(df_outcome_window)
+            # ENTRY DETECTION: Use FULL SEPA (trend + breakout) for finding entry signals
+            # This matches sequential behavior which requires all 11 criteria
+            trend_mask_full, breakout_mask_full = VectorizedSEPAScreener.screen_single_ticker_split(df_outcome_window)
+            full_sepa_mask = trend_mask_full & breakout_mask_full
             
-            # Add SEPA_Status column to the original dataframe for vectorized exit detection
-            df.loc[df_outcome_window.index, 'SEPA_Status'] = sepa_mask_full
+            # EXIT DETECTION: Use ONLY trend criteria (Stage 2)
+            # Add trend-only SEPA_Status column for vectorized exit detection
+            # This matches sequential exit behavior which only checks detect_stage2_uptrend()
+            df.loc[df_outcome_window.index, 'SEPA_Status'] = trend_mask_full  # Trend only for exits!
             
             # Filter to entry period for signal detection
             df_entry_period = df_outcome_window[(df_outcome_window.index <= self.end_date)]
-            sepa_mask = sepa_mask_full[df_outcome_window.index <= self.end_date]
+            full_sepa_entry = full_sepa_mask[df_outcome_window.index <= self.end_date]
             
-            # Find new triggers (SEPA = True today, SEPA = False yesterday)
-            sepa_prev = sepa_mask.shift(1, fill_value=False)
-            new_triggers = sepa_mask & ~sepa_prev
+            # Find new triggers (FULL SEPA = True today, False yesterday)
+            # Entry requires trend + breakout to match sequential
+            sepa_prev = full_sepa_entry.shift(1, fill_value=False)
+            new_triggers = full_sepa_entry & ~sepa_prev
             
             # Extract trigger dates
             trigger_dates = df_entry_period.index[new_triggers].tolist()
@@ -238,10 +243,16 @@ class FastTradeSimulator(TradeSimulator):
         
         Now delegates to the shared VectorizedSEPAScreener for consistency
         across the codebase.
+        
+        IMPORTANT: For EXIT detection, we use ONLY trend criteria (Stage 2),
+        NOT the full SEPA (trend + breakout). This matches sequential behavior.
+        Breakout criteria (volume, RS momentum) are only for ENTRY signals.
 
-        Returns boolean Series indicating SEPA qualification at each date.
+        Returns boolean Series indicating Stage 2 trend qualification at each date.
         """
-        return VectorizedSEPAScreener.screen_single_ticker(df)
+        # Use ONLY trend criteria for exits, not full SEPA
+        trend_ok, _ = VectorizedSEPAScreener.screen_single_ticker_split(df)
+        return trend_ok  # Return trend only, ignore breakout
 
     def _simulate_trades_sequential(self, signals: pd.DataFrame, enriched_data: Dict[str, pd.DataFrame],
                                    show_progress: bool) -> List[Trade]:
