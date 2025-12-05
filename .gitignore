@@ -69,3 +69,35 @@ htmlcov/
 
 # Distribution / packaging
 pip-wheel-metadata/
+
+# ML Models and Evaluation (generated artifacts)
+models/*.json
+models/*.pkl
+evaluation/*.png
+evaluation/*.jpg
+sepa_xgboost_model.json
+model_config.json
+
+# Debug and temporary files
+debug_*.py
+test_*.py
+check_*.py
+verify_*.py
+fix_*.py
+analyze_*.py
+apply_*.py
+rebuild_*.py
+scan_*.py
+validate_*.py
+init_*.py
+move_*.py
+investigate_*.py
+add_*.py
+*_debug_output.txt
+comparison_*.txt
+buy_list_export.csv
+*.backup
+
+# Temporary documentation (commit finalized docs only)
+# Keep: documented fixes and summaries that are final
+# Ignore: work-in-progress investigation notes
