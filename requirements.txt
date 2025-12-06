@@ -6,6 +6,7 @@ numpy>=1.24.0
 yfinance>=0.2.50
 requests
 python-dotenv>=1.0.0
+pandas-market-calendars>=4.0.0  # NYSE/market holiday calendar
 
 # Data Storage
 pyarrow>=12.0.0

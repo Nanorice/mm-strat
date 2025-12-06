@@ -152,14 +152,16 @@ class DataRepository:
                     'AMD', 'PLTR', 'SMCI', 'JPM', 'V', 'MA', 'LLY', 'AVGO']
 
 
-    def _is_cache_stale(self, file_path: Path, min_date: str = '2000-01-01') -> bool:
+    def _is_cache_stale(self, file_path: Path, min_date: str = '2000-01-01', check_min_date: bool = True) -> bool:
         """
         Check if cached Parquet file is stale or doesn't have required date range.
-        
+
         Args:
             file_path: Path to cached file
             min_date: Minimum required start date (default: 2000-01-01)
-            
+            check_min_date: If False, skips historical range check and only validates latest data.
+                          Use False for scanner (only needs current data), True for ML training.
+
         Returns:
             True if cache should be refreshed, False otherwise
         """
@@ -172,35 +174,37 @@ class DataRepository:
         if age_days >= self.cache_days:
             logger.debug(f"{file_path.name}: Stale (file age: {age_days} days)")
             return True
-        
+
         # Check date range coverage and latest data date
         try:
             df = pd.read_parquet(file_path)
             if df.empty:
                 logger.debug(f"{file_path.name}: Empty cache file")
                 return True
-            
-            # Check if historical data goes back far enough
+
             cache_start = df.index.min()
-            required_start = pd.Timestamp(min_date)
-            
-            if cache_start > required_start:
-                logger.debug(f"{file_path.name}: Insufficient range (has {cache_start.date()}, need {required_start.date()})")
-                return True
-            
-            # Check if latest data is current (most recent closed trading day)
             cache_end = df.index.max()
+
+            # Check if historical data goes back far enough (only if requested)
+            if check_min_date:
+                required_start = pd.Timestamp(min_date)
+
+                if cache_start > required_start:
+                    logger.debug(f"{file_path.name}: Insufficient range (has {cache_start.date()}, need {required_start.date()})")
+                    return True
+
+            # Check if latest data is current (most recent closed trading day)
             latest_trading_day = get_latest_trading_day()
-            
+
             # Cache is stale if latest data is older than the most recent closed trading day
             # This accounts for weekends, holidays, and market hours
             if cache_end < latest_trading_day:
                 logger.debug(f"{file_path.name}: Outdated (latest data: {cache_end.date()}, need: {latest_trading_day.date()})")
                 return True
-                
+
             logger.debug(f"{file_path.name}: Valid cache (from {cache_start.date()} to {cache_end.date()})")
             return False
-            
+
         except Exception as e:
             logger.warning(f"{file_path.name}: Cache validation failed ({e}), treating as stale")
             return True
@@ -377,16 +381,19 @@ class DataRepository:
                         continue
         return None
 
-    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'yfinance', min_date: str = '2000-01-01') -> Optional[pd.DataFrame]:
+    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'fmp', min_date: str = '2000-01-01',
+                       check_min_date: bool = True, max_retries: int = 2) -> Optional[pd.DataFrame]:
         """
         Returns OHLCV data for a single ticker.
-        First checks Parquet cache, then downloads if needed.
+        First checks Parquet cache, then downloads from FMP if needed.
 
         Args:
             ticker: Stock symbol
             use_cache: If True, uses cached data when available
-            source: Data source - 'yfinance' (default) or 'fmp'
+            source: Data source - 'fmp' (default, recommended for quality) or 'yfinance' (not recommended)
             min_date: Minimum required start date for cache validation (default: 2000-01-01)
+            check_min_date: If False, skips historical range check (for scanner). If True, validates full date range (for ML training)
+            max_retries: Number of FMP download attempts before failing (default: 2)
 
         Returns:
             DataFrame with OHLCV data (adjusted), or None if failed
@@ -394,7 +401,7 @@ class DataRepository:
         cache_file = self.price_dir / f"{ticker}.parquet"
 
         # Try cache first (with date range validation)
-        if use_cache and cache_file.exists() and not self._is_cache_stale(cache_file, min_date=min_date):
+        if use_cache and cache_file.exists() and not self._is_cache_stale(cache_file, min_date=min_date, check_min_date=check_min_date):
             try:
                 df = pd.read_parquet(cache_file)
                 logger.debug(f"Loaded {ticker} from cache")
@@ -402,23 +409,38 @@ class DataRepository:
             except Exception as e:
                 logger.warning(f"Cache read failed for {ticker}: {e}")
 
-        # Download fresh data with source selection and fallback
-        if source == 'fmp' and config.FMP_API_KEY:
-            try:
-                logger.debug(f"Downloading {ticker} from FMP...")
-                data = self._get_ticker_data_fmp(ticker)
-                if data is not None:
-                    # Save to cache
-                    data.to_parquet(cache_file)
-                    logger.debug(f"Cached {ticker} to {cache_file}")
-                    return data
-                else:
-                    logger.warning(f"FMP returned no data for {ticker}")
-            except Exception as e:
-                logger.warning(f"FMP failed for {ticker}: {e}")
+        # Download fresh data from FMP (primary source)
+        if source == 'fmp':
+            if not config.FMP_API_KEY:
+                logger.error(f"FMP_API_KEY not set - cannot download {ticker}")
+                return None
+            
+            # Retry logic for FMP
+            for attempt in range(1, max_retries + 1):
+                try:
+                    logger.debug(f"Downloading {ticker} from FMP (attempt {attempt}/{max_retries})...")
+                    data = self._get_ticker_data_fmp(ticker)
+                    if data is not None and not data.empty:
+                        # Save to cache
+                        data.to_parquet(cache_file)
+                        logger.debug(f"Successfully cached {ticker} to {cache_file}")
+                        return data
+                    else:
+                        logger.warning(f"FMP returned no data for {ticker} (attempt {attempt}/{max_retries})")
+                        if attempt < max_retries:
+                            time.sleep(1)  # Brief pause before retry
+                except Exception as e:
+                    logger.warning(f"FMP failed for {ticker} (attempt {attempt}/{max_retries}): {e}")
+                    if attempt < max_retries:
+                        time.sleep(1)  # Brief pause before retry
+            
+            # All FMP attempts failed
+            logger.error(f"Failed to download {ticker} from FMP after {max_retries} attempts")
+            return None
         
-        # # Use yfinance (either explicitly requested or as fallback)
-        # return self._get_ticker_data_yfinance(ticker, cache_file)
+        # Legacy yfinance fallback (not recommended - use FMP for quality)
+        logger.warning(f"Using yfinance for {ticker} - data quality may be inconsistent")
+        return self._get_ticker_data_yfinance(ticker, cache_file)
 
     def _get_ticker_data_fmp(self, ticker: str) -> Optional[pd.DataFrame]:
         """
@@ -504,7 +526,8 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', min_date: str = '1900-01-01') -> Dict[str, bool]:
+    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', min_date: str = '1900-01-01',
+                    check_min_date: bool = True) -> Dict[str, bool]:
         """
         Smart batch update of Parquet cache.
         Only downloads tickers that are missing or stale.
@@ -513,7 +536,8 @@ class DataRepository:
             tickers: List of ticker symbols to update
             force: If True, re-downloads all tickers regardless of cache
             source: Data source - 'yfinance' (default) or 'fmp'
-            min_date: Minimum required start date for cache validation (default: 2000-01-01)
+            min_date: Minimum required start date for cache validation (default: 1900-01-01)
+            check_min_date: If False, skips historical range check (for scanner). If True, validates full date range (for ML training)
 
         Returns:
             Dict mapping ticker -> success status
@@ -524,7 +548,7 @@ class DataRepository:
         # Determine which tickers need updating
         for ticker in tickers:
             cache_file = self.price_dir / f"{ticker}.parquet"
-            if force or self._is_cache_stale(cache_file, min_date=min_date):
+            if force or self._is_cache_stale(cache_file, min_date=min_date, check_min_date=check_min_date):
                 to_download.append(ticker)
             else:
                 results[ticker] = True  # Already cached
@@ -722,7 +746,8 @@ class DataRepository:
             return None
         return self._safe_extract_close(df)
 
-    def get_batch_data(self, tickers: List[str], max_workers: int = 8, show_progress: bool = False) -> Dict[str, pd.DataFrame]:
+    def get_batch_data(self, tickers: List[str], max_workers: int = 8, show_progress: bool = False,
+                      min_date: str = '2000-01-01', check_min_date: bool = False) -> Dict[str, pd.DataFrame]:
         """
         Loads multiple tickers from cache efficiently using parallel execution.
 
@@ -730,6 +755,11 @@ class DataRepository:
             tickers: List of ticker symbols
             max_workers: Number of parallel threads (default: 8)
             show_progress: If True, display progress bar (default: False)
+            min_date: Minimum required start date for cache validation (default: 2000-01-01)
+                     For scanner use, set to ~2 years ago to allow recent IPOs
+                     For ML training, set to 2010-01-01 for historical depth
+            check_min_date: If False (default), skips historical range check and only validates latest data (scanner mode).
+                          If True, validates full historical range (ML training mode).
 
         Returns:
             Dict mapping ticker -> DataFrame
@@ -738,7 +768,7 @@ class DataRepository:
 
         # Helper function for parallel execution
         def load_single(ticker):
-            return ticker, self.get_ticker_data(ticker, use_cache=True)
+            return ticker, self.get_ticker_data(ticker, use_cache=True, min_date=min_date, check_min_date=check_min_date)
 
         # Use ThreadPoolExecutor for IO-bound file reading
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:

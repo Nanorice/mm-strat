@@ -109,12 +109,15 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         print(f"       Using specified tickers: {', '.join(tickers)} ({len(tickers)} total)")
 
     # Step 2: Batch Cache Update (skipped if already done in date-range mode)
+    # Scanner only needs recent data for indicator calculation (2 years is sufficient)
+    # This allows recent IPOs with <2 years of history to still be scanned
+    # NOTE: check_min_date=False means we only check if latest data is current, not if it goes back to min_date
+    min_date = (pd.Timestamp.now() - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
+
     if not skip_cache_update:
         print(f"\n[2/{total_steps}] Batch Updating Cache...")
         update_start = time.time()
-        # Scanner only needs recent data for indicator calculation (2 years is sufficient)
-        min_date = (pd.Timestamp.now() - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
-        results = data_repo.update_cache(tickers, force=False, source='fmp', min_date=min_date)
+        results = data_repo.update_cache(tickers, force=False, source='fmp', min_date=min_date, check_min_date=False)
         success_count = sum(results.values())
         update_time = time.time() - update_start
         print(f"       Updated {success_count}/{len(tickers)} tickers in {update_time:.1f}s")
@@ -127,7 +130,8 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
         print(f"\n[3/{total_steps}] Batch Loading Price Data...")
         load_start = time.time()
         # Load data from cache (cache was just updated above)
-        ticker_data = data_repo.get_batch_data(tickers)
+        # check_min_date=False: Only check latest data is current, skip historical range validation
+        ticker_data = data_repo.get_batch_data(tickers, min_date=min_date, check_min_date=False)
         load_time = time.time() - load_start
         print(f"       Loaded {len(ticker_data)} tickers in {load_time:.1f}s")
     else:
@@ -1200,18 +1204,20 @@ if __name__ == "__main__":
             tickers = data_repo.update_universe()
             cache_start = time.time()
             # Scanner only needs recent data for indicator calculation (2 years is sufficient)
+            # check_min_date=False: Only check latest data is current, skip historical range validation
             min_date = (pd.Timestamp.now() - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
-            results = data_repo.update_cache(tickers, force=False, source='fmp', min_date=min_date)
+            results = data_repo.update_cache(tickers, force=False, source='fmp', min_date=min_date, check_min_date=False)
             success_count = sum(results.values())
             cache_time = time.time() - cache_start
             print(f"            Updated {success_count}/{len(tickers)} tickers in {cache_time:.1f}s")
             print(f"            Cache is now ready for {(end_date - start_date).days + 1} day(s) of scanning\n")
-            
+
             # PRE-LOAD: Load all price data once for entire date range (major optimization)
             print("\n[PRE-SCAN] Loading price data for date range...")
             load_start = time.time()
             # Load data from cache (cache was just updated above)
-            all_ticker_data = data_repo.get_batch_data(tickers)
+            # check_min_date=False: Only check latest data is current, skip historical range validation
+            all_ticker_data = data_repo.get_batch_data(tickers, min_date=min_date, check_min_date=False)
             load_time = time.time() - load_start
             print(f"            Loaded {len(all_ticker_data)} tickers in {load_time:.1f}s")
             print(f"            Data will be filtered by date for each scan (in-memory operation)\n")

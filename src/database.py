@@ -141,11 +141,30 @@ class DatabaseManager:
 
         conn.commit()
         conn.close()
-        
+
         # Ensure columns exist (flexible schema evolution)
         self._ensure_columns_exist('buy_list_activity', {'vol_ratio': 'REAL', 'volume_ratio': 'REAL'})
-        self._ensure_columns_exist('buy_list', {'ml_features': 'TEXT'})
-        
+
+        # Ensure all lagged feature columns exist (for databases created before these were added)
+        lagged_columns = {
+            'nATR_lag1': 'REAL',
+            'atr_lag1': 'REAL',
+            'vcp_ratio_lag1': 'REAL',
+            'consolidation_width_lag1': 'REAL',
+            'price_vs_sma50_lag1': 'REAL',
+            'price_vs_sma150_lag1': 'REAL',
+            'price_vs_sma200_lag1': 'REAL',
+            'rs_lag1': 'REAL',
+            'rs_ma_lag1': 'REAL',
+            'dry_up_volume_lag1': 'REAL',
+            'high_52w_lag1': 'REAL',
+            'low_52w_lag1': 'REAL',
+            'rsi14_lag1': 'REAL',
+            'dist_from_52w_high_lag1': 'REAL',
+            'ml_features': 'TEXT'
+        }
+        self._ensure_columns_exist('buy_list', lagged_columns)
+
         logger.info(f"Database initialized at {self.db_path}")
 
     def _ensure_columns_exist(self, table_name: str, columns: Dict[str, str]):
