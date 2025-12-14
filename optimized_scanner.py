@@ -117,7 +117,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     if not skip_cache_update:
         print(f"\n[2/{total_steps}] Batch Updating Cache...")
         update_start = time.time()
-        results = data_repo.update_cache(tickers, force=False, source='fmp', min_date=min_date, check_min_date=False)
+        results = data_repo.update_cache(tickers, force=False, source='fmp')
         success_count = sum(results.values())
         update_time = time.time() - update_start
         print(f"       Updated {success_count}/{len(tickers)} tickers in {update_time:.1f}s")
@@ -1206,7 +1206,7 @@ if __name__ == "__main__":
             # Scanner only needs recent data for indicator calculation (2 years is sufficient)
             # check_min_date=False: Only check latest data is current, skip historical range validation
             min_date = (pd.Timestamp.now() - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
-            results = data_repo.update_cache(tickers, force=False, source='fmp', min_date=min_date, check_min_date=False)
+            results = data_repo.update_cache(tickers, force=False, source='fmp')
             success_count = sum(results.values())
             cache_time = time.time() - cache_start
             print(f"            Updated {success_count}/{len(tickers)} tickers in {cache_time:.1f}s")

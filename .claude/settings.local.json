@@ -8,7 +8,12 @@
       "Bash(dir:*)",
       "Bash(python -c:*)",
       "Bash(python:*)",
-      "Bash(.venvScriptspython.exe -c \"import sys; print(sys.stdout.encoding)\")"
+      "Bash(.venvScriptspython.exe -c \"import sys; print(sys.stdout.encoding)\")",
+      "Bash(test:*)",
+      "Bash(head:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(find:*)",
+      "Bash(sysctl:*)"
     ],
     "deny": [],
     "ask": []

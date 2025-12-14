@@ -54,7 +54,7 @@ class FundamentalEngine:
 
         # API call tracking for rate limiting (thread-safe)
         self._call_timestamps = []
-        self._rate_limit_lock = None  # Will be created on first use to avoid pickle issues
+        self._rate_limit_lock = threading.Lock()
 
     def _is_cache_stale(self, file_path: Path) -> bool:
         """
@@ -76,22 +76,32 @@ class FundamentalEngine:
     def _rate_limit_check(self):
         """
         Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
-        Pauses execution if approaching rate limit.
+        Uses sliding window approach - pauses only when necessary.
         Thread-safe for parallel execution.
         """
         with self._rate_limit_lock:
             now = time.time()
-            # Keep only timestamps from last 60 seconds
+
+            # Remove timestamps older than 60 seconds (sliding window)
             self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
 
-            # If approaching limit, wait
-            if len(self._call_timestamps) >= self.rate_limit - 5:  # 5-call buffer
-                sleep_time = 60 - (now - self._call_timestamps[0])
-                if sleep_time > 0:
-                    logger.warning(f"Rate limit approaching, sleeping {sleep_time:.1f}s...")
-                    time.sleep(sleep_time)
-                    self._call_timestamps = []
+            # If at rate limit, wait until oldest call falls outside the window
+            if len(self._call_timestamps) >= self.rate_limit:
+                # Calculate how long to wait for the oldest call to age out
+                oldest_call = self._call_timestamps[0]
+                time_since_oldest = now - oldest_call
+                sleep_time = 60.0 - time_since_oldest + 0.1  # Add 0.1s buffer
 
+                if sleep_time > 0:
+                    logger.debug(f"Rate limit reached ({len(self._call_timestamps)}/{self.rate_limit}), "
+                                f"sleeping {sleep_time:.1f}s until oldest call expires")
+                    time.sleep(sleep_time)
+
+                    # Re-clean timestamps after sleeping
+                    now = time.time()
+                    self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
+
+            # Record this call
             self._call_timestamps.append(now)
 
     def _fetch_statement(self, ticker: str, statement_type: str, max_retries: int = 3) -> Optional[pd.DataFrame]:
@@ -112,7 +122,7 @@ class FundamentalEngine:
             'symbol': ticker,
             'period': 'quarter',
             'apikey': self.api_key,
-            'limit': 100 # self.lookback_years * 4  # Quarterly reports: 4 per year
+            'limit': 500 # self.lookback_years * 4  # Quarterly reports: 4 per year
         }
 
         for attempt in range(max_retries):
@@ -377,6 +387,10 @@ class FundamentalEngine:
         """
         Batch update fundamental data cache for multiple tickers using parallel execution.
 
+        Note: Fundamentals are updated quarterly on earnings dates, NOT daily.
+        Therefore, this method only checks for MISSING tickers, not stale data.
+        Use force=True to re-download existing data.
+
         Args:
             tickers: List of ticker symbols
             force: If True, re-fetch all tickers regardless of cache
@@ -390,12 +404,19 @@ class FundamentalEngine:
         to_fetch = []
 
         # Determine which tickers need updating
-        for ticker in tickers:
-            cache_file = self.fundamentals_dir / f"{ticker}.parquet"
-            if force or self._is_cache_stale(cache_file):
-                to_fetch.append(ticker)
-            else:
-                results[ticker] = True  # Already cached
+        if force:
+            # Force mode: Re-download everything
+            logger.info("Force mode enabled - re-downloading all tickers")
+            to_fetch = tickers
+        else:
+            # Incremental mode: Only download missing tickers (no date staleness check)
+            # Fundamentals update quarterly on earnings dates, not daily trading days
+            for ticker in tickers:
+                cache_file = self.fundamentals_dir / f"{ticker}.parquet"
+                if not cache_file.exists():
+                    to_fetch.append(ticker)
+                else:
+                    results[ticker] = True  # Already cached
 
         if not to_fetch:
             logger.info("All tickers are up to date in cache")
@@ -403,7 +424,13 @@ class FundamentalEngine:
 
         logger.info(f"Updating fundamental cache for {len(to_fetch)}/{len(tickers)} tickers...")
         logger.info(f"Estimated: {len(to_fetch) * 3} API calls with {max_workers} parallel workers")
-        logger.info(f"Expected rate: ~{max_workers * 3 * 60 / 60:.0f} calls/minute (rate limit: {self.rate_limit}/min)")
+        # Rate limit: 300 calls/min ÷ 3 calls per ticker = max 100 tickers/min
+        # Conservative estimate: 80-90 tickers/min to stay under limit
+        calls_per_ticker = 3
+        max_tickers_per_min = (self.rate_limit * 0.9) / calls_per_ticker  # 90% of rate limit for safety
+        estimated_minutes = len(to_fetch) / max_tickers_per_min if max_tickers_per_min > 0 else 0
+        logger.info(f"Rate limit: {self.rate_limit} calls/min → max ~{max_tickers_per_min:.0f} tickers/min")
+        logger.info(f"Estimated time: ~{estimated_minutes:.1f} minutes ({estimated_minutes/60:.1f} hours)")
 
         # Process tickers in parallel with ThreadPoolExecutor
         success_count = 0

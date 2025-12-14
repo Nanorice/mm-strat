@@ -49,7 +49,16 @@ FMP_SCREENER_PARAMS = {
 # Data Download Settings
 LOOKBACK_PERIOD = '5y'  # History needed for technical indicators (SMA_200, 52W high/low, etc.)
 BATCH_SIZE = 50  # Number of tickers to download per batch
+
+# DEPRECATED: File age check removed in favor of data coverage validation
+# This setting is no longer used by DataRepository
+# Kept for backward compatibility with external scripts
 DATA_CACHE_DAYS = 1  # Re-download if data older than N days
+
+# New validation strategy:
+# - Dataset building: Validates cache covers start_date to end_date
+# - Scanner: Validates cache includes latest_trading_day
+# - File modification time is NOT checked - only data coverage matters
 
 # Financial Modeling Prep API Settings
 FMP_API_KEY = os.getenv('FMP_API_KEY', '')  # Load from .env file

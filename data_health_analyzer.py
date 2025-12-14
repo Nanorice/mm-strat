@@ -263,50 +263,90 @@ class DataHealthAnalyzer:
         print("\n" + "=" * 80)
         print(" COMPANY PROFILE ANALYSIS")
         print("=" * 80)
-        
+
         print(f"\n📁 Checking profiles for {len(price_universe)} tickers")
         print(f"📂 Company info directory: {self.company_info_dir}\n")
-        
-        # Get all profile files
-        profile_files = list(self.company_info_dir.glob('*.json'))
-        profile_tickers = {f.stem for f in profile_files}
-        
-        print(f"Total profile files: {len(profile_files)}")
-        
+
+        # Load company profiles from single parquet file
+        profiles_file = self.company_info_dir / 'company_profiles.parquet'
+
+        if not profiles_file.exists():
+            print(f"❌ Company profiles file not found: {profiles_file}")
+            print(f"   Run Cell 4 (Company Profile Update) to generate profiles")
+            return {
+                'total_checked': len(price_universe),
+                'complete': 0,
+                'incomplete': 0,
+                'missing': len(price_universe),
+                'with_profiles': [],
+                'without_profiles': price_universe,
+                'field_availability': {}
+            }
+
+        try:
+            profiles_df = pd.read_parquet(profiles_file)
+            print(f"Total profiles in file: {len(profiles_df)}")
+
+            # Get available tickers in profiles
+            if 'symbol' in profiles_df.columns:
+                profile_tickers = set(profiles_df['symbol'].values)
+            elif 'ticker' in profiles_df.columns:
+                profile_tickers = set(profiles_df['ticker'].values)
+            else:
+                # If no symbol/ticker column, assume index contains tickers
+                profile_tickers = set(profiles_df.index)
+
+            print(f"Tickers with profiles: {len(profile_tickers)}")
+
+        except Exception as e:
+            print(f"❌ Error loading company profiles: {e}")
+            return {
+                'total_checked': len(price_universe),
+                'complete': 0,
+                'incomplete': 0,
+                'missing': len(price_universe),
+                'with_profiles': [],
+                'without_profiles': price_universe,
+                'field_availability': {}
+            }
+
         # Categorize
         with_profiles = []
         without_profiles = []
         incomplete_profiles = []
-        
-        # Key fields to check
-        key_fields = ['sector', 'industry', 'marketCap', 'exchange', 'country']
+
+        # Key fields to check (use actual column names from parquet)
+        key_fields = ['sector', 'industry', 'mktCap', 'exchange', 'country']
         field_availability = defaultdict(int)
-        
+
         for ticker in price_universe:
             if ticker in profile_tickers:
-                profile_file = self.company_info_dir / f"{ticker}.json"
                 try:
-                    with open(profile_file, 'r') as f:
-                        profile = json.load(f)
-                    
-                    if not profile or (isinstance(profile, list) and len(profile) == 0):
+                    # Get ticker's profile row
+                    if 'symbol' in profiles_df.columns:
+                        profile_row = profiles_df[profiles_df['symbol'] == ticker]
+                    elif 'ticker' in profiles_df.columns:
+                        profile_row = profiles_df[profiles_df['ticker'] == ticker]
+                    else:
+                        profile_row = profiles_df.loc[[ticker]] if ticker in profiles_df.index else pd.DataFrame()
+
+                    if profile_row.empty:
                         without_profiles.append(ticker)
-                        self.profile_results[ticker] = {'status': 'empty'}
+                        self.profile_results[ticker] = {'status': 'missing'}
                         continue
-                    
-                    # Handle list format
-                    if isinstance(profile, list):
-                        profile = profile[0] if len(profile) > 0 else {}
-                    
+
+                    # Get first row if multiple matches
+                    profile = profile_row.iloc[0].to_dict()
+
                     # Check key fields
                     available_fields = []
                     for field in key_fields:
-                        if field in profile and profile[field]:
+                        if field in profile and pd.notna(profile[field]) and profile[field] not in ['', None]:
                             available_fields.append(field)
                             field_availability[field] += 1
-                    
+
                     completeness = len(available_fields) / len(key_fields)
-                    
+
                     if completeness >= 0.8:
                         with_profiles.append(ticker)
                         status = 'complete'
@@ -316,7 +356,7 @@ class DataHealthAnalyzer:
                     else:
                         without_profiles.append(ticker)
                         status = 'empty'
-                    
+
                     self.profile_results[ticker] = {
                         'status': status,
                         'available_fields': available_fields,
@@ -324,7 +364,7 @@ class DataHealthAnalyzer:
                         'sector': profile.get('sector'),
                         'industry': profile.get('industry')
                     }
-                    
+
                 except Exception as e:
                     without_profiles.append(ticker)
                     self.profile_results[ticker] = {
@@ -334,19 +374,19 @@ class DataHealthAnalyzer:
             else:
                 without_profiles.append(ticker)
                 self.profile_results[ticker] = {'status': 'missing'}
-        
+
         # Print results
         total = len(price_universe)
         print(f"\n✅ Complete profiles: {len(with_profiles)} tickers ({len(with_profiles)/total*100:.1f}%)")
         print(f"⚠️  Incomplete profiles: {len(incomplete_profiles)} tickers ({len(incomplete_profiles)/total*100:.1f}%)")
         print(f"❌ No profiles: {len(without_profiles)} tickers ({len(without_profiles)/total*100:.1f}%)")
-        
+
         # Show field availability
         print(f"\n📊 Key Field Availability:")
         for field in key_fields:
             count = field_availability[field]
             print(f"   {field}: {count}/{total} ({count/total*100:.1f}%)")
-        
+
         return {
             'total_checked': total,
             'complete': len(with_profiles),

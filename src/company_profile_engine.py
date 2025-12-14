@@ -292,17 +292,12 @@ class CompanyProfileEngine:
         # Load sector mapping
         sector_mapping = self.get_sector_mapping(use_cache=True)
 
-        if industry_mapping is None or industry_mapping.empty:
-            logger.warning("Industry mapping not available, filling with -1")
-            profiles_df['industry_id'] = -1
-
-        if sector_mapping is None or sector_mapping.empty:
-            logger.warning("Sector mapping not available, filling with -1")
-            profiles_df['sector_id'] = -1
-
-        # If both mappings missing, return early
+        # If both mappings missing, add default IDs and return
         if (industry_mapping is None or industry_mapping.empty) and \
            (sector_mapping is None or sector_mapping.empty):
+            logger.warning("Industry and sector mappings not available, filling with -1")
+            profiles_df['industry_id'] = -1
+            profiles_df['sector_id'] = -1
             return profiles_df
 
         # Reset index temporarily for merge, keeping ticker as a column
@@ -317,6 +312,10 @@ class CompanyProfileEngine:
             )
             # Fill missing industry_ids
             profiles_df['industry_id'] = profiles_df['industry_id'].fillna(-1).astype(int)
+        else:
+            # No industry mapping available
+            logger.warning("Industry mapping not available, filling with -1")
+            profiles_df['industry_id'] = -1
 
         # Merge profiles with sector mapping (stable from FMP API)
         if sector_mapping is not None and not sector_mapping.empty:
@@ -327,6 +326,10 @@ class CompanyProfileEngine:
             )
             # Fill missing sector_ids
             profiles_df['sector_id'] = profiles_df['sector_id'].fillna(-1).astype(int)
+        else:
+            # No sector mapping available
+            logger.warning("Sector mapping not available, filling with -1")
+            profiles_df['sector_id'] = -1
 
         # Restore ticker as index
         profiles_df = profiles_df.set_index('ticker')
@@ -411,17 +414,35 @@ class CompanyProfileEngine:
 
         return df
 
-    def fetch_all_profiles(self, tickers: List[str], show_progress: bool = True) -> pd.DataFrame:
+    def _fetch_single_profile(self, ticker: str) -> Optional[Dict]:
         """
-        Batch fetch company profiles for multiple tickers.
+        Fetch and parse a single company profile.
+
+        Args:
+            ticker: Stock symbol
+
+        Returns:
+            Parsed profile dict or None if failed
+        """
+        profile_data = self._fetch_company_profile(ticker)
+        if profile_data:
+            return self._parse_profile_response(profile_data, ticker)
+        return None
+
+    def fetch_all_profiles(self, tickers: List[str], show_progress: bool = True, max_workers: int = 10) -> pd.DataFrame:
+        """
+        Batch fetch company profiles for multiple tickers using parallel processing.
 
         Args:
             tickers: List of ticker symbols
             show_progress: Display progress bar
+            max_workers: Number of parallel workers (default 10 for 300 calls/min rate limit)
 
         Returns:
             DataFrame with all company profiles (without industry IDs)
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         profiles = []
         success_count = 0
         failed_count = 0
@@ -429,36 +450,47 @@ class CompanyProfileEngine:
 
         total = len(tickers)
 
-        for i, ticker in enumerate(tickers):
-            # Fetch profile
-            profile_data = self._fetch_company_profile(ticker)
+        # Use tqdm progress bar if available
+        try:
+            from tqdm import tqdm
+            use_tqdm = show_progress
+        except ImportError:
+            use_tqdm = False
 
-            if profile_data:
-                parsed = self._parse_profile_response(profile_data, ticker)
-                if parsed:
-                    profiles.append(parsed)
-                    success_count += 1
-                else:
+        # Parallel processing with ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_ticker = {executor.submit(self._fetch_single_profile, ticker): ticker
+                               for ticker in tickers}
+
+            # Process completed tasks with progress bar
+            if use_tqdm:
+                from tqdm import tqdm
+                pbar = tqdm(total=total, desc="Fetching profiles", unit="ticker")
+
+            for future in as_completed(future_to_ticker):
+                ticker = future_to_ticker[future]
+                try:
+                    result = future.result()
+                    if result:
+                        profiles.append(result)
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                except Exception as e:
+                    logger.error(f"Exception fetching {ticker}: {e}")
                     failed_count += 1
-            else:
-                failed_count += 1
 
-            # Progress logging every 25 tickers
-            if show_progress and (i + 1) % 25 == 0:
-                elapsed = time.time() - start_time
-                rate = (i + 1) / elapsed if elapsed > 0 else 0
-                eta_seconds = (total - i - 1) / rate if rate > 0 else 0
-                eta_minutes = eta_seconds / 60
+                if use_tqdm:
+                    pbar.update(1)
 
-                pct = ((i + 1) / total) * 100
-                logger.info(f"Progress: {i+1}/{total} ({pct:.1f}%) | ✓ {success_count} ✗ {failed_count} | "
-                          f"Rate: {rate:.1f} tickers/sec | ETA: {eta_minutes:.1f} min")
+            if use_tqdm:
+                pbar.close()
 
-        # Final progress
-        if show_progress:
-            elapsed = time.time() - start_time
-            logger.info(f"Progress: {total}/{total} (100.0%) | ✓ {success_count} ✗ {failed_count} | "
-                       f"Total time: {elapsed/60:.1f} min")
+        # Final summary
+        elapsed = time.time() - start_time
+        logger.info(f"Fetched {success_count}/{total} profiles successfully in {elapsed/60:.1f} min "
+                   f"({success_count/elapsed:.1f} profiles/sec)")
 
         # Convert to DataFrame
         if not profiles:
@@ -524,13 +556,19 @@ class CompanyProfileEngine:
 
         return df
 
-    def update_profiles_cache(self, tickers: List[str] = None, force: bool = False) -> Dict[str, bool]:
+    def update_profiles_cache(self, tickers: List[str] = None, force: bool = False,
+                             max_workers: int = 10) -> Dict[str, bool]:
         """
         Update company profiles cache.
 
+        Note: Company profiles (sector, industry, market cap) rarely change.
+        Therefore, this method only checks for MISSING tickers, not stale data.
+        Use force=True to re-download existing profiles.
+
         Args:
             tickers: List of tickers to update (None = all from price folder)
-            force: If True, refresh all tickers regardless of cache age
+            force: If True, refresh all tickers regardless of cache
+            max_workers: Number of parallel workers (default 10 for 300 calls/min rate limit)
 
         Returns:
             Dict mapping ticker -> success status
@@ -540,10 +578,12 @@ class CompanyProfileEngine:
             price_files = list(config.PRICE_DATA_DIR.glob('*.parquet'))
             tickers = [f.stem for f in price_files if f.stem != config.BENCHMARK_TICKER]
 
-        # Check if force refresh or cache is stale
-        if force or self._is_cache_stale(self.profiles_file):
-            logger.info(f"{'Force refresh' if force else 'Cache stale'}, fetching all {len(tickers)} tickers")
-            df = self.fetch_all_profiles(tickers, show_progress=True)
+        # Check if force refresh
+        if force:
+            logger.info(f"Force refresh enabled, fetching all {len(tickers)} tickers")
+            df = self.fetch_all_profiles(tickers, show_progress=True, max_workers=max_workers)
+            # Merge with industry IDs
+            df = self._merge_with_industry_ids(df)
         else:
             # Load existing cache
             try:
@@ -555,22 +595,33 @@ class CompanyProfileEngine:
 
                 if missing_tickers:
                     logger.info(f"Fetching {len(missing_tickers)} missing tickers")
-                    new_df = self.fetch_all_profiles(missing_tickers, show_progress=True)
+                    new_df = self.fetch_all_profiles(missing_tickers, show_progress=True, max_workers=max_workers)
 
                     if not new_df.empty:
+                        # Merge new profiles with industry IDs
+                        new_df = self._merge_with_industry_ids(new_df)
+
+                        # Ensure old cache has the same columns as new data
+                        for col in ['industry_id', 'sector_id']:
+                            if col not in df.columns:
+                                df[col] = -1
+
                         # Merge with existing cache
                         df = pd.concat([df, new_df])
                 else:
                     logger.info("All tickers already in cache")
+                    # Ensure cache has industry_id and sector_id columns
+                    for col in ['industry_id', 'sector_id']:
+                        if col not in df.columns:
+                            df[col] = -1
             except Exception as e:
                 logger.warning(f"Failed to load existing cache: {e}, fetching all")
-                df = self.fetch_all_profiles(tickers, show_progress=True)
+                df = self.fetch_all_profiles(tickers, show_progress=True, max_workers=max_workers)
+                # Merge with industry IDs
+                df = self._merge_with_industry_ids(df)
 
         if df.empty:
             return {ticker: False for ticker in tickers}
-
-        # Merge with industry IDs
-        df = self._merge_with_industry_ids(df)
 
         # Save to cache
         try:

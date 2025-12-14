@@ -36,18 +36,39 @@ logging.getLogger('src.strategy').setLevel(logging.WARNING)
 logging.getLogger('src.trade_simulator').setLevel(logging.INFO)  # Keep simulator messages
 
 
-def print_summary_statistics(simulator: TradeSimulator, output_path: str = None):
+def print_summary_statistics(dataset_b: pd.DataFrame, output_path: str = None):
     """
     Prints and optionally saves summary statistics.
-    
+
     Args:
-        simulator: TradeSimulator instance
+        dataset_b: DataFrame containing trade results
         output_path: Optional path to save JSON report
     """
-    stats = simulator.get_summary_statistics()
-    
-    if not stats:
+    if dataset_b.empty:
         print("\n❌ No trades generated - cannot compute statistics")
+        return
+
+    # Compute statistics from dataset_b directly
+    wins = dataset_b[dataset_b['label'] == 1]
+    losses = dataset_b[dataset_b['label'] == 0]
+
+    stats = {
+        'total_trades': len(dataset_b),
+        'winning_trades': len(wins),
+        'losing_trades': len(losses),
+        'win_rate': len(wins) / len(dataset_b) if len(dataset_b) > 0 else 0,
+        'avg_return': dataset_b['return_pct'].mean(),
+        'avg_win': wins['return_pct'].mean() if not wins.empty else 0,
+        'avg_loss': losses['return_pct'].mean() if not losses.empty else 0,
+        'avg_days_held': dataset_b['days_held'].mean(),
+        'max_win': dataset_b['return_pct'].max(),
+        'max_loss': dataset_b['return_pct'].min(),
+        'label_distribution': dataset_b['label'].value_counts().to_dict(),
+        'exit_reasons': dataset_b['exit_reason'].value_counts().to_dict()
+    }
+
+    if not stats:
+        print("\n❌ Failed to compute statistics")
         return
     
     print("\n" + "=" * 80)
@@ -205,10 +226,16 @@ def main():
     # Initialize components
     logger.info("Initializing components...")
     data_repo = DataRepository()
-    benchmark_data = data_repo.get_benchmark_data()
-    
+
+    # Load benchmark data with required end date validation
+    # Convert outcome_end to pd.Timestamp for cache validation
+    required_end_date = pd.to_datetime(args.end)
+    benchmark_data = data_repo.get_benchmark_data(required_end_date=required_end_date)
+
     if benchmark_data is None:
         logger.error("Failed to load benchmark data!")
+        logger.error(f"Make sure SPY data is cached and covers up to {required_end_date}")
+        logger.error("Run: python build_dataset_a.py --update-cache to refresh price data")
         return
     
     feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
@@ -279,10 +306,10 @@ def main():
     if dataset_b.empty:
         print("\n❌ No trades generated!")
         return
-    
+
     # Print summary statistics
     print_summary_statistics(
-        simulator,
+        dataset_b,
         output_path=output_path.parent / 'simulation_stats.json'
     )
     

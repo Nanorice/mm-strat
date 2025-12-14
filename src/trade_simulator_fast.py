@@ -28,6 +28,139 @@ from src.vectorized_screening import VectorizedSEPAScreener
 logger = logging.getLogger(__name__)
 
 
+def _simulate_ticker_trades_standalone(ticker: str, signals: pd.DataFrame,
+                                      ticker_df: pd.DataFrame, config: TradingConfig,
+                                      outcome_end: pd.Timestamp) -> List[Trade]:
+    """
+    Standalone function for simulating trades for a single ticker.
+
+    This function is designed to be picklable for multiprocessing.
+    It doesn't rely on any instance state, only the provided arguments.
+
+    Args:
+        ticker: Stock symbol
+        signals: DataFrame of entry signals for this ticker
+        ticker_df: Enriched price data for this ticker
+        config: Trading configuration
+        outcome_end: End date for outcome window
+
+    Returns:
+        List of completed Trade objects
+    """
+    trades = []
+    active_trade = None
+    last_exit_date = None
+
+    # Process signals chronologically
+    for _, signal in signals.iterrows():
+        entry_date = signal['entry_date']
+
+        # Check re-entry cooldown
+        if last_exit_date is not None:
+            if not config.allow_reentry:
+                continue  # Skip all future entries
+
+            days_since_exit = (entry_date - last_exit_date).days
+            if days_since_exit < config.reentry_cooldown_days:
+                continue  # Still in cooldown
+
+        # Skip if already in trade
+        if active_trade is not None:
+            continue
+
+        # Open trade
+        entry_price = signal['entry_price']
+
+        # Find exit using vectorized search
+        exit_info = _find_exit_vectorized_standalone(
+            ticker_df, entry_date, entry_price, config, outcome_end
+        )
+
+        if exit_info is None:
+            # Trade never exited (still open at outcome_end)
+            continue
+
+        exit_date, exit_price, exit_reason = exit_info
+
+        # Create Trade object (ID will be assigned chronologically later)
+        trade = Trade(
+            trade_id=0,  # Placeholder - assigned chronologically in run_simulation()
+            ticker=ticker,
+            entry_date=entry_date,
+            entry_price=entry_price
+        )
+
+        # Close trade
+        trade.close(
+            exit_date=exit_date,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+            ticker_df=ticker_df,
+            labeling_function=config.labeling_function
+        )
+
+        trades.append(trade)
+        last_exit_date = exit_date
+
+    return trades
+
+
+def _find_exit_vectorized_standalone(ticker_df: pd.DataFrame, entry_date: pd.Timestamp,
+                                     entry_price: float, config: TradingConfig,
+                                     outcome_end: pd.Timestamp) -> Optional[Tuple[pd.Timestamp, float, str]]:
+    """
+    Standalone vectorized exit detection for a single trade.
+
+    This function is designed to be picklable for multiprocessing.
+    It relies on the SEPA_Status column being precomputed in the ticker_df.
+
+    Returns: (exit_date, exit_price, exit_reason) or None if no exit
+    """
+    # Get data from entry onwards until outcome_end
+    future_df = ticker_df[(ticker_df.index > entry_date) & (ticker_df.index <= outcome_end)]
+
+    if future_df.empty:
+        return None
+
+    # Exit Rule 1: Trend break (FULLY VECTORIZED using SEPA_Status column)
+    if config.exit_on_trend_break:
+        if 'SEPA_Status' in future_df.columns:
+            # Vectorized search: Find first date where SEPA_Status becomes False
+            trend_break_mask = ~future_df['SEPA_Status']
+
+            if trend_break_mask.any():
+                # argmax() returns index of first True value (first SEPA=False)
+                exit_idx = trend_break_mask.to_numpy().argmax()
+                exit_date = future_df.index[exit_idx]
+                exit_price = future_df.loc[exit_date, 'Close']
+                return (exit_date, exit_price, 'trend_break')
+        else:
+            # SEPA_Status column is required for parallel processing
+            # If missing, we cannot use the strategy (unpicklable)
+            logger.error("SEPA_Status column missing - cannot detect exits in parallel mode")
+            raise ValueError("SEPA_Status column is required for parallel trade simulation")
+
+    # Exit Rule 2: Stop loss (already vectorized)
+    if config.exit_on_stop_loss:
+        stop_price = entry_price * (1 - config.stop_loss_pct / 100)
+        stop_hit = future_df['Close'] <= stop_price
+
+        if stop_hit.any():
+            # argmax() returns index of first True value
+            stop_idx = stop_hit.to_numpy().argmax()
+            exit_date = future_df.index[stop_idx]
+            exit_price = future_df.loc[exit_date, 'Close']
+            return (exit_date, exit_price, 'stop_loss')
+
+    # No exit found - hold until outcome_end
+    if outcome_end in future_df.index:
+        exit_date = outcome_end
+        exit_price = future_df.loc[exit_date, 'Close']
+        return (exit_date, exit_price, 'end_of_outcome_window')
+
+    return None
+
+
 class FastTradeSimulator(TradeSimulator):
     """
     Vectorized trade simulator for fast Dataset B generation.
@@ -53,16 +186,28 @@ class FastTradeSimulator(TradeSimulator):
         logger.info("Loading price data for universe...")
         tickers = self.data_repo.update_universe()
 
-        # Skip cache update - just load existing cached data directly
-        # (Cache validation is slow for large universes - update cache separately if needed)
-        logger.info(f"Loading cached data for {len(tickers)} tickers (skipping cache update)...")
-        ticker_data = self.data_repo.get_batch_data(tickers)
+        # Load cached data with progress indicator
+        if show_progress:
+            print(f"Loading cached data for {len(tickers)} tickers...")
+        logger.info(f"Loading cached data for {len(tickers)} tickers...")
+
+        # Use force_cache_only to avoid API calls (faster, but requires cache to be up-to-date)
+        # Use required_end_date to validate cache coverage
+        ticker_data = self.data_repo.get_batch_data(
+            tickers,
+            show_progress=show_progress,
+            force_cache_only=True,  # Only use cache, no API calls
+            required_end_date=pd.to_datetime(self.outcome_end),
+            max_workers=16  # Increase parallelism for faster loading
+        )
 
         # Filter valid data
         valid_ticker_data = {
             t: df for t, df in ticker_data.items()
             if df is not None and len(df) >= 200
         }
+        if show_progress:
+            print(f"Loaded {len(valid_ticker_data)} tickers with sufficient data\n")
         logger.info(f"Loaded {len(valid_ticker_data)} tickers with sufficient data")
 
         # Step 2: Calculate features for all tickers (batch processing)
@@ -278,14 +423,17 @@ class FastTradeSimulator(TradeSimulator):
                                  n_jobs: int, show_progress: bool) -> List[Trade]:
         """Parallel trade simulation (multiple tickers simultaneously)."""
         # Prepare arguments for parallel processing
+        # Note: We don't pass self.strategy to avoid pickling issues with thread locks
+        # The standalone function relies on SEPA_Status column for exit detection
         ticker_groups = [
-            (ticker, ticker_signals, enriched_data[ticker])
+            (ticker, ticker_signals, enriched_data[ticker], self.config,
+             self.outcome_end)
             for ticker, ticker_signals in signals.groupby('ticker')
         ]
 
-        # Use multiprocessing Pool
+        # Use multiprocessing Pool with standalone function
         with Pool(processes=n_jobs) as pool:
-            results = pool.starmap(self._simulate_ticker_trades, ticker_groups)
+            results = pool.starmap(_simulate_ticker_trades_standalone, ticker_groups)
 
         # Flatten results
         all_trades = [trade for ticker_trades in results for trade in ticker_trades]
