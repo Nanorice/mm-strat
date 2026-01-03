@@ -1,0 +1,8 @@
+Sprint 1 (2026-01-01):
+    ☐ when querying data, add a dynamic argument for start date (end date being latest trading day), so we save size queired
+    ☐ overhaul multiple day scanner, make sure no redundant blocks exist
+    ☐ had issues with computing source when enriching dataset a: summarise what was done, cross-sectional properties were omitted, add this back and train a new model
+    ☐ EDA on trainning data, confirm what properties were used, if we included non-normalised ones
+    ☐ add more macro points:
+        ☐ market liquidity, market regime indicator (fund level, sofr xxx spread, )
+        ☐ parallel to benchmarks: major index levels (QQQ, SPY, DJI, VIX), commod levels (copper, wheat, gld, slv), FX strength (jpy, )

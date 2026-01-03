@@ -392,15 +392,98 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
                 print(f"           Will be REMOVED from buy list")
 
         print("\n" + "=" * 80)
+    
+    # Update Database - Buy List Management  
+    print(f"\n[{total_steps}/{total_steps}] Managing Buy List...")
+    
+    # Temporal Consistency Check - Detect backward scans
+    all_signals = db.get_buy_list(active_only=False)
+    if not all_signals.empty:
+        earliest_signal_date = pd.to_datetime(all_signals['signal_date']).min()
+        # clearing data if a backward scan is detected
+        if pd.Timestamp(scan_date_str) < earliest_signal_date:
+            print(f"\n       [WARN]  BACKWARD SCAN DETECTED")
+            print(f"       Scan date: {scan_date_str} is before earliest signal: {earliest_signal_date.date()}")
+            print(f"       Clearing future signals to maintain temporal consistency...")
+            
+            # Optional: Backup to CSV before clearing
+            if csv_output:
+                from pathlib import Path
+                backup_dir = Path(config.DATA_DIR) / 'scanner_output' / 'backups'
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                
+                backup_path = backup_dir / f'buy_list_activity_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+                db.export_to_csv('buy_list_activity', str(backup_path))
+                print(f"       [FILE] Activity backup saved: {backup_path.name}")
+            
+            # Clear future signals
+            deleted = db.clear_future_signals(scan_date_str)
+            print(f"       [OK] Cleared {deleted['buy_list_deleted']} signals and {deleted['activity_deleted']} activity records")
+    
+    # Load current active buy list (as of scan_date for historical accuracy)
+    current_buy_list = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+    tickers_in_buy_list = set(current_buy_list['ticker'].tolist()) if not current_buy_list.empty else set()
+    
+    # Extract result lists from scanner
+    # - trend_ok_stocks: Pass C1-C8 (used for REMOVAL decisions)
+    # - breakout_stocks: Pass C9-C11 (informational)
+    # - qualifying_stocks: Pass ALL C1-C11 (backward compat)
+    # - new_triggers_today: Pass C1-C11 + 0->1 transition (used for ADDITION)
+    trend_ok_stocks = results.get('trend_ok_stocks', [])
+    breakout_stocks = results.get('breakout_stocks', [])
+    qualifying_stocks = results.get('qualifying_stocks', [])  # Backward compat
 
+    trend_ok_tickers = set([s['ticker'] for s in trend_ok_stocks])
+    new_trigger_tickers = set([t['ticker'] for t in new_triggers_today])
+
+    # Determine additions (new triggers not already in buy list)
+    # Requires BOTH trend + breakout (C1-C11) + 0->1 transition
+    tickers_to_add = [t for t in new_triggers_today if t['ticker'] not in tickers_in_buy_list]
+
+    # Determine removals (in buy_list but no longer trend_ok)
+    # Only checks trend (C1-C8) - allows tickers to stay even if volume weakens
+    tickers_to_remove = tickers_in_buy_list - trend_ok_tickers
+    
+    # Execute Additions
+    for trigger in tickers_to_add:
+        ticker = trigger['ticker']
+        signal_price = trigger['entry_price']  # Close price on signal date
+
+        # Extract indicator values from enriched data
+        ticker_df = enriched_data.get(ticker)
+
+        # Get indicator values - use scan_date if available, otherwise use last available
+        if ticker_df is not None:
+            if scan_date_obj in ticker_df.index:
+                row = ticker_df.loc[scan_date_obj]
+            else:
+                # Use last available date before scan_date
+                available_dates = ticker_df.index[ticker_df.index <= scan_date_obj]
+                if len(available_dates) > 0:
+                    row = ticker_df.loc[available_dates[-1]]
+                else:
+                    row = None
+
+            if row is not None:
+                ma50 = row.get('SMA_50')
+                ma150 = row.get('SMA_150')
+                ma200 = row.get('SMA_200')
+                high_52w = row.get('High_52W')
+                low_52w = row.get('Low_52W')
+            else:
+                ma50 = ma150 = ma200 = high_52w = low_52w = None
+        else:
+            ma50 = ma150 = ma200 = high_52w = low_52w = None
+
+    all_active_tickers = tickers_in_buy_list + tickers_to_add
     # ML Scoring (if enabled)
     ml_scores = {}  # Dictionary: ticker -> {'probability': float, 'rank': int}
-    if use_ml and ml_scorer and len(new_triggers_today) > 0:
+    if use_ml and ml_scorer:
         print("\n" + "="*80)
         print(" ML SCORING LAYER")
         print("="*80)
         print(f"\n[5/{total_steps}] ML Model Inference...")
-        print(f"       Candidates to score: {len(new_triggers_today)}")
+        print(f"       Candidates to score: {len(all_active_tickers)}")
         ml_start = time.time()
 
         try:
@@ -414,7 +497,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             # Create feature DataFrame (matching training dataset structure)
             print("       Extracting features for ML candidates...")
             ml_candidates = []
-            for trigger in new_triggers_today:
+            for trigger in all_active_tickers:
                 ticker = trigger['ticker']
                 ticker_df = enriched_data.get(ticker)
 
@@ -471,7 +554,8 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             if len(ml_candidates) > 0:
                 candidates_df = pd.DataFrame(ml_candidates)
                 print(f"       Successfully prepared {len(candidates_df)} candidates for scoring")
-                logger.debug(f"       Feature count per candidate: {len(candidates_df.columns) - 2}")  # Exclude ticker, date
+                logger.debug(f"       Feature count per candidate: {len(candidates_df.columns) - 2}")  
+                # Excluding ticker, date
 
                 # Score batch
                 print("       Running ML model predictions...")
@@ -547,90 +631,6 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             print(f"\n       [ERROR] ML scoring failed: {e}")
             print(f"       Proceeding with all SEPA signals (no ML filter)...")
             logger.error(f"ML scoring error: {e}", exc_info=True)
-    elif use_ml and ml_scorer and len(new_triggers_today) == 0:
-        print(f"\n[5/{total_steps}] ML Scoring: Skipped (no new triggers)")
-    
-    # Update Database - Buy List Management  
-    print(f"\n[{total_steps}/{total_steps}] Managing Buy List...")
-    
-    # Temporal Consistency Check - Detect backward scans
-    all_signals = db.get_buy_list(active_only=False)
-    if not all_signals.empty:
-        earliest_signal_date = pd.to_datetime(all_signals['signal_date']).min()
-        
-        if pd.Timestamp(scan_date_str) < earliest_signal_date:
-            print(f"\n       [WARN]  BACKWARD SCAN DETECTED")
-            print(f"       Scan date: {scan_date_str} is before earliest signal: {earliest_signal_date.date()}")
-            print(f"       Clearing future signals to maintain temporal consistency...")
-            
-            # Optional: Backup to CSV before clearing
-            if csv_output:
-                from pathlib import Path
-                backup_dir = Path(config.DATA_DIR) / 'scanner_output' / 'backups'
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                
-                backup_path = backup_dir / f'buy_list_activity_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-                db.export_to_csv('buy_list_activity', str(backup_path))
-                print(f"       [FILE] Activity backup saved: {backup_path.name}")
-            
-            # Clear future signals
-            deleted = db.clear_future_signals(scan_date_str)
-            print(f"       [OK] Cleared {deleted['buy_list_deleted']} signals and {deleted['activity_deleted']} activity records")
-    
-    # Step 1: Load current active buy list (as of scan_date for historical accuracy)
-    current_buy_list = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
-    tickers_in_buy_list = set(current_buy_list['ticker'].tolist()) if not current_buy_list.empty else set()
-    
-    # Step 2: Extract result lists from scanner
-    # - trend_ok_stocks: Pass C1-C8 (used for REMOVAL decisions)
-    # - breakout_stocks: Pass C9-C11 (informational)
-    # - qualifying_stocks: Pass ALL C1-C11 (backward compat)
-    # - new_triggers_today: Pass C1-C11 + 0->1 transition (used for ADDITION)
-    trend_ok_stocks = results.get('trend_ok_stocks', [])
-    breakout_stocks = results.get('breakout_stocks', [])
-    qualifying_stocks = results.get('qualifying_stocks', [])  # Backward compat
-
-    trend_ok_tickers = set([s['ticker'] for s in trend_ok_stocks])
-    new_trigger_tickers = set([t['ticker'] for t in new_triggers_today])
-
-    # Step 3: Determine additions (new triggers not already in buy list)
-    # Requires BOTH trend + breakout (C1-C11) + 0->1 transition
-    tickers_to_add = [t for t in new_triggers_today if t['ticker'] not in tickers_in_buy_list]
-
-    # Step 4: Determine removals (in buy_list but no longer trend_ok)
-    # Only checks trend (C1-C8) - allows tickers to stay even if volume weakens
-    tickers_to_remove = tickers_in_buy_list - trend_ok_tickers
-    
-    # Step 5: Execute Additions
-    for trigger in tickers_to_add:
-        ticker = trigger['ticker']
-        signal_price = trigger['entry_price']  # Close price on signal date
-
-        # Extract indicator values from enriched data
-        ticker_df = enriched_data.get(ticker)
-
-        # Get indicator values - use scan_date if available, otherwise use last available
-        if ticker_df is not None:
-            if scan_date_obj in ticker_df.index:
-                row = ticker_df.loc[scan_date_obj]
-            else:
-                # Use last available date before scan_date
-                available_dates = ticker_df.index[ticker_df.index <= scan_date_obj]
-                if len(available_dates) > 0:
-                    row = ticker_df.loc[available_dates[-1]]
-                else:
-                    row = None
-
-            if row is not None:
-                ma50 = row.get('SMA_50')
-                ma150 = row.get('SMA_150')
-                ma200 = row.get('SMA_200')
-                high_52w = row.get('High_52W')
-                low_52w = row.get('Low_52W')
-            else:
-                ma50 = ma150 = ma200 = high_52w = low_52w = None
-        else:
-            ma50 = ma150 = ma200 = high_52w = low_52w = None
 
         # Get ML scores and features if available
         ml_prob = None
@@ -651,7 +651,7 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             ticker=ticker,
             signal_date=scan_date_str,
             signal_price=signal_price,
-            current_price=signal_price,  # Same as signal_price initially
+            current_price=current_price,  # Same as signal_price initially
             rs=trigger.get('rs'),
             vol_ratio=trigger.get('vol_ratio'),
             # Indicator values
@@ -667,17 +667,17 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
             ml_score_date=ml_score_date,
             ml_features=ml_features_dict
         )
-        db.log_buy_list_activity(
-            ticker=ticker,
-            action='ADDED',
-            action_date=scan_date_str,
-            reason='new_trigger',
-            entry_price=trigger['entry_price'],
-            stop_price=trigger.get('stop_price'),
-            target_price=trigger.get('target_price'),
-            rs=trigger.get('rs'),
-            vol_ratio=trigger.get('vol_ratio')
-        )
+        # db.log_buy_list_activity(
+        #     ticker=ticker,
+        #     action='ADDED',
+        #     action_date=scan_date_str,
+        #     reason='new_trigger',
+        #     entry_price=trigger['entry_price'],
+        #     stop_price=trigger.get('stop_price'),
+        #     target_price=trigger.get('target_price'),
+        #     rs=trigger.get('rs'),
+        #     vol_ratio=trigger.get('vol_ratio')
+        # )
     
     # Step 6: Update existing tickers (those that remain in buy_list)
     # Only check trend_ok (C1-C8) - allows tickers with weak volume to stay
@@ -986,236 +986,6 @@ def run_optimized_scanner(scan_date: Optional[str] = None, csv_output: bool = Fa
     print(f"Scanner complete! (Total time: {total_time:.1f}s)")
     print("=" * 80 + "\n")
 
-def _process_date_range_signals(buy_signals, sell_signals, enriched_data, args, data_repo):
-    """
-    Process buy/sell signals from 2D vectorized scan and update database.
-    
-    Groups signals by date and performs database updates for each day.
-    Then scores all buy list tickers with ML (if enabled).
-    
-    Args:
-        buy_signals: DataFrame with buy signal rows (from find_signal_transitions)
-        sell_signals: DataFrame with sell signal rows (from find_signal_transitions)
-        enriched_data: Dict mapping ticker -> DataFrame with features
-        args: Command-line arguments
-        data_repo: DataRepository instance
-    """
-    import pandas as pd
-    import numpy as np
-    from src.strategy import SEPAStrategy
-    
-    # Get unique dates from signals
-    buy_dates = buy_signals['date'].unique() if len(buy_signals) > 0 else []
-    sell_dates = sell_signals['date'].unique() if len(sell_signals) > 0 else []
-    all_dates = sorted(set(list(buy_dates) + list(sell_dates)))
-    
-    # Initialize database manager
-    db = DatabaseManager()
-    
-    # Initialize strategy for trade plan calculation
-    benchmark_data = data_repo.get_benchmark_data(check_min_date=False)
-    strategy = SEPAStrategy(benchmark_data=benchmark_data)
-    
-    # Track latest date for final ML scoring
-    latest_date = None
-    
-    # Process each date
-    for date in all_dates:
-        date_pd = pd.Timestamp(date)
-        date_str = date_pd.strftime('%Y-%m-%d')
-        
-        if latest_date is None or date_pd > latest_date:
-            latest_date = date_pd
-        
-        # Get signals for this date
-        buys_today = buy_signals[buy_signals['date'] == date] if len(buy_signals) > 0 else pd.DataFrame()
-        sells_today = sell_signals[sell_signals['date'] == date] if len(sell_signals) > 0 else pd.DataFrame()
-        
-        print(f"  {date_str}: +{len(buys_today)} buys, -{len(sells_today)} sells")
-        
-        # Process sells first (remove from buy list)
-        for _, row in sells_today.iterrows():
-            ticker = row['ticker']
-            db.remove_from_buy_list(ticker, reason='trend_break')
-        
-        # Process buys (add to buy list)
-        for _, row in buys_today.iterrows():
-            ticker = row['ticker']
-            
-            # Get enriched data for this ticker
-            if ticker not in enriched_data:
-                continue
-            
-            df = enriched_data[ticker]
-            
-            # Calculate trade plan
-            trade_plan = strategy.calculate_trade_plan(df, date_pd)
-            if trade_plan is None:
-                continue
-            
-            # Get additional metrics
-            if date_pd in df.index:
-                ticker_row = df.loc[date_pd]
-                rs_value = ticker_row.get('RS', None)
-                vol_ratio = ticker_row.get('Vol_Ratio', None)
-                atr_value = ticker_row.get('ATR', None)
-            else:
-                rs_value = None
-                vol_ratio = None
-                atr_value = None
-            
-            # Add to buy list (without ML scores initially)
-            db.add_to_buy_list(
-                ticker=ticker,
-                signal_date=date_str,
-                signal_price=trade_plan['entry_price'],
-                current_price=trade_plan['entry_price'],
-                entry_price=trade_plan['entry_price'],
-                stop_price=trade_plan['stop_price'],
-                target_price=trade_plan['target_price'],
-                rs=rs_value,
-                atr=atr_value,
-                vol_ratio=vol_ratio,
-                ml_probability=None,  # Will be scored at the end
-                ml_rank=None
-            )
-    
-    # ML Scoring: Score all buy list tickers at the latest date
-    if args.use_ml and args.model_path and latest_date is not None:
-        print(f"\n  Scoring buy list with ML (at {latest_date.strftime('%Y-%m-%d')})...")
-        
-        try:
-            from src.ml_scorer import MLScorer
-            from src.fundamental_merger import FundamentalMerger
-            
-            # Load ML scorer
-            ml_scorer = MLScorer(model_path=args.model_path, log_predictions=False)
-            fund_merger = FundamentalMerger(force_cache_only=True)  # Use cache only for speed
-            
-            # Get current buy list from database
-            buy_list_df = db.get_buy_list()
-            if buy_list_df.empty:
-                print("    No tickers in buy list to score")
-                return
-            
-            active_tickers = buy_list_df['ticker'].unique().tolist()
-            print(f"    Scoring {len(active_tickers)} tickers...")
-            
-            # Prepare features for each ticker
-            ml_candidates = []
-            for ticker in active_tickers:
-                if ticker not in enriched_data:
-                    continue
-                
-                ticker_df = enriched_data[ticker]
-                
-                # Get row at latest_date
-                if latest_date in ticker_df.index:
-                    row = ticker_df.loc[latest_date]
-                else:
-                    # Use last available date
-                    available = ticker_df.index[ticker_df.index <= latest_date]
-                    if len(available) == 0:
-                        continue
-                    row = ticker_df.loc[available[-1]]
-                
-                # Get fundamental data
-                single_date_df = pd.DataFrame({
-                    'Date': [latest_date],
-                    'Close': [row.get('Close', np.nan)]
-                }).set_index('Date')
-                
-                try:
-                    merged_df = fund_merger.merge_ticker_data(ticker, single_date_df)
-                    fund_cols = [c for c in merged_df.columns if c not in ['Date', 'Close', 'Open', 'High', 'Low', 'Volume', 'Adj Close']]
-                    
-                    # Combine technical + fundamental features
-                    feature_dict = row.to_dict()
-                    for fcol in fund_cols:
-                        if fcol in merged_df.columns:
-                            feature_dict[fcol] = merged_df[fcol].iloc[0]
-                    
-                    feature_dict['ticker'] = ticker
-                    feature_dict['Date'] = latest_date
-                    ml_candidates.append(feature_dict)
-                    
-                except Exception as e:
-                    logger.debug(f"Failed to get fundamentals for {ticker}: {e}")
-                    continue
-            
-            if len(ml_candidates) == 0:
-                print("    No valid candidates for ML scoring")
-                return
-            
-            # Create DataFrame and score
-            candidates_df = pd.DataFrame(ml_candidates)
-            scores = ml_scorer.score_candidates(candidates_df)
-            probabilities, ranks = ml_scorer.score_batch(candidates_df, ticker_column='ticker')
-            candidates_df['ml_score'] = probabilities
-            candidates_df['ml_rank'] = ranks            # Update database with ML scores
-            for _, score_row in scores.iterrows():
-                ticker = score_row['ticker']
-                ml_prob = score_row.get('ml_probability', None)
-                ml_rank = score_row.get('ml_rank', None)
-                
-                db.update_ml_scores(ticker, ml_prob, ml_rank)
-            
-            print(f"    [OK] Scored {len(scores)} tickers successfully")
-            
-        except Exception as e:
-            print(f"    [WARN] ML scoring failed: {e}")
-            logger.error(f"ML scoring error: {e}", exc_info=True)
-
-def save_results_to_parquet(new_signals, mode='single_day', date_range=None):
-    """
-    Saves scan results to Parquet.
-    mode='single_day': Appends new signals to 'master_buy_list.parquet'
-    mode='range': Saves specific range to 'scan_results_{start}_{end}.parquet'
-    """
-    output_dir = Path(config.DATA_DIR) / 'scanner_output' / 'parquet'
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Convert list of dicts to DataFrame if needed
-    if isinstance(new_signals, list):
-        if not new_signals: return
-        df = pd.DataFrame(new_signals)
-    else:
-        df = new_signals
-        
-    if df.empty: return
-
-    # Ensure date column is datetime for Parquet compatibility
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'])
-
-    if mode == 'range' and date_range:
-        # Save unique file for this range
-        filename = f"scan_results_{date_range[0]}_{date_range[1]}.parquet"
-        path = output_dir / filename
-        df.to_parquet(path)
-        print(f"\n[FILE] Saved range results to: {path}")
-
-    elif mode == 'single_day':
-        # Master list logic: Load -> Append -> Deduplicate -> Save
-        master_path = output_dir / 'master_buy_list.parquet'
-        
-        if master_path.exists():
-            try:
-                existing_df = pd.read_parquet(master_path)
-                # Concatenate
-                combined_df = pd.concat([existing_df, df], ignore_index=True)
-                # Remove duplicates (same ticker on same date)
-                combined_df = combined_df.drop_duplicates(subset=['ticker', 'date'], keep='last')
-            except Exception as e:
-                print(f"[WARN] Failed to read existing master parquet: {e}")
-                combined_df = df
-        else:
-            combined_df = df
-            
-        combined_df.to_parquet(master_path)
-        print(f"\n[FILE] Appended {len(df)} new signals to: {master_path}")
-        print(f"       Master list now contains {len(combined_df)} total signals")
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QSS Optimized Scanner with ML Integration")
     parser.add_argument('--scan-date', type=str, help='Scan date (YYYY-MM-DD). Default: today')
@@ -1233,142 +1003,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        if args.date_range:
-            # Date range mode - optimize by updating cache once before scanning all dates
-            from datetime import datetime, timedelta
-
-            start_date = datetime.strptime(args.date_range[0], '%Y-%m-%d')
-            end_date = datetime.strptime(args.date_range[1], '%Y-%m-%d')
-            
-            print(f"\n{'='*80}")
-            print(f"DATE RANGE MODE: {args.date_range[0]} to {args.date_range[1]}")
-            print(f"{'='*80}")
-            
-            # PRE-SCAN: Update cache once for all dates (major performance improvement)
-            print("\n[PRE-SCAN] Updating cache for date range...")
-            data_repo = DataRepository()
-            tickers = data_repo.update_universe()
-            tickers.append(config.BENCHMARK_TICKER)
-
-            cache_start = time.time()
-            # Scanner only needs recent data for indicator calculation (2 years is sufficient)
-            # check_min_date=False: Only check latest data is current, skip historical range validation
-            min_date = (pd.Timestamp.now() - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
-            results = data_repo.update_cache(tickers, force=False, source='fmp')
-            success_count = sum(results.values())
-            cache_time = time.time() - cache_start
-            print(f"            Updated {success_count}/{len(tickers)} tickers in {cache_time:.1f}s")
-            print(f"            Cache is now ready for {(end_date - start_date).days + 1} day(s) of scanning\n")
-
-            # PRE-LOAD: Load all price data once for entire date range (major optimization)
-            print("\n[PRE-SCAN] Loading price data for date range...")
-            load_start = time.time()
-            # Load data from cache (cache was just updated above)
-            # check_min_date=False: Only check latest data is current, skip historical range validation
-            all_ticker_data = data_repo.get_batch_data(tickers, min_date=min_date, check_min_date=False)
-            load_time = time.time() - load_start
-            print(f"            Loaded {len(all_ticker_data)} tickers in {load_time:.1f}s")
-            print(f"            Data will be filtered by date for each scan (in-memory operation)\n")
-            
-            # ====================================================================
-            # 2D VECTORIZED SCAN - Process entire date range as single matrix
-            # ====================================================================
-            
-            print(f"\n{'='*80}")
-            print(f">> 2D VECTORIZED SCAN: {args.date_range[0]} to {args.date_range[1]}")
-            print(f"{'='*80}\n")
-            
-            vectorized_start = time.time()
-            
-            # Import helper for 2D matrix processing
-            from src.vectorized_screening import VectorizedSEPAScreener
-            import pandas as pd
-            
-            # CRITICAL: Include sufficient historical data for technical indicators
-            # - SEPA condition 4 needs SMA_200.shift(20) = 20 trading days
-            # - SMA_200 itself needs 200 trading days
-            # - 52-week high needs ~250 trading days
-            # Total: Use 250 trading days (~1 year) to be safe
-            # Also add 1 day for boundary detection
-            lookback_days = 251  # 250 trading days + 1 for boundary
-            data_start_date = start_date - timedelta(days=lookback_days)
-            
-            # Initialize components needed for processing
-            benchmark_data = data_repo.get_benchmark_data(check_min_date=False)
-            feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
-            
-            # Step 1: Calculate features for all tickers
-            print("[Step 1/6] Computing features for all tickers...")
-            feature_start = time.time()
-            enriched_data = feature_engine.process_universe_batch(all_ticker_data)
-            feature_time = time.time() - feature_start
-            print(f"            Features computed in {feature_time:.1f}s\n")
-            
-            # Step 2: Build 2D matrix (all tickers × all dates in range + lookback)
-            print("[Step 2/6] Building 2D matrix (tickers × dates)...")
-            print(f"            Including {lookback_days} days of historical data for indicators...")
-            matrix_start = time.time()
-            df_matrix = VectorizedSEPAScreener.build_2d_matrix(
-                enriched_data,
-                start_date=pd.Timestamp(data_start_date),  # Include historical data
-                end_date=pd.Timestamp(end_date)
-            )
-            matrix_time = time.time() - matrix_start
-            print(f"            Matrix built: {df_matrix.shape[0]:,} rows in {matrix_time:.1f}s\n")
-            
-            # Step 3: Add SEPA_Status column (vectorized across entire matrix)
-            print("[Step 3/6] Computing SEPA status (vectorized)...")
-            sepa_start = time.time()
-            df_matrix = VectorizedSEPAScreener.add_sepa_status_column(df_matrix)
-            sepa_time = time.time() - sepa_start
-            qualified_count = df_matrix['SEPA_Status'].sum()
-            print(f"            SEPA status computed in {sepa_time:.1f}s")
-            print(f"            {qualified_count:,} ticker-dates qualified\n")
-            
-            # Step 4: Find all buy/sell transitions
-            print("[Step 4/6] Finding signal transitions...")
-            transition_start = time.time()
-            buy_signals, sell_signals = VectorizedSEPAScreener.find_signal_transitions(
-                df_matrix,
-                date_range_start=pd.Timestamp(start_date),
-                date_range_end=pd.Timestamp(end_date)
-            )
-            transition_time = time.time() - transition_start
-            print(f"            Transitions found in {transition_time:.1f}s")
-            print(f"            Buy signals: {len(buy_signals):,}")
-            print(f"            Sell signals: {len(sell_signals):,}\n")
-            
-            # Step 5: Process signals by date and update database
-            print("[Step 5/6] Updating database...")
-            _process_date_range_signals(
-                buy_signals,
-                sell_signals,
-                enriched_data,
-                args,
-                data_repo
-            )
-            
-            # Step 6: Summary
-            vectorized_time = time.time() - vectorized_start
-            num_days = (end_date - start_date).days + 1
-            
-            print(f"\n{'='*80}")
-            print(f"[OK] 2D VECTORIZED SCAN COMPLETE!")
-            print(f"{'='*80}")
-            print(f"Total time: {vectorized_time:.1f}s")
-            print(f"Dates processed: {num_days}")
-            print(f"Speed: {vectorized_time / num_days:.2f}s per day")
-            print(f"{'='*80}\n")
-        else:
-            # Single day mode
-            run_optimized_scanner(
-                scan_date=args.scan_date,
-                csv_output=args.csv_output,
-                use_ml=args.use_ml,
-                model_path=args.model_path,
-                tickers=args.tickers,
-                debug=args.debug
-            )
+        # Single day mode
+        run_optimized_scanner(
+            scan_date=args.scan_date,
+            csv_output=args.csv_output,
+            use_ml=args.use_ml,
+            model_path=args.model_path,
+            tickers=args.tickers,
+            debug=args.debug
+        )
 
     except KeyboardInterrupt:
         print("\n\nScanner interrupted by user.")

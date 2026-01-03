@@ -21,6 +21,9 @@ from tqdm import tqdm
 from typing import Optional
 import time
 
+import shutil
+import gc
+
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
 
@@ -36,6 +39,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Define features to lag globally or pass them in
+FEATURES_TO_LAG = [
+    'nATR', 'ATR', 'VCP_Ratio', 'Consolidation_Width',
+    'Price_vs_SMA_50', 'Price_vs_SMA_150', 'Price_vs_SMA_200',
+    'RS', 'RS_MA', 'Dry_Up_Volume',
+    'High_52W', 'Low_52W', 'RSI_14', 'Dist_From_52W_High'
+]
 
 def _process_ticker_for_dataset_a(
     ticker: str,
@@ -45,79 +55,58 @@ def _process_ticker_for_dataset_a(
     include_fundamentals: bool = False,
     skip_data_updates: bool = True
 ) -> pd.DataFrame:
-    """
-    Process a single ticker - calculate features and prepare records.
-
-    This function is designed to be pickle-safe for multiprocessing.
-    It creates its own FeatureEngine and FundamentalMerger instances
-    instead of receiving them as parameters (which would fail pickling).
-
-    Args:
-        ticker: Stock symbol
-        df: Price dataframe
-        mode: 'lightweight' or 'full'
-        benchmark_data: Benchmark series for RS calculation
-        include_fundamentals: Whether to include fundamental data
-        skip_data_updates: Skip data cache updates
-
-    Returns:
-        DataFrame with features for this ticker
-    """
     try:
-        # Create fresh instances (pickle-safe)
-        # Suppress initialization logs in worker processes to reduce noise
+        # --- Existing Feature Engineering Logic ---
+        # Suppress logging...
         import logging
         worker_logger = logging.getLogger('src.features')
         original_level = worker_logger.level
         worker_logger.setLevel(logging.WARNING)
 
         feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
-
         worker_logger.setLevel(original_level)
 
-        # Calculate lightweight features
+        # Calculate base features
         df_features = feature_engine.calculate_lightweight_features(df)
 
-        # Calculate heavyweight features if requested
         if mode == 'full':
             df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
 
-        # Merge fundamental data if requested
         if include_fundamentals:
             from src.fundamental_merger import FundamentalMerger
             fundamental_merger = FundamentalMerger(force_cache_only=skip_data_updates)
             df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
         
-        # OPTIMIZATION: Instead of looping through dates, just add ticker column
-        # The dataframe already has all the dates as index
+        # --- Standardize Columns ---
         df_features['ticker'] = ticker
-
-        # Handle date column carefully to avoid duplicates
-        # Use lowercase 'date' to match standard convention across codebase
+        
+        # Handle date index/column
         if 'date' not in df_features.columns:
-            # If date doesn't exist as column, create it from index
             df_features['date'] = pd.to_datetime(df_features.index)
-        elif df_features.index.name == 'date' or isinstance(df_features.index, pd.DatetimeIndex):
-            # If date exists as column AND index is date, reset index (drop it)
+        elif df_features.index.name == 'date':
             df_features = df_features.reset_index(drop=True)
-
-        # Ensure date column is datetime type
+            
         if 'date' in df_features.columns:
             df_features['date'] = pd.to_datetime(df_features['date'])
 
-        # Check for duplicate columns before proceeding
-        duplicate_cols = df_features.columns[df_features.columns.duplicated()].tolist()
-        if duplicate_cols:
-            logger.error(f"{ticker}: Duplicate columns detected: {duplicate_cols}")
-            # Remove duplicate columns (keep first occurrence)
-            df_features = df_features.loc[:, ~df_features.columns.duplicated()]
+        # --- OPTIMIZATION: Calculate Lags Here (Per Ticker) ---
+        # Instead of doing this globally later, we do it here while the data is small
+        df_features = df_features.sort_values('date') # Ensure time order
+        
+        for feature in FEATURES_TO_LAG:
+            if feature in df_features.columns:
+                df_features[f"{feature}_Lag1"] = df_features[feature].shift(1)
 
-        # Reorder columns: date, ticker, Close, Volume, then features
+        # --- Cleanup ---
+        # Remove duplicates
+        df_features = df_features.loc[:, ~df_features.columns.duplicated()]
+
+        # Reorder
         cols = ['date', 'ticker', 'Close', 'Volume']
         feature_cols = [c for c in df_features.columns if c not in cols + ['Open', 'High', 'Low']]
-        df_features = df_features[cols + feature_cols]
-
-        return df_features
+        
+        # Return final ordered dataframe
+        return df_features[cols + feature_cols]
         
     except Exception as e:
         logger.warning(f"Failed to process {ticker}: {e}")
@@ -161,7 +150,6 @@ def detect_memory_mode() -> str:
         logger.warning("psutil not installed. Defaulting to 'low' memory mode. Install psutil for auto-detection.")
         return 'low'
 
-
 def build_dataset_a(
     start_date: str,
     end_date: str,
@@ -172,534 +160,146 @@ def build_dataset_a(
     include_cross_sectional: bool = False,
     n_jobs: int = 1,
     skip_data_updates: bool = True,
-    memory_mode: str = 'auto'
+    memory_mode: str = 'auto' # Kept for signature compatibility, but now implicitly 'efficient'
 ) -> pd.DataFrame:
-    """
-    Build Dataset A - daily feature snapshots.
-
-    Args:
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-        mode: 'lightweight' or 'full' (includes heavyweight alphas)
-        tickers: Optional list of tickers (default: use universe)
-        validate_temporal: If True, run temporal validation checks
-        include_fundamentals: If True, merge fundamental data (growth, ratios, P/E, etc.)
-        include_cross_sectional: If True, add cross-sectional features
-        n_jobs: Number of parallel jobs (1 = sequential, -1 = all CPUs)
-        skip_data_updates: If True, skip price and fundamental data cache updates (default: True)
-                          For training datasets, data should already be up-to-date in cache.
-                          Set to False only if you need to fetch fresh market data.
-        memory_mode: Memory processing mode ('auto', 'low', 'high')
-                    'auto' = detect based on available RAM
-                    'low' = disk-based (8GB systems, slower but safe)
-                    'high' = in-memory (16GB+ systems, faster)
-
-    Returns:
-        DataFrame with columns: date, ticker, Close, Volume, features...
-    """
-    # Resolve memory mode
-    if memory_mode == 'auto':
-        memory_mode = detect_memory_mode()
-        logger.info(f"Auto-detected memory mode: {memory_mode}")
-    else:
-        logger.info(f"Memory mode: {memory_mode} (user-specified)")
-
+    
     logger.info(f"Building Dataset A from {start_date} to {end_date}")
-    logger.info(f"Mode: {mode}")
-    logger.info(f"Parallel jobs: {n_jobs}")
-
-    # Initialize components
+    
+    # 1. Setup Output Directory (Partitioned Dataset)
+    # We will write to a folder: data/ml/dataset_a_interim/
+    # This allows appending without loading the whole file.
+    output_dir = Path("data/ml/dataset_a_interim")
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 2. Initialize Components
     data_repo = DataRepository()
-
-    # Parse end_date for validation
     end_date_timestamp = pd.Timestamp(end_date)
-
-    # Load benchmark with end_date validation and force_cache_only
+    
     benchmark_data = data_repo.get_benchmark_data(
         required_end_date=end_date_timestamp,
         force_cache_only=skip_data_updates
     )
 
-    if benchmark_data is None:
-        logger.error("Failed to load benchmark data!")
-        return pd.DataFrame()
-    
-    feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
-    
-    # Initialize fundamental merger if requested
-    fundamental_merger = None
-    if include_fundamentals:
-        from src.fundamental_merger import FundamentalMerger
-        fundamental_merger = FundamentalMerger(force_cache_only=skip_data_updates)
-        logger.info("Fundamental enrichment enabled")
-        if skip_data_updates:
-            logger.info("Cache-only mode enabled for fundamentals (no API updates)")
-    
-    if validate_temporal:
-        validator = TemporalValidator()
-    
-    # Get tickers to process
     if tickers is None:
-        # Default: use full universe from FMP screener (~1730 tickers)
-        logger.info("No tickers specified - loading full universe from FMP screener...")
+        logger.info("Loading universe...")
         tickers = data_repo.update_universe()
-        logger.info(f"Loaded {len(tickers)} tickers from FMP stock screener")
-    
-    logger.info(f"Processing {len(tickers)} tickers")
-
-    # Update cache for all tickers (unless skip_data_updates is True)
-    if skip_data_updates:
-        logger.info("Skipping price data cache update (using existing cache)")
-    else:
-        logger.info("Updating price data cache...")
-        data_repo.update_cache(tickers, force=False)
-
-    # Load all ticker data
-    logger.info("Loading ticker data...")
-    ticker_data = data_repo.get_batch_data(
-        tickers,
-        show_progress=True,
-        required_end_date=end_date_timestamp,
-        force_cache_only=skip_data_updates
-    )
-    logger.info(f"Successfully loaded {len(ticker_data)}/{len(tickers)} tickers")
-
-    # Report tickers that don't cover the end_date
-    if len(ticker_data) < len(tickers):
-        missing_tickers = set(tickers) - set(ticker_data.keys())
-        logger.warning(f"\n{'='*80}")
-        logger.warning(f"COVERAGE GAP REPORT")
-        logger.warning(f"{'='*80}")
-        logger.warning(f"{len(missing_tickers)} tickers don't cover end_date {end_date}:")
-
-        # Show sample with actual date ranges
-        sample_missing = sorted(list(missing_tickers))[:20]
-        for ticker in sample_missing:
-            cache_file = data_repo.price_dir / f"{ticker}.parquet"
-            if cache_file.exists():
-                try:
-                    df = pd.read_parquet(cache_file)
-                    cache_end = df.index.max()
-                    logger.warning(f"  {ticker}: Latest data {cache_end.date()} (need {end_date})")
-                except:
-                    logger.warning(f"  {ticker}: Cache exists but unreadable")
-            else:
-                logger.warning(f"  {ticker}: No cached data")
-
-        if len(missing_tickers) > 20:
-            logger.warning(f"  ... and {len(missing_tickers) - 20} more")
-        logger.warning(f"{'='*80}\n")
-
-    # Generate business day range
-    date_range = pd.bdate_range(start_date, end_date)
-    logger.info(f"Processing {len(date_range)} trading days")
-    
-    # Process tickers (sequential or parallel)
-    if n_jobs == 1:
-        # Sequential processing - use pre-created instances for efficiency
-        logger.info("Processing tickers sequentially...")
-        results = []
-        with tqdm(total=len(ticker_data), desc="Building Dataset A", unit="ticker") as pbar:
-            for ticker, df in ticker_data.items():
-                try:
-                    # Calculate lightweight features
-                    df_features = feature_engine.calculate_lightweight_features(df)
-
-                    # Calculate heavyweight features if requested
-                    if mode == 'full':
-                        df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
-
-                    # Merge fundamental data if requested
-                    if fundamental_merger is not None:
-                        df_features = fundamental_merger.merge_ticker_data(ticker, df_features)
-
-                    # Add ticker column
-                    df_features['ticker'] = ticker
-
-                    # Handle date column carefully to avoid duplicates
-                    if 'date' not in df_features.columns:
-                        df_features['date'] = pd.to_datetime(df_features.index)
-                    elif df_features.index.name == 'date' or isinstance(df_features.index, pd.DatetimeIndex):
-                        df_features = df_features.reset_index(drop=True)
-
-                    # Ensure date column is datetime type
-                    if 'date' in df_features.columns:
-                        df_features['date'] = pd.to_datetime(df_features['date'])
-
-                    # Check for duplicate columns
-                    duplicate_cols = df_features.columns[df_features.columns.duplicated()].tolist()
-                    if duplicate_cols:
-                        logger.error(f"{ticker}: Duplicate columns detected: {duplicate_cols}")
-                        df_features = df_features.loc[:, ~df_features.columns.duplicated()]
-
-                    # Reorder columns
-                    cols = ['date', 'ticker', 'Close', 'Volume']
-                    feature_cols = [c for c in df_features.columns if c not in cols + ['Open', 'High', 'Low']]
-                    df_features = df_features[cols + feature_cols]
-
-                    if not df_features.empty:
-                        results.append(df_features)
-                except Exception as e:
-                    logger.warning(f"Failed to process {ticker}: {e}")
-
-                pbar.update(1)
-    else:
-        # Parallel processing - pass pickle-safe parameters
-        from multiprocessing import Pool, cpu_count
-
-        if n_jobs == -1:
-            n_jobs = cpu_count()
-
-        logger.info(f"Processing tickers in parallel using {n_jobs} workers...")
-
-        # Prepare arguments: (ticker, df, mode, benchmark_data, include_fundamentals, skip_data_updates)
-        args_list = [
-            (ticker, df, mode, benchmark_data, include_fundamentals, skip_data_updates)
-            for ticker, df in ticker_data.items()
-        ]
-
-        # Calculate optimal chunksize for load balancing
-        # Balance between progress smoothness and overhead
-        optimal_chunksize = max(1, len(args_list) // (n_jobs * 4))
-        chunksize = min(optimal_chunksize, 10)  # Cap at 10 for smooth progress
-
-        logger.info(f"Using chunksize={chunksize} for {len(args_list)} tickers")
-
-        # Choose parallel processing strategy based on memory mode
-        if memory_mode == 'low':
-            # LOW MEMORY MODE: Stream results to disk instead of accumulating in memory
-            import tempfile
-            import os
-            temp_dir = tempfile.mkdtemp(prefix='dataset_a_parallel_')
-            logger.info(f"LOW MEMORY MODE: Streaming results to disk: {temp_dir}")
-
-            # Use multiprocessing Pool with imap_unordered for real-time progress updates
-            pool = None
-            chunk_files = []
-            try:
-                pool = Pool(processes=n_jobs)
-                results = []
-                chunk_counter = 0
-                STREAM_BATCH_SIZE = 50  # Write to disk every 50 tickers
-
-                with tqdm(total=len(args_list), desc="Building Dataset A", unit="ticker") as pbar:
-                    # imap_unordered yields results as they complete (lazy evaluation)
-                    for result in pool.imap_unordered(
-                        _process_ticker_for_dataset_a_wrapper,
-                        args_list,
-                        chunksize=chunksize
-                    ):
-                        if not result.empty:
-                            results.append(result)
-
-                            # When we accumulate enough results, write to disk and clear memory
-                            if len(results) >= STREAM_BATCH_SIZE:
-                                chunk_df = pd.concat(results, ignore_index=True)
-                                chunk_file = os.path.join(temp_dir, f'stream_chunk_{chunk_counter:04d}.parquet')
-                                chunk_df.to_parquet(chunk_file, index=False, compression='snappy')
-                                chunk_files.append(chunk_file)
-                                logger.debug(f"Wrote stream chunk {chunk_counter} ({len(results)} tickers) to disk")
-                                chunk_counter += 1
-
-                                # Clear memory
-                                results.clear()
-                                del chunk_df
-
-                        pbar.update(1)
-
-                # Write any remaining results
-                if results:
-                    chunk_df = pd.concat(results, ignore_index=True)
-                    chunk_file = os.path.join(temp_dir, f'stream_chunk_{chunk_counter:04d}.parquet')
-                    chunk_df.to_parquet(chunk_file, index=False, compression='snappy')
-                    chunk_files.append(chunk_file)
-                    logger.debug(f"Wrote final stream chunk {chunk_counter} ({len(results)} tickers) to disk")
-                    results.clear()
-                    del chunk_df
-
-                logger.info(f"Parallel processing complete. Created {len(chunk_files)} stream chunks.")
-
-                # MEMORY OPTIMIZATION: Don't load all chunks into memory at once
-                # Instead, keep file paths and read them later in batches during concatenation
-                # This avoids loading 49 large DataFrames into memory simultaneously
-                logger.info(f"Stream chunks will be processed in batches during concatenation")
-
-                # Store file paths instead of DataFrames
-                results = chunk_files  # List of file paths, not DataFrames
-                streaming_temp_dir = temp_dir  # Save for cleanup later
-
-            finally:
-                # Properly clean up pool to prevent semaphore leaks
-                if pool is not None:
-                    pool.close()
-                    pool.join()
-
-                # DON'T clean up temp_dir yet - files are still needed for concatenation
-                # Will be cleaned up after concatenation is complete
-        else:
-            # HIGH MEMORY MODE: Fast in-memory accumulation (requires 16GB+ RAM)
-            logger.info(f"HIGH MEMORY MODE: In-memory processing (fast)")
-
-            pool = None
-            try:
-                pool = Pool(processes=n_jobs)
-                results = []
-
-                with tqdm(total=len(args_list), desc="Building Dataset A", unit="ticker") as pbar:
-                    for result in pool.imap_unordered(
-                        _process_ticker_for_dataset_a_wrapper,
-                        args_list,
-                        chunksize=chunksize
-                    ):
-                        if not result.empty:
-                            results.append(result)
-                        pbar.update(1)
-
-                logger.info(f"Parallel processing complete. Collected {len(results)} DataFrames in memory")
-
-            finally:
-                # Properly clean up pool to prevent semaphore leaks
-                if pool is not None:
-                    pool.close()
-                    pool.join()
-    
-    # Concatenate all results
-    logger.info("Concatenating results...")
-    if not results:
-        logger.error("No data generated!")
-        return pd.DataFrame()
-
-    # Check if results are file paths (from low memory streaming) or DataFrames
-    results_are_files = isinstance(results, list) and len(results) > 0 and isinstance(results[0], str)
-
-    # Track streaming temp dir for cleanup after concatenation
-    streaming_temp_dir_to_cleanup = None
-    if results_are_files and 'streaming_temp_dir' in locals():
-        streaming_temp_dir_to_cleanup = streaming_temp_dir
-
-    if not results_are_files:
-        # Convert categorical and problematic object columns to string to avoid ordering issues
-        for df in results:
-            # Convert categorical columns
-            for col in df.select_dtypes(include=['category']).columns:
-                df[col] = df[col].astype(str)
-
-            # Also convert object columns that might have mixed types (except date/ticker)
-            for col in df.select_dtypes(include=['object']).columns:
-                if col not in ['date', 'ticker']:
-                    try:
-                        df[col] = df[col].astype(str)
-                    except:
-                        pass  # Skip if conversion fails
-
-    # MEMORY FIX: Choose concatenation strategy based on memory mode and result count
-    # High memory mode or few results: fast in-memory concat
-    # Low memory mode with many results: disk-based hierarchical merge
-
-    if (memory_mode == 'high' or len(results) <= 10) and not results_are_files:
-        # HIGH MEMORY or few chunks - safe to concatenate in memory
-        logger.info(f"Concatenating {len(results)} DataFrames in memory...")
-        dataset_a = pd.concat(results, ignore_index=True)
-        results.clear()
-        del results
-    else:
-        # Many chunks - use disk-based incremental concatenation
-        logger.info(f"Concatenating {len(results)} items using disk-based approach...")
-
-        import tempfile
-        import os
-
-        # Determine if results are file paths or DataFrames
-        if results_are_files:
-            # Results are already file paths from streaming - use them directly
-            logger.info(f"Using {len(results)} pre-existing stream chunk files")
-            chunk_files = results
-            temp_dir = None  # No new temp dir needed
-        else:
-            # Results are DataFrames - need to write them to disk first
-            temp_dir = tempfile.mkdtemp(prefix='dataset_a_chunks_')
-            logger.info(f"Using temporary directory: {temp_dir}")
-
-            CHUNK_SIZE = 50  # Smaller chunks for memory-constrained systems
-            total_chunks = (len(results) - 1) // CHUNK_SIZE + 1
-            chunk_files = []
-
-            # Write chunks to disk incrementally
-            for i in range(0, len(results), CHUNK_SIZE):
-                chunk_dfs = results[i:i + CHUNK_SIZE]
-                chunk_df = pd.concat(chunk_dfs, ignore_index=True)
-
-                # Write to temporary parquet file
-                chunk_file = os.path.join(temp_dir, f'chunk_{len(chunk_files):04d}.parquet')
-                chunk_df.to_parquet(chunk_file, index=False, compression='snappy')
-                chunk_files.append(chunk_file)
-
-                logger.info(f"  Wrote chunk {len(chunk_files)}/{total_chunks} ({len(chunk_dfs)} DataFrames) to disk")
-
-                # Aggressively free memory
-                del chunk_dfs, chunk_df
-
-            # Clear original results list
-            results.clear()
-            del results
-
-        # Read chunks back and concatenate in batches (further reduces memory pressure)
-        logger.info(f"Reading {len(chunk_files)} chunk files and concatenating in batches...")
-        BATCH_SIZE = 2  # Extremely small batch size for memory-constrained 8GB systems
-
-        # Create temp dir for intermediate files if not exists
-        if temp_dir is None:
-            temp_dir = tempfile.mkdtemp(prefix='dataset_a_merge_')
-
-        intermediate_files = []
-
-        try:
-            # First pass: merge small chunks into intermediate chunks
-            for batch_idx in range(0, len(chunk_files), BATCH_SIZE):
-                batch = chunk_files[batch_idx:batch_idx + BATCH_SIZE]
-                batch_df = pd.concat([pd.read_parquet(f) for f in batch], ignore_index=True)
-
-                intermediate_file = os.path.join(temp_dir, f'intermediate_{len(intermediate_files):04d}.parquet')
-                batch_df.to_parquet(intermediate_file, index=False, compression='snappy')
-                intermediate_files.append(intermediate_file)
-
-                logger.info(f"  Merged batch {len(intermediate_files)}/{(len(chunk_files)-1)//BATCH_SIZE + 1}")
-                del batch_df
-
-            # Multiple merge passes to keep reducing file count down to 1
-            pass_number = 2
-            current_files = intermediate_files
-
-            while len(current_files) > 1:
-                logger.info(f"Merge pass {pass_number} for {len(current_files)} files...")
-                next_pass_files = []
-
-                for batch_idx in range(0, len(current_files), BATCH_SIZE):
-                    batch = current_files[batch_idx:batch_idx + BATCH_SIZE]
-                    batch_df = pd.concat([pd.read_parquet(f) for f in batch], ignore_index=True)
-
-                    pass_file = os.path.join(temp_dir, f'pass{pass_number}_{len(next_pass_files):04d}.parquet')
-                    batch_df.to_parquet(pass_file, index=False, compression='snappy')
-                    next_pass_files.append(pass_file)
-
-                    logger.info(f"  Pass {pass_number} batch {len(next_pass_files)}/{(len(current_files)-1)//BATCH_SIZE + 1}")
-                    del batch_df
-
-                current_files = next_pass_files
-                pass_number += 1
-
-            # Final result: single file remaining
-            logger.info(f"Merge complete! Reading final result from disk...")
-            dataset_a = pd.read_parquet(current_files[0])
-
-        finally:
-            # Clean up temporary files
-            logger.info("Cleaning up temporary chunk files...")
-            import shutil
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-                logger.info(f"Removed temporary directory: {temp_dir}")
-
-            # Also clean up streaming temp directory if it exists
-            if streaming_temp_dir_to_cleanup and os.path.exists(streaming_temp_dir_to_cleanup):
-                shutil.rmtree(streaming_temp_dir_to_cleanup)
-                logger.info(f"Removed streaming temporary directory: {streaming_temp_dir_to_cleanup}")
-
-    # CRITICAL: Ensure proper data types before sorting to avoid comparison errors
-    # Convert ticker to string and date to datetime
-    dataset_a['ticker'] = dataset_a['ticker'].astype(str)
-    dataset_a['date'] = pd.to_datetime(dataset_a['date'])
-
-    # CRITICAL: Sort by ticker AND date before shifting to ensure proper groupby boundaries
-    dataset_a = dataset_a.sort_values(['ticker', 'date']).reset_index(drop=True)
-
-    # Apply lagged features using groupby to respect ticker boundaries
-    logger.info("\n" + "="*80)
-    logger.info(" APPLYING LAGGED FEATURES (Setup Conditions at T-1)")
-    logger.info("="*80)
-    logger.info("Creating lagged features with groupby to prevent cross-ticker contamination...")
-    lag_start = time.time()
-
-    FEATURES_TO_LAG = [
-        'nATR', 'ATR', 'VCP_Ratio', 'Consolidation_Width',
-        'Price_vs_SMA_50', 'Price_vs_SMA_150', 'Price_vs_SMA_200',
-        'RS', 'RS_MA', 'Dry_Up_Volume',
-        'High_52W', 'Low_52W', 'RSI_14', 'Dist_From_52W_High'
-    ]
-
-    lagged_count = 0
-    for feature in FEATURES_TO_LAG:
-        if feature in dataset_a.columns:
-            lag_col_name = f"{feature}_Lag1"
-            dataset_a[lag_col_name] = dataset_a.groupby('ticker')[feature].shift(1)
-            lagged_count += 1
-            logger.debug(f"  Added {lag_col_name}")
-        else:
-            logger.warning(f"  Feature '{feature}' not found in dataset. Skipping lag.")
-
-    lag_time = time.time() - lag_start
-    logger.info(f"Created {lagged_count}/{len(FEATURES_TO_LAG)} lagged features in {lag_time:.1f}s")
-
-    # Validation: Check first row per ticker has NaN lags (prevents data leakage)
-    logger.info("Validating groupby boundaries (first row per ticker should have NaN lags)...")
-    sample_tickers = dataset_a['ticker'].unique()[:3]
-    lag_cols = [c for c in dataset_a.columns if c.endswith('_Lag1')]
-
-    validation_passed = True
-    for ticker in sample_tickers:
-        ticker_data = dataset_a[dataset_a['ticker'] == ticker].sort_values('date')
-        if len(ticker_data) > 0:
-            first_row = ticker_data.iloc[0]
-            nan_lags = first_row[lag_cols].isna().sum()
-
-            if nan_lags == len(lag_cols):
-                logger.debug(f"  ✓ {ticker}: First row has NaN lags (correct)")
-            else:
-                logger.warning(f"  ✗ {ticker}: First row has {len(lag_cols) - nan_lags}/{len(lag_cols)} non-NaN lags (DATA LEAK!)")
-                validation_passed = False
-
-    if validation_passed:
-        logger.info("✓ Lag validation passed: No cross-ticker contamination detected")
-    else:
-        logger.warning("✗ Lag validation FAILED: Potential data leakage detected!")
-
-    # Re-sort by date and ticker for consistency with expected output format
-    dataset_a = dataset_a.sort_values(['date', 'ticker']).reset_index(drop=True)
-
-    # Summary statistics
-    logger.info(f"\nDataset A Summary:")
-    logger.info(f"  Total rows: {len(dataset_a):,}")
-    logger.info(f"  Date range: {dataset_a['date'].min()} to {dataset_a['date'].max()}")
-    logger.info(f"  Tickers: {dataset_a['ticker'].nunique()}")
-    logger.info(f"  Features: {len(dataset_a.columns) - 2}")  # Exclude date, ticker
-    logger.info(f"  Missing values: {dataset_a.isnull().sum().sum()} ({dataset_a.isnull().sum().sum() / dataset_a.size * 100:.2f}%)")
-    
-    # Add cross-sectional features if requested (post-processing after concatenation)
-    if include_cross_sectional:
-        logger.info("\n" + "="*80)
-        logger.info(" POST-PROCESSING: CROSS-SECTIONAL FEATURES")
-        logger.info("="*80)
         
-        try:
-            from src.cross_sectional_features import add_cross_sectional_features
+    # 3. Batch Processing Loop
+    # Process 100 tickers at a time to keep RAM low
+    BATCH_SIZE = 100 
+    total_processed = 0
+    
+    # Split tickers into chunks
+    ticker_chunks = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
+    logger.info(f"Processing {len(tickers)} tickers in {len(ticker_chunks)} batches...")
+
+    from multiprocessing import Pool, cpu_count
+    
+    if n_jobs == -1:
+        n_jobs = cpu_count()
+
+    # Create pool once (or recreate per batch if you suspect memory leaks)
+    pool = Pool(processes=n_jobs) if n_jobs > 1 else None
+
+    try:
+        for i, chunk in enumerate(tqdm(ticker_chunks, desc="Processing Batches")):
             
-            dataset_a = add_cross_sectional_features(
-                dataset_a,
+            # A. Load ONLY this batch of data
+            chunk_data = data_repo.get_batch_data(
+                chunk, 
+                show_progress=False,
+                required_end_date=end_date_timestamp,
+                force_cache_only=skip_data_updates
+            )
+            
+            if not chunk_data:
+                continue
+
+            # B. Process Batch
+            batch_results = []
+            
+            args_list = [
+                (t, df, mode, benchmark_data, include_fundamentals, skip_data_updates)
+                for t, df in chunk_data.items()
+            ]
+
+            if pool:
+                # Parallel
+                for result in pool.imap_unordered(_process_ticker_for_dataset_a_wrapper, args_list):
+                    if not result.empty:
+                        batch_results.append(result)
+            else:
+                # Sequential
+                for args in args_list:
+                    result = _process_ticker_for_dataset_a(*args)
+                    if not result.empty:
+                        batch_results.append(result)
+
+            # C. Write Batch Immediately
+            if batch_results:
+                df_batch = pd.concat(batch_results, ignore_index=True)
+                
+                # Standardize types before writing
+                df_batch['ticker'] = df_batch['ticker'].astype(str)
+                # Convert object cols to string (except date)
+                for col in df_batch.select_dtypes(include=['object']).columns:
+                    if col != 'date':
+                        df_batch[col] = df_batch[col].astype(str)
+
+                # Write to parquet partition
+                # Files named part_0.parquet, part_1.parquet, etc.
+                batch_file = output_dir / f"part_{i}.parquet"
+                df_batch.to_parquet(batch_file, index=False, compression='snappy')
+                
+                total_processed += len(df_batch)
+
+            # D. Aggressive Memory Cleanup
+            del chunk_data
+            del batch_results
+            if 'df_batch' in locals(): del df_batch
+            gc.collect()
+
+    finally:
+        if pool:
+            pool.close()
+            pool.join()
+
+    logger.info(f"Batch processing complete. Total rows generated: {total_processed:,}")
+
+    # 4. Finalizing
+    # If include_cross_sectional is True, we must now load the data (or process efficiently)
+    # Since cross-sectional needs ALL data for a specific date, this is tricky for OOM.
+    # However, usually we can load the columns needed for ranking, rank them, and merge back.
+    # For now, let's just return the directory path logic or a pyarrow table.
+    
+    logger.info("Reading consolidated dataset from disk...")
+    
+    # Use PyArrow to read the dataset (efficiently handles partitioned folders)
+    try:
+        full_df = pd.read_parquet(output_dir)
+        
+        # Sort finally (this might spike RAM, but it's cleaner than before)
+        full_df = full_df.sort_values(['date', 'ticker']).reset_index(drop=True)
+        
+        if include_cross_sectional:
+            # Add cross sectional features now that we have the full frame
+            # (Note: if this crashes RAM, you need a different strategy for XS features)
+            from src.cross_sectional_features import add_cross_sectional_features
+            full_df = add_cross_sectional_features(
+                full_df,
                 company_profile_path='data/company_info/company_profiles.parquet',
                 rs_column='RS'
             )
             
-            # Update feature count
-            logger.info(f"\nUpdated Dataset A Summary:")
-            logger.info(f"  Total features: {len(dataset_a.columns) - 2}")  # Exclude date, ticker
-            logger.info(f"  New cross-sectional features: RS_Universe_Rank, Sector_Momentum, Industry_Momentum")
-            
-        except Exception as e:
-            logger.error(f"Failed to add cross-sectional features: {e}")
-            logger.warning("Continuing without cross-sectional features...")
-    
-    return dataset_a
+        return full_df
 
+    except Exception as e:
+        logger.error(f"Could not load final dataframe into memory: {e}")
+        logger.info(f"Data is safely saved in {output_dir}")
+        # Return empty DF to signal "Check disk", or throw error
+        return pd.DataFrame()
 
 def main():
     """Main entry point for Dataset A builder."""
