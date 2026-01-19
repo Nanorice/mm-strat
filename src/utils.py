@@ -4,6 +4,11 @@ Shared utility functions for the quantamental trading system.
 import pandas as pd
 import pytz
 from datetime import datetime, time
+from pathlib import Path
+from typing import List, Set
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_latest_trading_day() -> pd.Timestamp:
@@ -72,3 +77,116 @@ def get_latest_trading_day() -> pd.Timestamp:
             latest_date -= pd.Timedelta(days=1)
 
         return latest_date
+
+
+def load_etf_exclusion_list(filepath: str = 'data/etf_fund_tickers.txt') -> Set[str]:
+    """
+    Load ETF/Fund exclusion list from file.
+
+    Args:
+        filepath: Path to ETF/fund ticker list file
+
+    Returns:
+        Set of ticker symbols to exclude from processing
+    """
+    filepath = Path(filepath)
+
+    if not filepath.exists():
+        logger.warning(f"ETF/Fund exclusion list not found: {filepath}")
+        logger.warning(f"Run 'python identify_etfs.py' to generate it")
+        return set()
+
+    etf_fund_tickers = set()
+
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            # Skip comments and empty lines
+            if line.startswith('#') or not line:
+                continue
+            # Extract ticker (before tab or comment)
+            ticker = line.split()[0]  # First word is the ticker
+            etf_fund_tickers.add(ticker)
+
+    logger.info(f"Loaded {len(etf_fund_tickers)} ETF/fund tickers to exclude")
+
+    return etf_fund_tickers
+
+
+def filter_etfs(tickers: List[str], etf_list_path: str = 'data/etf_fund_tickers.txt',
+                filter_spacs: bool = True) -> List[str]:
+    """
+    Filter out ETFs, funds, SPACs, and other non-operating companies from ticker list.
+
+    Args:
+        tickers: List of ticker symbols
+        etf_list_path: Path to ETF/fund exclusion list
+        filter_spacs: If True, also filter SPACs and shell companies (default: True)
+
+    Returns:
+        Filtered list of tickers (operating companies only)
+    """
+    # Step 1: Filter using ETF exclusion list
+    etf_exclusion = load_etf_exclusion_list(etf_list_path)
+
+    if not etf_exclusion:
+        logger.warning("No ETF exclusion list loaded, skipping ETF/fund filtering")
+        etf_filtered = tickers
+    else:
+        etf_filtered = [t for t in tickers if t not in etf_exclusion]
+        etf_excluded = len(tickers) - len(etf_filtered)
+        logger.info(f"ETF/Fund filtering: {len(tickers)} → {len(etf_filtered)} tickers ({etf_excluded} excluded)")
+
+    # Step 2: Filter SPACs, shell companies, units, warrants
+    # Only check suspicious tickers (ending with U/W/R or containing 'acqu') to save time
+    if not filter_spacs:
+        return etf_filtered
+
+    try:
+        from src.company_profile_engine import CompanyProfileEngine
+        profile_engine = CompanyProfileEngine()
+
+        spac_excluded = []
+        final_filtered = []
+        suspicious_count = 0
+
+        for ticker in etf_filtered:
+            should_exclude = False
+
+            # Quick check: only load profile for suspicious tickers
+            ticker_lower = ticker.lower()
+            is_suspicious = (
+                (ticker.endswith(('U', 'W', 'R')) and len(ticker) > 2) or
+                ('acquisition' in ticker_lower) or
+                ('acqu' in ticker_lower) or
+                ('mesh' in ticker_lower and 'acquisition' in ticker_lower) or  # Catches MESHU
+                (ticker_lower.startswith('sv') and ticker_lower.endswith('u'))  # SVxxU pattern
+            )
+
+            if is_suspicious:
+                suspicious_count += 1
+                profile = profile_engine.get_ticker_profile(ticker)
+                if profile is not None:
+                    industry = str(profile.get('industry', '')).lower()
+                    company_name = str(profile.get('companyName', '')).lower()
+
+                    # Check for units, warrants, rights
+                    if any(kw in company_name for kw in ['units', 'unit', 'warrant', 'rights']):
+                        should_exclude = True
+                    # Check for SPACs and shell companies (in industry OR company name)
+                    elif 'acquisition' in industry or 'shell' in industry or 'acquisition corp' in company_name:
+                        should_exclude = True
+
+            if should_exclude:
+                spac_excluded.append(ticker)
+            else:
+                final_filtered.append(ticker)
+
+        if spac_excluded:
+            logger.info(f"SPAC/Shell filtering: Checked {suspicious_count} suspicious tickers, excluded {len(spac_excluded)} (Final: {len(final_filtered)} tickers)")
+
+        return final_filtered
+
+    except Exception as e:
+        logger.warning(f"SPAC filtering failed: {e}, skipping")
+        return etf_filtered

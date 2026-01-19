@@ -37,3 +37,7 @@ optuna>=3.0.0           # Bayesian optimization
 
 # Feature importance and interpretability
 shap>=0.42.0            # SHAP values for feature importance
+
+# Dashboard & Visualization
+streamlit>=1.30.0
+plotly>=5.18.0

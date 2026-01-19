@@ -82,6 +82,11 @@ class FundamentalProcessor:
         if not combined_df.empty:
             combined_df = self._calculate_safety_ratios(combined_df)
             combined_df = self._calculate_operating_metrics(combined_df)
+            
+            # CRITICAL FIX: Remove duplicate fiscal periods (from outer joins)
+            # Deduplicate on fiscal_date, keeping first (most complete from merge)
+            if 'fiscal_date' in combined_df.columns:
+                combined_df = combined_df.drop_duplicates(subset=['fiscal_date'], keep='first')
         
         return combined_df
     
@@ -118,7 +123,7 @@ class FundamentalProcessor:
         after_count = len(df)
         
         if before_count > after_count:
-            logger.warning(
+            logger.debug(
                 f"{ticker}: Dropped {before_count - after_count} rows with missing filing_date"
             )
         
@@ -164,6 +169,8 @@ class FundamentalProcessor:
             if base_col in df.columns:
                 # YoY: compare to 4 quarters ago
                 df[growth_col] = df[base_col].pct_change(periods=4, fill_method=None) * 100
+                # Replace inf with nan (inf growth from division by zero is not meaningful)
+                df[growth_col] = df[growth_col].replace([np.inf, -np.inf], np.nan)
             else:
                 df[growth_col] = np.nan
         
@@ -181,19 +188,35 @@ class FundamentalProcessor:
         else:
             df['revenue_accel'] = np.nan
         
-        # NEW MINERVINI QUALITY CHECK - Inventory vs Sales Spread
-        # Positive value = Red flag (inventory growing faster than sales)
-        # Negative value = Healthy (sales outpacing inventory growth)
-        if 'inventory' in df.columns:
-            df['inventory_growth_yoy'] = df['inventory'].pct_change(periods=4, fill_method=None) * 100
-            
-            if 'revenue_growth_yoy' in df.columns:
-                df['inventory_vs_sales_spread'] = df['inventory_growth_yoy'] - df['revenue_growth_yoy']
-            else:
-                df['inventory_vs_sales_spread'] = np.nan
+        # LONG-TERM TREND FEATURES - "Proven Winner" Check
+        # These help distinguish market leaders from flash-in-the-pan stocks
+        
+        # 3-Year Revenue CAGR (Compound Annual Growth Rate)
+        # CAGR = ((Value_current / Value_3y_ago) ^ (1/3)) - 1
+        # For quarterly data: 12 quarters = 3 years
+        if 'revenue' in df.columns:
+            revenue_3y_ago = df['revenue'].shift(12)
+            df['revenue_cagr_3y'] = np.where(
+                (revenue_3y_ago > 0) & (df['revenue'] > 0),
+                ((df['revenue'] / revenue_3y_ago) ** (1/3) - 1) * 100,
+                np.nan
+            )
         else:
-            df['inventory_growth_yoy'] = np.nan
-            df['inventory_vs_sales_spread'] = np.nan
+            df['revenue_cagr_3y'] = np.nan
+        
+        # EPS Stability Score - Standard Deviation of EPS growth over 8 quarters
+        # Lower score = More stable/consistent growth (better for SEPA)
+        # Higher score = Volatile/unpredictable growth (risky)
+        if 'eps_growth_yoy' in df.columns:
+            df['eps_stability_score'] = df['eps_growth_yoy'].rolling(
+                window=8, 
+                min_periods=4  # Allow calculation with at least 4 quarters
+            ).std()
+        else:
+            df['eps_stability_score'] = np.nan
+        
+        # NOTE: Inventory metrics moved to _calculate_operating_metrics()
+        # because inventory is a balance sheet item, not income statement
         
         # Sort back to original order (newest first)
         df = df.sort_values('filing_date', ascending=False)
@@ -265,6 +288,9 @@ class FundamentalProcessor:
         if 'filing_date' in merged.columns:
             merged = merged.sort_values('filing_date', ascending=False)
         
+        # CRITICAL: Reset index to prevent duplicate label errors in fillna
+        merged = merged.reset_index(drop=True)
+        
         # Clean up duplicate columns: Combine _income and _balance versions
         # Strategy: For each base column name, coalesce _income and _balance values
         # (revenue from _income, totalAssets from _balance, etc.)
@@ -283,16 +309,40 @@ class FundamentalProcessor:
         all_suffixed_bases = income_bases | balance_bases | cashflow_bases
         
         # Combine them: use fillna to merge (income statement data fills balance sheet NaN and vice versa)
+        # CRITICAL: Also handle _cashflow suffix since columns like operatingCashFlow exist in multiple statements
         for base in all_suffixed_bases:
             income_col = f'{base}_income'
             balance_col = f'{base}_balance'
-            
-            if income_col in merged.columns and balance_col in merged.columns:
-                # Combine: take non-null values from either column
-                merged[base] = merged[income_col].fillna(merged[balance_col])
-                # Drop the suffixed versions
-                merged = merged.drop(columns=[income_col, balance_col])
-                logger.debug(f"Combined {income_col} and {balance_col} into {base}")
+            cashflow_col = f'{base}_cashflow'
+
+            # Collect all versions that exist
+            versions_to_combine = []
+            if income_col in merged.columns:
+                versions_to_combine.append(income_col)
+            if balance_col in merged.columns:
+                versions_to_combine.append(balance_col)
+            if cashflow_col in merged.columns:
+                versions_to_combine.append(cashflow_col)
+
+            # If we have multiple versions, combine them
+            if len(versions_to_combine) >= 2:
+                # CRITICAL: Check if base column already exists (from cash flow without suffix)
+                # If it does, we need to include it in the combination
+                if base in merged.columns:
+                    # Base column exists - combine all versions INCLUDING the base
+                    combined_data = merged[base]
+                    for ver in versions_to_combine:
+                        combined_data = combined_data.fillna(merged[ver])
+                    merged[base] = combined_data
+                else:
+                    # Base doesn't exist - create it from suffixed versions
+                    merged[base] = merged[versions_to_combine[0]]
+                    for ver in versions_to_combine[1:]:
+                        merged[base] = merged[base].fillna(merged[ver])
+
+                # Drop all suffixed versions
+                merged = merged.drop(columns=versions_to_combine)
+                logger.debug(f"Combined {versions_to_combine} into {base}")
         
         # Rename remaining _income columns (exist only in income statement)
         rename_income = {col: col.replace('_income', '') for col in merged.columns if col.endswith('_income')}
@@ -305,6 +355,24 @@ class FundamentalProcessor:
         if rename_balance:
             merged = merged.rename(columns=rename_balance)
             logger.debug(f"Renamed {len(rename_balance)} balance-only columns")
+
+        # Rename remaining _cashflow columns (exist only in cash flow statement)
+        rename_cashflow = {col: col.replace('_cashflow', '') for col in merged.columns if col.endswith('_cashflow')}
+        if rename_cashflow:
+            merged = merged.rename(columns=rename_cashflow)
+            logger.debug(f"Renamed {len(rename_cashflow)} cash flow-only columns")
+
+        # NEW: Standardize cash flow column names from FMP API to internal standard
+        from src.fundamental_column_mapping import standardize_cash_flow_columns
+        merged = standardize_cash_flow_columns(merged)
+        logger.debug("Standardized cash flow column names")
+        
+        # CRITICAL FIX: Remove duplicate columns (keep first occurrence)
+        # This happens when columns like 'operatingCashFlow' exist in multiple statements
+        if merged.columns.duplicated().any():
+            dup_cols = merged.columns[merged.columns.duplicated()].unique().tolist()
+            logger.debug(f"Removing duplicate columns: {dup_cols}")
+            merged = merged.loc[:, ~merged.columns.duplicated(keep='first')]
         
         return merged
     
@@ -323,6 +391,9 @@ class FundamentalProcessor:
         Returns:
             Dataframe with ratio columns added
         """
+        # CRITICAL: Reset index to prevent duplicate label errors
+        df = df.reset_index(drop=True)
+        
         # Prepare new columns as a dict to avoid fragmentation
         new_cols = {}
 
@@ -378,6 +449,9 @@ class FundamentalProcessor:
         Returns:
             Dataframe with operating metric columns added
         """
+        # CRITICAL: Reset index to prevent duplicate label errors in numpy/pandas operations
+        df = df.reset_index(drop=True)
+        
         # Prepare new columns as a dict to avoid fragmentation
         new_cols = {}
 
@@ -421,6 +495,106 @@ class FundamentalProcessor:
         else:
             new_cols['roa'] = np.nan
 
+        # Net Margin (SEPA requirement): netIncome / revenue
+        if 'netIncome' in df.columns and 'revenue' in df.columns:
+            new_cols['net_margin'] = np.where(
+                df['revenue'] != 0,
+                (df['netIncome'] / df['revenue']) * 100,
+                np.nan
+            )
+        else:
+            new_cols['net_margin'] = np.nan
+
+        # NEW MINERVINI QUALITY CHECK - Inventory vs Sales Spread
+        # Positive value = Red flag (inventory growing faster than sales)
+        # Negative value = Healthy (sales outpacing inventory growth)
+        # NOTE: Moved here from _calculate_growth_metrics because inventory is a balance sheet item
+        if 'inventory' in df.columns and 'fiscal_date' in df.columns:
+            # Sort by fiscal_date for proper time-series calculations
+            df_sorted = df.sort_values('fiscal_date', ascending=True)
+            inventory_growth = df_sorted['inventory'].pct_change(periods=4, fill_method=None) * 100
+            # Replace inf with nan (inf growth rates from division by zero are not meaningful)
+            inventory_growth = inventory_growth.replace([np.inf, -np.inf], np.nan)
+
+            new_cols['inventory_growth_yoy'] = inventory_growth.values
+
+            if 'revenue_growth_yoy' in df.columns:
+                # Use sorted df to ensure alignment with inventory_growth
+                # Replace inf with nan to avoid invalid subtract warnings (inf - inf = nan)
+                revenue_growth_clean = df_sorted['revenue_growth_yoy'].replace([np.inf, -np.inf], np.nan)
+                new_cols['inventory_vs_sales_spread'] = new_cols['inventory_growth_yoy'] - revenue_growth_clean.values
+            else:
+                new_cols['inventory_vs_sales_spread'] = np.nan
+        else:
+            new_cols['inventory_growth_yoy'] = np.nan
+            new_cols['inventory_vs_sales_spread'] = np.nan
+
+        # NEW ADDITIONAL FUNDAMENTAL FEATURES
+        # Earnings Quality Score - Operating cash flow relative to reported earnings
+        # Higher is better (>1 means cash flow exceeds accounting earnings)
+        if 'operatingCashFlow' in df.columns and 'netIncome' in df.columns:
+            new_cols['earnings_quality_score'] = np.where(
+                df['netIncome'] != 0,
+                df['operatingCashFlow'] / df['netIncome'],
+                np.nan
+            )
+        else:
+            new_cols['earnings_quality_score'] = np.nan
+
+        # FCF Margin - Free cash flow as % of revenue
+        # Measures real cash-generating ability
+        if 'freeCashFlow' in df.columns and 'revenue' in df.columns:
+            new_cols['fcf_margin'] = np.where(
+                df['revenue'] != 0,
+                (df['freeCashFlow'] / df['revenue']) * 100,
+                np.nan
+            )
+        else:
+            new_cols['fcf_margin'] = np.nan
+
+        # Gross Margin Trend - Measures margin expansion/contraction
+        # Formula: Current_Gross_Margin - Avg_Gross_Margin_4Q (trailing 4 quarters)
+        # Positive = Expanding margins (good), Negative = Contracting margins (bad)
+        # IMPORTANT: gross_margin is in new_cols dict, not yet added to df
+        if 'gross_margin' in new_cols and 'fiscal_date' in df.columns:
+            # Check if gross_margin is an array (not just a scalar nan)
+            gross_margin_values = new_cols['gross_margin']
+            if not (isinstance(gross_margin_values, float) and np.isnan(gross_margin_values)):
+                # CRITICAL: Must handle both duplicate fiscal_dates AND preserve original row order
+                # Strategy: Sort for calculation, then map back using original index
+
+                # Reset index to integer positions for clean sorting
+                df_reset = df.reset_index(drop=True).copy()
+
+                # Add gross_margin temporarily for calculation
+                df_reset['gross_margin'] = gross_margin_values
+
+                # Sort by fiscal_date for proper time-series calculation
+                df_sorted = df_reset.sort_values('fiscal_date', ascending=True).copy()
+
+                # Calculate 4-quarter rolling average (excluding current quarter)
+                # shift(1) excludes current value, then take rolling mean of 4 quarters
+                gross_margin_4q_avg = df_sorted['gross_margin'].shift(1).rolling(
+                    window=4,
+                    min_periods=2  # Allow calculation with at least 2 historical quarters
+                ).mean()
+
+                # Trend = Current - Historical Average
+                df_sorted['gross_margin_trend'] = df_sorted['gross_margin'] - gross_margin_4q_avg
+
+                # Sort back to the original dataframe's order (by original reset index)
+                df_sorted = df_sorted.sort_index()
+
+                # Extract the calculated trend values in original order
+                new_cols['gross_margin_trend'] = df_sorted['gross_margin_trend'].values
+            else:
+                new_cols['gross_margin_trend'] = np.nan
+        else:
+            new_cols['gross_margin_trend'] = np.nan
+
+        # Reset index before concat to prevent duplicate label errors
+        df = df.reset_index(drop=True)
+        
         # Add all columns at once to avoid fragmentation
         return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
     

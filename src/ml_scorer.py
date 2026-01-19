@@ -66,15 +66,29 @@ class MLScorer:
         if metadata_path is None:
             # Handle different naming patterns:
             # models/model_fold_1.json -> models/model_metadata_fold_1.json
+            # models/model_m01.json -> models/model_m01_config.json
             # models/model.json -> models/model_metadata.json
-            model_name = self.model_path.stem  # e.g., 'model_fold_1' or 'model'
+            model_name = self.model_path.stem  # e.g., 'model_fold_1' or 'model_m01'
+            
+            # Try multiple patterns in order of preference
+            candidate_patterns = []
             if 'fold' in model_name:
                 # Extract fold number and reconstruct metadata name
-                # model_fold_1 -> model_metadata_fold_1
-                metadata_name = model_name.replace('model_fold_', 'model_metadata_fold_') + '.json'
+                candidate_patterns.append(model_name.replace('model_fold_', 'model_metadata_fold_') + '.json')
+            # Try *_config.json pattern (e.g., model_m01 -> model_m01_config.json)
+            candidate_patterns.append(model_name + '_config.json')
+            # Try model_metadata pattern
+            candidate_patterns.append(model_name.replace('model', 'model_metadata') + '.json')
+            
+            # Find first existing metadata file
+            for pattern in candidate_patterns:
+                candidate_path = self.model_path.parent / pattern
+                if candidate_path.exists():
+                    metadata_path = candidate_path
+                    break
             else:
-                metadata_name = model_name.replace('model', 'model_metadata') + '.json'
-            metadata_path = self.model_path.parent / metadata_name
+                # Default to first pattern if none exist (will raise error later)
+                metadata_path = self.model_path.parent / candidate_patterns[0]
         self.metadata_path = Path(metadata_path)
 
         # Load model and metadata
@@ -111,14 +125,27 @@ class MLScorer:
         with open(self.metadata_path, 'r') as f:
             self.metadata = json.load(f)
 
-        # Extract critical info
-        self.feature_names = self.metadata.get('feature_names')
-        self.model_version = self.metadata.get('training_date', 'unknown')
+        # Extract critical info - support both naming conventions
+        self.feature_names = self.metadata.get('feature_names') or self.metadata.get('feature_columns')
+        self.model_version = self.metadata.get('training_date') or self.metadata.get('created_at', 'unknown')
 
         if not self.feature_names:
-            raise ValueError("Metadata missing 'feature_names'. Cannot align features.")
+            raise ValueError("Metadata missing 'feature_names' or 'feature_columns'. Cannot align features.")
+
+        # Detect model type
+        model_type = self.metadata.get('model_type')
+        objective = self.metadata.get('objective', '')
+
+        # Determine if this is a regression or classification model
+        if model_type == 'regression' or 'reg:' in objective:
+            self.is_regressor = True
+            self.output_format = 'return_pct'
+        else:
+            self.is_regressor = False
+            self.output_format = 'probability'
 
         logger.info(f"Metadata loaded: {len(self.feature_names)} features expected")
+        logger.info(f"Model type: {'Regression' if self.is_regressor else 'Classification'}")
 
     def _align_features(self, X: pd.DataFrame) -> pd.DataFrame:
         """

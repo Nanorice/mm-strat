@@ -18,7 +18,7 @@ from pathlib import Path
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
-from src.data_engine import DataRepository
+from src.data_engine import DataRepository, CacheMode
 from src.strategy import SEPAStrategy
 from src.features import FeatureEngineer
 from src.trade_simulator import Trade, TradeSimulator
@@ -191,13 +191,11 @@ class FastTradeSimulator(TradeSimulator):
             print(f"Loading cached data for {len(tickers)} tickers...")
         logger.info(f"Loading cached data for {len(tickers)} tickers...")
 
-        # Use force_cache_only to avoid API calls (faster, but requires cache to be up-to-date)
-        # Use required_end_date to validate cache coverage
+        # Use CACHE_ONLY mode for speed (no staleness checks, no API calls)
         ticker_data = self.data_repo.get_batch_data(
             tickers,
             show_progress=show_progress,
-            force_cache_only=True,  # Only use cache, no API calls
-            required_end_date=pd.to_datetime(self.outcome_end),
+            mode=CacheMode.CACHE_ONLY,
             max_workers=16  # Increase parallelism for faster loading
         )
 

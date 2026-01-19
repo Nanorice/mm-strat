@@ -11,9 +11,11 @@ import json
 import time
 import concurrent.futures
 import threading
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
+from enum import Enum
 import logging
 from tqdm import tqdm
 import pyarrow.parquet as pq
@@ -25,6 +27,30 @@ from src.utils import get_latest_trading_day
 logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
 logger = logging.getLogger(__name__)
 
+# Historical data fetch start date (can be adjusted for older data)
+DEFAULT_HISTORICAL_START_DATE = '2000-01-01'
+
+
+class CacheMode(Enum):
+    """
+    Data access modes for DataRepository cache validation.
+    
+    Use these modes to clearly indicate your data freshness requirements:
+    
+    - LIVE: For scanners/dashboards that need today's data. Will check if cache
+            has the latest trading day and can trigger API updates if stale.
+    
+    - HISTORICAL: For model training/backtesting on a specific date range.
+                  Only validates that data covers the required range, does NOT
+                  check for latest trading day. No API calls.
+    
+    - CACHE_ONLY: For feature extraction/parallel processing. Uses whatever
+                  exists in cache without any validation. No API calls.
+    """
+    LIVE = "live"           # Scanners: requires today's data, may auto-update
+    HISTORICAL = "historical"  # Training: validates date range only, no "latest day" check
+    CACHE_ONLY = "cache_only"  # Feature extraction: use as-is, no validation
+
 
 class DataRepository:
     """
@@ -32,7 +58,7 @@ class DataRepository:
     Implements smart Parquet caching to minimize API calls and bandwidth.
     """
 
-    def __init__(self):
+    def __init__(self, enable_validation: bool = True):
         self.price_dir = config.PRICE_DATA_DIR
         self.benchmark_ticker = config.BENCHMARK_TICKER
         self.cache_days = config.DATA_CACHE_DAYS
@@ -41,6 +67,14 @@ class DataRepository:
         self._call_timestamps = []
         self._rate_limit_lock = threading.Lock()  # Thread-safe lock
         self.rate_limit = 300  # FMP Starter tier rate limit
+
+        # Per-file locks for parallel safety (allows concurrent writes to different files)
+        self._file_locks = {}  # Dict mapping file path -> lock
+        self._file_locks_lock = threading.Lock()  # Lock for modifying the locks dict itself
+
+        # IPO validation settings
+        self.enable_validation = enable_validation
+        self._ipo_cache = {}  # Cache for IPO dates to avoid repeated API calls
 
     def get_screener_universe(self) -> List[str]:
         """
@@ -154,138 +188,300 @@ class DataRepository:
             return ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA',
                     'AMD', 'PLTR', 'SMCI', 'JPM', 'V', 'MA', 'LLY', 'AVGO']
 
-    def _is_cache_stale(self, file_path: Path, min_date: str = '2000-01-01', check_min_date: bool = True,
-                        required_end_date: Optional[pd.Timestamp] = None, force_cache_only: bool = False,
-                        current_market_date: Optional[pd.Timestamp] = None) -> bool:
-            """
-            Hyper-Optimized staleness check. 
-            Accepts 'current_market_date' to avoid calling get_latest_trading_day() repeatedly.
-            """
+    def _is_cache_stale(self, file_path: Path, 
+                        mode: CacheMode = None,
+                        date_range: Optional[Tuple[str, str]] = None,
+                        # Legacy parameters (for backward compatibility)
+                        current_market_date: Optional[pd.Timestamp] = None,
+                        min_date: str = '2000-01-01', check_min_date: bool = False,
+                        required_end_date: Optional[pd.Timestamp] = None, 
+                        force_cache_only: bool = False) -> bool:
+        """
+        Check if cached data is stale based on access mode.
+        
+        NEW API (recommended):
+            mode: CacheMode enum value (LIVE, HISTORICAL, or CACHE_ONLY)
+            date_range: Tuple of (start_date, end_date) for HISTORICAL mode validation
+        
+        LEGACY API (deprecated, for backward compatibility):
+            force_cache_only, check_min_date, required_end_date, etc.
+        
+        Args:
+            file_path: Path to parquet cache file
+            mode: Data access mode - LIVE (scanner), HISTORICAL (training), or CACHE_ONLY
+            date_range: Required (start, end) date range for HISTORICAL mode
+            current_market_date: (Legacy) Latest trading day for LIVE mode
+            min_date: (Legacy) Minimum required start date
+            check_min_date: (Legacy) If True, validates cache starts at or before min_date
+            required_end_date: (Legacy) Validates cache covers up to this date
+            force_cache_only: (Legacy) Maps to CACHE_ONLY mode
+        
+        Returns:
+            True if cache is stale/incomplete, False otherwise
+        """
+        # Backward compatibility: map legacy flags to CacheMode
+        if mode is None:
             if force_cache_only:
-                return False if file_path.exists() else False
-
-            if not file_path.exists():
-                return True
-
-            cache_start = None
-            cache_end = None
+                mode = CacheMode.CACHE_ONLY
+            elif required_end_date is not None or check_min_date:
+                mode = CacheMode.HISTORICAL
+                # Build date_range from legacy params if not provided
+                if date_range is None and required_end_date is not None:
+                    date_range = (min_date if check_min_date else None, 
+                                  required_end_date.strftime('%Y-%m-%d') if required_end_date else None)
+            else:
+                mode = CacheMode.LIVE
+        
+        # CACHE_ONLY: Never stale if file exists (fastest path)
+        if mode == CacheMode.CACHE_ONLY:
+            return not file_path.exists()
+        
+        if not file_path.exists():
+            return True
+        
+        try:
+            # Read only the index (dates) from parquet - super fast!
+            df = pd.read_parquet(file_path, columns=[])
             
-            try:
-                # --- ATTEMPT 1: INSTANT METADATA READ ---
-                parquet_file = pq.ParquetFile(file_path)
-                metadata = parquet_file.metadata
+            # Check index length instead of df.empty (df.empty returns True when columns=[] even with data)
+            if len(df.index) == 0:
+                return True
                 
-                if metadata.num_rows == 0:
+            cache_start_date = df.index.min().date()
+            cache_end_date = df.index.max().date()
+            
+            if mode == CacheMode.HISTORICAL:
+                # HISTORICAL mode: Only validate date range, NO "latest trading day" check
+                if date_range:
+                    if date_range[0]:  # Check start date
+                        required_start = pd.Timestamp(date_range[0]).date()
+                        if cache_start_date > required_start:
+                            return True
+                    if date_range[1]:  # Check end date
+                        required_end = pd.Timestamp(date_range[1]).date()
+                        if cache_end_date < required_end:
+                            return True
+                # Legacy support: check_min_date without date_range
+                elif check_min_date:
+                    required_start = pd.Timestamp(min_date).date()
+                    if cache_start_date > required_start:
+                        return True
+                    if required_end_date is not None:
+                        target_end = required_end_date.date()
+                        if cache_end_date < target_end:
+                            return True
+                return False  # HISTORICAL: never checks latest trading day!
+            
+            elif mode == CacheMode.LIVE:
+                # LIVE mode: Must have latest trading day
+                if current_market_date is None:
+                    current_market_date = get_latest_trading_day()
+                
+                target_date = current_market_date.date()
+                if cache_end_date < target_date:
                     return True
-
-                # Find date column
-                date_col_idx = -1
-                for i, name in enumerate(parquet_file.schema.names):
-                    if name in ['Date', 'date', '__index_level_0__']:
-                        date_col_idx = i
-                        break
-                
-                if date_col_idx == -1:
-                    date_col_idx = metadata.num_columns - 1
-
-                rg_first = metadata.row_group(0)
-                rg_last = metadata.row_group(metadata.num_row_groups - 1)
-                
-                min_stat = rg_first.column(date_col_idx).statistics.min
-                max_stat = rg_last.column(date_col_idx).statistics.max
-                
-                if min_stat is not None and max_stat is not None:
-                    # Handle int96/int64 timestamps
-                    if isinstance(min_stat, int):
-                        cache_start = pd.to_datetime(min_stat, unit='ns')
-                        cache_end = pd.to_datetime(max_stat, unit='ns')
-                    else:
-                        cache_start = pd.to_datetime(min_stat)
-                        cache_end = pd.to_datetime(max_stat)
-                else:
-                    raise ValueError("No stats")
-
-            except Exception:
-                # --- ATTEMPT 2: FALLBACK ---
-                try:
-                    df_index = pd.read_parquet(file_path, columns=['Close'])
-                    if df_index.empty: return True
-                    cache_start = df_index.index.min()
-                    cache_end = df_index.index.max()
-                except Exception:
-                    return True
-
-            # --- VALIDATION ---
-            try:
-                if check_min_date:
-                    required_start = pd.Timestamp(min_date)
-                    if cache_start.date() > required_start.date():
-                        return True
-
-                if required_end_date is not None:
-                    if cache_end.date() < required_end_date.date():
-                        return True
-                else:
-                    # Scanner Mode: USE PRE-CALCULATED DATE IF AVAILABLE
-                    if current_market_date is not None:
-                        latest_trading_day = current_market_date
-                    else:
-                        latest_trading_day = get_latest_trading_day()
-                    
-                    cache_date = cache_end.date()
-                    target_date = latest_trading_day.date() if hasattr(latest_trading_day, 'date') else latest_trading_day
-
-                    if cache_date < target_date:
-                        return True
-                    
-                    if cache_date > target_date:
-                        return True
-
                 return False
-
-            except Exception:
-                return True    
+            
+        except Exception as e:
+            logger.debug(f"Cache staleness check failed for {file_path.stem}: {e}")
+            return True    
     
     def _rate_limit_check(self):
         """
         Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
         Uses sliding window approach - pauses only when necessary.
         Thread-safe for parallel execution.
+        
+        CRITICAL: Lock is ONLY held when checking/updating timestamps, NOT during sleep.
+        This allows multiple workers to proceed in parallel while respecting the rate limit.
         """
+        # Phase 1: Check if we need to wait (acquire lock briefly)
         with self._rate_limit_lock:
             now = time.time()
-
+            
             # Remove timestamps older than 60 seconds (sliding window)
             self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
-
-            # If at rate limit, wait until oldest call falls outside the window
+            
+            # Check if we're at capacity
             if len(self._call_timestamps) >= self.rate_limit:
-                # Calculate how long to wait for the oldest call to age out
+                # Calculate sleep time
                 oldest_call = self._call_timestamps[0]
                 time_since_oldest = now - oldest_call
                 sleep_time = 60.0 - time_since_oldest + 0.1  # Add 0.1s buffer
-
-                if sleep_time > 0:
-                    logger.debug(f"Rate limit reached ({len(self._call_timestamps)}/{self.rate_limit}), "
-                                f"sleeping {sleep_time:.1f}s until oldest call expires")
-                    time.sleep(sleep_time)
-
-                    # Re-clean timestamps after sleeping
-                    now = time.time()
-                    self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
-
+            else:
+                sleep_time = 0
+        
+        # Phase 2: Sleep OUTSIDE the lock (if needed) so other workers can proceed
+        if sleep_time > 0:
+            logger.debug(f"Rate limit reached, sleeping {sleep_time:.1f}s")
+            time.sleep(sleep_time)
+        
+        # Phase 3: Record this call (acquire lock briefly again)
+        with self._rate_limit_lock:
+            now = time.time()
+            # Re-clean after potential sleep
+            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
             # Record this call
             self._call_timestamps.append(now)
-    
-    def _fetch_fmp_historical(self, ticker: str, from_date: str = '1990-01-01', max_retries: int = 3) -> Optional[dict]:
+
+    def _get_ipo_date(self, ticker: str) -> Optional[pd.Timestamp]:
+        """
+        Fetch IPO date from FMP company profile API with caching.
+
+        Args:
+            ticker: Stock symbol
+
+        Returns:
+            IPO date as Timestamp, or None if not available
+        """
+        # Check cache first
+        if ticker in self._ipo_cache:
+            return self._ipo_cache[ticker]
+
+        if not config.FMP_API_KEY:
+            return None
+
+        try:
+            url = f"{config.FMP_BASE_URL}/profile/{ticker}"
+            params = {'apikey': config.FMP_API_KEY}
+
+            response = requests.get(url, params=params, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                if isinstance(data, list) and len(data) > 0:
+                    profile = data[0]
+                    ipo_date = profile.get('ipoDate')
+
+                    if ipo_date and ipo_date != '':
+                        ipo_timestamp = pd.to_datetime(ipo_date)
+                        self._ipo_cache[ticker] = ipo_timestamp
+                        return ipo_timestamp
+
+            # Cache None result to avoid repeated failed lookups
+            self._ipo_cache[ticker] = None
+            return None
+
+        except Exception as e:
+            logger.debug(f"Could not fetch IPO date for {ticker}: {e}")
+            self._ipo_cache[ticker] = None
+            return None
+
+    def _validate_and_trim_data(self, df: pd.DataFrame, ticker: str) -> Optional[pd.DataFrame]:
+        """
+        Validate price data and trim to IPO date if validation is enabled.
+
+        Args:
+            df: Price DataFrame with Date index
+            ticker: Stock symbol
+
+        Returns:
+            Validated/trimmed DataFrame, or None if validation fails
+        """
+        if not self.enable_validation:
+            return df
+
+        if df is None or df.empty:
+            return None
+
+        # Get IPO date
+        ipo_date = self._get_ipo_date(ticker)
+
+        if ipo_date:
+            data_start = df.index.min()
+
+            if data_start < ipo_date:
+                years_before = (ipo_date - data_start).days / 365.25
+                logger.warning(
+                    f"{ticker}: Data starts {years_before:.1f} years before IPO "
+                    f"({data_start.date()} < {ipo_date.date()}). Trimming to IPO date."
+                )
+
+                # Trim data to start from IPO
+                df = df[df.index >= ipo_date]
+
+                if df.empty:
+                    logger.error(f"{ticker}: No data after IPO date filter")
+                    return None
+
+        # Additional validation checks
+        if df['Close'].min() <= 0:
+            logger.error(f"{ticker}: Invalid data - zero or negative prices")
+            return None
+
+        if df.index.min().year < 1970:
+            logger.error(f"{ticker}: Invalid data - unrealistic start date ({df.index.min().year})")
+            return None
+
+        return df
+
+    def _safe_write_parquet(self, df: pd.DataFrame, file_path: Path, ticker: str,
+                           merge_with_existing: bool = False) -> bool:
+        """
+        Thread-safe parquet file write with validation.
+        Uses per-file locks to allow parallel writes to different files.
+
+        Args:
+            df: DataFrame to write
+            file_path: Destination file path
+            ticker: Stock symbol (for logging)
+            merge_with_existing: If True, merge with existing cache file (for incremental updates)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get or create a lock for this specific file
+            file_key = str(file_path)
+            with self._file_locks_lock:
+                if file_key not in self._file_locks:
+                    self._file_locks[file_key] = threading.Lock()
+                file_lock = self._file_locks[file_key]
+            
+            # Use per-file lock (only blocks writes to the SAME file, not all files)
+            with file_lock:
+                # If merging, load existing cache inside the lock (thread-safe)
+                if merge_with_existing and file_path.exists():
+                    try:
+                        old_df = pd.read_parquet(file_path)
+                        df = pd.concat([old_df, df])
+                        # Drop duplicates by index (date), keeping last (newer data)
+                        df = df[~df.index.duplicated(keep='last')]
+                        # Ensure chronological order
+                        df = df.sort_index()
+                        logger.debug(f"{ticker}: Merged new data with existing cache")
+                    except Exception as e:
+                        logger.warning(f"{ticker}: Could not merge with existing cache: {e}. Using new data only.")
+                        # Continue with new data only if merge fails
+
+                # Validate data before writing
+                validated_df = self._validate_and_trim_data(df, ticker)
+
+                if validated_df is None:
+                    logger.error(f"{ticker}: Validation failed, not saving")
+                    return False
+
+                # Write to parquet
+                validated_df.to_parquet(file_path)
+                logger.debug(f"{ticker}: Successfully saved to {file_path.name}")
+                return True
+
+        except Exception as e:
+            logger.error(f"{ticker}: Failed to write parquet: {e}")
+            return False
+
+    def _fetch_fmp_historical(self, ticker: str, from_date: str = None, max_retries: int = 3, force_from_date: bool = False) -> Optional[dict]:
         """
         Fetch historical OHLCV data from FMP API for a single ticker with retry logic.
+        Implements INCREMENTAL fetching - only downloads data since last cached date.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
 
         Args:
             ticker: Single ticker symbol
-            from_date: Start date for historical data (default: 1990-01-01)
+            from_date: Start date for historical data (default: DEFAULT_HISTORICAL_START_DATE)
             max_retries: Maximum number of retries for 429 errors (default: 3)
+            force_from_date: If True, use from_date directly without checking cache (for full historical fetch)
 
         Returns:
             JSON response dict with historical data, or None if failed
@@ -293,6 +489,25 @@ class DataRepository:
         if not config.FMP_API_KEY:
             raise ValueError("FMP_API_KEY not set in environment")
 
+        # Use default if not specified
+        if from_date is None:
+            from_date = DEFAULT_HISTORICAL_START_DATE
+
+        # Determine cache file path for this ticker
+        cache_file = self.price_dir / f"{ticker}.parquet"
+
+        # Calculate optimal start date for incremental fetch
+        # (Skip this logic if force_from_date is True - user wants full historical data)
+        if not force_from_date and cache_file.exists():
+            try:
+                df = pd.read_parquet(cache_file, columns=[])
+                last_date = df.index.max()
+                from_date = (last_date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            except:
+                from_date = DEFAULT_HISTORICAL_START_DATE  # Full download if cache corrupted
+        elif not force_from_date:
+            from_date = DEFAULT_HISTORICAL_START_DATE  # Full download for new ticker
+        
         url = f"{config.FMP_BASE_URL}/historical-price-eod/full"
         params = {
             'symbol': ticker,
@@ -322,9 +537,18 @@ class DataRepository:
                 response.raise_for_status()
                 data = response.json()
                 
-                # FMP returns a list of historical data directly
-                if isinstance(data, list) and len(data) > 0:
-                    return {'historical': data}
+                # FMP returns dict with 'historical' key OR a list
+                if isinstance(data, dict):
+                    # Standard FMP format - return as-is
+                    return data
+                elif isinstance(data, list):
+                    if len(data) > 0:
+                        # List with data - wrap it
+                        return {'historical': data}
+                    else:
+                        # Empty list means no new data available (cache is up-to-date)
+                        logger.debug(f"{ticker}: No new data available from FMP (cache is current)")
+                        return {'historical': [], 'already_current': True}
                 else:
                     logger.warning(f"Unexpected FMP response format for {ticker}: {type(data)}")
                     return None
@@ -430,50 +654,74 @@ class DataRepository:
                         continue
         return None
 
-    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'fmp', min_date: str = '2000-01-01',
-                       check_min_date: bool = True, max_retries: int = 2, update_cache: bool = False,
-                       required_end_date: Optional[pd.Timestamp] = None, force_cache_only: bool = False) -> Optional[pd.DataFrame]:
+    def get_ticker_data(self, ticker: str, use_cache: bool = True, source: str = 'fmp', 
+                        mode: CacheMode = None,
+                        date_range: Optional[Tuple[str, str]] = None,
+                        # Legacy parameters (for backward compatibility)
+                        min_date: str = '2000-01-01',
+                        check_min_date: bool = True, max_retries: int = 2, update_cache: bool = False,
+                        required_end_date: Optional[pd.Timestamp] = None, force_cache_only: bool = False) -> Optional[pd.DataFrame]:
         """
         Returns OHLCV data for a single ticker.
         First checks Parquet cache, then downloads from FMP if needed.
 
+        NEW API (recommended):
+            mode: CacheMode enum - LIVE, HISTORICAL, or CACHE_ONLY
+            date_range: Tuple of (start_date, end_date) for HISTORICAL mode
+        
+        LEGACY API (deprecated, still supported):
+            force_cache_only, check_min_date, required_end_date, etc.
+
         Args:
             ticker: Stock symbol
             use_cache: If True, uses cached data when available
-            source: Data source - 'fmp' (default, recommended for quality) or 'yfinance' (not recommended)
-            min_date: Minimum required start date for cache validation (default: 2000-01-01)
-            check_min_date: If False, skips historical range check (for scanner). If True, validates full date range (for ML training)
+            source: Data source - 'fmp' (default) or 'yfinance' (not recommended)
+            mode: Data access mode (LIVE, HISTORICAL, or CACHE_ONLY)
+            date_range: Required date range for HISTORICAL mode validation
+            min_date: (Legacy) Minimum required start date
+            check_min_date: (Legacy) If True, validates full date range
             max_retries: Number of FMP download attempts before failing (default: 2)
             update_cache: If True, allows cache updates via API calls
-            required_end_date: If provided, validates cache covers up to this date (for dataset building)
-            force_cache_only: If True, only use cache (no API calls), return None if cache missing/incomplete
+            required_end_date: (Legacy) Validates cache covers up to this date
+            force_cache_only: (Legacy) Maps to CACHE_ONLY mode
 
         Returns:
             DataFrame with OHLCV data (adjusted), or None if failed
         """
         cache_file = self.price_dir / f"{ticker}.parquet"
 
-        # Force cache-only mode
-        if force_cache_only:
+        # Backward compatibility: map legacy flags to CacheMode
+        if mode is None:
+            if force_cache_only:
+                mode = CacheMode.CACHE_ONLY
+            elif required_end_date is not None or check_min_date:
+                mode = CacheMode.HISTORICAL
+            else:
+                mode = CacheMode.LIVE
+
+        # CACHE_ONLY mode: just read cache, no validation or API calls
+        if mode == CacheMode.CACHE_ONLY:
             if cache_file.exists():
                 try:
                     df = pd.read_parquet(cache_file)
-                    logger.debug(f"Loaded {ticker} from cache (force_cache_only mode)")
+                    logger.debug(f"Loaded {ticker} from cache (CACHE_ONLY mode)")
                     return df
                 except Exception as e:
                     logger.warning(f"Cache read failed for {ticker}: {e}")
                     return None
             else:
-                logger.debug(f"{ticker}: No cache available (force_cache_only mode)")
+                logger.debug(f"{ticker}: No cache available (CACHE_ONLY mode)")
                 return None
 
-        # Try cache first (with date range validation)
+        # Try cache first (with mode-based validation)
         if use_cache and cache_file.exists() and not self._is_cache_stale(
             cache_file,
+            mode=mode,
+            date_range=date_range,
+            # Pass legacy params for backward compat
             min_date=min_date,
             check_min_date=check_min_date,
             required_end_date=required_end_date,
-            force_cache_only=False  # Already handled above
         ):
             try:
                 df = pd.read_parquet(cache_file)
@@ -599,95 +847,117 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp') -> Dict[str, bool]:
-            """
-            Parallelized Cache Update with Hoisted Date Calculation.
-            """
-            # ... [Keep Timestamp / Market Hours Logic] ...
-            from datetime import datetime, time as dt_time
-            import pytz
-            # ... (keep market hours check)
+    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', max_workers: int = 10, from_date: str = None) -> Dict[str, bool]:
+        """
+        Parallelized Cache Update with market date hoisting and incremental fetching.
+        
+        Args:
+            tickers: List of ticker symbols to update
+            force: If True, re-download all tickers regardless of cache status
+            source: Data source - 'fmp' (Financial Modeling Prep) or 'yfinance'
+            max_workers: Number of parallel workers for downloading (default: 10)
+            from_date: Override start date for fetching (YYYY-MM-DD). If specified,
+                      bypasses incremental logic and fetches full history from this date.
+        
+        Returns:
+            Dict mapping ticker -> success status
+        """
+        # Market hours check - skip update during trading hours unless forced
+        from datetime import datetime, time as dt_time
+        import pytz
 
-            results = {}
-            to_download = []
+        results = {}
+        to_download = []
 
-            if force:
-                logger.info("Force mode enabled - downloading all")
-                to_download = tickers
-            else:
-                # 1. CALCULATE DATE ONCE (The Fix)
-                logger.info("Fetching latest trading day...")
-                market_date = get_latest_trading_day()
-                logger.info(f"Latest trading day is: {market_date}")
-                
-                logger.info(f"Checking {len(tickers)} files (Parallel Metadata Scan)...")
-                
-                try:
-                    from tqdm import tqdm
-                    pbar = tqdm(total=len(tickers), desc="Scanning cache", unit="file")
-                except ImportError:
-                    pbar = None
-
-                # 2. Worker uses the pre-calculated date
-                def check_worker(ticker):
-                    path = self.price_dir / f"{ticker}.parquet"
-                    # Pass the date explicitly
-                    is_stale = self._is_cache_stale(path, check_min_date=False, current_market_date=market_date)
-                    return ticker, is_stale
-
-                # 3. Parallel Execution
-                with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                    future_to_ticker = {executor.submit(check_worker, t): t for t in tickers}
-                    
-                    for future in concurrent.futures.as_completed(future_to_ticker):
-                        ticker, is_stale = future.result()
-                        if is_stale:
-                            to_download.append(ticker)
-                        else:
-                            results[ticker] = True
-                        
-                        if pbar: pbar.update(1)
-                
-                if pbar: pbar.close()
-
-            if not to_download:
-                logger.info("✅ All tickers up to date.")
-                return results
-
-            logger.info(f"⬇️ Downloading {len(to_download)} missing/stale tickers...")
+        if force:
+            logger.info("Force mode enabled - downloading all")
+            to_download = tickers
+        else:
+            # 1. CALCULATE DATE ONCE (The Fix)
+            logger.info("Fetching latest trading day...")
+            market_date = get_latest_trading_day()
+            logger.info(f"Latest trading day is: {market_date}")
             
-            # ... [Rest of Download Logic] ...
-            if source == 'fmp' and config.FMP_API_KEY:
-                fmp_results = self._update_cache_fmp(to_download)
-                results.update(fmp_results)
-                return results
+            logger.info(f"Checking {len(tickers)} files (Parallel Metadata Scan)...")
+            
+            try:
+                from tqdm import tqdm
+                pbar = tqdm(total=len(tickers), desc="Scanning cache", unit="file")
+            except ImportError:
+                pbar = None
 
-            yf_results = self._update_cache_yfinance(to_download)
-            results.update(yf_results)
-            return results    
+            # 2. Worker uses the pre-calculated date
+            def check_worker(ticker):
+                path = self.price_dir / f"{ticker}.parquet"
+                # Use simplified staleness check
+                is_stale = self._is_cache_stale(path, current_market_date=market_date)
+                return ticker, is_stale
+
+            # 3. Parallel Execution
+            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+                future_to_ticker = {executor.submit(check_worker, t): t for t in tickers}
+                
+                for future in concurrent.futures.as_completed(future_to_ticker):
+                    ticker, is_stale = future.result()
+                    if is_stale:
+                        to_download.append(ticker)
+                    else:
+                        results[ticker] = True
+                    
+                    if pbar: pbar.update(1)
+            
+            if pbar: pbar.close()
+
+        if not to_download:
+            logger.info("✅ All tickers up to date.")
+            return results
+
+        logger.info(f"⬇️ Downloading {len(to_download)} missing/stale tickers...")
+        
+        # Pass max_workers and from_date through to FMP fetcher
+        if source == 'fmp' and config.FMP_API_KEY:
+            fmp_results = self._update_cache_fmp(to_download, max_workers=max_workers, from_date=from_date)
+            results.update(fmp_results)
+            return results
+
+        yf_results = self._update_cache_yfinance(to_download)
+        results.update(yf_results)
+        return results    
     
-    def _fetch_price_worker(self, ticker: str, max_retries: int = 3) -> tuple:
+    def _fetch_price_worker(self, ticker: str, max_retries: int = 3, from_date: str = None) -> tuple:
         """
         Worker function for parallel price fetching with retry logic.
 
         Args:
             ticker: Stock symbol to fetch
             max_retries: Maximum number of retry attempts
+            from_date: Override start date (bypasses incremental logic if specified)
 
         Returns:
             Tuple of (ticker, success_status, error_message)
         """
+        # Determine if we should force from_date (bypass cache check)
+        force_from_date = from_date is not None
+        
         for attempt in range(max_retries):
             try:
                 # Fetch single ticker from FMP (with rate limiting)
-                fmp_data = self._fetch_fmp_historical(ticker)
+                fmp_data = self._fetch_fmp_historical(ticker, from_date=from_date, force_from_date=force_from_date)
 
                 if fmp_data:
+                    # Check if cache is already current (no new data available)
+                    if fmp_data.get('already_current', False):
+                        logger.debug(f"{ticker}: Cache is already current, no update needed")
+                        return (ticker, True, None)
+                    
+                    # Parse and save new data
                     df = self._parse_fmp_response(fmp_data, ticker)
                     if df is not None and not df.empty:
                         cache_file = self.price_dir / f"{ticker}.parquet"
-                        df.to_parquet(cache_file)
-                        return (ticker, True, None)
+
+                        # Use thread-safe write with validation (handles cache merging internally)
+                        success = self._safe_write_parquet(df, cache_file, ticker, merge_with_existing=True)
+                        return (ticker, success, None if success else "Validation failed")
                     else:
                         return (ticker, False, "No data parsed")
                 else:
@@ -703,7 +973,7 @@ class DataRepository:
 
         return (ticker, False, "Max retries exceeded")
 
-    def _update_cache_fmp(self, tickers: List[str], max_workers: int = 10, show_progress: bool = True) -> Dict[str, bool]:
+    def _update_cache_fmp(self, tickers: List[str], max_workers: int = 10, show_progress: bool = True, from_date: str = None) -> Dict[str, bool]:
         """
         Update cache using FMP API with parallel execution and retry logic.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
@@ -713,6 +983,7 @@ class DataRepository:
             tickers: List of ticker symbols
             max_workers: Number of parallel workers (default: 10)
             show_progress: Show detailed progress updates (default: True)
+            from_date: Override start date for fetching (bypasses incremental logic)
 
         Returns:
             Dict mapping ticker -> success status
@@ -738,8 +1009,8 @@ class DataRepository:
 
         # Use ThreadPoolExecutor for parallel fetching
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_ticker = {executor.submit(self._fetch_price_worker, ticker): ticker for ticker in tickers}
+            # Submit all tasks with from_date
+            future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 3, from_date): ticker for ticker in tickers}
 
             # Process completed tasks with progress tracking
             if use_tqdm:
@@ -891,41 +1162,63 @@ class DataRepository:
             logger.debug(f"Could not extract {ticker}: {e}")
             return None
 
-    def get_benchmark_data(self, min_date: str = '2000-01-01', check_min_date: bool = True, 
+    def get_benchmark_data(self, 
+                            mode: CacheMode = None,
+                            date_range: Optional[Tuple[str, str]] = None,
+                            # Legacy parameters (for backward compatibility)
+                            min_date: str = '2000-01-01', check_min_date: bool = True, 
                             required_end_date: Optional[pd.Timestamp] = None, 
                             force_cache_only: bool = False) -> Optional[pd.Series]:
-            """
-            Returns the benchmark (SPY) close prices.
-            Now supports min_date validation override.
-            """
-            df = self.get_ticker_data(
-                self.benchmark_ticker,
-                min_date=min_date,             # <--- PASS THROUGH
-                check_min_date=check_min_date, # <--- PASS THROUGH
-                required_end_date=required_end_date,
-                force_cache_only=force_cache_only
-            )
-            if df is None:
-                return None
-            return self._safe_extract_close(df)
+        """
+        Returns the benchmark (SPY) close prices.
+        
+        NEW API (recommended):
+            mode: CacheMode enum - LIVE, HISTORICAL, or CACHE_ONLY
+            date_range: Tuple of (start_date, end_date) for HISTORICAL mode
+        
+        LEGACY API (deprecated, still supported):
+            min_date, check_min_date, required_end_date, force_cache_only
+        """
+        df = self.get_ticker_data(
+            self.benchmark_ticker,
+            mode=mode,
+            date_range=date_range,
+            # Legacy params for backward compat
+            min_date=min_date,
+            check_min_date=check_min_date,
+            required_end_date=required_end_date,
+            force_cache_only=force_cache_only
+        )
+        if df is None:
+            return None
+        return self._safe_extract_close(df)
     
     def get_batch_data(self, tickers: List[str], max_workers: int = 8, show_progress: bool = False,
-                      min_date: str = '2000-01-01', check_min_date: bool = False,
-                      required_end_date: Optional[pd.Timestamp] = None, force_cache_only: bool = False) -> Dict[str, pd.DataFrame]:
+                        mode: CacheMode = None,
+                        date_range: Optional[Tuple[str, str]] = None,
+                        # Legacy parameters (for backward compatibility)
+                        min_date: str = '2000-01-01', check_min_date: bool = False,
+                        required_end_date: Optional[pd.Timestamp] = None, force_cache_only: bool = False) -> Dict[str, pd.DataFrame]:
         """
         Loads multiple tickers from cache efficiently using parallel execution.
+
+        NEW API (recommended):
+            mode: CacheMode enum - LIVE, HISTORICAL, or CACHE_ONLY
+            date_range: Tuple of (start_date, end_date) for HISTORICAL mode
+        
+        LEGACY API (deprecated, still supported):
+            min_date, check_min_date, required_end_date, force_cache_only
 
         Args:
             tickers: List of ticker symbols
             max_workers: Number of parallel threads (default: 8)
             show_progress: If True, display progress bar (default: False)
-            min_date: Minimum required start date for cache validation (default: 2000-01-01)
-                     For scanner use, set to ~2 years ago to allow recent IPOs
-                     For ML training, set to 2010-01-01 for historical depth
-            check_min_date: If False (default), skips historical range check and only validates latest data (scanner mode).
-                          If True, validates full historical range (ML training mode).
-            required_end_date: If provided, validates cache covers up to this date (for dataset building)
-            force_cache_only: If True, only use cache (no API calls), return None for missing tickers
+            mode: Data access mode (LIVE, HISTORICAL, or CACHE_ONLY)
+            date_range: Required date range for HISTORICAL mode validation
+            min_date: (Legacy) Minimum required start date
+            check_min_date: (Legacy) If True, validates full historical range
+            required_end_date: (Legacy) Validates cache covers up to this date
+            force_cache_only: (Legacy) Maps to CACHE_ONLY mode
 
         Returns:
             Dict mapping ticker -> DataFrame (only includes tickers with data)
@@ -937,6 +1230,9 @@ class DataRepository:
             return ticker, self.get_ticker_data(
                 ticker,
                 use_cache=True,
+                mode=mode,
+                date_range=date_range,
+                # Legacy params for backward compat
                 min_date=min_date,
                 check_min_date=check_min_date,
                 required_end_date=required_end_date,
@@ -973,3 +1269,25 @@ class DataRepository:
                     logger.warning(f"Failed to load {ticker}: {e}")
 
         return data
+
+    def get_cached_tickers(self) -> List[str]:
+        """
+        Get list of all tickers available in the price cache.
+
+        Returns:
+            List of ticker symbols that have cached price data
+        """
+        if not self.price_dir.exists():
+            return []
+
+        # Get all .parquet files in price cache directory
+        parquet_files = list(self.price_dir.glob('*.parquet'))
+
+        # Extract ticker symbols from filenames (remove .parquet extension)
+        tickers = [f.stem for f in parquet_files]
+
+        # Sort alphabetically
+        tickers.sort()
+
+        logger.debug(f"Found {len(tickers)} tickers in price cache")
+        return tickers

@@ -41,7 +41,8 @@ class FundamentalMerger:
         fundamental_engine: Optional[FundamentalEngine] = None,
         fundamental_processor: Optional[FundamentalProcessor] = None,
         staleness_threshold_days: int = 400,
-        force_cache_only: bool = False
+        force_cache_only: bool = False,
+        include_raw_fundamentals: bool = False
     ):
         """
         Initialize Fundamental Merger.
@@ -51,11 +52,14 @@ class FundamentalMerger:
             fundamental_processor: Processor for calculating growth/ratios
             staleness_threshold_days: Days before data is considered stale
             force_cache_only: If True, only use cached fundamental data (no API updates)
+            include_raw_fundamentals: If True, include all raw fundamental columns.
+                                     If False (default), only include derived metrics.
         """
         self.fundamental_engine = fundamental_engine or FundamentalEngine(force_cache_only=force_cache_only)
         self.fundamental_processor = fundamental_processor or FundamentalProcessor()
         self.staleness_threshold_days = staleness_threshold_days
         self.force_cache_only = force_cache_only
+        self.include_raw_fundamentals = include_raw_fundamentals
     
     def merge_ticker_data(
         self,
@@ -102,7 +106,10 @@ class FundamentalMerger:
         # Step 6: Calculate hybrid features (Phase 3)
         merged_df = self.calculate_hybrid_features(merged_df)
         
-        # Step 7: Restore Date as index if it was originally an index
+        # Step 7: Filter columns based on include_raw_fundamentals flag
+        merged_df = self._filter_fundamental_columns(merged_df)
+        
+        # Step 8: Restore Date as index if it was originally an index
         if was_index and 'Date' in merged_df.columns:
             merged_df = merged_df.set_index('Date')
         
@@ -222,8 +229,8 @@ class FundamentalMerger:
             df['is_stale'] = df['days_since_report'] > self.staleness_threshold_days
             
             # Replace negative days (shouldn't happen) with NaN
-            df.loc[df['days_since_report'] < 0, 'days_since_report'] = np.nan
-            df.loc[df['days_since_report'] < 0, 'is_stale'] = True
+            df['days_since_report'] = np.where(df['days_since_report'] < 0, np.nan, df['days_since_report'])
+            df['is_stale'] = np.where(df['days_since_report'] < 0, True, df['is_stale'])
         else:
             df['days_since_report'] = np.nan
             df['days_since_earnings'] = np.nan
@@ -268,7 +275,8 @@ class FundamentalMerger:
         growth_cols = ['revenue_growth_yoy', 'eps_growth_yoy', 'net_income_growth_yoy']
         for col in growth_cols:
             if col in df.columns:
-                df.loc[no_fund_mask, col] = df.loc[no_fund_mask, col].fillna(0)
+                # Use np.where to safely handle potential duplicate indices
+                df[col] = np.where(no_fund_mask & df[col].isna(), 0, df[col])
         
         # Ratios: fill with median (or 0 if all NaN)
         # Suppress warnings for empty slice (when all values are NaN)
@@ -282,7 +290,7 @@ class FundamentalMerger:
                     warnings.simplefilter("ignore", category=RuntimeWarning)
                     median_val = df[col].median()
                 fill_val = median_val if not pd.isna(median_val) else 0
-                df.loc[no_fund_mask, col] = df.loc[no_fund_mask, col].fillna(fill_val)
+                df[col] = np.where(no_fund_mask & df[col].isna(), fill_val, df[col])
         
         # Raw values: fill with 0 (ONLY for rows without fundamentals)
         # This prevents overwriting real merged data with zeros
@@ -293,7 +301,7 @@ class FundamentalMerger:
         for col in raw_cols:
             if col in df.columns:
                 # Only fill rows that have NO fundamental data
-                df.loc[no_fund_mask, col] = df.loc[no_fund_mask, col].fillna(0)
+                df[col] = np.where(no_fund_mask & df[col].isna(), 0, df[col])
         
         return df
     
@@ -321,8 +329,8 @@ class FundamentalMerger:
             )
             
             # Cap extreme P/E values (>1000 is unrealistic noise)
-            df.loc[df['pe_ratio'] > 1000, 'pe_ratio'] = np.nan
-            df.loc[df['pe_ratio'] < -1000, 'pe_ratio'] = np.nan
+            df['pe_ratio'] = np.where(df['pe_ratio'] > 1000, np.nan, df['pe_ratio'])
+            df['pe_ratio'] = np.where(df['pe_ratio'] < -1000, np.nan, df['pe_ratio'])
         else:
             df['pe_ratio'] = np.nan
         
@@ -346,8 +354,8 @@ class FundamentalMerger:
             )
             
             # Cap extreme P/S values (>100 is unrealistic)
-            df.loc[df['ps_ratio'] > 100, 'ps_ratio'] = np.nan
-            df.loc[df['ps_ratio'] < 0, 'ps_ratio'] = np.nan
+            df['ps_ratio'] = np.where(df['ps_ratio'] > 100, np.nan, df['ps_ratio'])
+            df['ps_ratio'] = np.where(df['ps_ratio'] < 0, np.nan, df['ps_ratio'])
         else:
             df['ps_ratio'] = np.nan
         
@@ -375,8 +383,8 @@ class FundamentalMerger:
                 )
                 
                 # Cap extreme P/B values
-                df.loc[df['pb_ratio'] > 100, 'pb_ratio'] = np.nan
-                df.loc[df['pb_ratio'] < -100, 'pb_ratio'] = np.nan
+                df['pb_ratio'] = np.where(df['pb_ratio'] > 100, np.nan, df['pb_ratio'])
+                df['pb_ratio'] = np.where(df['pb_ratio'] < -100, np.nan, df['pb_ratio'])
             else:
                 df['pb_ratio'] = np.nan
         else:
@@ -487,6 +495,39 @@ class FundamentalMerger:
         
         logger.debug(f"{ticker}: Added empty fundamental columns")
 
+        return df
+
+    def _filter_fundamental_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Filter fundamental columns based on include_raw_fundamentals flag.
+        
+        If include_raw_fundamentals is False (default), only keep derived metrics
+        and drop raw fundamental columns to keep feature set lean.
+        
+        Args:
+            df: Merged dataframe
+            
+        Returns:
+            DataFrame with appropriate fundamental columns
+        """
+        if self.include_raw_fundamentals:
+            # Keep all columns
+            logger.debug("Keeping all fundamental columns (raw + derived)")
+            return df
+        
+        # Get list of columns to drop (raw fundamentals)
+        from src.fundamental_column_mapping import get_columns_to_merge, RAW_FUNDAMENTAL_COLUMNS
+        
+        # Get current columns
+        current_cols = set(df.columns)
+        
+        # Get raw columns that exist in the dataframe
+        columns_to_drop = [col for col in RAW_FUNDAMENTAL_COLUMNS if col in current_cols]
+        
+        if columns_to_drop:
+            df = df.drop(columns=columns_to_drop)
+            logger.debug(f"Dropped {len(columns_to_drop)} raw fundamental columns (keeping only derived metrics)")
+        
         return df
 
     def _check_duplicate_columns(self, df: pd.DataFrame, context: str = "") -> None:

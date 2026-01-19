@@ -62,7 +62,7 @@ class FeatureEngineer:
             'High_20D', 'Breakout'                # Breakout detection
         ]
 
-        logger.info("FeatureEngineer initialized in dual-stage mode")
+        logger.debug("FeatureEngineer initialized in dual-stage mode")
     
     def calculate_lightweight_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -141,9 +141,65 @@ class FeatureEngineer:
         
         # SMA 50 Slope - trend strength (percentage change per day)
         df['SMA_50_Slope'] = (df['SMA_50'] - df['SMA_50'].shift(10)) / df['SMA_50'].shift(10) / 10 * 100
+        
+        # NEW: Distance-based pattern detectors
+        # Distance from 20-day low (bounce pattern detector)
+        df['Lowest_Low_20D'] = df['Low'].rolling(window=20).min()
+        df['Dist_From_20D_Low'] = np.where(
+            df['Lowest_Low_20D'] > 0,
+            (df['Close'] / df['Lowest_Low_20D']) - 1,
+            np.nan
+        )
+        
+        # Distance from 20-day high (resistance proximity)
+        df['Highest_High_20D'] = df['High'].rolling(window=20).max()
+        df['Dist_From_20D_High'] = np.where(
+            df['Highest_High_20D'] > 0,
+            (df['Close'] / df['Highest_High_20D']) - 1,
+            np.nan
+        )
+        
+        # Distance from 52-week low (recovery/reversal detector)
+        df['Dist_From_52W_Low'] = np.where(
+            df['Low_52W'] > 0,
+            (df['Close'] / df['Low_52W']) - 1,
+            np.nan
+        )
 
-        # Add lagged features (setup conditions at T-1)
-        df = self.add_lagged_features(df, lag_periods=1)
+        # Import centralized lag config
+        try:
+            from src.feature_config import FEATURES_TO_LAG
+
+            for feature in FEATURES_TO_LAG:
+                if feature in df.columns:
+                    # Create Lag1
+                    df[f"{feature}_Lag1"] = df[feature].shift(1)
+                    # We can add more lags here if feature_config dictates
+
+            # NEW: Create Delta features (percentage change from T-1 to T)
+            # Delta = (Current - Lag1) / Lag1
+            # This captures momentum separately from absolute levels
+            for feature in FEATURES_TO_LAG:
+                if feature in df.columns:
+                    lag_col = f"{feature}_Lag1"
+                    delta_col = f"{feature}_Delta"
+
+                    # Only create delta if lag was successfully created
+                    if lag_col in df.columns:
+                        # Vectorized percentage change with edge case handling
+                        # Avoid division by zero/near-zero values
+                        df[delta_col] = np.where(
+                            np.abs(df[lag_col]) > 1e-10,  # Threshold to avoid numerical instability
+                            (df[feature] - df[lag_col]) / df[lag_col],
+                            np.nan  # Set to NaN when Lag1 is 0 or too small
+                        )
+
+                        # Clean up any inf values (defensive)
+                        df[delta_col] = df[delta_col].replace([np.inf, -np.inf], np.nan)
+
+        except ImportError:
+            # Fallback if config not found
+            pass
 
         return df
 

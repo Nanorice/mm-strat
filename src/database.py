@@ -92,6 +92,8 @@ class DatabaseManager:
                 dist_from_52w_high_lag1 REAL,
 
                 ml_probability REAL,
+                ml_expected_return REAL,
+                ml_model_type TEXT,
                 ml_rank INTEGER,
                 ml_model_version TEXT,
                 ml_score_date DATE,
@@ -161,7 +163,9 @@ class DatabaseManager:
             'low_52w_lag1': 'REAL',
             'rsi14_lag1': 'REAL',
             'dist_from_52w_high_lag1': 'REAL',
-            'ml_features': 'TEXT'
+            'ml_features': 'TEXT',
+            'ml_expected_return': 'REAL',
+            'ml_model_type': 'TEXT'
         }
         self._ensure_columns_exist('buy_list', lagged_columns)
 
@@ -321,7 +325,8 @@ class DatabaseManager:
                        high_52w_lag1: Optional[float] = None, low_52w_lag1: Optional[float] = None,
                        rsi14_lag1: Optional[float] = None, dist_from_52w_high_lag1: Optional[float] = None,
                        # ML scores
-                       ml_probability: Optional[float] = None, ml_rank: Optional[int] = None,
+                       ml_probability: Optional[float] = None, ml_expected_return: Optional[float] = None,
+                       ml_model_type: Optional[str] = None, ml_rank: Optional[int] = None,
                        ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None,
                        ml_features: Optional[Dict] = None):
         """
@@ -357,7 +362,9 @@ class DatabaseManager:
             low_52w_lag1: Lagged 52-week low (T-1)
             rsi14_lag1: Lagged RSI 14 (T-1)
             dist_from_52w_high_lag1: Lagged distance from 52W high (T-1)
-            ml_probability: ML success probability (0.0-1.0)
+            ml_probability: ML success probability (0.0-1.0) - for classification models
+            ml_expected_return: ML expected return percentage - for regression models
+            ml_model_type: Type of ML model used ('regression' or 'classification')
             ml_rank: ML rank (1=best)
             ml_model_version: Model version identifier
             ml_score_date: Date ML score was generated
@@ -379,16 +386,16 @@ class DatabaseManager:
              price_vs_sma50_lag1, price_vs_sma150_lag1, price_vs_sma200_lag1,
              rs_lag1, rs_ma_lag1, dry_up_volume_lag1,
              high_52w_lag1, low_52w_lag1, rsi14_lag1, dist_from_52w_high_lag1,
-             ml_probability, ml_rank, ml_model_version, ml_score_date, ml_features,
+             ml_probability, ml_expected_return, ml_model_type, ml_rank, ml_model_version, ml_score_date, ml_features,
              last_updated, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
               target_price, atr, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
               nATR_lag1, atr_lag1, vcp_ratio_lag1, consolidation_width_lag1,
               price_vs_sma50_lag1, price_vs_sma150_lag1, price_vs_sma200_lag1,
               rs_lag1, rs_ma_lag1, dry_up_volume_lag1,
               high_52w_lag1, low_52w_lag1, rsi14_lag1, dist_from_52w_high_lag1,
-              ml_probability, ml_rank, ml_model_version, ml_score_date, ml_features_json,
+              ml_probability, ml_expected_return, ml_model_type, ml_rank, ml_model_version, ml_score_date, ml_features_json,
               last_updated))
 
         conn.commit()
@@ -438,7 +445,8 @@ class DatabaseManager:
                                 ma50: Optional[float] = None, ma150: Optional[float] = None,
                                 ma200: Optional[float] = None, high_52w: Optional[float] = None,
                                 low_52w: Optional[float] = None,
-                                ml_probability: Optional[float] = None, ml_rank: Optional[int] = None,
+                                ml_probability: Optional[float] = None, ml_expected_return: Optional[float] = None,
+                                ml_model_type: Optional[str] = None, ml_rank: Optional[int] = None,
                                 ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None,
                                 ml_features: Optional[str] = None):
         """
@@ -455,7 +463,9 @@ class DatabaseManager:
             ma200: 200-day moving average
             high_52w: 52-week high
             low_52w: 52-week low
-            ml_probability: ML model probability score
+            ml_probability: ML model probability score (for classification)
+            ml_expected_return: ML expected return percentage (for regression)
+            ml_model_type: Type of ML model ('regression' or 'classification')
             ml_rank: ML rank among all active candidates
             ml_model_version: Version of the ML model used
             ml_score_date: Date when ML score was calculated
@@ -477,6 +487,12 @@ class DatabaseManager:
         if ml_probability is not None:
             sql += ", ml_probability = ?"
             params.append(ml_probability)
+        if ml_expected_return is not None:
+            sql += ", ml_expected_return = ?"
+            params.append(ml_expected_return)
+        if ml_model_type is not None:
+            sql += ", ml_model_type = ?"
+            params.append(ml_model_type)
         if ml_rank is not None:
             sql += ", ml_rank = ?"
             params.append(ml_rank)
@@ -502,22 +518,89 @@ class DatabaseManager:
         """
         Updates only the ML rank for a ticker in buy_list.
         Used for recalculating ranks across entire buy list.
-        
+
         Args:
             ticker: Stock symbol
             ml_rank: New ML rank (1=best)
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             UPDATE buy_list
             SET ml_rank = ?
             WHERE ticker = ? AND status = 'active'
         """, (ml_rank, ticker))
-        
+
         conn.commit()
         conn.close()
+
+    def batch_update_ml_scores(self, updates: List[Dict]):
+        """
+        Batch update ML scores for multiple tickers in a single transaction.
+        Solves database locking issues by using one connection for all updates.
+
+        Args:
+            updates: List of dicts with keys:
+                - ticker: Stock symbol
+                - ml_probability: ML success probability (for classification)
+                - ml_expected_return: ML expected return % (for regression)
+                - ml_model_type: Type of model ('regression' or 'classification')
+                - ml_rank: ML rank
+                - ml_model_version: Model version
+                - ml_score_date: Date ML score was calculated
+                - ml_features: JSON string of features
+
+        Returns:
+            Number of successfully updated tickers
+        """
+        if not updates:
+            return 0
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        update_count = 0
+
+        try:
+            for update in updates:
+                ticker = update['ticker']
+                ml_prob = update.get('ml_probability')
+                ml_expected_return = update.get('ml_expected_return')
+                ml_model_type = update.get('ml_model_type')
+                ml_rank = update.get('ml_rank')
+                ml_version = update.get('ml_model_version')
+                ml_date = update.get('ml_score_date')
+                ml_features = update.get('ml_features')
+
+                cursor.execute("""
+                    UPDATE buy_list
+                    SET ml_probability = ?,
+                        ml_expected_return = ?,
+                        ml_model_type = ?,
+                        ml_rank = ?,
+                        ml_model_version = ?,
+                        ml_score_date = ?,
+                        ml_features = ?,
+                        last_updated = ?
+                    WHERE ticker = ? AND status = 'active'
+                """, (ml_prob, ml_expected_return, ml_model_type, ml_rank, ml_version, ml_date, ml_features,
+                      datetime.now().strftime('%Y-%m-%d'), ticker))
+
+                if cursor.rowcount > 0:
+                    update_count += 1
+
+            conn.commit()
+            logger.info(f"Batch updated ML scores for {update_count}/{len(updates)} tickers")
+
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Batch update failed: {e}")
+            raise
+        finally:
+            conn.close()
+
+        return update_count
 
 
     def get_buy_list(self, active_only: bool = True, as_of_date: Optional[str] = None) -> pd.DataFrame:
@@ -565,6 +648,7 @@ class DatabaseManager:
                               rs: Optional[float] = None, vol_ratio: Optional[float] = None):
         """
         Logs buy list activity (additions/removals) for historical tracking.
+        Prevents duplicate entries for same ticker+action+date combination.
 
         Args:
             ticker: Stock symbol
@@ -580,11 +664,28 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        # Check if this exact activity already exists (prevent duplicates when re-running same day)
         cursor.execute("""
-            INSERT INTO buy_list_activity
-            (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio))
+            SELECT id FROM buy_list_activity
+            WHERE ticker = ? AND action = ? AND action_date = ?
+        """, (ticker, action, action_date))
+
+        existing = cursor.fetchone()
+
+        if existing:
+            # Update existing activity record instead of inserting duplicate
+            cursor.execute("""
+                UPDATE buy_list_activity
+                SET reason = ?, entry_price = ?, stop_price = ?, target_price = ?, rs = ?, vol_ratio = ?
+                WHERE id = ?
+            """, (reason, entry_price, stop_price, target_price, rs, vol_ratio, existing[0]))
+        else:
+            # Insert new activity record
+            cursor.execute("""
+                INSERT INTO buy_list_activity
+                (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ticker, action, action_date, reason, entry_price, stop_price, target_price, rs, vol_ratio))
 
         conn.commit()
         conn.close()

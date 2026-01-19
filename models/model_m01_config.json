@@ -1,0 +1,83 @@
+{
+  "model_name": "M01",
+  "model_type": "regression",
+  "objective": "reg:squarederror",
+  "output_format": "return_pct",
+  "description": "SEPA Signal Quality Model",
+  "created_at": "2026-01-18T23:06:19.528258",
+  "feature_columns": [
+    "alpha009",
+    "alpha011",
+    "alpha013",
+    "alpha041",
+    "alpha060",
+    "alpha101",
+    "nATR",
+    "RS",
+    "RS_Delta",
+    "VCP_Ratio",
+    "SMA_50_Slope",
+    "Price_vs_SMA_50",
+    "Price_vs_SMA_200",
+    "Dry_Up_Volume",
+    "Dist_From_20D_Low",
+    "Dist_From_52W_High",
+    "operating_margin",
+    "eps_growth_yoy",
+    "revenue_accel",
+    "pe_ratio",
+    "eps_accel"
+  ],
+  "validation_metrics": [
+    {
+      "test_year": "2021",
+      "train_samples": 4168,
+      "test_samples": 2863,
+      "rmse": 16.722221517270423,
+      "mae": 10.153729487700945,
+      "selection_edge": 0.8321706471020871,
+      "top_decile_mean": 2.110553127787853,
+      "top2_edge": 1.1004677634687465
+    },
+    {
+      "test_year": "2022",
+      "train_samples": 5809,
+      "test_samples": 956,
+      "rmse": 13.273396430372227,
+      "mae": 9.257663412008226,
+      "selection_edge": 1.5834873766001623,
+      "top_decile_mean": -1.1100606618090885,
+      "top2_edge": 0.18302779829919524
+    },
+    {
+      "test_year": "2023",
+      "train_samples": 5259,
+      "test_samples": 1850,
+      "rmse": 19.2846053132742,
+      "mae": 10.18262648352972,
+      "selection_edge": 1.5432874696382388,
+      "top_decile_mean": 3.31808975004905,
+      "top2_edge": 1.852997728402678
+    },
+    {
+      "test_year": "2024",
+      "train_samples": 5669,
+      "test_samples": 2487,
+      "rmse": 18.4161774091038,
+      "mae": 9.571970842632256,
+      "selection_edge": 1.4043762986618595,
+      "top_decile_mean": 2.9674833688022093,
+      "top2_edge": 0.9202321834778611
+    },
+    {
+      "test_year": "2025",
+      "train_samples": 5293,
+      "test_samples": 2124,
+      "rmse": 16.829311359494348,
+      "mae": 7.992542676011382,
+      "selection_edge": 3.309490506150365,
+      "top_decile_mean": 2.9314008731965915,
+      "top2_edge": 2.800134417064843
+    }
+  ]
+}

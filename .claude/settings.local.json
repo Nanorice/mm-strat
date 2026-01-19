@@ -13,7 +13,11 @@
       "Bash(head:*)",
       "Bash(.venv/bin/python:*)",
       "Bash(find:*)",
-      "Bash(sysctl:*)"
+      "Bash(sysctl:*)",
+      "Bash(C:/Users/Hang/PycharmProjects/quantamental/.venv/Scripts/python.exe:*)",
+      "Bash(chcp:*)",
+      "Bash($env:PYTHONIOENCODING=\"utf-8\")",
+      "Bash(.venvScriptspython.exe test_delta_features.py)"
     ],
     "deny": [],
     "ask": []

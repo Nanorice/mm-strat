@@ -44,6 +44,8 @@ FMP_SCREENER_PARAMS = {
     "country": "US",                     # US stocks only
     "exchange": "NYSE,NASDAQ,AMEX",      # Major US exchanges
     "limit": 10000,                      # Max results (get all in one request)
+    "isEtf": "false",
+    "isFUnd": "false"
 }
 
 # Data Download Settings
@@ -162,9 +164,13 @@ EXCLUDED_SECTORS = []       # Placeholder: e.g., ['Utilities', 'Real Estate']
 COMPANY_PROFILE_CACHE_DAYS = 30  # Company info changes infrequently
 
 # ==============================================================================
-# MACHINE LEARNING SETTINGS (PLACEHOLDER FOR FUTURE)
+# MACHINE LEARNING SETTINGS
 # ==============================================================================
-# TODO: Meta-labeling with Random Forest
+# Production ML Model Configuration
+ML_PRODUCTION_MODEL = 'models/model_m01.json'  # Path to production model
+ML_MODEL_TYPE = 'regression'  # 'regression' or 'classification'
+
+# Legacy settings (for backward compatibility)
 ML_ENABLED = False
 ML_MODEL_PATH = None
 ML_CONFIDENCE_THRESHOLD = 0.6  # Only take trades with >60% ML confidence
