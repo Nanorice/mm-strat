@@ -1,0 +1,199 @@
+# ETF and Fund Tickers
+# Auto-generated from company profiles
+# Total: 190 tickers
+#
+# These tickers are excluded from fundamental screening because:
+# - ETFs/Funds don't file traditional 10-Q/10-K reports
+# - They have different financial statement structures
+# - Growth screening strategies don't apply to fund products
+#
+AAT	# American Assets Trust, Inc.
+ABR	# Arbor Realty Trust, Inc.
+ACP	# Abrdn Income Credit Strategies Fund
+ADAM	# Adamas Trust, Inc.
+ADX	# Adams Diversified Equity Fund, Inc.
+AIO	# Virtus Artificial Intelligence & Technology Opportunities Fund
+AKR	# Acadia Realty Trust
+AOD	# Abrdn Total Dynamic Dividend Fund
+ARDC	# Ares Dynamic Credit Allocation Fund, Inc.
+ASG	# Liberty All-Star Growth Fund, Inc.
+ASGI	# Abrdn Global Infrastructure Income Fund
+AVK	# Advent Convertible and Income Fund
+AWF	# AllianceBernstein Global High Income Fund
+BBN	# BlackRock Taxable Municipal Bond Trust
+BCAT	# BlackRock Capital Allocation Trust
+BCX	# Blackrock Resources & Commodities Strategy Trust
+BDJ	# BlackRock Enhanced Equity Dividend Trust
+BGB	# Blackstone/GSO Strategic Credit Fund
+BGR	# BlackRock Energy and Resources Trust
+BGT	# BlackRock Floating Rate Income Trust
+BGY	# BlackRock Enhanced International Dividend Trust
+BHK	# BlackRock Core Bond Trust
+BIT	# BlackRock Multi-Sector Income Trust
+BLE	# BlackRock Municipal Income Trust II
+BLW	# BlackRock Limited Duration Income Trust
+BMEZ	# BlackRock Health Sciences Trust II
+BOE	# BlackRock Enhanced Global Dividend Trust
+BRW	# Saba Capital Income & Opportunities Fund
+BST	# BlackRock Science and Technology Trust
+BSTZ	# BlackRock Science and Technology Trust II
+BTX	# BlackRock Technology and Private Equity Term Trust
+BTZ	# BlackRock Credit Allocation Income Trust
+BUI	# BlackRock Utilities, Infrastructure & Power Opportunities Trust
+BXMT	# Blackstone Mortgage Trust, Inc.
+BXMX	# Nuveen S&P 500 Buy-Write Income Fund
+BXSL	# Blackstone Secured Lending Fund
+CHCT	# Community Healthcare Trust Incorporated
+CHI	# Calamos Convertible Opportunities and Income Fund
+CHW	# Calamos Global Dynamic Income Fund
+CHY	# Calamos Convertible and High Income Fund
+CII	# BlackRock Enhanced Capital and Income Fund, Inc.
+CLDT	# Chatham Lodging Trust
+CLM	# Cornerstone Strategic Value Fund, Inc.
+COLD	# Americold Realty Trust, Inc.
+CPT	# Camden Property Trust
+CRF	# Cornerstone Total Return Fund, Inc.
+CSQ	# Calamos Strategic Total Return Fund
+CTRE	# CareTrust REIT, Inc.
+DHC	# Diversified Healthcare Trust
+DIAX	# Nuveen Dow 30 Dynamic Overwrite Fund
+DLR	# Digital Realty Trust, Inc.
+DLY	# DoubleLine Yield Opportunities Fund
+DNP	# DNP Select Income Fund Inc.
+DSL	# DoubleLine Income Solutions Fund
+DSU	# BlackRock Debt Strategies Fund, Inc.
+EAD	# Wells Fargo Advantage Funds - Allspring Income Opportunities Fund
+ECAT	# BlackRock ESG Capital Allocation Trust
+EDD	# Morgan Stanley Emerging Markets Domestic Debt Fund, Inc.
+EFR	# Eaton Vance Senior Floating-Rate Trust
+EIM	# Eaton Vance Municipal Bond Fund
+EMD	# Western Asset Emerging Markets Debt Fund Inc.
+EOS	# Eaton Vance Enhanced Equity Income Fund II
+EPRT	# Essential Properties Realty Trust, Inc.
+ESRT	# Empire State Realty Trust, Inc.
+ESS	# Essex Property Trust, Inc.
+ETG	# Eaton Vance Tax-Advantaged Global Dividend Income Fund
+ETH	# Grayscale Ethereum Mini Trust
+ETHE	# Grayscale Ethereum Trust (ETH)
+ETJ	# Eaton Vance Risk-Managed Diversified Equity Income Fund
+ETV	# Eaton Vance Tax-Managed Buy-Write Opportunities Fund
+ETW	# Eaton Vance Tax-Managed Global Buy-Write Opportunities Fund
+ETY	# Eaton Vance Tax-Managed Diversified Equity Income Fund
+EVT	# Eaton Vance Tax-Advantaged Dividend Income Fund
+EVV	# Eaton Vance Limited Duration Income Fund
+EXG	# Eaton Vance Tax-Managed Global Diversified Equity Income Fund
+FAX	# Abrdn Asia-Pacific Income Fund Inc
+FBRT	# Franklin BSP Realty Trust, Inc.
+FCPT	# Four Corners Property Trust, Inc.
+FFC	# Flaherty & Crumrine Preferred Securities Income Fund Inc.
+FR	# First Industrial Realty Trust, Inc.
+FRA	# BlackRock Floating Rate Income Strategies Fund, Inc.
+FRT	# Federal Realty Investment Trust
+GAB	# The Gabelli Equity Trust Inc.
+GBAB	# Guggenheim Taxable Municipal Bond & Investment Grade Debt Trust
+GDV	# The Gabelli Dividend & Income Trust
+GGN	# GAMCO Global Gold, Natural Resources & Income Trust
+GHY	# PGIM Global High Yield Fund, Inc
+GOF	# Guggenheim Strategic Opportunities Fund
+GUT	# The Gabelli Utility Trust
+HFRO	# Highland Funds I - Highland Income Fund
+HPS	# John Hancock Preferred Income Fund III
+HR	# Healthcare Realty Trust Incorporated
+HTD	# John Hancock Tax-Advantaged Dividend Income Fund
+HYT	# BlackRock Corporate High Yield Fund, Inc.
+IGD	# Voya Global Equity Dividend and Premium Opportunity Fund
+IIM	# Invesco Value Municipal Income Trust
+ILPT	# Industrial Logistics Properties Trust
+IQI	# Invesco Quality Municipal Income Trust
+IRT	# Independence Realty Trust, Inc.
+IVT	# InvenTrust Properties Corp.
+JFR	# Nuveen Floating Rate Income Fund
+JPC	# Nuveen Preferred & Income Opportunities Fund
+JQC	# Nuveen Credit Strategies Income Fund
+JRI	# Nuveen Real Asset Income and Growth Fund
+KIO	# KKR Income Opportunities Fund
+KREF	# KKR Real Estate Finance Trust Inc.
+KRG	# Kite Realty Group Trust
+KTF	# DWS Municipal Income Trust
+KYN	# Kayne Anderson Energy Infrastructure Fund, Inc.
+LXP	# LXP Industrial Trust
+MEGI	# NYLI CBRE Global Infrastructure Megatrends Term Fund
+MHD	# BlackRock MuniHoldings Fund, Inc.
+MMU	# Western Asset Managed Municipals Fund Inc.
+MPW	# Medical Properties Trust, Inc.
+MQY	# BlackRock MuniYield Quality Fund, Inc.
+MSB	# Mesabi Trust
+MSDL	# Morgan Stanley Direct Lending Fund
+MSIF	# MSC Income Fund, Inc.
+MUC	# BlackRock MuniHoldings California Quality Fund, Inc.
+MVF	# BlackRock MuniVest Fund, Inc.
+MYD	# BlackRock MuniYield Fund, Inc.
+MYI	# BlackRock MuniYield Quality Fund III, Inc.
+NAD	# Nuveen Quality Municipal Income Fund
+NBXG	# Neuberger Berman Next Generation Connectivity Fund Inc.
+NCA	# Nuveen California Municipal Value Fund
+NCV	# Virtus Convertible & Income Fund
+NDMO	# Nuveen Dynamic Municipal Opportunities Fund
+NEA	# Nuveen AMT-Free Quality Municipal Income Fund
+NFJ	# Virtus Dividend, Interest & Premium Strategy Fund
+NMAI	# Nuveen Multi-Asset Income Fund
+NMCO	# Nuveen Municipal Credit Opportunities Fund
+NML	# Neuberger Energy Infrastructure and Income Fund Inc.
+NMZ	# Nuveen Municipal High Income Opportunity Fund
+NPFD	# Nuveen Variable Rate Preferred & Income Fund
+NQP	# Nuveen Pennsylvania Quality Municipal Income Fund
+NRK	# Nuveen New York AMT-Free Quality Municipal Income Fund
+NSA	# National Storage Affiliates Trust
+NTRS	# Northern Trust Corporation
+NUV	# Nuveen Municipal Value Fund, Inc.
+NVG	# Nuveen AMT-Free Municipal Credit Income Fund
+NXJ	# Nuveen New Jersey Quality Municipal Income Fund
+NXRT	# NexPoint Residential Trust, Inc.
+NZF	# Nuveen Municipal Credit Income Fund
+OMAH	# VistaShares Target 15 Berkshire Select Income ETF
+PAXS	# PIMCO Access Income Fund
+PBT	# Permian Basin Royalty Trust
+PCN	# PIMCO Corporate & Income Strategy Fund
+PCQ	# PIMCO California Municipal Income Fund
+PDI	# PIMCO Dynamic Income Fund
+PDM	# Piedmont Office Realty Trust, Inc.
+PDO	# Pimco Dynamic Income Opportunities Fund
+PDT	# John Hancock Premium Dividend Fund
+PDX	# PIMCO Dynamic Income Strategy Fund
+PEB	# Pebblebrook Hotel Trust
+PEO	# Adams Natural Resources Fund, Inc.
+PFL	# PIMCO Income Strategy Fund
+PFN	# PIMCO Income Strategy Fund II
+PKST	# Peakstone Realty Trust
+PML	# PIMCO Municipal Income Fund II
+PMT	# PennyMac Mortgage Investment Trust
+PSTL	# Postal Realty Trust, Inc.
+PTA	# Cohen & Steers Tax-Advantaged Preferred Securities and Income Fund
+PTY	# PIMCO Corporate & Income Opportunity Fund
+QQQX	# Nuveen Nasdaq 100 Dynamic Overwrite Fund
+RA	# Brookfield Real Assets Income Fund Inc.
+RLJ	# RLJ Lodging Trust
+RMT	# Royce Micro-Cap Trust, Inc.
+RNP	# Cohen & Steers REIT and Preferred Income Fund, Inc.
+RQI	# Cohen & Steers Quality Income Realty Fund, Inc.
+RVT	# Royce Value Trust Inc.
+RWT	# Redwood Trust, Inc.
+SDHY	# PGIM Short Duration High Yield Opportunities Fund
+SILA	# Sila Realty Trust, Inc.
+STEW	# SRH Total Return Fund, Inc.
+STWD	# Starwood Property Trust, Inc.
+TEI	# Templeton Emerging Markets Income Fund
+THQ	# Abrdn Healthcare Opportunities Fund
+THW	# Abrdn World Healthcare Fund
+TRTX	# TPG RE Finance Trust, Inc.
+USA	# Liberty All-Star Equity Fund
+UTF	# Cohen & Steers Infrastructure Fund, Inc
+UTG	# Reaves Utility Income Fund
+VGM	# Invesco Trust for Investment Grade Municipals
+VKQ	# Invesco Municipal Trust
+VMO	# Invesco Municipal Opportunity Trust
+VNO	# Vornado Realty Trust
+WASH	# Washington Trust Bancorp, Inc.
+WDI	# Western Asset Diversified Income Fund
+WIW	# Western Asset Inflation-Linked Opportunities & Income Fund
+XXRP	# Teucrium 2x Long Daily XRP ETF

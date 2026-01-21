@@ -1186,13 +1186,54 @@ def generate_model_report(model, feature_cols: List[str], metrics: List[Dict],
 
 
 # =============================================================================
+# STEP 2R: REHYDRATE D2 (Multi-Day Trajectories)
+# =============================================================================
+def rehydrate_d2(d1: pd.DataFrame, n_jobs: int = -1, horizon_days: int = None) -> pd.DataFrame:
+    """
+    Rehydrate d2 from snapshot to multi-day trajectories.
+
+    Phase 1A: Expands each trade from entry to SEPA exit with daily OHLCV + features.
+    Phase 1B: Uses fixed horizon if horizon_days is set.
+
+    Args:
+        d1: Trade simulation results from simulate_trades()
+        n_jobs: Number of parallel workers for feature computation
+        horizon_days: Optional fixed horizon (None = use SEPA exit, else fixed horizon)
+
+    Returns:
+        Long-format DataFrame with one row per trade-day
+    """
+    horizon_msg = f"with {horizon_days}-day fixed horizon" if horizon_days else "using SEPA exits"
+    logger.info(f"Step 2R: Rehydrating D2 dataset ({len(d1)} trades) {horizon_msg}")
+
+    from src.dataset_rehydrator import DatasetRehydrator
+    from src.fundamental_merger import FundamentalMerger
+
+    # Initialize components (reuse same pattern as enrich_with_features)
+    data_repo = DataRepository()
+    benchmark_data = data_repo.get_benchmark_data(mode=CacheMode.CACHE_ONLY)
+    feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
+    fund_merger = FundamentalMerger(force_cache_only=True)
+
+    # Rehydrate with optional fixed horizon
+    rehydrator = DatasetRehydrator(data_repo, feature_engine, fund_merger, horizon_days=horizon_days)
+    d2_rehydrated = rehydrator.rehydrate_trades(d1, n_jobs=n_jobs)
+
+    logger.info(f"Rehydration complete: {len(d2_rehydrated):,} rows "
+                f"({len(d2_rehydrated) / len(d1):.1f} days/trade avg)")
+
+    return d2_rehydrated
+
+
+# =============================================================================
 # MAIN PIPELINE
 # =============================================================================
 def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
                 steps: List[str] = None,
                 model_type: str = 'regression',
                 tune: bool = False,
-                tune_trials: int = 50):
+                tune_trials: int = 50,
+                horizon_days: int = 90):
     """
     Run the full model training pipeline.
 
@@ -1204,6 +1245,7 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         model_type: 'regression' or 'classification'
         tune: Whether to run Optuna hyperparameter tuning
         tune_trials: Number of Optuna trials
+        horizon_days: Fixed horizon for d2r_fixed step (default: 90)
     """
     if steps is None:
         steps = ['d1', 'd2', 'train']
@@ -1222,6 +1264,9 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
 
     d1_path = Path("data/ml/d1_trades.parquet")
     d2_path = Path("data/ml/d2_features.parquet")
+    d2r_path = Path("data/ml/d2_rehydrated.parquet")
+    # Dynamic path based on horizon parameter
+    d2r90_path = Path(f"data/ml/d2_fixed_horizon_{horizon_days}d.parquet")
 
     # Step 1: Simulate Trades (D1)
     if 'd1' in steps:
@@ -1231,7 +1276,7 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         if d1_path.exists():
             print(f"   Skipping Step 1. Loading existing D1 from {d1_path}")
             d1 = pd.read_parquet(d1_path)
-        elif 'd2' in steps or 'train' in steps:
+        elif 'd2' in steps or 'd2r' in steps or 'd2r90' in steps or 'train' in steps:
             print("   Step 1 (D1) skipped but file missing. Cannot proceed.")
             return
 
@@ -1246,6 +1291,39 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         elif 'train' in steps:
              print("   Step 2 (D2) skipped but file missing. Cannot proceed.")
              return
+
+    # Step 2R: Rehydrate D2 (Multi-Day Trajectories)
+    if 'd2r' in steps:
+        d2_rehydrated = rehydrate_d2(d1, n_jobs=-1)
+        d2_rehydrated.to_parquet(d2r_path, index=False)
+        logger.info(f"Saved rehydrated dataset to {d2r_path} "
+                    f"({d2r_path.stat().st_size / 1024 / 1024:.1f} MB)")
+
+    # Step 2R-90: Rehydrate D2 with Fixed Horizon (for Triple Barrier)
+    if 'd2r90' in steps:
+        logger.info(f"Step 2R-{horizon_days}: Rehydrating with {horizon_days}-day fixed horizon")
+
+        # CRITICAL: Filter out trades that don't have enough forward-looking data
+        # If end_date is 2023-12-31 and horizon is 90 days, we can't test trades after 2023-10-02
+        end_date_dt = pd.to_datetime(end_date)
+        cutoff_date = end_date_dt - pd.Timedelta(days=horizon_days)
+
+        d1_filtered = d1[pd.to_datetime(d1['date']) <= cutoff_date].copy()
+        trades_excluded = len(d1) - len(d1_filtered)
+
+        if trades_excluded > 0:
+            logger.warning(f"Excluded {trades_excluded} trades after {cutoff_date.strftime('%Y-%m-%d')} "
+                          f"(insufficient {horizon_days}-day forward window)")
+            logger.info(f"Remaining trades for rehydration: {len(d1_filtered):,}")
+
+        # Rehydrate with filtered trades
+        d2_90d = rehydrate_d2(d1_filtered, n_jobs=-1, horizon_days=horizon_days)
+
+        d2_90d.to_parquet(d2r90_path, index=False)
+        logger.info(f"Saved {horizon_days}-day horizon dataset to {d2r90_path}")
+        logger.info(f"  Size: {d2r90_path.stat().st_size / 1024 / 1024:.1f} MB")
+        logger.info(f"  Rows: {len(d2_90d):,}")
+        logger.info(f"  Avg days/trade: {len(d2_90d) / len(d1_filtered):.1f}")
 
     # Step 3: Train Model (Walk-Forward)
     if 'train' in steps:
@@ -1280,9 +1358,9 @@ if __name__ == "__main__":
     parser.add_argument('--start', default='2018-01-01', help='Start Date (YYYY-MM-DD)')
     parser.add_argument('--end', default='2023-12-31', help='End Date (YYYY-MM-DD)')
     parser.add_argument('--threshold', type=float, default=15.0, help='Success threshold (%)')
-    parser.add_argument('--steps', nargs='+', choices=['d1', 'd2', 'train'],
+    parser.add_argument('--steps', nargs='+', choices=['d1', 'd2', 'd2r', 'd2r90', 'train'],
                        default=['d1', 'd2', 'train'],
-                       help='Pipeline steps to execute (default: all)')
+                       help='Pipeline steps to execute (d1=trades, d2=features, d2r=rehydrate, d2r90=90-day horizon, train=model)')
 
     # MODEL TRAINING OPTIONS
     parser.add_argument('--model-type', choices=['regression', 'classification'],
@@ -1295,8 +1373,14 @@ if __name__ == "__main__":
     parser.add_argument('--trials', type=int, default=50,
                        help='Number of Optuna trials (default: 50, use 10 for quick test)')
 
+    # REHYDRATION OPTIONS (for Triple Barrier)
+    parser.add_argument('--horizon', type=int, default=90,
+                       choices=[30, 60, 90, 120, 180],
+                       help='Fixed horizon in days for d2r90 step (default: 90, options: 30/60/90/120/180)')
+
     args = parser.parse_args()
 
     run_pipeline(args.start, args.end, args.threshold, args.steps,
                 model_type=args.model_type,
-                tune=args.tune, tune_trials=args.trials)
+                tune=args.tune, tune_trials=args.trials,
+                horizon_days=args.horizon)

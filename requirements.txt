@@ -18,6 +18,8 @@ openpyxl>=3.1.0
 # Visualization
 matplotlib>=3.7.0
 seaborn>=0.12.0
+anywidget>=0.9.21
+nbformat>=5
 
 # Progress Bars
 tqdm>=4.65.0
@@ -41,3 +43,6 @@ shap>=0.42.0            # SHAP values for feature importance
 # Dashboard & Visualization
 streamlit>=1.30.0
 plotly>=5.18.0
+
+# Backtesting
+vectorbt>=0.28.0
