@@ -455,7 +455,7 @@ def compute_expectancy(outcomes: pd.DataFrame) -> dict:
         outcomes: DataFrame with columns [barrier_outcome, return_at_outcome, days_to_outcome]
 
     Returns:
-        Dict with expectancy, win_rate, avg_win, avg_loss, risk_reward, avg_days
+        Dict with expectancy, win_rate, avg_win, avg_loss, risk_reward, avg_days, ignition_score
     """
     tp_trades = outcomes[outcomes['barrier_outcome'] == 'TP']
     sl_trades = outcomes[outcomes['barrier_outcome'] == 'SL']
@@ -467,7 +467,7 @@ def compute_expectancy(outcomes: pd.DataFrame) -> dict:
             'expectancy': 0, 'risk_adjusted_return': 0,
             'win_rate': 0, 'loss_rate': 0, 'time_rate': 0,
             'avg_win': 0, 'avg_loss': 0, 'avg_time': 0,
-            'avg_days': 0, 'risk_reward': 0
+            'avg_days': 0, 'risk_reward': 0, 'ignition_score': 0
         }
 
     tp_pct = len(tp_trades) / total
@@ -486,6 +486,15 @@ def compute_expectancy(outcomes: pd.DataFrame) -> dict:
     annual_factor = 252 / avg_days if avg_days > 0 else 0
     risk_adjusted_return = expectancy * annual_factor
 
+    # Ignition Score: Separation between TP (igniters) and Time (drifters)
+    # High score = TP trades clearly different from Time trades
+    # This measures how well barriers distinguish fast movers from capital wasters
+    std_all_returns = outcomes['return_at_outcome'].std()
+    if std_all_returns > 0 and len(tp_trades) > 0 and len(time_trades) > 0:
+        ignition_score = (avg_tp_return - avg_time_return) / std_all_returns
+    else:
+        ignition_score = 0
+
     return {
         'expectancy': expectancy,
         'risk_adjusted_return': risk_adjusted_return,
@@ -496,5 +505,6 @@ def compute_expectancy(outcomes: pd.DataFrame) -> dict:
         'avg_loss': avg_sl_return,
         'avg_time': avg_time_return,
         'avg_days': avg_days,
-        'risk_reward': abs(avg_tp_return / avg_sl_return) if avg_sl_return != 0 else 0
+        'risk_reward': abs(avg_tp_return / avg_sl_return) if avg_sl_return != 0 else 0,
+        'ignition_score': ignition_score
     }

@@ -1,0 +1,81 @@
+{
+  "model_name": "M01_3bar_v2",
+  "feature_version": "M01_3BAR_V2",
+  "created_at": "2026-01-23T02:27:04.378734",
+  "feature_columns": [
+    "alpha009",
+    "alpha011",
+    "alpha013",
+    "alpha041",
+    "alpha060",
+    "alpha101",
+    "nATR",
+    "RS",
+    "RS_Delta",
+    "VCP_Ratio",
+    "SMA_50_Slope",
+    "Price_vs_SMA_50",
+    "Price_vs_SMA_200",
+    "Dry_Up_Volume",
+    "Dist_From_20D_Low",
+    "Dist_From_52W_High",
+    "operating_margin",
+    "eps_growth_yoy",
+    "revenue_accel",
+    "pe_ratio",
+    "eps_accel",
+    "alpha046",
+    "alpha049",
+    "alpha051",
+    "rs_velocity",
+    "volume_acceleration",
+    "breakout_momentum",
+    "consolidation_duration",
+    "price_momentum_curve"
+  ],
+  "barrier_params": {
+    "k_sl": 1.0,
+    "k_tp": 4.0,
+    "min_tp": 0.2,
+    "max_time": 30,
+    "horizon_days": 120
+  },
+  "validation_metrics": [
+    {
+      "fold": 1,
+      "test_year": 2021,
+      "train_samples": 4168,
+      "test_samples": 2863,
+      "accuracy": 0.7928746070555361,
+      "precision": 0.14285714285714285,
+      "recall": 0.5506329113924051,
+      "auc": 0.7775170219237698,
+      "top_decile_mean": 0.02280559440940628,
+      "selection_edge": 0.017056148355609
+    },
+    {
+      "fold": 2,
+      "test_year": 2022,
+      "train_samples": 5809,
+      "test_samples": 956,
+      "accuracy": 0.752092050209205,
+      "precision": 0.08641975308641975,
+      "recall": 0.5833333333333334,
+      "auc": 0.7505434782608695,
+      "top_decile_mean": -0.02220007197337838,
+      "selection_edge": -0.009232535351380326
+    },
+    {
+      "fold": 3,
+      "test_year": 2023,
+      "train_samples": 5259,
+      "test_samples": 1274,
+      "accuracy": 0.8383045525902669,
+      "precision": 0.19111111111111112,
+      "recall": 0.6417910447761194,
+      "auc": 0.8336692675809024,
+      "top_decile_mean": 0.03529835117114284,
+      "selection_edge": 0.032504583301532886
+    }
+  ]
+}

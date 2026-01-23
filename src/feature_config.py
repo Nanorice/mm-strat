@@ -56,6 +56,13 @@ TECHNICAL_FEATURES = [
     'Breakout',              # Breakout signal (1/0)
     'Is_Green_Day',          # Bullish candle (1/0)
     'RSI_Regime',            # Context-aware RSI (bull=1, bear=0)
+
+    # Velocity Features (Phase 2: Ignition Engine)
+    'rs_velocity',           # RS acceleration (5-day slope)
+    'volume_acceleration',   # Volume second derivative (surge detector)
+    'breakout_momentum',     # Breakout strength in ATR units
+    'consolidation_duration',# Days of tight consolidation (coil length)
+    'price_momentum_curve',  # Price second derivative (parabolic detector)
 ]
 
 # =============================================================================
@@ -73,6 +80,9 @@ ALPHA_FEATURES = [
     'alpha013',
     'alpha015',
     'alpha041',
+    'alpha046',    # Slope change (ignition)
+    'alpha049',    # Slope deceleration (ignition)
+    'alpha051',    # Slope deceleration (ignition)
     'alpha054',
     'alpha060',
     'alpha101',
@@ -181,6 +191,27 @@ M01_FEATURES = [
     'eps_accel', 
 ]
 
+# M01_3BAR: Triple Barrier Meta-Labeling Model (Baseline)
+# Uses same features as M01 but predicts barrier-exit outcomes (TP vs SL/Time)
+M01_3BAR_FEATURES = M01_FEATURES.copy()  # Start with proven M01 feature set
+
+# M01_3BAR_V2: Enhanced with Velocity Features (Phase 2: Ignition Engine)
+# Adds velocity-specific features to distinguish igniters from drifters
+M01_3BAR_FEATURES_V2 = M01_3BAR_FEATURES.copy()
+M01_3BAR_FEATURES_V2.extend([
+    # WorldQuant Slope Change Factors (Acceleration/Deceleration)
+    'alpha046',  # Slope change detector (old slope - new slope)
+    'alpha049',  # Slope deceleration (threshold -0.1)
+    'alpha051',  # Slope deceleration (threshold -0.05)
+
+    # Velocity Features (Custom)
+    'rs_velocity',           # RS acceleration (5-day slope)
+    'volume_acceleration',   # Volume surge detector (2nd derivative)
+    'breakout_momentum',     # Breakout strength (ATR-normalized)
+    'consolidation_duration',# Coil length (tight days count)
+    'price_momentum_curve',  # Price acceleration (2nd derivative)
+])
+
 # Future Models (Placeholders)
 # M02_FEATURES = [...]  # Regime Detection Model
 # M03_FEATURES = [...]  # Liquidity Model
@@ -189,19 +220,21 @@ M01_FEATURES = [
 def get_model_features(model_name: str = 'M01') -> List[str]:
     """
     Get the feature list for a specific model.
-    
+
     Args:
-        model_name: 'M01', 'M02', etc.
-    
+        model_name: 'M01', 'M01_3BAR', 'M01_3BAR_V2', 'M02', etc.
+
     Returns:
         List of feature column names.
     """
     registry = {
         'M01': M01_FEATURES,
+        'M01_3BAR': M01_3BAR_FEATURES,
+        'M01_3BAR_V2': M01_3BAR_FEATURES_V2,  # Phase 2: Velocity-enhanced
         # 'M02': M02_FEATURES,
     }
-    
+
     if model_name not in registry:
         raise ValueError(f"Unknown model: {model_name}. Available: {list(registry.keys())}")
-        
+
     return registry[model_name]

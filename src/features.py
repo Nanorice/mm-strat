@@ -166,6 +166,56 @@ class FeatureEngineer:
             np.nan
         )
 
+        # =====================================================================
+        # VELOCITY FEATURES (Phase 2: Ignition Engine)
+        # =====================================================================
+        # These features measure ACCELERATION and URGENCY to identify igniters
+        # (fast movers that hit targets quickly) vs drifters (slow capital wasters)
+
+        # 1. RS Velocity - How fast is Relative Strength accelerating?
+        # Formula: (RS[t] - RS[t-5]) / 5 (5-day slope)
+        # Igniters: Accelerating RS; Drifters: Flat or decelerating RS
+        if 'RS' in df.columns:
+            df['rs_velocity'] = (df['RS'] - df['RS'].shift(5)) / 5
+        else:
+            df['rs_velocity'] = np.nan
+
+        # 2. Volume Acceleration - Is buying pressure increasing exponentially?
+        # Formula: Second derivative of volume = (vol[t] - vol[t-1]) - (vol[t-1] - vol[t-2])
+        # Igniters: Volume surges (accumulation); Drifters: Low/declining volume
+        df['volume_acceleration'] = (df['Volume'] - df['Volume'].shift(1)) - (df['Volume'].shift(1) - df['Volume'].shift(2))
+
+        # 3. Breakout Momentum - How explosively did it break the high?
+        # Formula: (close - high_20d) / ATR
+        # Igniters: 3-5 ATR breakouts; Drifters: Weak breakouts (< 1 ATR)
+        if 'High_20D' in df.columns and 'ATR' in df.columns:
+            df['breakout_momentum'] = np.where(
+                df['ATR'] > 0,
+                (df['Close'] - df['High_20D']) / df['ATR'],
+                0
+            )
+        else:
+            df['breakout_momentum'] = 0
+
+        # 4. Consolidation Duration - How long was the coil?
+        # Formula: Count of days where daily range < 0.5 × ATR in last 20 days
+        # Igniters: Longer consolidations = more energy stored; Drifters: No clear pattern
+        if 'ATR' in df.columns:
+            daily_range = df['High'] - df['Low']
+            tight_days = (daily_range < 0.5 * df['ATR']).astype(int)
+            df['consolidation_duration'] = tight_days.rolling(window=20).sum()
+        else:
+            df['consolidation_duration'] = 0
+
+        # 5. Price Momentum Curve - Is price acceleration increasing (parabolic)?
+        # Formula: Second derivative of price = (close[t] - close[t-1]) - (close[t-1] - close[t-2])
+        # Igniters: Parabolic acceleration; Drifters: Linear or decelerating
+        df['price_momentum_curve'] = (df['Close'] - df['Close'].shift(1)) - (df['Close'].shift(1) - df['Close'].shift(2))
+
+        # =====================================================================
+        # END VELOCITY FEATURES
+        # =====================================================================
+
         # Import centralized lag config
         try:
             from src.feature_config import FEATURES_TO_LAG

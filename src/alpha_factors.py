@@ -44,11 +44,17 @@ class AlphaEngine:
         - Alpha #015: -1 × sum(rank(correlation(rank(high), rank(volume), 3)), 3)
         - Alpha #054: ((-1 * ((low - close) * (open^5)) / ((low - high) * (close^5))))
         - Alpha #060: ((2 * scale(rank(((((close - low) - (high - close)) / (high - low)) * volume)))) - scale(rank(ts_argmax(close, 10))))
+
+    Velocity/Ignition Alphas (Slope Change Factors):
+        - Alpha #046: Slope change detector (old slope - new slope) with threshold 0.25
+        - Alpha #049: Slope deceleration detector (threshold -0.1)
+        - Alpha #051: Slope deceleration detector (threshold -0.05)
     """
     
-    # Default alpha list - comprehensive set (legacy + priority)
+    # Default alpha list - comprehensive set (legacy + priority + velocity)
     DEFAULT_ALPHAS = [1, 6, 9, 12, 41, 101,  # Legacy alphas
-                      2, 4, 11, 13, 15, 54, 60]  # Priority alphas
+                      2, 4, 11, 13, 15, 54, 60,  # Priority alphas
+                      46, 49, 51]  # Slope change / velocity alphas (ignition factors)
     
     def __init__(self, alpha_list: Optional[List[int]] = None):
         """

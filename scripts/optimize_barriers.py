@@ -86,20 +86,22 @@ def walk_forward_grid_search(
         
     else:  # hybrid (RECOMMENDED)
         grid = {
-            'k_sl': [1.0, 1.25, 1.5, 2.0],      # Stop: How many ATRs?
+            'k_sl': [1.0, 1.5, 2.0],            # Stop: How many ATRs? (tighter stops)
             'k_tp': [2.0, 3.0, 4.0],            # Target multiplier
             'min_tp': [0.15, 0.20],             # Floor: 15% vs 20%?
+            'max_time': [30, 45, 60],           # Shorter horizons to catch drifters
         }
         param_combinations = [
-            HybridBarrierParams(k_sl=ks, k_tp=kt, min_tp=mt)
-            for ks, kt, mt in product(
-                grid['k_sl'], grid['k_tp'], grid['min_tp']
+            HybridBarrierParams(k_sl=ks, k_tp=kt, min_tp=mt, max_time=max_t)
+            for ks, kt, mt, max_t in product(
+                grid['k_sl'], grid['k_tp'], grid['min_tp'], grid['max_time']
             )
         ]
         print(f"\nHybrid Grid: {len(param_combinations)} combinations")
         print("  k_sl (stop): ", grid['k_sl'])
         print("  k_tp (target mult): ", grid['k_tp'])
         print("  min_tp (floor): ", grid['min_tp'])
+        print("  max_time (horizon): ", grid['max_time'])
 
     # Walk-forward splits
     years = sorted(d2['year'].unique())
@@ -118,7 +120,7 @@ def walk_forward_grid_search(
         test_trades = test_data['trade_id'].nunique()
 
         print(f"\n{'='*70}")
-        print(f"Fold {i+1}: Train {list(train_years_range)} → Test [{test_year}]")
+        print(f"Fold {i+1}: Train {list(train_years_range)} -> Test [{test_year}]")
         print(f"  Train: {train_trades:,} trades")
         print(f"  Test: {test_trades:,} trades")
         print(f"{'='*70}")
@@ -157,7 +159,8 @@ def walk_forward_grid_search(
                 param_dict = {
                     'k_sl': params.k_sl,
                     'k_tp': params.k_tp,
-                    'min_tp': params.min_tp
+                    'min_tp': params.min_tp,
+                    'max_time': params.max_time
                 }
 
             return {
@@ -166,12 +169,17 @@ def walk_forward_grid_search(
                 **param_dict,
                 'train_expectancy': train_metrics['expectancy'],
                 'train_win_rate': train_metrics['win_rate'],
+                'train_ignition_score': train_metrics['ignition_score'],
                 'test_expectancy': test_metrics['expectancy'],
                 'test_risk_adj_return': test_metrics['risk_adjusted_return'],
                 'test_win_rate': test_metrics['win_rate'],
                 'test_loss_rate': test_metrics['loss_rate'],
+                'test_time_rate': test_metrics['time_rate'],
                 'test_avg_days': test_metrics['avg_days'],
                 'test_risk_reward': test_metrics['risk_reward'],
+                'test_ignition_score': test_metrics['ignition_score'],
+                'test_avg_win': test_metrics['avg_win'],
+                'test_avg_time': test_metrics['avg_time'],
                 'test_trades': len(test_outcomes)
             }
 
@@ -190,9 +198,9 @@ def walk_forward_grid_search(
 
         results.extend(fold_results)
 
-    # Convert to DataFrame and sort
+    # Convert to DataFrame and sort by ignition_score (primary) and test_expectancy (secondary)
     results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('test_expectancy', ascending=False)
+    results_df = results_df.sort_values(['test_ignition_score', 'test_expectancy'], ascending=[False, False])
 
     return results_df
 
@@ -263,12 +271,19 @@ def main():
 
     # Display top 10 parameter sets
     print("\n" + "=" * 70)
-    print(" TOP 10 PARAMETER SETS (by test expectancy)")
+    print(" TOP 10 PARAMETER SETS (by ignition score, then expectancy)")
     print("=" * 70)
-    
+
     # Format for display
     display_cols = results.columns.tolist()
     print(results.head(10).to_string(index=False))
+
+    # Also show top 10 by expectancy for comparison
+    print("\n" + "=" * 70)
+    print(" TOP 10 BY EXPECTANCY (for comparison)")
+    print("=" * 70)
+    results_by_exp = results.sort_values('test_expectancy', ascending=False)
+    print(results_by_exp.head(10).to_string(index=False))
 
     # Display best overall params (avg across folds)
     if args.type == 'static':
@@ -276,24 +291,28 @@ def main():
     elif args.type == 'dynamic':
         group_cols = ['upper_atr_mult', 'lower_atr_mult', 'time_days']
     else:  # hybrid
-        group_cols = ['k_sl', 'k_tp', 'min_tp']
+        group_cols = ['k_sl', 'k_tp', 'min_tp', 'max_time']
 
     avg_results = results.groupby(group_cols).agg({
         'test_expectancy': 'mean',
         'test_risk_adj_return': 'mean',
         'test_win_rate': 'mean',
+        'test_time_rate': 'mean',
         'test_avg_days': 'mean',
-        'test_risk_reward': 'mean'
+        'test_risk_reward': 'mean',
+        'test_ignition_score': 'mean',
+        'test_avg_win': 'mean',
+        'test_avg_time': 'mean'
     }).reset_index()
 
-    avg_results = avg_results.sort_values('test_expectancy', ascending=False)
+    avg_results = avg_results.sort_values('test_ignition_score', ascending=False)
 
     print("\n" + "=" * 70)
-    print(" BEST PARAMETERS (averaged across all folds)")
+    print(" BEST PARAMETERS (averaged across all folds, ranked by ignition score)")
     print("=" * 70)
-    
+
     best = avg_results.iloc[0]
-    
+
     if args.type == 'static':
         print(f"  TP={best['upper_pct']:.0%}, SL=-{best['lower_pct']:.0%}, Time={best['time_days']:.0f}d")
     elif args.type == 'dynamic':
@@ -301,13 +320,17 @@ def main():
     else:  # hybrid
         print(f"  Stop: {best['k_sl']:.2f}×ATR")
         print(f"  Target: MAX({best['min_tp']:.0%}, {best['k_tp']:.1f}×ATR)")
-        print(f"  (Dynamic time: [{20}-{60}d] based on distance/speed)")
+        print(f"  Max Time: {best['max_time']:.0f}d (dynamic: [20, {best['max_time']:.0f}] based on distance/speed)")
 
-    print(f"\n  Avg Test Expectancy: {best['test_expectancy']:.4f}")
+    print(f"\n  Avg Test Ignition Score: {best['test_ignition_score']:.4f} ** (TP vs Time separation)")
+    print(f"  Avg Test Expectancy: {best['test_expectancy']:.4f}")
     print(f"  Avg Risk-Adj Return: {best['test_risk_adj_return']:.4f}")
-    print(f"  Avg Win Rate: {best['test_win_rate']:.1%}")
+    print(f"  Avg Win Rate (TP): {best['test_win_rate']:.1%}")
+    print(f"  Avg Time Rate (drifters): {best['test_time_rate']:.1%}")
     print(f"  Avg Days to Outcome: {best['test_avg_days']:.1f}")
     print(f"  Avg Risk/Reward: {best['test_risk_reward']:.2f}")
+    print(f"  Avg TP Return: {best['test_avg_win']:.2%}")
+    print(f"  Avg Time Return: {best['test_avg_time']:.2%}")
 
     # Show all parameter set averages
     print("\n" + "=" * 70)

@@ -800,6 +800,250 @@ def train_model_walk_forward(data: pd.DataFrame,
 
 
 # =============================================================================
+# STEP 3.5: TRAIN M01_3BAR (TRIPLE BARRIER MODEL)
+# =============================================================================
+def train_triple_barrier_model(
+    d3_path: str = 'data/ml/d3_triple_barrier_labels.parquet',
+    tune: bool = False,
+    tune_trials: int = 50,
+    verbose: bool = True,
+    feature_version: str = 'M01_3BAR'
+) -> Tuple:
+    """
+    Train M01_3bar model using triple barrier labels.
+
+    This function is nearly identical to train_model_walk_forward() but:
+    - Loads D3 instead of D2
+    - Uses 'y_meta' as target (triple barrier labels)
+    - Always operates in classification mode
+    - Adds scale_pos_weight for class imbalance (12% TP rate)
+    - Uses 'return_at_outcome' for decile analysis
+
+    Args:
+        d3_path: Path to D3 dataset with triple barrier labels
+        tune: Whether to run Optuna hyperparameter tuning
+        tune_trials: Number of Optuna trials if tuning
+        verbose: Print detailed progress
+        feature_version: Feature set to use ('M01_3BAR' or 'M01_3BAR_V2')
+
+    Returns:
+        Tuple of (trained_model, feature_columns, metrics_dataframe)
+    """
+    import xgboost as xgb
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
+
+    logger.info("=" * 70)
+    logger.info(f"TRAINING {feature_version} (TRIPLE BARRIER META-LABELING MODEL)")
+    logger.info("=" * 70)
+
+    # Load D3 dataset
+    d3 = pd.read_parquet(d3_path)
+    logger.info(f"Loaded D3: {len(d3):,} trades from {d3_path}")
+
+    # Show label distribution
+    y_meta_dist = d3['y_meta'].value_counts()
+    logger.info(f"Label distribution:")
+    logger.info(f"  y_meta=1 (TP):  {y_meta_dist.get(1, 0):,} ({y_meta_dist.get(1, 0)/len(d3)*100:.1f}%)")
+    logger.info(f"  y_meta=0 (SL/Time): {y_meta_dist.get(0, 0):,} ({y_meta_dist.get(0, 0)/len(d3)*100:.1f}%)")
+
+    # Show barrier outcome breakdown
+    if 'barrier_outcome' in d3.columns:
+        barrier_dist = d3['barrier_outcome'].value_counts()
+        logger.info(f"Barrier outcomes:")
+        for outcome, count in barrier_dist.items():
+            logger.info(f"  {outcome}: {count:,} ({count/len(d3)*100:.1f}%)")
+
+    # Get feature set (M01_3BAR or M01_3BAR_V2)
+    model_features = get_model_features(feature_version)
+
+    # Filter to available features
+    available_cols = [c for c in model_features if c in d3.columns]
+    missing_cols = [c for c in model_features if c not in d3.columns]
+
+    if missing_cols:
+        logger.warning(f"Missing {len(missing_cols)} features: {missing_cols[:5]}...")
+
+    logger.info(f"Using {len(available_cols)}/{len(model_features)} {feature_version} features")
+
+    # Prepare data for walk-forward
+    data = d3.copy()
+    data = data.sort_values('Date')
+    data['year'] = pd.to_datetime(data['Date']).dt.year
+
+    # Clean training data (reuse existing cleaner)
+    data = clean_training_data(data, available_cols)
+
+    years = sorted(data['year'].unique())
+    logger.info(f"Years available: {years}")
+
+    # Optuna tuning (if requested)
+    best_params = {}
+    if tune and OPTUNA_AVAILABLE:
+        logger.info("Running hyperparameter tuning...")
+        X_tune = data[available_cols]
+        y_tune = data['y_meta']  # Triple barrier labels
+
+        best_params = tune_hyperparameters_optuna(
+            X_tune, y_tune,
+            model_type='classification',  # Always classification for barriers
+            n_trials=tune_trials,
+            n_splits=5,
+            random_state=42
+        )
+        logger.info(f"Best hyperparameters found: {best_params}")
+    elif tune and not OPTUNA_AVAILABLE:
+        logger.warning("Tuning requested but Optuna not available. Using default parameters.")
+
+    # Walk-forward training (same structure as M01)
+    all_metrics = []
+    final_model = None
+    train_years_count = 3  # Same as M01
+
+    logger.info(f"\nStarting walk-forward validation ({train_years_count}-year train window)")
+
+    for i, test_year in enumerate(years[train_years_count:]):
+        train_years_range = years[i:i+train_years_count]
+
+        train_data = data[data['year'].isin(train_years_range)]
+        test_data = data[data['year'] == test_year]
+
+        if len(train_data) < 50 or len(test_data) < 10:
+            logger.warning(f"Skipping fold for {test_year} (insufficient data)")
+            continue
+
+        X_train = train_data[available_cols]
+        y_train = train_data['y_meta']  # Triple barrier labels
+        X_test = test_data[available_cols]
+        y_test = test_data['y_meta']
+
+        logger.info(f"\nFold {i+1}: Train {train_years_range} → Test [{test_year}]")
+        logger.info(f"  Train: {len(X_train):,} trades")
+        logger.info(f"  Test: {len(X_test):,} trades")
+
+        # Calculate scale_pos_weight for class imbalance
+        n_negative = (y_train == 0).sum()
+        n_positive = (y_train == 1).sum()
+        scale_pos_weight = n_negative / n_positive if n_positive > 0 else 1.0
+
+        logger.info(f"  Train TP rate: {n_positive/(n_negative+n_positive)*100:.1f}% (scale_pos_weight={scale_pos_weight:.2f})")
+
+        # Train XGBoost
+        if best_params:
+            model = xgb.XGBClassifier(
+                **best_params,
+                scale_pos_weight=scale_pos_weight,
+                random_state=42,
+                n_jobs=-1
+            )
+        else:
+            # Default hyperparameters (same as M01 classification + scale_pos_weight)
+            model = xgb.XGBClassifier(
+                n_estimators=500,
+                learning_rate=0.03,
+                max_depth=5,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                min_child_weight=3,
+                scale_pos_weight=scale_pos_weight,
+                eval_metric='logloss',
+                random_state=42,
+                n_jobs=-1
+            )
+
+        model.fit(X_train, y_train, verbose=False)
+
+        # Predictions
+        y_pred_proba = model.predict_proba(X_test)[:, 1]
+        y_pred = (y_pred_proba >= 0.5).astype(int)
+
+        # Standard classification metrics
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, zero_division=0)
+        recall = recall_score(y_test, y_pred, zero_division=0)
+        auc = roc_auc_score(y_test, y_pred_proba) if len(y_test.unique()) > 1 else 0.5
+
+        # Decile analysis (KEY METRIC for trading)
+        # Use return_at_outcome instead of return_pct
+        if 'return_at_outcome' in test_data.columns:
+            fold_decile_results = analyze_deciles(
+                test_data['return_at_outcome'],
+                y_pred_proba
+            )
+            selection_edge = fold_decile_results['selection_edge']
+            top_decile_mean = fold_decile_results['top_decile_mean']
+        else:
+            logger.warning("  'return_at_outcome' not in D3 - using y_meta for decile analysis")
+            fold_decile_results = analyze_deciles(y_test, y_pred_proba)
+            selection_edge = fold_decile_results['selection_edge']
+            top_decile_mean = fold_decile_results['top_decile_mean']
+
+        logger.info(f"  Accuracy:  {accuracy:.3f}")
+        logger.info(f"  Precision: {precision:.3f}")
+        logger.info(f"  Recall:    {recall:.3f}")
+        logger.info(f"  AUC:       {auc:.3f}")
+        logger.info(f"  Top Decile Avg Return: {top_decile_mean:.2f}%")
+        logger.info(f"  Selection Edge: {selection_edge:+.2f}%")
+
+        all_metrics.append({
+            'fold': i + 1,
+            'test_year': test_year,
+            'train_samples': len(train_data),
+            'test_samples': len(test_data),
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'auc': auc,
+            'top_decile_mean': top_decile_mean,
+            'selection_edge': selection_edge
+        })
+
+        final_model = model  # Keep last fold model
+
+    # Summary
+    logger.info("\n" + "=" * 70)
+    logger.info(" WALK-FORWARD RESULTS (M01_3BAR)")
+    logger.info("=" * 70)
+
+    if all_metrics:
+        metrics_df = pd.DataFrame(all_metrics)
+        print(metrics_df.to_string(index=False))
+
+        avg_accuracy = metrics_df['accuracy'].mean()
+        avg_precision = metrics_df['precision'].mean()
+        avg_recall = metrics_df['recall'].mean()
+        avg_auc = metrics_df['auc'].mean()
+        avg_edge = metrics_df['selection_edge'].mean()
+        avg_top_decile = metrics_df['top_decile_mean'].mean()
+
+        print("\n" + "=" * 70)
+        print("SUMMARY STATISTICS")
+        print("=" * 70)
+        print(f"   Folds Completed:          {len(all_metrics)}")
+        print(f"   Average Accuracy:         {avg_accuracy:.3f}")
+        print(f"   Average Precision:        {avg_precision:.3f}")
+        print(f"   Average Recall:           {avg_recall:.3f}")
+        print(f"   Average AUC:              {avg_auc:.3f}")
+        print(f"   Average Selection Edge:   {avg_edge:+.2f}%")
+        print(f"   Average Top Decile Mean:  {avg_top_decile:+.2f}%")
+        print("=" * 70)
+
+        # Viability assessment
+        if avg_edge > 2.5 and avg_auc > 0.60:
+            print("\n[SUCCESS] STRONG SIGNAL - Model shows consistent edge across folds")
+        elif avg_edge > 1.5 and avg_auc > 0.55:
+            print("\n[OK] MODERATE SIGNAL - Model has edge but may need refinement")
+        else:
+            print("\n[WARNING] WEAK SIGNAL - Consider adjusting barrier params or features")
+
+        print("\n")
+
+        return final_model, available_cols, metrics_df
+    else:
+        logger.error("No folds completed - check data availability")
+        return None, available_cols, pd.DataFrame()
+
+
+# =============================================================================
 # STEP 4: SAVE PRODUCTION MODEL (M01)
 # =============================================================================
 def save_production_model(model, feature_cols: List[str], metrics: List[Dict]):
@@ -1185,6 +1429,194 @@ def generate_model_report(model, feature_cols: List[str], metrics: List[Dict],
     return str(report_path)
 
 
+def generate_model_report_m01_3bar(
+    model,
+    metrics_df: pd.DataFrame,
+    features: List[str],
+    config: dict
+):
+    """Generate markdown report for M01_3bar model."""
+
+    output_dir = Path("models")
+    output_dir.mkdir(exist_ok=True)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report_path = output_dir / f'model_report_M01_3bar_{timestamp}.md'
+
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(f"# M01_3bar Model Report\n\n")
+        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        # Executive Summary
+        f.write("## Executive Summary\n\n")
+
+        avg_edge = metrics_df['selection_edge'].mean()
+        avg_auc = metrics_df['auc'].mean()
+        avg_precision = metrics_df['precision'].mean()
+        avg_recall = metrics_df['recall'].mean()
+        avg_accuracy = metrics_df['accuracy'].mean()
+
+        f.write(f"- **Average Selection Edge:** {avg_edge:.2f}%\n")
+        f.write(f"- **Average AUC:** {avg_auc:.3f}\n")
+        f.write(f"- **Average Precision:** {avg_precision:.3f}\n")
+        f.write(f"- **Average Recall:** {avg_recall:.3f}\n")
+        f.write(f"- **Average Accuracy:** {avg_accuracy:.3f}\n")
+        f.write(f"- **Barrier Type:** Hybrid (ATR-based)\n")
+        f.write(f"- **Barrier Params:** k_sl={config['barrier_params']['k_sl']}, ")
+        f.write(f"k_tp={config['barrier_params']['k_tp']}, ")
+        f.write(f"min_tp={config['barrier_params']['min_tp']}\n\n")
+
+        # Viability Assessment
+        f.write("## Viability Assessment\n\n")
+        if avg_edge > 2.5 and avg_auc > 0.60:
+            f.write("**STRONG SIGNAL** - Model shows consistent edge across folds.\n\n")
+            f.write("The model demonstrates strong predictive power for identifying trades that hit profit targets before stop-losses. ")
+            f.write(f"With a {avg_edge:.2f}% selection edge and {avg_auc:.3f} AUC, this model is ready for live testing.\n\n")
+        elif avg_edge > 1.5 and avg_auc > 0.55:
+            f.write("**MODERATE SIGNAL** - Model has edge but may need refinement.\n\n")
+            f.write(f"The model shows {avg_edge:.2f}% selection edge with {avg_auc:.3f} AUC. ")
+            f.write("Consider combining with M01 in an ensemble or using stricter thresholds (score > 0.7).\n\n")
+        else:
+            f.write("**WEAK SIGNAL** - Model edge is marginal. Consider:\n")
+            f.write("- Adjusting barrier parameters (run grid search again)\n")
+            f.write("- Adding barrier-specific features (e.g., volatility_regime, sector_tp_rate)\n")
+            f.write("- Ensemble with M01 predictions\n")
+            f.write("- Increasing training data or tuning hyperparameters\n\n")
+
+        # Walk-Forward Results
+        f.write("## Walk-Forward Validation Results\n\n")
+        f.write("```\n")
+        f.write(metrics_df.to_string(index=False))
+        f.write("\n```\n\n")
+
+        # Feature Importance (Top 20)
+        f.write("## Feature Importance (Top 20)\n\n")
+
+        importance = model.get_booster().get_score(importance_type='gain')
+        if importance:
+            importance_sorted = sorted(importance.items(), key=lambda x: x[1], reverse=True)[:20]
+
+            f.write("| Rank | Feature | Gain | % Total |\n")
+            f.write("|------|---------|------|----------|\n")
+
+            total_gain = sum(v for k, v in importance.items())
+            for i, (feat, gain) in enumerate(importance_sorted, 1):
+                pct = (gain / total_gain) * 100
+                f.write(f"| {i} | {feat} | {gain:.0f} | {pct:.2f}% |\n")
+
+            f.write("\n")
+
+            # Feature insights
+            top_10_pct = sum(g for f, g in importance_sorted[:10]) / total_gain * 100
+            f.write(f"**Insight:** Top 10 features contribute {top_10_pct:.1f}% of total gain.\n\n")
+        else:
+            f.write("*No feature importance available*\n\n")
+
+        # Usage Recommendations
+        f.write("## Usage Recommendations\n\n")
+        f.write("### Trade Selection Thresholds\n\n")
+
+        if avg_edge > 2.5:
+            f.write("- **High Confidence (Score > 0.7):** Position size 1.5x\n")
+            f.write("- **Medium Confidence (Score > 0.5):** Position size 1.0x\n")
+            f.write("- **Low Confidence (Score < 0.5):** Skip\n\n")
+        elif avg_edge > 1.5:
+            f.write("- **Conservative (Score > 0.8):** Position size 1.0x\n")
+            f.write("- **Moderate (Score > 0.6):** Position size 0.5x\n")
+            f.write("- **Low (Score < 0.6):** Skip\n\n")
+        else:
+            f.write("- **Very Conservative (Score > 0.85):** Position size 0.5x\n")
+            f.write("- **All others:** Skip until model is improved\n\n")
+
+        f.write("### Comparison with M01\n\n")
+        f.write("M01_3bar uses path-dependent triple barrier labels instead of M01's final return threshold. ")
+        f.write("The key difference: M01 asks \"will this trade return 15%+?\", while M01_3bar asks \"will this trade hit ")
+        f.write("the profit target before the stop-loss?\"\n\n")
+
+        f.write("**Integration Strategies:**\n\n")
+        f.write("1. **Ensemble Approach:** Combine scores\n")
+        f.write("   ```python\n")
+        f.write("   final_score = 0.6 × M01_score + 0.4 × M01_3bar_score\n")
+        f.write("   ```\n\n")
+
+        f.write("2. **Filter Approach:** Require both models to agree\n")
+        f.write("   ```python\n")
+        f.write("   take_trade = (M01_score > 0.6) AND (M01_3bar_score > 0.6)\n")
+        f.write("   ```\n\n")
+
+        f.write("3. **Position Sizing:** Use M01_3bar confidence to scale M01 positions\n")
+        f.write("   ```python\n")
+        f.write("   if M01_score > 0.7:\n")
+        f.write("       if M01_3bar_score > 0.8:\n")
+        f.write("           position_size = base_size × 1.5  # High conviction\n")
+        f.write("       elif M01_3bar_score > 0.6:\n")
+        f.write("           position_size = base_size × 1.0  # Normal\n")
+        f.write("       else:\n")
+        f.write("           position_size = base_size × 0.5  # Reduced\n")
+        f.write("   ```\n\n")
+
+        # Barrier Configuration
+        f.write("## Barrier Configuration\n\n")
+        f.write(f"- **Stop Loss:** k_sl = {config['barrier_params']['k_sl']} × ATR\n")
+        f.write(f"- **Profit Target:** MAX({config['barrier_params']['min_tp']:.0%}, {config['barrier_params']['k_tp']} × ATR)\n")
+        f.write(f"- **Max Time Barrier:** {config['barrier_params']['max_time']} days (give up waiting for TP/SL)\n")
+        f.write(f"- **Rehydration Horizon:** {config['barrier_params'].get('horizon_days', 'N/A')} days (for feature calculation only)\n\n")
+
+        f.write("**Interpretation:**\n")
+        f.write("- Stop losses are volatility-adaptive (tighter for low-vol stocks, wider for high-vol)\n")
+        f.write(f"- Profit targets have a {config['barrier_params']['min_tp']:.0%} floor but expand with volatility\n")
+        f.write(f"- Max time barrier = {config['barrier_params']['max_time']} days (not {config['barrier_params'].get('horizon_days', 'N/A')} - that's just for features)\n")
+        f.write("- These parameters were optimized via walk-forward grid search (Phase 1)\n\n")
+
+        # Model Configuration
+        f.write("## Model Configuration\n\n")
+        f.write("### XGBoost Parameters\n\n")
+        f.write("```python\n")
+        f.write("XGBClassifier(\n")
+        f.write("    n_estimators=500,\n")
+        f.write("    learning_rate=0.03,\n")
+        f.write("    max_depth=5,\n")
+        f.write("    subsample=0.8,\n")
+        f.write("    colsample_bytree=0.8,\n")
+        f.write("    min_child_weight=3,\n")
+        f.write("    scale_pos_weight=<calculated per fold>,  # Handles class imbalance\n")
+        f.write("    eval_metric='logloss',\n")
+        f.write("    random_state=42\n")
+        f.write(")\n")
+        f.write("```\n\n")
+
+        f.write("### Validation Strategy\n\n")
+        f.write("- **Method:** Walk-Forward Validation\n")
+        f.write("- **Train Window:** 3 years\n")
+        f.write("- **Test Window:** 1 year\n")
+        f.write("- **Class Imbalance:** Handled via scale_pos_weight (auto-calculated per fold)\n\n")
+
+        # Next Steps
+        f.write("## Next Steps\n\n")
+
+        if avg_edge > 2.5:
+            f.write("1. **Backtest with VectorBT:** Use d3_rehydrated.parquet to compare equity curves vs M01\n")
+            f.write("2. **Live Testing:** Paper trade top 10% predictions for 1-2 months\n")
+            f.write("3. **Ensemble Testing:** Compare M01 vs M01_3bar vs Ensemble performance\n")
+            f.write("4. **Monitor Degradation:** Track edge over time in production\n")
+        elif avg_edge > 1.5:
+            f.write("1. **Hyperparameter Tuning:** Run Optuna with 50-100 trials\n")
+            f.write("2. **Feature Engineering:** Add barrier-specific features (volatility regime, sector TP rates)\n")
+            f.write("3. **Ensemble with M01:** Test weighted combinations\n")
+            f.write("4. **Barrier Re-optimization:** Try different k_sl/k_tp/min_tp values\n")
+        else:
+            f.write("1. **Barrier Re-optimization:** Run grid search with wider parameter ranges\n")
+            f.write("2. **Feature Engineering:** Add domain-specific features for barrier prediction\n")
+            f.write("3. **Alternative Models:** Test LightGBM or CatBoost\n")
+            f.write("4. **Data Quality:** Review D3 label generation for potential issues\n")
+
+        f.write("\n\n")
+        f.write("---\n\n")
+        f.write(f"Report generated by model_trainer.py at {timestamp}\n")
+
+    logger.info(f"Generated report: {report_path}")
+
+
 # =============================================================================
 # STEP 2R: REHYDRATE D2 (Multi-Day Trajectories)
 # =============================================================================
@@ -1226,6 +1658,125 @@ def rehydrate_d2(d1: pd.DataFrame, n_jobs: int = -1, horizon_days: int = None) -
 
 
 # =============================================================================
+# STEP D3: TRIPLE BARRIER LABEL GENERATION
+# =============================================================================
+def generate_d3_labels(
+    d2_path: str = 'data/ml/d2_fixed_horizon_90d.parquet',
+    k_sl: float = 2.0,
+    k_tp: float = 3.0,
+    min_tp: float = 0.15,
+    max_time: int = 60,
+    min_time: int = 20,
+    n_jobs: int = -1
+) -> pd.DataFrame:
+    """
+    Generate D3 dataset with triple barrier labels.
+
+    Uses hybrid barrier logic: ATR-based stops + MAX(floor, ATR) targets.
+
+    Args:
+        d2_path: Path to d2_fixed_horizon_90d.parquet
+        k_sl: Stop loss ATR multiplier (default: 2.0)
+        k_tp: Target ATR multiplier (default: 3.0)
+        min_tp: Minimum profit target floor (default: 0.15 = 15%)
+        max_time: Maximum time barrier (default: 60 days)
+        min_time: Minimum time barrier (default: 20 days)
+        n_jobs: Parallel workers
+
+    Returns:
+        D3 DataFrame with y_meta labels and barrier outcomes
+    """
+    from src.triple_barrier_labeler import (
+        TripleBarrierLabeler,
+        HybridBarrierParams,
+        compute_expectancy
+    )
+
+    logger.info(f"Step D3: Generating triple barrier labels")
+    logger.info(f"   Params: k_sl={k_sl}, k_tp={k_tp}, min_tp={min_tp:.0%}")
+
+    # Load D2 fixed horizon data
+    d2 = pd.read_parquet(d2_path)
+    logger.info(f"   Loaded {len(d2):,} rows, {d2['trade_id'].nunique()} trades")
+
+    # Create hybrid barrier params
+    params = HybridBarrierParams(
+        k_sl=k_sl,
+        k_tp=k_tp,
+        min_tp=min_tp,
+        max_time=max_time,
+        min_time=min_time
+    )
+
+    # Apply barriers
+    d3 = TripleBarrierLabeler.label_dataset(
+        d2_rehydrated=d2,
+        params=params,
+        binary_labels=True,
+        n_jobs=n_jobs,
+        use_vectorized=True
+    )
+
+    # Log results
+    metrics = compute_expectancy(d3)
+    logger.info(f"   Labeled {len(d3):,} trades")
+    logger.info(f"   y_meta=1 (TP): {(d3['y_meta'] == 1).sum()} ({(d3['y_meta'] == 1).mean():.1%})")
+    logger.info(f"   Expectancy: {metrics['expectancy']:.2%}, Risk/Reward: {metrics['risk_reward']:.2f}")
+
+    return d3
+
+
+# =============================================================================
+# STEP D3R: REHYDRATE D3 (Trajectories with Barrier Exits)
+# =============================================================================
+def rehydrate_d3(
+    d1: pd.DataFrame,
+    d3: pd.DataFrame,
+    n_jobs: int = -1
+) -> pd.DataFrame:
+    """
+    Rehydrate D3 using barrier exit days instead of SEPA exits.
+
+    Creates multi-day trajectories truncated to barrier outcomes for backtesting.
+
+    Args:
+        d1: D1 trades DataFrame
+        d3: D3 labels DataFrame (with days_to_outcome)
+        n_jobs: Parallel workers
+
+    Returns:
+        Rehydrated DataFrame with trajectories ending at barrier exit
+    """
+    from src.dataset_rehydrator import DatasetRehydrator
+    from src.fundamental_merger import FundamentalMerger
+
+    logger.info(f"Step D3R: Rehydrating with barrier exits ({len(d3)} trades)")
+
+    # Filter D1 to only trades in D3
+    d3_trade_ids = set(d3['trade_id'])
+    d1_filtered = d1[d1['trade_id'].isin(d3_trade_ids)].copy()
+    logger.info(f"   Filtered D1 to {len(d1_filtered):,} trades")
+
+    # Initialize components
+    data_repo = DataRepository()
+    benchmark_data = data_repo.get_benchmark_data(mode=CacheMode.CACHE_ONLY)
+    feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
+    fund_merger = FundamentalMerger(force_cache_only=True)
+
+    # Rehydrate with D3 exits
+    rehydrator = DatasetRehydrator(
+        data_repo, feature_engine, fund_merger,
+        d3_exits=d3  # Use barrier exits from D3
+    )
+    d3_rehydrated = rehydrator.rehydrate_trades(d1_filtered, n_jobs=n_jobs)
+
+    logger.info(f"   Rehydrated: {len(d3_rehydrated):,} rows "
+                f"({len(d3_rehydrated) / len(d1_filtered):.1f} days/trade avg)")
+
+    return d3_rehydrated
+
+
+# =============================================================================
 # MAIN PIPELINE
 # =============================================================================
 def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
@@ -1233,7 +1784,8 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
                 model_type: str = 'regression',
                 tune: bool = False,
                 tune_trials: int = 50,
-                horizon_days: int = 90):
+                horizon_days: int = 90,
+                feature_version: str = 'M01_3BAR'):
     """
     Run the full model training pipeline.
 
@@ -1244,6 +1796,8 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         steps: Pipeline steps to run
         model_type: 'regression' or 'classification'
         tune: Whether to run Optuna hyperparameter tuning
+        horizon_days: Fixed horizon in days for rehydration
+        feature_version: Feature set version for M01_3bar ('M01_3BAR' or 'M01_3BAR_V2')
         tune_trials: Number of Optuna trials
         horizon_days: Fixed horizon for d2r_fixed step (default: 90)
     """
@@ -1276,7 +1830,7 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         if d1_path.exists():
             print(f"   Skipping Step 1. Loading existing D1 from {d1_path}")
             d1 = pd.read_parquet(d1_path)
-        elif 'd2' in steps or 'd2r' in steps or 'd2r90' in steps or 'train' in steps:
+        elif 'd2' in steps or 'd2r' in steps or 'd2rh' in steps or 'train' in steps:
             print("   Step 1 (D1) skipped but file missing. Cannot proceed.")
             return
 
@@ -1300,8 +1854,8 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
                     f"({d2r_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
     # Step 2R-90: Rehydrate D2 with Fixed Horizon (for Triple Barrier)
-    if 'd2r90' in steps:
-        logger.info(f"Step 2R-{horizon_days}: Rehydrating with {horizon_days}-day fixed horizon")
+    if 'd2rh' in steps:
+        logger.info(f"Step D2RH: Rehydrating with {horizon_days}-day fixed horizon")
 
         # CRITICAL: Filter out trades that don't have enough forward-looking data
         # If end_date is 2023-12-31 and horizon is 90 days, we can't test trades after 2023-10-02
@@ -1324,6 +1878,43 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         logger.info(f"  Size: {d2r90_path.stat().st_size / 1024 / 1024:.1f} MB")
         logger.info(f"  Rows: {len(d2_90d):,}")
         logger.info(f"  Avg days/trade: {len(d2_90d) / len(d1_filtered):.1f}")
+
+    # Step D3: Generate Triple Barrier Labels
+    d3_path = Path(f"data/ml/d3_triple_barrier_{horizon_days}d.parquet")
+    if 'd3' in steps:
+        # Requires d2rh data
+        if not d2r90_path.exists():
+            logger.error(f"D3 requires d2rh data. Run with --steps d2rh first.")
+            return
+
+        d3 = generate_d3_labels(
+            d2_path=str(d2r90_path),
+            k_sl=1.0,   # Phase 1 optimized (was 2.0)
+            k_tp=4.0,   # Phase 1 optimized (was 3.0)
+            min_tp=0.20,  # Phase 1 optimized (was 0.15)
+            max_time=30,  # Phase 1 optimized (was 60)
+            n_jobs=-1
+        )
+        d3.to_parquet(d3_path, index=False)
+        logger.info(f"Saved D3 labels to {d3_path} ({d3_path.stat().st_size / 1024 / 1024:.1f} MB)")
+    else:
+        if d3_path.exists() and ('d3r' in steps):
+            logger.info(f"Loading existing D3 from {d3_path}")
+            d3 = pd.read_parquet(d3_path)
+
+    # Step D3R: Rehydrate D3 with Barrier Exits
+    d3r_path = Path(f"data/ml/d3_rehydrated_{horizon_days}d.parquet")
+    if 'd3r' in steps:
+        # Requires D3 labels
+        if not d3_path.exists():
+            logger.error(f"D3R requires D3 labels. Run with --steps d3 first.")
+            return
+        if 'd3' not in steps:
+            d3 = pd.read_parquet(d3_path)
+
+        d3_rehydrated = rehydrate_d3(d1, d3, n_jobs=-1)
+        d3_rehydrated.to_parquet(d3r_path, index=False)
+        logger.info(f"Saved D3 rehydrated to {d3r_path} ({d3r_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
     # Step 3: Train Model (Walk-Forward)
     if 'train' in steps:
@@ -1349,6 +1940,73 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
             print(f"\n[SUCCESS] Model report saved to: {report_path}")
             print(f"[SUCCESS] Feature importance saved to: models/feature_importance.csv\n")
 
+    # Step D3-TRAIN: Train M01_3bar (Triple Barrier Model)
+    if 'd3train' in steps:
+        logger.info("=" * 70)
+        logger.info("Step D3-TRAIN: Training M01_3bar (Triple Barrier Model)")
+        logger.info("=" * 70)
+
+        # Check if D3 exists
+        if not d3_path.exists():
+            logger.error(f"D3 dataset not found: {d3_path}")
+            logger.error(f"Run --steps d3 first to generate triple barrier labels")
+            return
+
+        # Train M01_3bar
+        model, features, metrics_df = train_triple_barrier_model(
+            d3_path=str(d3_path),
+            tune=tune,
+            tune_trials=tune_trials,
+            verbose=True,
+            feature_version=feature_version
+        )
+
+        if model is not None:
+            # Save model (include version suffix for V2)
+            model_name = 'M01_3bar' if feature_version == 'M01_3BAR' else 'M01_3bar_v2'
+            model_path = Path('models') / f'model_{model_name.lower()}.json'
+            model.save_model(str(model_path))
+            logger.info(f"Saved model to {model_path}")
+
+            # Save config
+            import json
+            config = {
+                'model_name': model_name,
+                'feature_version': feature_version,
+                'created_at': datetime.now().isoformat(),
+                'feature_columns': features,
+                'barrier_params': {
+                    'k_sl': 1.0,  # Phase 1 optimized
+                    'k_tp': 4.0,  # Phase 1 optimized
+                    'min_tp': 0.20,  # Phase 1 optimized
+                    'max_time': 30,  # Phase 1 optimized
+                    'horizon_days': horizon_days
+                },
+                'validation_metrics': metrics_df.to_dict('records')
+            }
+
+            config_path = Path('models') / f'model_{model_name.lower()}_config.json'
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            logger.info(f"Saved config to {config_path}")
+
+            # Generate feature importance
+            output_dir = Path("models")
+            importance_df = save_feature_importance(model, features, output_dir)
+
+            # Rename feature importance file to avoid overwriting M01's
+            default_importance = output_dir / "feature_importance.csv"
+            m01_3bar_importance = output_dir / "feature_importance_m01_3bar.csv"
+            if default_importance.exists():
+                default_importance.replace(m01_3bar_importance)
+                logger.info(f"Saved feature importance to {m01_3bar_importance}")
+
+            # Generate report
+            generate_model_report_m01_3bar(model, metrics_df, features, config)
+
+            print(f"\n[SUCCESS] M01_3bar model trained and saved to models/")
+            print(f"[SUCCESS] Check models/model_report_M01_3bar_*.md for detailed results\n")
+
     elapsed = time.time() - start_time
     print(f"\nTotal Pipeline Time: {elapsed/60:.1f} minutes\n")
 
@@ -1358,9 +2016,10 @@ if __name__ == "__main__":
     parser.add_argument('--start', default='2018-01-01', help='Start Date (YYYY-MM-DD)')
     parser.add_argument('--end', default='2023-12-31', help='End Date (YYYY-MM-DD)')
     parser.add_argument('--threshold', type=float, default=15.0, help='Success threshold (%)')
-    parser.add_argument('--steps', nargs='+', choices=['d1', 'd2', 'd2r', 'd2r90', 'train'],
+    parser.add_argument('--steps', nargs='+',
+                       choices=['d1', 'd2', 'd2r', 'd2rh', 'd3', 'd3r', 'train', 'd3train'],
                        default=['d1', 'd2', 'train'],
-                       help='Pipeline steps to execute (d1=trades, d2=features, d2r=rehydrate, d2r90=90-day horizon, train=model)')
+                       help='Pipeline steps (d1=trades, d2=features, d2r=rehydrate, d2rh=horizon, d3=labels, d3r=rehydrate_d3, train=M01, d3train=M01_3bar)')
 
     # MODEL TRAINING OPTIONS
     parser.add_argument('--model-type', choices=['regression', 'classification'],
@@ -1376,11 +2035,17 @@ if __name__ == "__main__":
     # REHYDRATION OPTIONS (for Triple Barrier)
     parser.add_argument('--horizon', type=int, default=90,
                        choices=[30, 60, 90, 120, 180],
-                       help='Fixed horizon in days for d2r90 step (default: 90, options: 30/60/90/120/180)')
+                       help='Fixed horizon in days for d2rh/d3/d3r steps (default: 90)')
+
+    # FEATURE VERSION (for M01_3bar)
+    parser.add_argument('--feature-version', type=str, default='M01_3BAR',
+                       choices=['M01_3BAR', 'M01_3BAR_V2'],
+                       help='Feature set version for M01_3bar model (default: M01_3BAR, V2: includes velocity features)')
 
     args = parser.parse_args()
 
     run_pipeline(args.start, args.end, args.threshold, args.steps,
                 model_type=args.model_type,
                 tune=args.tune, tune_trials=args.trials,
-                horizon_days=args.horizon)
+                horizon_days=args.horizon,
+                feature_version=args.feature_version)

@@ -102,7 +102,8 @@ class VectorBTBacktester:
 
         Returns:
             dict with keys: sharpe, sortino, max_drawdown_pct, max_favorable_excursion_pct,
-                           total_return_pct, calmar, win_rate, peak_date, days_to_peak
+                           max_adverse_excursion_pct, total_return_pct, calmar, win_rate, 
+                           peak_date, days_to_peak, regret_pct, return_to_mdd
         """
         if self.portfolio is None:
             raise RuntimeError("Must run run_simulation() first")
@@ -111,13 +112,18 @@ class VectorBTBacktester:
         equity = self.portfolio.value()
         initial_value = equity.iloc[0]
 
-        # Calculate MDD and MFE
+        # Calculate MDD (max drawdown from running peak)
         running_max = equity.expanding().max()
         drawdown = (equity - running_max) / running_max * 100
         max_drawdown_pct = drawdown.min()
 
+        # Calculate MFE (max favorable excursion from entry)
         favorable_excursion = (equity - initial_value) / initial_value * 100
         max_fav_exc_pct = favorable_excursion.max()
+
+        # Calculate MAE (max adverse excursion from entry - worst point before exit)
+        adverse_excursion = (equity - initial_value) / initial_value * 100
+        max_adv_exc_pct = adverse_excursion.min()  # Most negative = worst drawdown from entry
 
         # Find peak date
         peak_idx = equity.idxmax()
@@ -126,6 +132,12 @@ class VectorBTBacktester:
 
         # Total return
         total_return_pct = self.portfolio.total_return() * 100
+
+        # Regret: How much profit left on table (MFE - final return)
+        regret_pct = max_fav_exc_pct - total_return_pct
+
+        # Return-to-MDD ratio (risk-adjusted, higher = better)
+        return_to_mdd = abs(total_return_pct / max_drawdown_pct) if max_drawdown_pct != 0 else None
 
         # Get VectorBT stats (handle cases where stats might not be available)
         try:
@@ -152,7 +164,10 @@ class VectorBTBacktester:
             'calmar': calmar,
             'max_drawdown_pct': max_drawdown_pct,
             'max_favorable_excursion_pct': max_fav_exc_pct,
+            'max_adverse_excursion_pct': max_adv_exc_pct,
             'total_return_pct': total_return_pct,
+            'regret_pct': regret_pct,
+            'return_to_mdd': return_to_mdd,
             'win_rate': win_rate,
             'peak_date': peak_date,
             'days_to_peak': days_to_peak,

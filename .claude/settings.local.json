@@ -17,7 +17,8 @@
       "Bash(C:/Users/Hang/PycharmProjects/quantamental/.venv/Scripts/python.exe:*)",
       "Bash(chcp:*)",
       "Bash($env:PYTHONIOENCODING=\"utf-8\")",
-      "Bash(.venvScriptspython.exe test_delta_features.py)"
+      "Bash(.venvScriptspython.exe test_delta_features.py)",
+      "Bash(C:/Users/Hang/PycharmProjects/quantamental/.venv/Scripts/Activate.ps1)"
     ],
     "deny": [],
     "ask": []

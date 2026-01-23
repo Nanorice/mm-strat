@@ -86,12 +86,16 @@ class TradeAnalyzer:
             'label': label,
             'return_pct': return_pct,
             'exit_reason': exit_reason,
+            'barrier_outcome': first_row.get('barrier_outcome', None),
             'sharpe': metrics['sharpe'],
             'sortino': metrics['sortino'],
             'calmar': metrics['calmar'],
             'max_dd_pct': metrics['max_drawdown_pct'],
             'max_fav_exc_pct': metrics['max_favorable_excursion_pct'],
+            'max_adv_exc_pct': metrics['max_adverse_excursion_pct'],
             'total_return_pct': metrics['total_return_pct'],
+            'regret_pct': metrics['regret_pct'],
+            'return_to_mdd': metrics['return_to_mdd'],
             'win_rate': metrics['win_rate'],
             'peak_date': metrics['peak_date'],
             'days_to_peak': metrics['days_to_peak'],
@@ -177,9 +181,48 @@ class TradeAnalyzer:
         print(f"Average Sharpe: {self.results['sharpe'].mean():.2f}")
         print(f"Average Sortino: {self.results['sortino'].mean():.2f}")
         print(f"Average Max DD: {self.results['max_dd_pct'].mean():.2f}%")
-        print(f"Average Max Fav Exc: {self.results['max_fav_exc_pct'].mean():.2f}%")
+        print(f"Average MFE: {self.results['max_fav_exc_pct'].mean():.2f}%")
+        print(f"Average MAE: {self.results['max_adv_exc_pct'].mean():.2f}%")
+        print(f"Average Regret: {self.results['regret_pct'].mean():.2f}%")
         print(f"Average days held: {self.results['days_held'].mean():.1f}")
         print(f"Average days to peak: {self.results['days_to_peak'].mean():.1f}")
+
+        # Portfolio-level metrics
+        print("\n--- Portfolio-Level Metrics ---")
+        winners = self.results[self.results['total_return_pct'] > 0]
+        losers = self.results[self.results['total_return_pct'] <= 0]
+        win_rate = len(winners) / len(self.results) * 100
+        avg_win = winners['total_return_pct'].mean() if len(winners) > 0 else 0
+        avg_loss = losers['total_return_pct'].mean() if len(losers) > 0 else 0
+        
+        # Expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+        expectancy = (win_rate/100 * avg_win) + ((1 - win_rate/100) * avg_loss)
+        print(f"Win Rate: {win_rate:.1f}%")
+        print(f"Avg Win: {avg_win:.2f}%")
+        print(f"Avg Loss: {avg_loss:.2f}%")
+        print(f"Expectancy: {expectancy:.2f}%")
+        
+        # Profit Factor = gross profits / gross losses
+        gross_profit = winners['total_return_pct'].sum() if len(winners) > 0 else 0
+        gross_loss = abs(losers['total_return_pct'].sum()) if len(losers) > 0 else 1
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        print(f"Profit Factor: {profit_factor:.2f}")
+        
+        # Avg Return-to-MDD
+        valid_r2mdd = self.results['return_to_mdd'].dropna()
+        if len(valid_r2mdd) > 0:
+            print(f"Avg Return/MDD: {valid_r2mdd.mean():.2f}")
+
+        # Barrier outcome breakdown (if available)
+        if 'barrier_outcome' in self.results.columns and self.results['barrier_outcome'].notna().any():
+            print("\n--- Barrier Outcome Breakdown ---")
+            barrier_stats = self.results.groupby('barrier_outcome').agg({
+                'total_return_pct': ['mean', 'median', 'count'],
+                'max_dd_pct': 'mean',
+                'max_fav_exc_pct': 'mean',
+                'days_held': 'mean',
+            }).round(2)
+            print(barrier_stats)
 
         # Winners vs Losers
         if 'label' in self.results.columns and self.results['label'].notna().any():
@@ -190,14 +233,16 @@ class TradeAnalyzer:
             print(f"\nWinners ({len(winners):,} trades):")
             print(f"  Avg return: {winners['total_return_pct'].mean():.2f}%")
             print(f"  Avg Max DD: {winners['max_dd_pct'].mean():.2f}%")
-            print(f"  Avg Max Fav Exc: {winners['max_fav_exc_pct'].mean():.2f}%")
+            print(f"  Avg MFE: {winners['max_fav_exc_pct'].mean():.2f}%")
+            print(f"  Avg MAE: {winners['max_adv_exc_pct'].mean():.2f}%")
             print(f"  Avg Sharpe: {winners['sharpe'].mean():.2f}")
             print(f"  Avg days to peak: {winners['days_to_peak'].mean():.1f}")
 
             print(f"\nLosers ({len(losers):,} trades):")
             print(f"  Avg return: {losers['total_return_pct'].mean():.2f}%")
             print(f"  Avg Max DD: {losers['max_dd_pct'].mean():.2f}%")
-            print(f"  Avg Max Fav Exc: {losers['max_fav_exc_pct'].mean():.2f}%")
+            print(f"  Avg MFE: {losers['max_fav_exc_pct'].mean():.2f}%")
+            print(f"  Avg MAE: {losers['max_adv_exc_pct'].mean():.2f}%")
             print(f"  Avg Sharpe: {losers['sharpe'].mean():.2f}")
             print(f"  Avg days to peak: {losers['days_to_peak'].mean():.1f}")
 
