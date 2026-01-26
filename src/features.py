@@ -212,6 +212,23 @@ class FeatureEngineer:
         # Igniters: Parabolic acceleration; Drifters: Linear or decelerating
         df['price_momentum_curve'] = (df['Close'] - df['Close'].shift(1)) - (df['Close'].shift(1) - df['Close'].shift(2))
 
+        # 6. Immediate Thrust - Price second derivative (Physics: Jerk measurement)
+        # Formula: Change in momentum = today's price change - yesterday's price change
+        # Igniters: Explosive acceleration (jerk); Drifters: Constant velocity
+        df['immediate_thrust'] = df['Close'].diff(1).diff(1)
+
+        # 7. Log Volume Velocity - Demand surge detector (logarithmic scaling)
+        # Formula: 2-day change in log(volume) to capture exponential surges
+        # Igniters: Volume doubles/triples; Drifters: Flat volume
+        df['log_volume_velocity'] = np.log(df['Volume'].replace(0, 1)).diff(2)
+
+        # 8. Price Acceleration 10D - Trend slope change (10-day window)
+        # Formula: (New 10d slope) - (Old 10d slope) to detect steepening trends
+        # Igniters: Accelerating trends; Drifters: Linear/decelerating trends
+        slope_new = (df['Close'] - df['Close'].shift(10)) / 10
+        slope_old = (df['Close'].shift(10) - df['Close'].shift(20)) / 10
+        df['price_accel_10d'] = slope_new - slope_old
+
         # =====================================================================
         # END VELOCITY FEATURES
         # =====================================================================

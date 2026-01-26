@@ -570,25 +570,251 @@ def tune_hyperparameters_optuna(X: pd.DataFrame, y: pd.Series,
 # =============================================================================
 # STEP 3: TRAIN MODEL (WALK-FORWARD)
 # =============================================================================
+def calculate_y_max_from_rehydrated(d2_features: pd.DataFrame, 
+                                     d2r_path: str = 'data/ml/d2_rehydrated.parquet') -> pd.DataFrame:
+    """
+    Calculate y_max (Maximum Favorable Excursion) for each trade from rehydrated data.
+    
+    y_max = max return achievable during the trade (peak - entry) / entry * 100
+    Also calculates regret = y_max - return_pct (profit left on table)
+    
+    Args:
+        d2_features: D2 features DataFrame with trade entries
+        d2r_path: Path to D2 rehydrated parquet file
+        
+    Returns:
+        DataFrame with y_max and regret columns added
+    """
+    d2r_file = Path(d2r_path)
+    if not d2r_file.exists():
+        logger.warning(f"D2 rehydrated file not found: {d2r_path}")
+        logger.warning("Cannot calculate y_max. Run --steps d2r first.")
+        return d2_features
+    
+    logger.info(f"Calculating y_max from {d2r_path}...")
+    d2_rehydrated = pd.read_parquet(d2r_path)
+    
+    # Calculate y_max per trade
+    y_max_results = []
+    
+    for trade_id, group in d2_rehydrated.groupby('trade_id'):
+        # Entry is day 0
+        if 'day_in_trade' in group.columns:
+            entry_rows = group[group['day_in_trade'] == 0]
+        else:
+            entry_rows = group.iloc[:1]
+            
+        if len(entry_rows) == 0:
+            continue
+            
+        entry_price = entry_rows['Close'].iloc[0]
+        if entry_price <= 0:
+            continue
+            
+        # y_max = MFE (max return from entry to peak)
+        highest = group['High'].max()
+        y_max = ((highest - entry_price) / entry_price) * 100
+        
+        # Get ticker and date for merge
+        ticker = group['ticker'].iloc[0] if 'ticker' in group.columns else None
+        date = entry_rows['Date'].iloc[0] if 'Date' in entry_rows.columns else None
+        
+        y_max_results.append({
+            'trade_id': trade_id,
+            'ticker': ticker,
+            'date': pd.to_datetime(date).normalize() if date is not None else None,
+            'y_max': y_max
+        })
+    
+    y_max_df = pd.DataFrame(y_max_results)
+    logger.info(f"   Calculated y_max for {len(y_max_df)} trades (mean: {y_max_df['y_max'].mean():.2f}%)")
+    
+    # Merge y_max back to d2_features
+    d2_features = d2_features.copy()
+    d2_features['date'] = pd.to_datetime(d2_features['date']).dt.normalize()
+    
+    # Merge on both ticker and date for accuracy
+    merged = pd.merge(
+        d2_features,
+        y_max_df[['ticker', 'date', 'y_max']],
+        on=['ticker', 'date'],
+        how='left'
+    )
+    
+    # Calculate regret (profit left on table)
+    if 'return_pct' in merged.columns:
+        merged['regret'] = merged['y_max'] - merged['return_pct']
+    
+    missing_y_max = merged['y_max'].isna().sum()
+    if missing_y_max > 0:
+        logger.warning(f"   {missing_y_max} trades missing y_max (no matching rehydrated data)")
+        # Fill with return_pct as fallback
+        merged['y_max'] = merged['y_max'].fillna(merged['return_pct'])
+        merged['regret'] = merged['regret'].fillna(0)
+    
+    return merged
+
+
+def enrich_d2_with_survivor_labels(d2_features: pd.DataFrame,
+                                    d2r_path: str = 'data/ml/d2_rehydrated.parquet',
+                                    stop_multiplier: float = 2.0) -> pd.DataFrame:
+    """
+    Enrich d2_features with survivor model labels (y_max, MAE, MFE, is_survivor).
+
+    Survivor Model Concept:
+    - structural_stop = -K × nATR (where K = stop_multiplier, default 2.0)
+    - Survivor: MAE > structural_stop (didn't hit stop)
+    - Crashed: MAE <= structural_stop (hit stop)
+    - y_max = MFE (for survivors), MAE (for crashed)
+
+    Args:
+        d2_features: D2 features DataFrame
+        d2r_path: Path to D2 rehydrated parquet file
+        stop_multiplier: Multiplier for structural stop (default: 2.0)
+
+    Returns:
+        DataFrame with added columns: y_max, MAE, MFE, structural_stop, is_survivor
+    """
+    d2r_file = Path(d2r_path)
+    if not d2r_file.exists():
+        logger.warning(f"D2 rehydrated file not found: {d2r_path}")
+        logger.warning("Cannot calculate survivor labels. Run --steps d2rh first.")
+        return d2_features
+
+    logger.info(f"Calculating survivor labels from {d2r_path}...")
+    logger.info(f"   Structural stop: -{stop_multiplier}×ATR")
+
+    d2_rehydrated = pd.read_parquet(d2r_path)
+
+    # Add day_in_trade if missing
+    if 'day_in_trade' not in d2_rehydrated.columns:
+        logger.info("   Adding day_in_trade to rehydrated data...")
+        from src import eda_utils
+        d2_rehydrated = eda_utils.add_trade_sequence(d2_rehydrated, date_col='Date')
+
+    # Calculate MAE, MFE, and nATR for each trade
+    results = []
+
+    for trade_id, group in d2_rehydrated.groupby('trade_id'):
+        # Entry is day 0
+        entry_rows = group[group['day_in_trade'] == 0]
+        if len(entry_rows) == 0:
+            continue
+
+        entry_price = entry_rows['Close'].iloc[0]
+        if entry_price <= 0:
+            continue
+
+        # Get nATR from entry day
+        if 'nATR' in entry_rows.columns:
+            natr = entry_rows['nATR'].iloc[0]
+        else:
+            logger.warning(f"   nATR not found for trade {trade_id}, using default 5.0")
+            natr = 5.0
+
+        # Calculate MFE (Max Favorable Excursion)
+        highest = group['High'].max()
+        mfe = ((highest - entry_price) / entry_price) * 100
+
+        # Calculate MAE (Max Adverse Excursion)
+        lowest = group['Low'].min()
+        mae = ((lowest - entry_price) / entry_price) * 100
+
+        # Structural stop threshold
+        structural_stop = -stop_multiplier * natr
+
+        # Determine survivor status
+        is_survivor = mae > structural_stop
+
+        # y_max for training
+        y_max = mfe if is_survivor else mae
+
+        # Get ticker and date for merge
+        ticker = group['ticker'].iloc[0] if 'ticker' in group.columns else None
+        date = entry_rows['Date'].iloc[0] if 'Date' in entry_rows.columns else None
+
+        results.append({
+            'trade_id': trade_id,
+            'ticker': ticker,
+            'date': pd.to_datetime(date).normalize() if date is not None else None,
+            'MFE': mfe,
+            'MAE': mae,
+            'nATR': natr,
+            'structural_stop': structural_stop,
+            'is_survivor': is_survivor,
+            'y_max': y_max
+        })
+
+    results_df = pd.DataFrame(results)
+
+    # Calculate statistics
+    n_total = len(results_df)
+    n_crashed = (~results_df['is_survivor']).sum()
+    n_survived = results_df['is_survivor'].sum()
+    crash_rate = n_crashed / n_total if n_total > 0 else 0
+
+    logger.info(f"   Total trades: {n_total}")
+    logger.info(f"   🔴 Crashed: {n_crashed} ({crash_rate:.1%})")
+    logger.info(f"   🟢 Survived: {n_survived} ({(1-crash_rate):.1%})")
+
+    crashed_mean = results_df[~results_df['is_survivor']]['y_max'].mean()
+    survived_mean = results_df[results_df['is_survivor']]['y_max'].mean()
+    logger.info(f"   Mean y_max (crashed): {crashed_mean:.2f}%")
+    logger.info(f"   Mean y_max (survived): {survived_mean:.2f}%")
+
+    # Merge back to d2_features
+    d2_features = d2_features.copy()
+    d2_features['date'] = pd.to_datetime(d2_features['date']).dt.normalize()
+
+    merged = pd.merge(
+        d2_features,
+        results_df[['ticker', 'date', 'MFE', 'MAE', 'structural_stop', 'is_survivor', 'y_max']],
+        on=['ticker', 'date'],
+        how='left'
+    )
+
+    # Calculate regret
+    if 'return_pct' in merged.columns:
+        merged['regret'] = merged['MFE'] - merged['return_pct']
+
+    missing = merged['y_max'].isna().sum()
+    if missing > 0:
+        logger.warning(f"   {missing} trades missing survivor labels (no matching rehydrated data)")
+        # Fill with return_pct as fallback
+        merged['y_max'] = merged['y_max'].fillna(merged['return_pct'])
+        merged['is_survivor'] = merged['is_survivor'].fillna(True)  # Assume survivors if missing
+
+    return merged
+
+
 def train_model_walk_forward(data: pd.DataFrame,
                               model_type: str = 'regression',
                               tune: bool = False,
                               tune_trials: int = 50,
                               train_years: int = 3,
-                              test_years: int = 1) -> Tuple:
+                              test_years: int = 1,
+                              target: str = 'return_pct',
+                              survivor_model: bool = False,
+                              survivor_stop_multiplier: float = 2.0) -> Tuple:
     """
     Train XGBoost using Walk-Forward validation.
-    
+
     Strategy:
       Fold 1: Train [2015-2017], Test [2018]
       Fold 2: Train [2016-2018], Test [2019]
       ...
-    
+
     Args:
         data: Merged D1+D2 DataFrame.
+        model_type: 'regression' or 'classification'
+        tune: Whether to run Optuna hyperparameter tuning
+        tune_trials: Number of Optuna trials
         train_years: Size of training window.
         test_years: Size of test window.
-    
+        target: Target column to train on: 'return_pct', 'y_max', or 'label'
+        survivor_model: Enable Survivor Model (train only on survivors)
+        survivor_stop_multiplier: Structural stop multiplier for survivor filtering
+
     Returns:
         Tuple of (trained_model, feature_columns, metrics_dict)
     """
@@ -609,6 +835,7 @@ def train_model_walk_forward(data: pd.DataFrame,
     
     logger.info(f"   Using {len(available_cols)} features for training")
     logger.info(f"   Model type: {model_type}")
+    logger.info(f"   Target: {target}")
 
     # Prepare data
     data = data.sort_values('date')
@@ -619,8 +846,52 @@ def train_model_walk_forward(data: pd.DataFrame,
 
     years = sorted(data['year'].unique())
 
-    # Determine target column based on model type
-    target_col = 'return_pct' if model_type == 'regression' else 'label'
+    # Determine target column based on target parameter
+    # Override model_type based on target to ensure consistency
+    if target == 'label':
+        target_col = 'label'
+        model_type = 'classification'
+    elif target == 'y_max':
+        target_col = 'y_max'
+        if target_col not in data.columns:
+            logger.info("   y_max not in data, calculating from D2 rehydrated...")
+            data = calculate_y_max_from_rehydrated(data)
+        model_type = 'regression'
+    else:  # return_pct (default)
+        target_col = 'return_pct'
+        # model_type remains as specified
+
+    # SURVIVOR MODEL: Enrich with survivor labels and filter
+    if survivor_model:
+        logger.info("=" * 70)
+        logger.info("SURVIVOR MODEL ENABLED")
+        logger.info("=" * 70)
+
+        # Calculate survivor labels if not already present
+        if 'is_survivor' not in data.columns:
+            logger.info("   Enriching with survivor labels...")
+            data = enrich_d2_with_survivor_labels(
+                data,
+                d2r_path='data/ml/d2_rehydrated.parquet',
+                stop_multiplier=survivor_stop_multiplier
+            )
+
+        # Use y_max as target for survivor model
+        if target != 'label':  # Don't override if classification
+            target_col = 'y_max'
+            logger.info(f"   Target overridden to: {target_col}")
+            model_type = 'regression'
+
+        # Filter: Train only on survivors
+        n_before = len(data)
+        data = data[data['is_survivor'] == True].copy()
+        n_after = len(data)
+        n_filtered = n_before - n_after
+
+        logger.info(f"   Filtered {n_filtered} crashed trades ({n_filtered/n_before:.1%})")
+        logger.info(f"   Training on {n_after} survivor trades")
+        logger.info(f"   Expected prediction bias: Mean y_max ≈ {data[target_col].mean():.1f}%")
+        logger.info("=" * 70)
 
     # Optuna tuning (optional, runs once on full dataset before walk-forward)
     best_params = {}
@@ -1785,7 +2056,10 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
                 tune: bool = False,
                 tune_trials: int = 50,
                 horizon_days: int = 90,
-                feature_version: str = 'M01_3BAR'):
+                feature_version: str = 'M01_3BAR',
+                target: str = 'return_pct',
+                survivor_model: bool = False,
+                survivor_stop_multiplier: float = 2.0):
     """
     Run the full model training pipeline.
 
@@ -1799,7 +2073,9 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
         horizon_days: Fixed horizon in days for rehydration
         feature_version: Feature set version for M01_3bar ('M01_3BAR' or 'M01_3BAR_V2')
         tune_trials: Number of Optuna trials
-        horizon_days: Fixed horizon for d2r_fixed step (default: 90)
+        target: Target column for M01 training ('return_pct', 'y_max', 'label')
+        survivor_model: Enable Survivor Model (train only on non-crashed trades)
+        survivor_stop_multiplier: Structural stop multiplier for survivor filtering (default: 2.0)
     """
     if steps is None:
         steps = ['d1', 'd2', 'train']
@@ -1922,7 +2198,10 @@ def run_pipeline(start_date: str, end_date: str, threshold: float = 15.0,
             merged,
             model_type=model_type,
             tune=tune,
-            tune_trials=tune_trials
+            tune_trials=tune_trials,
+            target=target,
+            survivor_model=survivor_model,
+            survivor_stop_multiplier=survivor_stop_multiplier
         )
 
         # Step 4: Save Production Model
@@ -2042,10 +2321,24 @@ if __name__ == "__main__":
                        choices=['M01_3BAR', 'M01_3BAR_V2'],
                        help='Feature set version for M01_3bar model (default: M01_3BAR, V2: includes velocity features)')
 
+    # TARGET SELECTION (for M01 dual labels - Option B)
+    parser.add_argument('--target', type=str, default='return_pct',
+                       choices=['return_pct', 'y_max', 'label'],
+                       help='Target column for M01 training (default: return_pct, y_max: max favorable excursion, label: binary)')
+
+    # SURVIVOR MODEL OPTIONS
+    parser.add_argument('--survivor-model', action='store_true',
+                       help='Enable Survivor Model: Train only on trades that do not hit structural stop (-K×ATR)')
+    parser.add_argument('--survivor-stop-multiplier', type=float, default=2.0,
+                       help='Structural stop multiplier for survivor model (default: 2.0, meaning -2×ATR)')
+
     args = parser.parse_args()
 
     run_pipeline(args.start, args.end, args.threshold, args.steps,
                 model_type=args.model_type,
                 tune=args.tune, tune_trials=args.trials,
                 horizon_days=args.horizon,
-                feature_version=args.feature_version)
+                feature_version=args.feature_version,
+                target=args.target,
+                survivor_model=args.survivor_model,
+                survivor_stop_multiplier=args.survivor_stop_multiplier)

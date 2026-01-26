@@ -1,0 +1,66 @@
+Cell 32:
+# Generate predictions and analyze calibration
+if m3bar_model is not None and d3 is not None:
+    print("Generating M01_3BAR predictions...")
+    
+    # Predict probabilities
+    d3['ignition_prob'] = m3bar_model.predict_proba(X_3bar)[:, 1]
+    
+    # Calibration analysis
+    fraction_of_positives, mean_predicted_value, ece = eda_utils.analyze_calibration(
+        y_3bar.values, 
+        d3['ignition_prob'].values, 
+        n_bins=10
+    )
+    
+    print(f"\n📊 Calibration Analysis:")
+    print(f"   Expected Calibration Error (ECE): {ece:.4f}")
+    print(f"   {'✅ Well-calibrated' if ece < 0.1 else '⚠️  Needs recalibration'}")
+    
+    # Visualization
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # 1. Calibration curve
+    ax1 = axes[0]
+    ax1.plot([0, 1], [0, 1], 'k--', linewidth=2, label='Perfect calibration')
+    ax1.plot(mean_predicted_value, fraction_of_positives, 'o-', linewidth=2, 
+             markersize=8, color='steelblue', label=f'M01_3BAR (ECE={ece:.3f})')
+    ax1.set_xlabel('Mean Predicted Probability')
+    ax1.set_ylabel('Fraction of Positives')
+    ax1.set_title('Calibration Curve')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Prediction distribution
+    ax2 = axes[1]
+    ax2.hist(d3['ignition_prob'], bins=30, color='teal', edgecolor='black', alpha=0.7)
+    ax2.axvline(d3['ignition_prob'].median(), color='red', linestyle='--', 
+                linewidth=2, label=f'Median: {d3["ignition_prob"].median():.2f}')
+    ax2.set_xlabel('Ignition Probability')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Prediction Distribution')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+    
+    # 3. Win rate by probability bins
+    ax3 = axes[2]
+    prob_bins = pd.cut(d3['ignition_prob'], bins=10)
+    win_rate_by_bin = d3.groupby(prob_bins)['y_meta'].mean() * 100
+    bin_centers = [interval.mid for interval in win_rate_by_bin.index]
+    
+    ax3.bar(range(len(win_rate_by_bin)), win_rate_by_bin.values, 
+            color='steelblue', edgecolor='black', alpha=0.7)
+    ax3.set_xticks(range(len(win_rate_by_bin)))
+    ax3.set_xticklabels([f"{bc:.1f}" for bc in bin_centers], rotation=45)
+    ax3.set_xlabel('Predicted Probability Bin (center)')
+    ax3.set_ylabel('Actual TP Rate (%)')
+    ax3.set_title('Reliability Diagram')
+    ax3.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    plt.savefig('../evaluation/section3_calibration.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print("\n✅ Calibration analysis complete")
+else:
+    print("⚠️  Load M01_3BAR model first")

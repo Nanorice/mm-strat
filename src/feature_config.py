@@ -163,7 +163,7 @@ DELTA_FEATURES = [f"{feature}_Delta" for feature in FEATURES_TO_LAG]
 # =============================================================================
 # MODEL-SPECIFIC FEATURE SETS
 # =============================================================================
-# M01: SEPA Signal Quality Model (Predicts: "Will this trade hit 15%+ profit?")
+# M01: SEPA Signal Regressor Model (Predicts: expected return)
 M01_FEATURES = [
     # Alphas
     'alpha009', 
@@ -197,20 +197,62 @@ M01_3BAR_FEATURES = M01_FEATURES.copy()  # Start with proven M01 feature set
 
 # M01_3BAR_V2: Enhanced with Velocity Features (Phase 2: Ignition Engine)
 # Adds velocity-specific features to distinguish igniters from drifters
-M01_3BAR_FEATURES_V2 = M01_3BAR_FEATURES.copy()
-M01_3BAR_FEATURES_V2.extend([
-    # WorldQuant Slope Change Factors (Acceleration/Deceleration)
-    'alpha046',  # Slope change detector (old slope - new slope)
-    'alpha049',  # Slope deceleration (threshold -0.1)
-    'alpha051',  # Slope deceleration (threshold -0.05)
+# =============================================================================
+# M01_3BAR: IGNITION ENGINE (Velocity-Only)
+# =============================================================================
 
-    # Velocity Features (Custom)
-    'rs_velocity',           # RS acceleration (5-day slope)
-    'volume_acceleration',   # Volume surge detector (2nd derivative)
-    'breakout_momentum',     # Breakout strength (ATR-normalized)
-    'consolidation_duration',# Coil length (tight days count)
-    'price_momentum_curve',  # Price acceleration (2nd derivative)
-])
+M01_3BAR_VELOCITY_ONLY = [
+    # --- 1. THE CAPTAINS (Core Strength) ---
+    'RS',                   # Relative Strength Ratio (The "Freshness" Signal)
+    'alpha011',             # VWAP Divergence (Institutional Intent)
+    'Dist_From_20D_Low',    # Support Proximity (Risk/Reward)
+    'Price_vs_SMA_200',     # Primary Trend Extension (Normalized)
+    'alpha054',             # Structure (Open/Close/Low physics)
+    'Vol_Ratio',            # Demand Fuel
+    'VCP_Ratio',            # Tightness (Volatility Contraction)
+
+    # --- 2. THE VELOCITY SQUAD (Speed & Acceleration) ---
+    'volume_acceleration',  # Demand Surge (2nd derivative)
+    'rs_velocity',          # Speed of RS change
+    'RS_Delta',             # Rate of change of Strength
+    'price_momentum_curve', # Parabolic check
+    'breakout_momentum',    # Thrust
+    'Dist_From_52W_High_Delta', # Speed into highs
+    'Dry_Up_Volume_Delta',  # Supply shock
+    # 'immediate_thrust',     # Price 2nd derivative (Physics)
+    'log_volume_velocity',  # Log-scaled volume force
+
+    # --- 3. WORLDQUANT PHYSICS (Alpha Factors) ---
+    'alpha046',   # Slope Acceleration
+    'alpha051',   # Conditional Slope Change
+    'alpha101',   # Candle Body Strength
+    'alpha009',   # Delta Close Stability
+    'alpha013',   # Price/Volume Covariance
+    'alpha006',   # Volume/Open Correlation
+    'alpha001',   # Rank of Returns
+    'alpha015',   # Rank Correlation (High/Vol)
+    # -- RESTORED ALPHAS --
+    'alpha002',   # Volume/Price Rank Correlation (Unique Physics)
+    'alpha004',   # Rank of Lows (Trend Consistency)
+    'alpha012',   # Directional Volume Force
+
+    # --- 4. CONTEXT & STRUCTURE (No Raw Prices) ---
+    'Dist_From_52W_High',       # Proximity to Blue Sky
+    'consolidation_duration',   # Fuel tank size
+    'Breakout',                 # Context Switch
+    'Consolidation_Width_Delta',# Base tightening
+    'Dist_From_20D_High',       # Proximity to trigger
+    'Dist_From_52W_Low',        # Trend Maturity
+    'RSI_14_Delta',             # Momentum Regime Change
+
+    # --- 5. LAGGED STATE (Context) ---
+    'RS_Lag1',
+    'VCP_Ratio_Lag1',
+    'Dist_From_20D_Low_Lag1',
+    'Price_vs_SMA_200_Lag1',
+    'Dist_From_52W_High_Lag1'
+]
+M01_3BAR_FEATURES_V2 = M01_3BAR_VELOCITY_ONLY.copy()
 
 # Future Models (Placeholders)
 # M02_FEATURES = [...]  # Regime Detection Model

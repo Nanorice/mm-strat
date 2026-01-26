@@ -169,6 +169,17 @@ class DatabaseManager:
         }
         self._ensure_columns_exist('buy_list', lagged_columns)
 
+        # Dual-model columns (M01 + M01_3BAR_V2)
+        dual_model_columns = {
+            'm01_expected_return': 'REAL',  # M01 regressor output
+            'm01_rank': 'INTEGER',          # M01 rank (1=best expected return)
+            'm01_3bar_prob': 'REAL',        # M01_3BAR_V2 classifier output (0-1)
+            'm01_3bar_rank': 'INTEGER',     # M01_3BAR rank (1=best prob)
+            'm01_3bar_sl_price': 'REAL',    # Stop loss price = Close - (k_sl × ATR)
+            'm01_3bar_tp_price': 'REAL'     # Target price = Close × (1 + MAX(min_tp, k_tp × ATR%))
+        }
+        self._ensure_columns_exist('buy_list', dual_model_columns)
+
         logger.info(f"Database initialized at {self.db_path}")
 
     def _ensure_columns_exist(self, table_name: str, columns: Dict[str, str]):
@@ -324,11 +335,15 @@ class DatabaseManager:
                        rs_ma_lag1: Optional[float] = None, dry_up_volume_lag1: Optional[float] = None,
                        high_52w_lag1: Optional[float] = None, low_52w_lag1: Optional[float] = None,
                        rsi14_lag1: Optional[float] = None, dist_from_52w_high_lag1: Optional[float] = None,
-                       # ML scores
+                       # ML scores (legacy single-model)
                        ml_probability: Optional[float] = None, ml_expected_return: Optional[float] = None,
                        ml_model_type: Optional[str] = None, ml_rank: Optional[int] = None,
                        ml_model_version: Optional[str] = None, ml_score_date: Optional[str] = None,
-                       ml_features: Optional[Dict] = None):
+                       ml_features: Optional[Dict] = None,
+                       # Dual-model scores (M01 + M01_3BAR_V2)
+                       m01_expected_return: Optional[float] = None, m01_rank: Optional[int] = None,
+                       m01_3bar_prob: Optional[float] = None, m01_3bar_rank: Optional[int] = None,
+                       m01_3bar_sl_price: Optional[float] = None, m01_3bar_tp_price: Optional[float] = None):
         """
         Adds or updates a ticker on the buy list (active buy signals).
 
@@ -369,6 +384,12 @@ class DatabaseManager:
             ml_model_version: Model version identifier
             ml_score_date: Date ML score was generated
             ml_features: Dictionary of ML model features (stored as JSON)
+            m01_expected_return: M01 model expected return (%)
+            m01_rank: M01 model rank (1=best)
+            m01_3bar_prob: M01_3BAR_V2 model probability (0-1)
+            m01_3bar_rank: M01_3BAR_V2 model rank (1=best)
+            m01_3bar_sl_price: Triple barrier stop loss price
+            m01_3bar_tp_price: Triple barrier target price
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -387,8 +408,9 @@ class DatabaseManager:
              rs_lag1, rs_ma_lag1, dry_up_volume_lag1,
              high_52w_lag1, low_52w_lag1, rsi14_lag1, dist_from_52w_high_lag1,
              ml_probability, ml_expected_return, ml_model_type, ml_rank, ml_model_version, ml_score_date, ml_features,
+             m01_expected_return, m01_rank, m01_3bar_prob, m01_3bar_rank, m01_3bar_sl_price, m01_3bar_tp_price,
              last_updated, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         """, (ticker, signal_date, signal_price, current_price, entry_price, stop_price,
               target_price, atr, rs, vol_ratio, ma50, ma150, ma200, high_52w, low_52w,
               nATR_lag1, atr_lag1, vcp_ratio_lag1, consolidation_width_lag1,
@@ -396,6 +418,7 @@ class DatabaseManager:
               rs_lag1, rs_ma_lag1, dry_up_volume_lag1,
               high_52w_lag1, low_52w_lag1, rsi14_lag1, dist_from_52w_high_lag1,
               ml_probability, ml_expected_return, ml_model_type, ml_rank, ml_model_version, ml_score_date, ml_features_json,
+              m01_expected_return, m01_rank, m01_3bar_prob, m01_3bar_rank, m01_3bar_sl_price, m01_3bar_tp_price,
               last_updated))
 
         conn.commit()
@@ -532,6 +555,35 @@ class DatabaseManager:
             WHERE ticker = ? AND status = 'active'
         """, (ml_rank, ticker))
 
+        conn.commit()
+        conn.close()
+
+    def update_buy_list_column(self, ticker: str, column: str, value):
+        """
+        Update a single column for a ticker in buy_list.
+        Used for updating individual dual-model columns like m01_rank, m01_3bar_rank.
+
+        Args:
+            ticker: Stock symbol
+            column: Column name to update
+            value: New value for the column
+        """
+        # Whitelist of allowed columns to prevent SQL injection
+        allowed_columns = {
+            'm01_expected_return', 'm01_rank', 'm01_3bar_prob', 'm01_3bar_rank',
+            'm01_3bar_sl_price', 'm01_3bar_tp_price', 'ml_rank', 'ml_probability',
+            'ml_expected_return', 'ml_model_version', 'ml_score_date'
+        }
+        if column not in allowed_columns:
+            raise ValueError(f"Column '{column}' not allowed for update")
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            UPDATE buy_list
+            SET {column} = ?, last_updated = ?
+            WHERE ticker = ? AND status = 'active'
+        """, (value, datetime.now().strftime('%Y-%m-%d'), ticker))
         conn.commit()
         conn.close()
 

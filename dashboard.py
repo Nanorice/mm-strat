@@ -254,27 +254,23 @@ def render_signal_review_page(db: DatabaseManager, data_repo: DataRepository):
             st.rerun()
 
     # Feature Information Panel
-    with st.expander("ℹ️ ML Model Features (21 total)", expanded=False):
+    with st.expander("ℹ️ Dual-Model System (M01 + M01_3BAR_V2)", expanded=False):
         st.markdown("""
-        **The ML model (M01) uses 21 features across 3 categories to predict expected returns:**
+        **Two ML models work together to score SEPA setups:**
 
-        **1. Alpha Factors - WorldQuant (6 features):**
-        - alpha009, alpha011, alpha013, alpha041, alpha060, alpha101
+        ### M01 (Regressor) - 21 features
+        - **Output:** Expected Return (%)
+        - **Alpha Factors:** alpha009, alpha011, alpha013, alpha041, alpha060, alpha101
+        - **Technical:** nATR, RS, VCP_Ratio, SMA_50_Slope, Price_vs_SMA_50/200
+        - **Fundamental:** operating_margin, eps_growth_yoy, revenue_accel, pe_ratio
 
-        **2. Technical Setup (10 features):**
-        - nATR, RS, RS_Delta, VCP_Ratio, SMA_50_Slope
-        - Price_vs_SMA_50, Price_vs_SMA_200
-        - Dry_Up_Volume, Dist_From_20D_Low, Dist_From_52W_High
+        ### M01_3BAR_V2 (Classifier) - 43 features
+        - **Output:** Ignition Probability (0-1), SL/TP prices
+        - **Uses Triple Barrier Labels:** k_sl=1.0, k_tp=4.0, min_tp=20%, max_time=30d
+        - **SL Price:** Close - (1.0 × ATR)
+        - **TP Price:** Close × (1 + MAX(20%, 4.0 × ATR%))
 
-        **3. Fundamental (5 features):**
-        - operating_margin, eps_growth_yoy, revenue_accel
-        - pe_ratio, eps_accel
-
-        **Model Details:**
-        - Type: XGBoost Regressor
-        - Output: Expected Return (%)
-        - Version: M01 (2026-01-18)
-        - Objective: Predict expected return for SEPA setups
+        **Ranking:** Each model generates independent ranks (lower = better).
         """)
 
     # Fetch active buy list
@@ -284,20 +280,13 @@ def render_signal_review_page(db: DatabaseManager, data_repo: DataRepository):
         st.info("No active signals in the buy list.")
         return
 
-    # Prepare display columns - support both regression and classification
-    # Check which score column has data
-    has_expected_return = 'ml_expected_return' in buy_list_df.columns and buy_list_df['ml_expected_return'].notna().any()
-    has_probability = 'ml_probability' in buy_list_df.columns and buy_list_df['ml_probability'].notna().any()
-    
-    if has_expected_return:
-        score_col = 'ml_expected_return'
-        score_display_name = 'Exp_Return_%'
-    else:
-        score_col = 'ml_probability'
-        score_display_name = 'ML_Prob'
-    
+    # Prepare display columns - dual-model support
+    # Define all dual-model columns we want to display
     display_columns = [
-        'ticker', 'signal_date', 'ml_rank', score_col,
+        'ticker', 'signal_date',
+        'm01_expected_return', 'm01_rank',      # M01 outputs
+        'm01_3bar_prob', 'm01_3bar_rank',       # M01_3BAR outputs
+        'm01_3bar_sl_price', 'm01_3bar_tp_price',
         'rs', 'volume_ratio', 'signal_price', 'current_price'
     ]
     
@@ -310,19 +299,29 @@ def render_signal_review_page(db: DatabaseManager, data_repo: DataRepository):
         buy_list_df['signal_price'] * 100
     ).round(2)
 
-    # Sort by ML rank (ascending) -> ML score (descending)
-    sort_cols = ['ml_rank']
-    if score_col in buy_list_df.columns:
-        sort_cols.append(score_col)
-    buy_list_df = buy_list_df.sort_values(
-        by=sort_cols,
-        ascending=[True] + [False] * (len(sort_cols) - 1)
-    )
+    # Sort selector for dual-model ranks
+    sort_options = {'M01 Rank (Expected Return)': 'm01_rank', 'M01_3BAR Rank (Ignition Prob)': 'm01_3bar_rank'}
+    sort_by_label = st.selectbox("📊 Primary Sort By:", options=list(sort_options.keys()), index=0)
+    sort_col = sort_options[sort_by_label]
     
-    # Rename score column for clearer display
+    # Sort by selected rank
+    if sort_col in buy_list_df.columns:
+        buy_list_df = buy_list_df.sort_values(by=sort_col, ascending=True, na_position='last')
+    
+    # Prepare display DataFrame with renamed columns
     display_df = buy_list_df[display_columns + ['price_chg_%']].copy()
-    if score_col in display_df.columns:
-        display_df = display_df.rename(columns={score_col: score_display_name})
+    
+    # Rename columns for clearer display
+    col_rename = {
+        'm01_expected_return': 'M01_Exp%',
+        'm01_rank': 'M01_#',
+        'm01_3bar_prob': '3Bar_Prob',
+        'm01_3bar_rank': '3Bar_#',
+        'm01_3bar_sl_price': 'SL_Price',
+        'm01_3bar_tp_price': 'TP_Price',
+        'volume_ratio': 'Vol_Ratio'
+    }
+    display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
 
     # Display sortable dataframe with row selection
     st.markdown("**Click a row to select ticker for Deep Dive:**")

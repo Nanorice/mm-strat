@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_ml_scorer(model_path: Optional[str] = None) -> Optional[MLScorer]:
-    """Load ML scorer if requested."""
+    """Load ML scorer if requested (legacy single-model function)."""
     if model_path is None:
         model_path = config.ML_PRODUCTION_MODEL
 
@@ -58,6 +58,156 @@ def load_ml_scorer(model_path: Optional[str] = None) -> Optional[MLScorer]:
         print(f"\n[WARN] ML model loading failed: {e}")
         print("        Proceeding without ML scoring...\n")
         return None
+
+
+def load_dual_ml_scorers() -> tuple:
+    """Load both M01 and M01_3BAR_V2 models.
+    
+    Returns:
+        tuple: (m01_scorer, m01_3bar_scorer) - either can be None if loading failed
+    """
+    m01_scorer = None
+    m01_3bar_scorer = None
+
+    # Load M01 (Regressor)
+    try:
+        m01_scorer = MLScorer(model_path=config.ML_M01_MODEL, log_predictions=True)
+        print(f"\n[M01] Loaded: Regressor (Expected Return %)")
+        print(f"      Version: {m01_scorer.model_version}, Features: {len(m01_scorer.feature_names)}")
+    except Exception as e:
+        print(f"\n[WARN] M01 loading failed: {e}")
+
+    # Load M01_3BAR_V2 (Classifier)
+    try:
+        m01_3bar_scorer = MLScorer(model_path=config.ML_M01_3BAR_MODEL, log_predictions=True)
+        print(f"[M01_3BAR_V2] Loaded: Classifier (Ignition Probability)")
+        print(f"      Version: {m01_3bar_scorer.model_version}, Features: {len(m01_3bar_scorer.feature_names)}")
+    except Exception as e:
+        print(f"[WARN] M01_3BAR_V2 loading failed: {e}")
+
+    return m01_scorer, m01_3bar_scorer
+
+
+def calculate_sl_price(close: float, atr: float, k_sl: float = None) -> float:
+    """Calculate stop-loss price: Close - (k_sl × ATR)"""
+    if k_sl is None:
+        k_sl = config.BARRIER_K_SL
+    return close - (k_sl * atr)
+
+
+def calculate_tp_price(close: float, atr: float, k_tp: float = None, min_tp: float = None) -> float:
+    """Calculate take-profit price: Close × (1 + MAX(min_tp, k_tp × ATR%))"""
+    if k_tp is None:
+        k_tp = config.BARRIER_K_TP
+    if min_tp is None:
+        min_tp = config.BARRIER_MIN_TP
+    atr_pct = atr / close if close > 0 else 0
+    tp_pct = max(min_tp, k_tp * atr_pct)
+    return close * (1 + tp_pct)
+
+
+def extract_features(row, feature_names: List[str]) -> dict:
+    """Extract feature dict from candidate row."""
+    features_dict = {}
+    for feature_name in feature_names:
+        if feature_name in row.index:
+            value = row[feature_name]
+            if pd.isna(value):
+                features_dict[feature_name] = None
+            elif isinstance(value, (np.integer, np.floating)):
+                features_dict[feature_name] = float(value)
+            else:
+                features_dict[feature_name] = value
+    return features_dict
+
+
+def score_with_dual_models(candidates_df: pd.DataFrame, m01_scorer: Optional[MLScorer],
+                           m01_3bar_scorer: Optional[MLScorer], scan_date_str: str) -> dict:
+    """Score with both models and return results dict.
+    
+    Returns:
+        dict: {ticker: {m01_expected_return, m01_features, m01_3bar_prob, 
+               m01_3bar_features, m01_3bar_sl_price, m01_3bar_tp_price}}
+    """
+    if len(candidates_df) == 0:
+        return {}
+
+    results = {}
+
+    # M01 scoring (regression - expected return)
+    if m01_scorer:
+        try:
+            m01_probs, _ = m01_scorer.score_batch(candidates_df, ticker_column='ticker', date_column='date')
+            for idx, ticker in enumerate(candidates_df['ticker']):
+                if ticker not in results:
+                    results[ticker] = {}
+                prob = m01_probs[idx]
+                results[ticker]['m01_expected_return'] = float(prob) if not np.isnan(prob) else None
+                results[ticker]['m01_features'] = extract_features(candidates_df.iloc[idx], m01_scorer.feature_names)
+        except Exception as e:
+            logger.error(f"M01 scoring failed: {e}")
+
+    # M01_3BAR_V2 scoring (classification - probability)
+    if m01_3bar_scorer:
+        try:
+            m01_3bar_probs, _ = m01_3bar_scorer.score_batch(candidates_df, ticker_column='ticker', date_column='date')
+            for idx, ticker in enumerate(candidates_df['ticker']):
+                if ticker not in results:
+                    results[ticker] = {}
+                prob = m01_3bar_probs[idx]
+                results[ticker]['m01_3bar_prob'] = float(prob) if not np.isnan(prob) else None
+                results[ticker]['m01_3bar_features'] = extract_features(candidates_df.iloc[idx], m01_3bar_scorer.feature_names)
+
+                # Calculate SL/TP prices using ATR
+                row = candidates_df.iloc[idx]
+                atr = row.get('ATR')
+                close = row.get('Close')
+                if atr and close and not np.isnan(atr) and not np.isnan(close):
+                    results[ticker]['m01_3bar_sl_price'] = calculate_sl_price(close, atr)
+                    results[ticker]['m01_3bar_tp_price'] = calculate_tp_price(close, atr)
+                else:
+                    results[ticker]['m01_3bar_sl_price'] = None
+                    results[ticker]['m01_3bar_tp_price'] = None
+        except Exception as e:
+            logger.error(f"M01_3BAR_V2 scoring failed: {e}")
+
+    return results
+
+
+def update_dual_ml_ranks(db: DatabaseManager, scan_date_str: str):
+    """Calculate separate ranks for M01 and M01_3BAR_V2."""
+    buy_list_df = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+
+    if buy_list_df.empty:
+        return
+
+    # Rank by M01 expected return (higher = better)
+    if 'm01_expected_return' in buy_list_df.columns:
+        m01_entries = buy_list_df[buy_list_df['m01_expected_return'].notna()].copy()
+        if len(m01_entries) > 0:
+            scores = m01_entries['m01_expected_return'].values
+            sorted_indices = np.argsort(scores)[::-1]
+            ranks = np.empty(len(scores), dtype=int)
+            ranks[sorted_indices] = np.arange(1, len(scores) + 1)
+
+            for ticker, rank in zip(m01_entries['ticker'], ranks):
+                db.update_buy_list_column(ticker, 'm01_rank', int(rank))
+
+            logger.info(f"Ranked {len(m01_entries)} tickers by M01 expected return")
+
+    # Rank by M01_3BAR_V2 probability (higher = better)
+    if 'm01_3bar_prob' in buy_list_df.columns:
+        m01_3bar_entries = buy_list_df[buy_list_df['m01_3bar_prob'].notna()].copy()
+        if len(m01_3bar_entries) > 0:
+            scores = m01_3bar_entries['m01_3bar_prob'].values
+            sorted_indices = np.argsort(scores)[::-1]
+            ranks = np.empty(len(scores), dtype=int)
+            ranks[sorted_indices] = np.arange(1, len(scores) + 1)
+
+            for ticker, rank in zip(m01_3bar_entries['ticker'], ranks):
+                db.update_buy_list_column(ticker, 'm01_3bar_rank', int(rank))
+
+            logger.info(f"Ranked {len(m01_3bar_entries)} tickers by M01_3BAR_V2 ignition prob")
 
 
 def prepare_ml_candidates(tickers: List[str], enriched_data: dict,
@@ -213,9 +363,9 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     """
     start_time = time.time()
 
-    # Initialize ML scorer
-    ml_scorer = load_ml_scorer(model_path) if use_ml else None
-    use_ml = ml_scorer is not None  # Update flag if loading failed
+    # Initialize dual ML scorers
+    m01_scorer, m01_3bar_scorer = load_dual_ml_scorers() if use_ml else (None, None)
+    use_ml = (m01_scorer is not None or m01_3bar_scorer is not None)  # Update flag if at least one loaded
 
     # Determine scan date
     if scan_date:
@@ -321,11 +471,11 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     print(f"       New triggers: {len(new_triggers_today)} stocks")
 
     # ========================================================================
-    # STEP 5 (Optional): ML Scoring
+    # STEP 5 (Optional): Dual-Model Scoring (M01 + M01_3BAR_V2)
     # ========================================================================
-    ml_scores = {}
-    if use_ml and ml_scorer:
-        print(f"\n[5/{total_steps}] ML Scoring...")
+    dual_scores = {}
+    if use_ml and (m01_scorer or m01_3bar_scorer):
+        print(f"\n[5/{total_steps}] Dual-Model Scoring...")
         ml_start = time.time()
 
         # Get all tickers to score (new triggers + existing buy list)
@@ -343,13 +493,14 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             candidates_df = prepare_ml_candidates(tickers_to_score, enriched_data, scan_date_obj, fund_merger)
 
             if len(candidates_df) > 0:
-                print(f"       Scoring {len(candidates_df)} candidates...")
-                ml_scores = score_with_ml(candidates_df, ml_scorer, scan_date_str)
+                print(f"       Scoring {len(candidates_df)} candidates with dual models...")
+                dual_scores = score_with_dual_models(candidates_df, m01_scorer, m01_3bar_scorer, scan_date_str)
                 ml_time = time.time() - ml_start
 
-                valid_scores = sum(1 for s in ml_scores.values() if s['probability'] is not None)
+                m01_valid = sum(1 for s in dual_scores.values() if s.get('m01_expected_return') is not None)
+                m01_3bar_valid = sum(1 for s in dual_scores.values() if s.get('m01_3bar_prob') is not None)
                 print(f"       [OK] Scored {len(candidates_df)} candidates in {ml_time:.1f}s")
-                print(f"       [OK] Valid predictions: {valid_scores}/{len(candidates_df)}")
+                print(f"       [OK] M01 valid: {m01_valid}, M01_3BAR valid: {m01_3bar_valid}")
             else:
                 print("       [WARN] No candidates with sufficient data")
         else:
@@ -410,24 +561,30 @@ def run_daily_scanner(scan_date: Optional[str] = None,
         else:
             ma50 = ma150 = ma200 = high_52w = low_52w = None
 
-        # Get ML scores
-        ml_prob = None
-        ml_expected_return = None
-        ml_model_type_str = None
+        # Get dual-model scores
+        m01_expected_return = None
+        m01_3bar_prob = None
+        m01_3bar_sl_price = None
+        m01_3bar_tp_price = None
         ml_features_dict = None
         ml_model_ver = None
-        if ticker in ml_scores:
-            score_value = ml_scores[ticker]['probability']
-            ml_features_dict = ml_scores[ticker].get('features')  # Get features dict
-            ml_model_ver = ml_scorer.model_version if ml_scorer else None
-            
-            # Determine model type and set appropriate column
-            if ml_scorer and ml_scorer.is_regressor:
-                ml_expected_return = score_value
-                ml_model_type_str = 'regression'
-            else:
-                ml_prob = score_value
-                ml_model_type_str = 'classification'
+        
+        if ticker in dual_scores:
+            ts = dual_scores[ticker]
+            m01_expected_return = ts.get('m01_expected_return')
+            m01_3bar_prob = ts.get('m01_3bar_prob')
+            m01_3bar_sl_price = ts.get('m01_3bar_sl_price')
+            m01_3bar_tp_price = ts.get('m01_3bar_tp_price')
+            # Combine features from both models for storage
+            ml_features_dict = {
+                'm01_features': ts.get('m01_features', {}),
+                'm01_3bar_features': ts.get('m01_3bar_features', {})
+            }
+            ml_model_ver = f"M01+M01_3BAR_V2"
+
+        # For legacy compatibility, also set ml_probability and ml_expected_return  
+        ml_prob = m01_3bar_prob  # Use 3bar as default probability
+        ml_expected_return_legacy = m01_expected_return
 
         db.add_to_buy_list(
             ticker=ticker,
@@ -444,13 +601,21 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             ma200=ma200,
             high_52w=high_52w,
             low_52w=low_52w,
+            # Legacy ML columns (backward compatibility)
             ml_probability=ml_prob,
-            ml_expected_return=ml_expected_return,
-            ml_model_type=ml_model_type_str,
+            ml_expected_return=ml_expected_return_legacy,
+            ml_model_type='dual',
             ml_rank=None,  # Will be calculated later
             ml_model_version=ml_model_ver,
-            ml_score_date=scan_date_str if (ml_prob or ml_expected_return) else None,
-            ml_features=ml_features_dict
+            ml_score_date=scan_date_str if (m01_expected_return or m01_3bar_prob) else None,
+            ml_features=ml_features_dict,
+            # Dual-model columns
+            m01_expected_return=m01_expected_return,
+            m01_rank=None,  # Calculated later
+            m01_3bar_prob=m01_3bar_prob,
+            m01_3bar_rank=None,  # Calculated later
+            m01_3bar_sl_price=m01_3bar_sl_price,
+            m01_3bar_tp_price=m01_3bar_tp_price
         )
         db.log_buy_list_activity(
             ticker=ticker,
@@ -496,26 +661,28 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             else:
                 ma50 = ma150 = ma200 = high_52w = low_52w = None
 
-            # Get ML scores
-            ml_prob = None
-            ml_expected_return = None
-            ml_model_type_str = None
+            # Get dual-model scores
+            m01_expected_return = None
+            m01_3bar_prob = None
+            m01_3bar_sl_price = None
+            m01_3bar_tp_price = None
             ml_features_dict = None
             ml_model_ver = None
-            if ticker in ml_scores:
-                score_value = ml_scores[ticker]['probability']
-                ml_features_dict = ml_scores[ticker].get('features')
-                ml_model_ver = ml_scorer.model_version if ml_scorer else None
-                
-                # Determine model type and set appropriate column
-                if ml_scorer and ml_scorer.is_regressor:
-                    ml_expected_return = score_value
-                    ml_model_type_str = 'regression'
-                else:
-                    ml_prob = score_value
-                    ml_model_type_str = 'classification'
+            
+            if ticker in dual_scores:
+                ts = dual_scores[ticker]
+                m01_expected_return = ts.get('m01_expected_return')
+                m01_3bar_prob = ts.get('m01_3bar_prob')
+                m01_3bar_sl_price = ts.get('m01_3bar_sl_price')
+                m01_3bar_tp_price = ts.get('m01_3bar_tp_price')
+                ml_features_dict = {
+                    'm01_features': ts.get('m01_features', {}),
+                    'm01_3bar_features': ts.get('m01_3bar_features', {})
+                }
+                ml_model_ver = "M01+M01_3BAR_V2"
 
             import json
+            # Update legacy columns
             db.update_buy_list_metrics(
                 ticker=ticker,
                 scan_date=actual_update_date,
@@ -527,13 +694,23 @@ def run_daily_scanner(scan_date: Optional[str] = None,
                 ma200=ma200,
                 high_52w=high_52w,
                 low_52w=low_52w,
-                ml_probability=ml_prob,
-                ml_expected_return=ml_expected_return,
-                ml_model_type=ml_model_type_str,
+                ml_probability=m01_3bar_prob,
+                ml_expected_return=m01_expected_return,
+                ml_model_type='dual',
                 ml_model_version=ml_model_ver,
-                ml_score_date=scan_date_str if (ml_prob or ml_expected_return) else None,
+                ml_score_date=scan_date_str if (m01_expected_return or m01_3bar_prob) else None,
                 ml_features=json.dumps(ml_features_dict) if ml_features_dict else None
             )
+            
+            # Update dual-model columns individually
+            if m01_expected_return is not None:
+                db.update_buy_list_column(ticker, 'm01_expected_return', m01_expected_return)
+            if m01_3bar_prob is not None:
+                db.update_buy_list_column(ticker, 'm01_3bar_prob', m01_3bar_prob)
+            if m01_3bar_sl_price is not None:
+                db.update_buy_list_column(ticker, 'm01_3bar_sl_price', m01_3bar_sl_price)
+            if m01_3bar_tp_price is not None:
+                db.update_buy_list_column(ticker, 'm01_3bar_tp_price', m01_3bar_tp_price)
 
     # Execute removals
     for ticker in tickers_to_remove:
@@ -545,9 +722,9 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             reason='trend_broken'
         )
 
-    # Recalculate ML ranks
-    if use_ml and ml_scorer:
-        update_ml_ranks(db, scan_date_str)
+    # Recalculate dual-model ML ranks
+    if use_ml and (m01_scorer or m01_3bar_scorer):
+        update_dual_ml_ranks(db, scan_date_str)
 
     print(f"       +{len(tickers_to_add)} added, -{len(tickers_to_remove)} removed")
     print(f"       Active buy list: {len(tickers_in_buy_list) + len(tickers_to_add) - len(tickers_to_remove)} tickers")
