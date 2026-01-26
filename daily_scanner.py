@@ -107,7 +107,7 @@ def calculate_tp_price(close: float, atr: float, k_tp: float = None, min_tp: flo
 
 
 def extract_features(row, feature_names: List[str]) -> dict:
-    """Extract feature dict from candidate row."""
+    """Extract feature dict from candidate row, converting all numpy types to JSON-serializable Python types."""
     features_dict = {}
     for feature_name in feature_names:
         if feature_name in row.index:
@@ -116,6 +116,8 @@ def extract_features(row, feature_names: List[str]) -> dict:
                 features_dict[feature_name] = None
             elif isinstance(value, (np.integer, np.floating)):
                 features_dict[feature_name] = float(value)
+            elif isinstance(value, np.bool_):
+                features_dict[feature_name] = bool(value)
             else:
                 features_dict[feature_name] = value
     return features_dict
@@ -212,9 +214,70 @@ def update_dual_ml_ranks(db: DatabaseManager, scan_date_str: str):
 
 def prepare_ml_candidates(tickers: List[str], enriched_data: dict,
                          scan_date_obj: pd.Timestamp, fund_merger: FundamentalMerger) -> pd.DataFrame:
-    """Prepare feature DataFrame for ML scoring."""
+    """Prepare feature DataFrame for ML scoring with batch alpha calculation."""
     ml_candidates = []
     feature_engine = FeatureEngineer(benchmark_data=None)  # Static method doesn't need benchmark
+
+    # BATCH ALPHA CALCULATION: Parallel processing using threads
+    alpha_batch_start = time.time()
+    from src.alpha_factors import AlphaEngine
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import os
+
+    alpha_engine = AlphaEngine()
+
+    # Check which tickers need alpha calculation
+    tickers_needing_alphas = []
+    expected_alpha_cols = [f'alpha{num:03d}' for num in alpha_engine.alpha_list]
+
+    for ticker in tickers:
+        ticker_df = enriched_data.get(ticker)
+        if ticker_df is not None and len(ticker_df) > 0:
+            # Check if alphas are missing
+            if not all(col in ticker_df.columns for col in expected_alpha_cols):
+                tickers_needing_alphas.append(ticker)
+
+    # Parallel calculate alphas using ThreadPool (efficient for numpy/pandas operations)
+    if len(tickers_needing_alphas) > 0:
+        logger.info(f"Calculating alphas for {len(tickers_needing_alphas)} tickers (parallel with {min(os.cpu_count() or 4, 8)} threads)...")
+
+        def calculate_alpha_for_ticker(ticker: str) -> tuple:
+            """Worker function for parallel alpha calculation."""
+            try:
+                ticker_df = enriched_data[ticker]
+                feature_engine_local = FeatureEngineer(benchmark_data=None)
+                result_df = feature_engine_local.calculate_heavyweight_features(ticker_df, ticker)
+                return (ticker, result_df, None)
+            except Exception as e:
+                logger.error(f"[{ticker}] Alpha calculation failed: {e}")
+                return (ticker, None, str(e))
+
+        # Use ThreadPoolExecutor (better for pandas/numpy than ProcessPool)
+        max_workers = min(os.cpu_count() or 4, 8)
+        completed_count = 0
+        results = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(calculate_alpha_for_ticker, ticker): ticker
+                      for ticker in tickers_needing_alphas}
+
+            for future in as_completed(futures):
+                ticker, result_df, error = future.result()
+                completed_count += 1
+
+                if error is None and result_df is not None:
+                    results[ticker] = result_df
+
+                if completed_count % 50 == 0 or completed_count == len(tickers_needing_alphas):
+                    logger.info(f"  Alpha progress: {completed_count}/{len(tickers_needing_alphas)}")
+
+        # Update enriched_data with results
+        enriched_data.update(results)
+
+    alpha_batch_time = time.time() - alpha_batch_start
+
+    # FEATURE EXTRACTION: Now extract features from all tickers
+    fund_total_time = 0.0
 
     for ticker in tickers:
         ticker_df = enriched_data.get(ticker)
@@ -232,13 +295,8 @@ def prepare_ml_candidates(tickers: List[str], enriched_data: dict,
             row_date = available_dates[-1]
             row = ticker_df.loc[row_date]
 
-        # Always calculate heavyweight features (alpha factors) to ensure they're present
-        # This is efficient because AlphaEngine will reuse existing columns if present
-        ticker_df = feature_engine.calculate_heavyweight_features(ticker_df, ticker)
-        enriched_data[ticker] = ticker_df  # Update cache with heavyweight features
-        row = ticker_df.loc[row_date]  # Re-extract row with alpha features
-
         # Get fundamental data
+        fund_start = time.time()
         single_date_df = pd.DataFrame({
             'Date': [row_date],
             'Close': [row.get('Close', np.nan)]
@@ -251,6 +309,7 @@ def prepare_ml_candidates(tickers: List[str], enriched_data: dict,
         except Exception as e:
             logger.warning(f"[{ticker}] Failed to load fundamentals: {e}")
             fund_data = None
+        fund_total_time += (time.time() - fund_start)
 
         # Merge technical + fundamental features
         candidate_features = {
@@ -263,6 +322,12 @@ def prepare_ml_candidates(tickers: List[str], enriched_data: dict,
             candidate_features.update(fund_data.to_dict())
 
         ml_candidates.append(candidate_features)
+
+    # Log breakdown
+    if len(tickers) > 0:
+        logger.info(f"prepare_ml_candidates breakdown for {len(tickers)} tickers:")
+        logger.info(f"  - Batch alpha calculation: {alpha_batch_time:.2f}s ({len(tickers_needing_alphas)} tickers needed alphas)")
+        logger.info(f"  - Fundamental merge: {fund_total_time:.2f}s ({fund_total_time/len(tickers)*1000:.1f}ms/ticker)")
 
     return pd.DataFrame(ml_candidates) if ml_candidates else pd.DataFrame()
 
@@ -438,11 +503,16 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     scan_start = time.time()
 
     # Load benchmark
+    print("       [4.1] Loading benchmark data...")
+    bench_start = time.time()
     benchmark_data = data_repo.get_benchmark_data(
         check_min_date=False,
         required_end_date=scan_date_str,
         force_cache_only=True
     )
+    bench_time = time.time() - bench_start
+    print(f"       [4.1] Benchmark loaded in {bench_time:.2f}s")
+
     if benchmark_data is None:
         print("       ERROR: Could not load benchmark data!")
         return
@@ -451,14 +521,14 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
     strategy = SEPAStrategy(benchmark_data=benchmark_data)
 
-    print("       Calculating features...")
+    print("       [4.2] Calculating lightweight features (batch)...")
     feature_start = time.time()
     enriched_data = feature_engine.process_universe_batch(valid_ticker_data)
     feature_time = time.time() - feature_start
-    print(f"       Features calculated in {feature_time:.1f}s")
+    print(f"       [4.2] Lightweight features calculated in {feature_time:.2f}s ({len(valid_ticker_data)} tickers, {feature_time/len(valid_ticker_data)*1000:.1f}ms/ticker)")
 
     # SEPA screening
-    print("       Screening for SEPA signals...")
+    print("       [4.3] Screening for SEPA signals...")
     screen_start = time.time()
     results = strategy.batch_scan_universe(enriched_data, scan_date=scan_date_obj)
     screen_time = time.time() - screen_start
@@ -466,9 +536,9 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     trend_ok_stocks = results.get('trend_ok_stocks', [])
     new_triggers_today = results['new_triggers']
 
-    print(f"       Screening complete in {screen_time:.1f}s")
-    print(f"       Trend OK (C1-C8): {len(trend_ok_stocks)} stocks")
-    print(f"       New triggers: {len(new_triggers_today)} stocks")
+    print(f"       [4.3] Screening complete in {screen_time:.2f}s")
+    print(f"       [4.3] Trend OK (C1-C8): {len(trend_ok_stocks)} stocks")
+    print(f"       [4.3] New triggers: {len(new_triggers_today)} stocks")
 
     # ========================================================================
     # STEP 5 (Optional): Dual-Model Scoring (M01 + M01_3BAR_V2)
@@ -479,6 +549,8 @@ def run_daily_scanner(scan_date: Optional[str] = None,
         ml_start = time.time()
 
         # Get all tickers to score (new triggers + existing buy list)
+        print("       [5.1] Identifying candidates...")
+        identify_start = time.time()
         current_buy_list = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
         tickers_in_buy_list = set(current_buy_list['ticker'].tolist()) if not current_buy_list.empty else set()
         new_trigger_tickers = set([t['ticker'] for t in new_triggers_today])
@@ -486,21 +558,29 @@ def run_daily_scanner(scan_date: Optional[str] = None,
 
         # Score new triggers + existing tickers that are still trend_ok
         tickers_to_score = list(new_trigger_tickers | (tickers_in_buy_list & trend_ok_tickers))
+        identify_time = time.time() - identify_start
+        print(f"       [5.1] Identified {len(tickers_to_score)} candidates in {identify_time:.2f}s")
 
         if len(tickers_to_score) > 0:
-            print(f"       Preparing {len(tickers_to_score)} candidates...")
+            print(f"       [5.2] Preparing ML features (including heavyweight alphas)...")
+            prep_start = time.time()
             fund_merger = FundamentalMerger()
             candidates_df = prepare_ml_candidates(tickers_to_score, enriched_data, scan_date_obj, fund_merger)
+            prep_time = time.time() - prep_start
+            print(f"       [5.2] Feature preparation complete in {prep_time:.2f}s ({prep_time/len(tickers_to_score)*1000:.1f}ms/ticker)")
 
             if len(candidates_df) > 0:
-                print(f"       Scoring {len(candidates_df)} candidates with dual models...")
+                print(f"       [5.3] Running dual-model inference...")
+                score_start = time.time()
                 dual_scores = score_with_dual_models(candidates_df, m01_scorer, m01_3bar_scorer, scan_date_str)
+                score_time = time.time() - score_start
                 ml_time = time.time() - ml_start
 
                 m01_valid = sum(1 for s in dual_scores.values() if s.get('m01_expected_return') is not None)
                 m01_3bar_valid = sum(1 for s in dual_scores.values() if s.get('m01_3bar_prob') is not None)
-                print(f"       [OK] Scored {len(candidates_df)} candidates in {ml_time:.1f}s")
-                print(f"       [OK] M01 valid: {m01_valid}, M01_3BAR valid: {m01_3bar_valid}")
+                print(f"       [5.3] Inference complete in {score_time:.2f}s ({score_time/len(candidates_df)*1000:.1f}ms/ticker)")
+                print(f"       [5.x] Total ML scoring time: {ml_time:.2f}s")
+                print(f"             M01 valid: {m01_valid}, M01_3BAR valid: {m01_3bar_valid}")
             else:
                 print("       [WARN] No candidates with sufficient data")
         else:
@@ -575,11 +655,11 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             m01_3bar_prob = ts.get('m01_3bar_prob')
             m01_3bar_sl_price = ts.get('m01_3bar_sl_price')
             m01_3bar_tp_price = ts.get('m01_3bar_tp_price')
-            # Combine features from both models for storage
-            ml_features_dict = {
-                'm01_features': ts.get('m01_features', {}),
-                'm01_3bar_features': ts.get('m01_3bar_features', {})
-            }
+            # Flatten features from both models for dashboard compatibility
+            # Dashboard expects a flat dict, not nested structure
+            ml_features_dict = {}
+            ml_features_dict.update(ts.get('m01_features', {}))
+            ml_features_dict.update(ts.get('m01_3bar_features', {}))
             ml_model_ver = f"M01+M01_3BAR_V2"
 
         # For legacy compatibility, also set ml_probability and ml_expected_return  
@@ -675,10 +755,10 @@ def run_daily_scanner(scan_date: Optional[str] = None,
                 m01_3bar_prob = ts.get('m01_3bar_prob')
                 m01_3bar_sl_price = ts.get('m01_3bar_sl_price')
                 m01_3bar_tp_price = ts.get('m01_3bar_tp_price')
-                ml_features_dict = {
-                    'm01_features': ts.get('m01_features', {}),
-                    'm01_3bar_features': ts.get('m01_3bar_features', {})
-                }
+                # Flatten features from both models for dashboard compatibility
+                ml_features_dict = {}
+                ml_features_dict.update(ts.get('m01_features', {}))
+                ml_features_dict.update(ts.get('m01_3bar_features', {}))
                 ml_model_ver = "M01+M01_3BAR_V2"
 
             import json

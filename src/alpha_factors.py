@@ -133,24 +133,24 @@ class AlphaEngine:
     def calculate_alphas(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate selected WorldQuant alphas for given price data.
-        
+
         TEMPORAL INTEGRITY:
         - Input df should contain data up to Day T (scan date)
         - Output alphas are valid for entry on Day T+1
         - No future data is used in calculations
-        
+
         Args:
             df: OHLCV DataFrame with DatetimeIndex
                 Required columns: Open, High, Low, Close, Volume
-        
+
         Returns:
             Copy of df with alpha columns added: alpha001, alpha006, ...
-        
+
         Example:
             >>> from src.data_engine import DataRepository
             >>> repo = DataRepository()
             >>> price_data = repo.get_ticker_data('AAPL')
-            >>> 
+            >>>
             >>> engine = AlphaEngine(alpha_list=[1, 6, 101])
             >>> enriched_data = engine.calculate_alphas(price_data)
             >>> print(enriched_data[['Close', 'alpha001', 'alpha006', 'alpha101']].tail())
@@ -161,11 +161,16 @@ class AlphaEngine:
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
                 raise ValueError(f"Missing required columns: {missing_cols}")
-            
+
             if len(df) < 50:
                 logger.debug(f"Insufficient data ({len(df)} rows). Alphas may be unstable.")
 
-            
+            # Check if all alphas already exist (cache optimization)
+            expected_alpha_cols = [f'alpha{num:03d}' for num in self.alpha_list]
+            if all(col in df.columns for col in expected_alpha_cols):
+                logger.debug("All alpha columns already exist, skipping recalculation")
+                return df
+
             # Create output dataframe
             result = df.copy()
             

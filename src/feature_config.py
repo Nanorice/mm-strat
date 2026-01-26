@@ -198,8 +198,10 @@ M01_3BAR_FEATURES = M01_FEATURES.copy()  # Start with proven M01 feature set
 # M01_3BAR_V2: Enhanced with Velocity Features (Phase 2: Ignition Engine)
 # Adds velocity-specific features to distinguish igniters from drifters
 # =============================================================================
-# M01_3BAR: IGNITION ENGINE (Velocity-Only)
+# M02: IGNITION CLASSIFIER (Velocity-Only Features)
 # =============================================================================
+# M02 is the Ignition Classifier that predicts triple barrier outcomes.
+# Uses velocity-focused features to identify fast-moving "igniters".
 
 M01_3BAR_VELOCITY_ONLY = [
     # --- 1. THE CAPTAINS (Core Strength) ---
@@ -252,11 +254,12 @@ M01_3BAR_VELOCITY_ONLY = [
     'Price_vs_SMA_200_Lag1',
     'Dist_From_52W_High_Lag1'
 ]
-M01_3BAR_FEATURES_V2 = M01_3BAR_VELOCITY_ONLY.copy()
 
-# Future Models (Placeholders)
-# M02_FEATURES = [...]  # Regime Detection Model
-# M03_FEATURES = [...]  # Liquidity Model
+# M02_FEATURES: The canonical feature set for Ignition Classifier
+M02_FEATURES = M01_3BAR_VELOCITY_ONLY.copy()
+
+# Backward compatibility aliases (deprecated - use M02_FEATURES)
+M01_3BAR_FEATURES_V2 = M02_FEATURES
 
 
 def get_model_features(model_name: str = 'M01') -> List[str]:
@@ -264,16 +267,20 @@ def get_model_features(model_name: str = 'M01') -> List[str]:
     Get the feature list for a specific model.
 
     Args:
-        model_name: 'M01', 'M01_3BAR', 'M01_3BAR_V2', 'M02', etc.
+        model_name: 'M01', 'M02', or legacy 'M01_3BAR' names (deprecated).
 
     Returns:
         List of feature column names.
     """
     registry = {
+        # Current models
         'M01': M01_FEATURES,
-        'M01_3BAR': M01_3BAR_FEATURES,
-        'M01_3BAR_V2': M01_3BAR_FEATURES_V2,  # Phase 2: Velocity-enhanced
-        # 'M02': M02_FEATURES,
+        'M02': M02_FEATURES,
+        
+        # Legacy aliases (backward compatibility - deprecated)
+        'M01_3BAR': M01_3BAR_FEATURES,        # Original baseline
+        'M01_3BAR_V2': M02_FEATURES,           # Now called M02
+        'M01_3BAR_VELOCITY_ONLY': M02_FEATURES # Now called M02
     }
 
     if model_name not in registry:

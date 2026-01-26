@@ -170,11 +170,16 @@ COMPANY_PROFILE_CACHE_DAYS = 30  # Company info changes infrequently
 ML_PRODUCTION_MODEL = 'models/model_m01.json'  # Path to production model
 ML_MODEL_TYPE = 'regression'  # 'regression' or 'classification'
 
-# Dual-Model Configuration (M01 + M01_3BAR_V2)
+# Dual-Model Configuration (M01 + M02)
+# M01: Regression model predicting expected return %
+# M02: Classification model predicting ignition probability (triple barrier)
 ML_M01_MODEL = 'models/model_m01.json'           # M01: Regressor (Expected Return %)
-ML_M01_3BAR_MODEL = 'models/model_m01_3bar_v2.json'  # M01_3BAR_V2: Classifier (Ignition Prob)
+ML_M02_MODEL = 'models/model_m02.json'           # M02: Classifier (Ignition Probability)
 
-# Triple Barrier Parameters (from M01_3BAR_V2 training config)
+# Legacy alias for backward compatibility (deprecated - use ML_M02_MODEL)
+ML_M01_3BAR_MODEL = 'models/model_m01_3bar_v2.json'
+
+# Triple Barrier Parameters (from M02 training config)
 BARRIER_K_SL = 1.0      # Stop loss = Close - (k_sl × ATR)
 BARRIER_K_TP = 4.0      # Profit target ATR multiplier
 BARRIER_MIN_TP = 0.2    # Minimum 20% profit target

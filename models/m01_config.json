@@ -1,0 +1,80 @@
+{
+  "model_name": "M01",
+  "model_type": "regression",
+  "created_at": "2026-01-26T23:10:57.165191",
+  "feature_columns": [
+    "alpha009",
+    "alpha011",
+    "alpha013",
+    "alpha041",
+    "alpha060",
+    "alpha101",
+    "nATR",
+    "RS",
+    "RS_Delta",
+    "VCP_Ratio",
+    "SMA_50_Slope",
+    "Price_vs_SMA_50",
+    "Price_vs_SMA_200",
+    "Dry_Up_Volume",
+    "Dist_From_20D_Low",
+    "Dist_From_52W_High",
+    "operating_margin",
+    "eps_growth_yoy",
+    "revenue_accel",
+    "pe_ratio",
+    "eps_accel"
+  ],
+  "validation_metrics": [
+    {
+      "test_year": 2021,
+      "train_samples": 4168,
+      "test_samples": 2863,
+      "rmse": 16.866924784179854,
+      "mae": 10.256824070364594,
+      "selection_edge": -0.7591832539894225,
+      "top_decile_mean": 0.5191992266963437,
+      "top2_edge": 1.2416712978931967
+    },
+    {
+      "test_year": 2022,
+      "train_samples": 5809,
+      "test_samples": 956,
+      "rmse": 13.215570604934513,
+      "mae": 9.163907410675435,
+      "selection_edge": 1.687591293904544,
+      "top_decile_mean": -1.0059567445047066,
+      "top2_edge": 0.533884380600234
+    },
+    {
+      "test_year": 2023,
+      "train_samples": 5259,
+      "test_samples": 1850,
+      "rmse": 19.34940422025076,
+      "mae": 10.23500187589029,
+      "selection_edge": 1.9952360245721545,
+      "top_decile_mean": 3.770038304982965,
+      "top2_edge": 1.6198341701923467
+    },
+    {
+      "test_year": 2024,
+      "train_samples": 5669,
+      "test_samples": 2487,
+      "rmse": 18.44182427272304,
+      "mae": 9.585723497161421,
+      "selection_edge": 1.900583533430266,
+      "top_decile_mean": 3.4636906035706154,
+      "top2_edge": 1.0271980805322982
+    },
+    {
+      "test_year": 2025,
+      "train_samples": 5293,
+      "test_samples": 2096,
+      "rmse": 17.434120213322473,
+      "mae": 8.225354913599983,
+      "selection_edge": 3.1596095453099404,
+      "top_decile_mean": 2.895192964647404,
+      "top2_edge": 3.8533294357887966
+    }
+  ]
+}

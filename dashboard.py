@@ -601,6 +601,14 @@ def render_ml_features(ticker_row: pd.Series):
         st.text(f"Notes: {notes}")
         return
 
+    # Handle nested structure from older dual-model format (backward compatibility)
+    if 'm01_features' in ml_features or 'm01_3bar_features' in ml_features:
+        # Flatten nested structure: merge both model features
+        flat_features = {}
+        flat_features.update(ml_features.get('m01_features', {}))
+        flat_features.update(ml_features.get('m01_3bar_features', {}))
+        ml_features = flat_features
+
     # Show all features in organized categories
     st.markdown("**ML Model Features (21 total):**")
 
