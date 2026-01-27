@@ -973,20 +973,55 @@ def main():
         st.rerun()
 
     st.sidebar.markdown("---")
-
+    
+    # Single radio with all pages visible
     page = st.sidebar.radio(
         "Navigation",
-        options=["Signal Review", "Manual Override", "History/Analytics"],
+        options=[
+            "Signal Review",
+            "Manual Override", 
+            "History/Analytics",
+            "📊 D1 Analysis",
+            "📊 M01 Report",
+            "📊 M02 Report",
+            "📊 Dual-Model",
+            "📊 Backtest"
+        ],
         index=0
     )
-
+    
+    # Clean page name (remove emoji prefix)
+    clean_page = page.replace("📊 ", "")
+    
     # Route to selected page
-    if page == "Signal Review":
-        render_signal_review_page(db, data_repo)
-    elif page == "Manual Override":
-        render_manual_override_page(db, data_repo)
-    elif page == "History/Analytics":
-        render_history_analytics_page(db)
+    if clean_page in ["D1 Analysis", "M01 Report", "M02 Report", "Dual-Model", "Backtest"]:
+        # ML Report pages
+        from src.dashboard_reports import (
+            render_d1_analysis,
+            render_m01_report,
+            render_m02_report,
+            render_dual_model,
+            render_backtest
+        )
+        
+        if clean_page == "D1 Analysis":
+            render_d1_analysis()
+        elif clean_page == "M01 Report":
+            render_m01_report()
+        elif clean_page == "M02 Report":
+            render_m02_report()
+        elif clean_page == "Dual-Model":
+            render_dual_model()
+        elif clean_page == "Backtest":
+            render_backtest()
+    else:
+        # Trading pages
+        if clean_page == "Signal Review":
+            render_signal_review_page(db, data_repo)
+        elif clean_page == "Manual Override":
+            render_manual_override_page(db, data_repo)
+        elif clean_page == "History/Analytics":
+            render_history_analytics_page(db)
 
     # Footer
     st.sidebar.markdown("---")

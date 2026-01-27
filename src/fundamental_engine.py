@@ -382,20 +382,27 @@ class FundamentalEngine:
         tickers: List[str],
         force: bool = False,
         show_progress: bool = True,
-        max_workers: int = 10
+        max_workers: int = 10,
+        use_earnings_calendar: bool = True
     ) -> Dict[str, bool]:
         """
         Batch update fundamental data cache for multiple tickers using parallel execution.
 
-        Note: Fundamentals are updated quarterly on earnings dates, NOT daily.
-        Therefore, this method only checks for MISSING tickers, not stale data.
-        Use force=True to re-download existing data.
+        Smart Update Strategy (use_earnings_calendar=True):
+        - Uses earnings calendar to detect when new quarterly reports are available
+        - Only fetches fundamentals for tickers with earnings releases after last cache update
+        - Dramatically reduces API calls vs time-based staleness checks
+
+        Legacy Mode (use_earnings_calendar=False or force=True):
+        - Only checks for missing ticker files
+        - Does not use time-based staleness (fundamentals update quarterly, not daily)
 
         Args:
             tickers: List of ticker symbols
-            force: If True, re-fetch all tickers regardless of cache
+            force: If True, re-fetch all tickers (disables earnings calendar)
             show_progress: If True, display progress information
             max_workers: Maximum number of parallel workers (default: 10, ~100 API calls/min with 3 calls per ticker)
+            use_earnings_calendar: If True, use earnings calendar for intelligent updates (default: True)
 
         Returns:
             Dict mapping ticker -> success status
@@ -408,8 +415,44 @@ class FundamentalEngine:
             # Force mode: Re-download everything
             logger.info("Force mode enabled - re-downloading all tickers")
             to_fetch = tickers
-        else:
-            # Incremental mode: Only download missing tickers (no date staleness check)
+        elif use_earnings_calendar:
+            # Smart mode: Use earnings calendar to determine updates
+            logger.info("Using earnings calendar for intelligent fundamental updates...")
+
+            try:
+                from src.earnings_engine import EarningsEngine
+                earnings_engine = EarningsEngine()
+
+                # Step 1: Update earnings cache for all tickers
+                logger.info("Updating earnings cache...")
+                earnings_results = earnings_engine.update_earnings_cache(
+                    tickers,
+                    force=False,
+                    max_workers=max_workers
+                )
+
+                earnings_success = sum(earnings_results.values())
+                logger.info(f"Earnings cache updated: {earnings_success}/{len(tickers)} tickers")
+
+                # Step 2: Get tickers needing fundamental update based on earnings
+                to_fetch = earnings_engine.get_tickers_needing_fundamental_update(
+                    tickers,
+                    self.fundamentals_dir
+                )
+
+                # Mark cached tickers as success
+                cached = set(tickers) - set(to_fetch)
+                for ticker in cached:
+                    results[ticker] = True
+
+                logger.info(f"Earnings calendar analysis: {len(to_fetch)}/{len(tickers)} tickers need fundamental update")
+
+            except Exception as e:
+                logger.warning(f"Earnings calendar failed ({e}), falling back to legacy mode")
+                use_earnings_calendar = False
+
+        if not use_earnings_calendar and not force:
+            # Legacy mode: Only download missing tickers (no date staleness check)
             # Fundamentals update quarterly on earnings dates, not daily trading days
             for ticker in tickers:
                 cache_file = self.fundamentals_dir / f"{ticker}.parquet"

@@ -210,6 +210,215 @@ class M02Trainer(BaseTrainer):
         print(f"   Average Edge:          {avg_edge:>+6.2f}%")
         print("=" * 70 + "\n")
     
+    # =========================================================================
+    # REPORT GENERATION
+    # =========================================================================
+    def save_feature_importance(self, model, feature_cols: List[str]) -> pd.DataFrame:
+        """Extract and save feature importance from trained model."""
+        importance = model.feature_importances_
+        
+        importance_df = pd.DataFrame({
+            'feature': feature_cols,
+            'gain': importance
+        }).sort_values('gain', ascending=False).reset_index(drop=True)
+        
+        importance_df['rank'] = range(1, len(importance_df) + 1)
+        total_gain = importance_df['gain'].sum()
+        importance_df['gain_pct'] = (importance_df['gain'] / total_gain * 100).round(2)
+        importance_df['cumulative_pct'] = importance_df['gain_pct'].cumsum().round(2)
+        
+        # Save to CSV
+        csv_path = self.output_dir / 'feature_importance_m02.csv'
+        importance_df.to_csv(csv_path, index=False)
+        logger.info(f"   Saved feature importance to {csv_path}")
+        
+        return importance_df
+    
+    def generate_report(
+        self,
+        model,
+        metrics_df: pd.DataFrame,
+        start_date: str = None,
+        end_date: str = None
+    ) -> str:
+        """
+        Generate comprehensive markdown report for M02 training results.
+        
+        Args:
+            model: Trained XGBoost classifier
+            metrics_df: Walk-forward validation metrics
+            start_date: Training start date
+            end_date: Training end date
+            
+        Returns:
+            Path to saved report
+        """
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = self.output_dir / f"model_report_M02_{timestamp}.md"
+        
+        # Get feature importance
+        feature_cols = self._feature_cols if hasattr(self, '_feature_cols') else []
+        importance_df = self.save_feature_importance(model, feature_cols) if feature_cols else None
+        
+        # Calculate summary statistics
+        avg_edge = metrics_df['selection_edge'].mean()
+        avg_acc = metrics_df['accuracy'].mean()
+        avg_prec = metrics_df['precision'].mean()
+        avg_recall = metrics_df['recall'].mean()
+        
+        # Build report
+        lines = []
+        lines.append("# Model Training Report - M02 (Ignition Classifier)")
+        lines.append("")
+        lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        if start_date and end_date:
+            lines.append(f"**Training Period:** {start_date} to {end_date}")
+        lines.append(f"**Model Type:** CLASSIFICATION")
+        lines.append(f"**Barrier Type:** Hybrid (ATR-based)")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        # Executive Summary
+        lines.append("## Executive Summary")
+        lines.append("")
+        lines.append(f"- **Average Selection Edge:** {avg_edge:.2f}%")
+        lines.append(f"- **Average Accuracy:** {avg_acc:.2%}")
+        lines.append(f"- **Average Precision:** {avg_prec:.2%}")
+        lines.append(f"- **Average Recall:** {avg_recall:.2%}")
+        lines.append(f"- **Barrier Params:** k_sl={self.barrier_params['k_sl']}, k_tp={self.barrier_params['k_tp']}, min_tp={self.barrier_params['min_tp']}")
+        lines.append("")
+        
+        # Viability Assessment
+        lines.append("## Viability Assessment")
+        lines.append("")
+        if avg_edge > 2.5 and avg_prec > 0.10:
+            lines.append("**STRONG SIGNAL** - Model shows consistent edge across folds.")
+            lines.append("")
+            lines.append(f"The model demonstrates strong predictive power for identifying trades that hit profit targets before stop-losses. With a {avg_edge:.2f}% selection edge and {avg_prec:.2%} precision, this model is ready for live testing.")
+        elif avg_edge > 1.5 and avg_prec > 0.05:
+            lines.append("**MODERATE SIGNAL** - Model has edge but may need refinement.")
+            lines.append("")
+            lines.append(f"The model shows {avg_edge:.2f}% selection edge with {avg_prec:.2%} precision. Consider combining with M01 in an ensemble or using stricter thresholds (score > 0.7).")
+        else:
+            lines.append("**WEAK SIGNAL** - Model edge is marginal. Consider:")
+            lines.append("- Adjusting barrier parameters (run grid search again)")
+            lines.append("- Adding barrier-specific features (e.g., volatility_regime, sector_tp_rate)")
+            lines.append("- Ensemble with M01 predictions")
+            lines.append("- Increasing training data or tuning hyperparameters")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        # Walk-Forward Results
+        lines.append("## Walk-Forward Validation Results")
+        lines.append("")
+        lines.append("| Fold | Test Year | Test Samples | Accuracy | Precision | Recall | Edge |")
+        lines.append("|------|-----------|--------------|----------|-----------|--------|------|")
+        
+        for i, row in metrics_df.iterrows():
+            lines.append(
+                f"| {i+1} | {row.get('test_year', 'N/A')} | {row['test_samples']:,} | "
+                f"{row['accuracy']:.2%} | {row['precision']:.2%} | {row['recall']:.2%} | {row['selection_edge']:+.2f}% |"
+            )
+        
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        # Feature Importance
+        if importance_df is not None and len(importance_df) > 0:
+            lines.append("## Feature Importance (Top 20)")
+            lines.append("")
+            lines.append("| Rank | Feature | Gain | % Total |")
+            lines.append("|------|---------|------|---------|")
+            
+            for _, row in importance_df.head(20).iterrows():
+                lines.append(f"| {int(row['rank'])} | {row['feature']} | {row['gain']:.0f} | {row['gain_pct']:.2f}% |")
+            
+            lines.append("")
+            top_10_pct = importance_df.head(10)['gain_pct'].sum()
+            lines.append(f"**Insight:** Top 10 features contribute {top_10_pct:.1f}% of total gain.")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        
+        # Usage Recommendations
+        lines.append("## Usage Recommendations")
+        lines.append("")
+        lines.append("### Trade Selection Thresholds")
+        lines.append("")
+        
+        if avg_edge > 2.5:
+            lines.append("- **High Confidence (Score > 0.7):** Position size 1.5x")
+            lines.append("- **Medium Confidence (Score > 0.5):** Position size 1.0x")
+            lines.append("- **Low Confidence (Score < 0.5):** Skip")
+        elif avg_edge > 1.5:
+            lines.append("- **Conservative (Score > 0.8):** Position size 1.0x")
+            lines.append("- **Moderate (Score > 0.6):** Position size 0.5x")
+            lines.append("- **Low (Score < 0.6):** Skip")
+        else:
+            lines.append("- **Very Conservative (Score > 0.85):** Position size 0.5x")
+            lines.append("- **All others:** Skip until model is improved")
+        lines.append("")
+        
+        lines.append("### Integration with M01")
+        lines.append("")
+        lines.append("**Ensemble Approach:**")
+        lines.append("```python")
+        lines.append("final_score = 0.6 × M01_score + 0.4 × M02_score")
+        lines.append("```")
+        lines.append("")
+        lines.append("**Filter Approach:**")
+        lines.append("```python")
+        lines.append("take_trade = (M01_score > 0.6) AND (M02_score > 0.6)")
+        lines.append("```")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        # Barrier Configuration
+        lines.append("## Barrier Configuration")
+        lines.append("")
+        lines.append(f"- **Stop Loss:** k_sl = {self.barrier_params['k_sl']} × ATR")
+        lines.append(f"- **Profit Target:** MAX({self.barrier_params['min_tp']:.0%}, {self.barrier_params['k_tp']} × ATR)")
+        lines.append(f"- **Max Time Barrier:** {self.barrier_params['max_time']} days")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        # Model Configuration
+        lines.append("## Model Configuration")
+        lines.append("")
+        lines.append("```python")
+        lines.append("XGBClassifier(")
+        lines.append("    objective='binary:logistic',")
+        lines.append("    n_estimators=500,")
+        lines.append("    learning_rate=0.03,")
+        lines.append("    max_depth=5,")
+        lines.append("    subsample=0.8,")
+        lines.append("    colsample_bytree=0.8,")
+        lines.append("    min_child_weight=3,")
+        if hasattr(self, '_scale_pos_weight'):
+            lines.append(f"    scale_pos_weight={self._scale_pos_weight:.2f},")
+        lines.append("    random_state=42")
+        lines.append(")")
+        lines.append("```")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("*Report generated by M02Trainer*")
+        
+        # Write report
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        
+        logger.info(f"Saved model report to {report_path}")
+        
+        return str(report_path)
+    
     def save(self, model, metrics_df: pd.DataFrame, config: Optional[Dict] = None):
         """Save M02 model with barrier parameters."""
         if config is None:

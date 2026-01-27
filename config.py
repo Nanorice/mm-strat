@@ -18,11 +18,12 @@ DATA_DIR = BASE_DIR / 'data'
 PRICE_DATA_DIR = DATA_DIR / 'price'
 FUNDAMENTALS_DIR = DATA_DIR / 'fundamentals'
 COMPANY_INFO_DIR = DATA_DIR / 'company_info'
+EARNINGS_DIR = DATA_DIR / 'earnings'
 DATABASE_DIR = BASE_DIR / 'database'
 NOTEBOOKS_DIR = BASE_DIR / 'notebooks'
 
 # Ensure directories exist
-for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
+for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, EARNINGS_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # ==============================================================================
@@ -157,6 +158,13 @@ FMP_FUNDAMENTAL_BATCH_DELAY = 5  # Small delay between batches (rate limiting is
 MIN_EARNINGS_GROWTH = None  # Placeholder: e.g., 0.15 for 15% YoY growth
 MIN_SALES_GROWTH = None     # Placeholder: e.g., 0.10 for 10% YoY growth
 EXCLUDED_SECTORS = []       # Placeholder: e.g., ['Utilities', 'Real Estate']
+
+# ==============================================================================
+# EARNINGS CALENDAR SETTINGS
+# ==============================================================================
+EARNINGS_CACHE_DAYS = 7  # Refresh earnings cache weekly (earnings dates rarely change)
+EARNINGS_LOOKBACK_LIMIT = 1000  # Historical earnings to fetch per ticker
+EARNINGS_ALERT_DAYS = 14  # Refresh cache if next earnings within this window (2 weeks)
 
 # ==============================================================================
 # COMPANY PROFILE SETTINGS

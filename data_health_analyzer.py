@@ -22,6 +22,7 @@ import sys
 sys.path.append(str(Path(__file__).parent))
 
 import config
+from src.earnings_engine import EarningsEngine
 
 
 class DataHealthAnalyzer:
@@ -31,11 +32,20 @@ class DataHealthAnalyzer:
         self.price_dir = Path(config.PRICE_DATA_DIR)
         self.fundamentals_dir = Path(config.FUNDAMENTALS_DIR)
         self.company_info_dir = Path(config.COMPANY_INFO_DIR)
-        
+        self.earnings_dir = Path(config.EARNINGS_DIR)
+
+        # Initialize earnings engine
+        try:
+            self.earnings_engine = EarningsEngine()
+        except ValueError:
+            # API key not available, earnings analysis will be skipped
+            self.earnings_engine = None
+
         # Results storage
         self.price_results = {}
         self.fundamental_results = {}
         self.profile_results = {}
+        self.earnings_results = {}
         
     def analyze_price_data(self) -> Dict:
         """Analyze price data coverage and the 200-bar filter."""
@@ -606,7 +616,212 @@ class DataHealthAnalyzer:
             'without_profiles': without_profiles,
             'field_availability': dict(field_availability)
         }
-    
+
+    def analyze_earnings_health(self, price_universe: List[str]) -> Dict:
+        """
+        Analyze earnings data health and staleness.
+
+        Checks:
+        1. Earnings cache coverage (how many tickers have earnings data)
+        2. Staleness detection:
+           - If today > future_earnings_date + 1 day AND fundamental_cache_date < latest_earnings_date
+           - This indicates FMP has filled in actuals since we last updated fundamentals
+        3. Earnings data quality (null actuals, cache age)
+
+        Args:
+            price_universe: List of ticker symbols to analyze
+
+        Returns:
+            Dictionary with earnings health metrics
+        """
+        if self.earnings_engine is None:
+            print("\n⚠️  Earnings analysis skipped: EarningsEngine not available (API key missing)")
+            return {
+                'total_checked': len(price_universe),
+                'with_earnings': 0,
+                'without_earnings': len(price_universe),
+                'stale_fundamentals': [],
+                'cache_issues': [],
+                'skipped': True
+            }
+
+        print("\n" + "=" * 80)
+        print(" EARNINGS HEALTH ANALYSIS")
+        print("=" * 80)
+
+        print(f"\nAnalyzing earnings data for {len(price_universe)} tickers")
+        print(f"Earnings directory: {self.earnings_dir}\n")
+
+        # Results tracking
+        with_earnings = []
+        without_earnings = []
+        stale_fundamentals = []  # Tickers with fundamentals older than latest earnings
+        cache_issues = []  # Tickers with corrupted/invalid earnings cache
+        earnings_quality = {}
+
+        # Get list of all earnings files
+        earnings_files = {f.stem for f in self.earnings_dir.glob('*.parquet')}
+
+        print(f"Total earnings cache files: {len(earnings_files)}\n")
+
+        # Analyze each ticker
+        for ticker in price_universe:
+            if ticker not in earnings_files:
+                without_earnings.append(ticker)
+                self.earnings_results[ticker] = {
+                    'status': 'missing',
+                    'has_cache': False
+                }
+                continue
+
+            try:
+                # Load earnings data
+                earnings_df = self.earnings_engine.get_ticker_earnings(ticker, use_cache=True)
+
+                if earnings_df is None or earnings_df.empty:
+                    without_earnings.append(ticker)
+                    cache_issues.append((ticker, 'empty_or_failed'))
+                    self.earnings_results[ticker] = {
+                        'status': 'error',
+                        'has_cache': True,
+                        'issue': 'Empty or failed to load'
+                    }
+                    continue
+
+                with_earnings.append(ticker)
+
+                # Get latest past earnings date
+                past_earnings = earnings_df[~earnings_df['is_future']]
+                latest_earnings_date = past_earnings['date'].max() if not past_earnings.empty else None
+
+                # Get cache age
+                cache_timestamp = earnings_df['cache_timestamp'].iloc[0]
+                cache_age_days = (datetime.now() - cache_timestamp).days
+
+                # Check for null actuals in latest 3 earnings
+                latest_3 = past_earnings.head(3)
+                has_null_actuals = False
+                if not latest_3.empty:
+                    has_null_actuals = (
+                        latest_3['epsActual'].isna().any() or
+                        latest_3['revenueActual'].isna().any()
+                    )
+
+                # Check fundamental cache staleness
+                fund_cache = self.fundamentals_dir / f"{ticker}.parquet"
+                is_fund_stale = False
+                fund_cache_date = None
+
+                if fund_cache.exists() and latest_earnings_date:
+                    fund_cache_date = datetime.fromtimestamp(fund_cache.stat().st_mtime)
+
+                    # Staleness rule: latest_earnings_date > fundamental_cache_date
+                    if pd.to_datetime(latest_earnings_date) > fund_cache_date:
+                        is_fund_stale = True
+                        stale_fundamentals.append({
+                            'ticker': ticker,
+                            'latest_earnings': latest_earnings_date,
+                            'fund_cache_date': fund_cache_date,
+                            'days_behind': (pd.to_datetime(latest_earnings_date) - fund_cache_date).days
+                        })
+
+                # Get next earnings date
+                future_earnings = earnings_df[earnings_df['is_future']].sort_values('date')
+                next_earnings_date = future_earnings.iloc[0]['date'] if not future_earnings.empty else None
+                days_until_earnings = (next_earnings_date - pd.Timestamp.now()).days if next_earnings_date else None
+
+                # Record earnings quality
+                earnings_quality[ticker] = {
+                    'latest_earnings_date': latest_earnings_date,
+                    'next_earnings_date': next_earnings_date,
+                    'days_until_earnings': days_until_earnings,
+                    'cache_age_days': cache_age_days,
+                    'has_null_actuals': has_null_actuals,
+                    'total_earnings': len(earnings_df),
+                    'past_earnings': len(past_earnings),
+                    'future_earnings': len(future_earnings),
+                    'is_fund_stale': is_fund_stale,
+                    'fund_cache_date': fund_cache_date
+                }
+
+                self.earnings_results[ticker] = {
+                    'status': 'complete',
+                    'has_cache': True,
+                    'quality': earnings_quality[ticker]
+                }
+
+            except Exception as e:
+                without_earnings.append(ticker)
+                cache_issues.append((ticker, str(e)))
+                self.earnings_results[ticker] = {
+                    'status': 'error',
+                    'has_cache': True,
+                    'error': str(e)
+                }
+
+        # Print results
+        total = len(price_universe)
+        print(f"\nWith earnings cache: {len(with_earnings)} tickers ({len(with_earnings)/total*100:.1f}%)")
+        print(f"Without earnings cache: {len(without_earnings)} tickers ({len(without_earnings)/total*100:.1f}%)")
+
+        if cache_issues:
+            print(f"\nCache Issues ({len(cache_issues)} tickers):")
+            for ticker, issue in cache_issues[:10]:
+                print(f"   {ticker}: {issue}")
+            if len(cache_issues) > 10:
+                print(f"   ... and {len(cache_issues) - 10} more")
+
+        # Stale fundamentals analysis
+        if stale_fundamentals:
+            print(f"\nSTALE FUNDAMENTALS DETECTED ({len(stale_fundamentals)} tickers):")
+            print(f"   These tickers have earnings AFTER their fundamental cache update:")
+
+            # Sort by days behind (worst first)
+            stale_sorted = sorted(stale_fundamentals, key=lambda x: x['days_behind'], reverse=True)
+
+            for item in stale_sorted[:15]:
+                print(f"   {item['ticker']:6s}: Latest earnings {item['latest_earnings'].date()}, "
+                      f"Fund cache {item['fund_cache_date'].date()} ({item['days_behind']} days behind)")
+
+            if len(stale_sorted) > 15:
+                print(f"   ... and {len(stale_sorted) - 15} more")
+
+            print(f"\n   Recommendation: Run 'python data_curator.py --update-fundamentals' to refresh")
+
+        # Earnings quality statistics
+        if earnings_quality:
+            cache_ages = [q['cache_age_days'] for q in earnings_quality.values()]
+            null_actuals_count = sum(1 for q in earnings_quality.values() if q['has_null_actuals'])
+
+            print(f"\nEarnings Cache Quality:")
+            print(f"   Average cache age: {np.mean(cache_ages):.1f} days")
+            print(f"   Median cache age: {np.median(cache_ages):.0f} days")
+            print(f"   Max cache age: {np.max(cache_ages):.0f} days")
+            print(f"   Tickers with null actuals: {null_actuals_count} ({null_actuals_count/len(earnings_quality)*100:.1f}%)")
+
+            # Upcoming earnings
+            upcoming = [q for q in earnings_quality.values()
+                       if q['days_until_earnings'] and 0 <= q['days_until_earnings'] <= 30]
+
+            if upcoming:
+                print(f"\nUpcoming Earnings (next 30 days): {len(upcoming)} tickers")
+                upcoming_sorted = sorted(upcoming, key=lambda x: x['days_until_earnings'])
+                for q in upcoming_sorted[:10]:
+                    ticker = [t for t, data in earnings_quality.items() if data == q][0]
+                    print(f"   {ticker:6s}: {q['next_earnings_date'].date()} "
+                          f"({q['days_until_earnings']} days)")
+
+        return {
+            'total_checked': total,
+            'with_earnings': len(with_earnings),
+            'without_earnings': len(without_earnings),
+            'stale_fundamentals': stale_fundamentals,
+            'stale_fundamentals_count': len(stale_fundamentals),
+            'cache_issues': cache_issues,
+            'earnings_quality': earnings_quality,
+            'skipped': False
+        }
+
     def cross_reference_analysis(self, price_summary: Dict, fund_summary: Dict, profile_summary: Dict):
         """Analyze cross-references between data types."""
         print("\n" + "=" * 80)
@@ -644,47 +859,69 @@ class DataHealthAnalyzer:
             'full_data_tickers': list(full_data)
         }
     
-    def generate_summary_report(self, price_summary: Dict, fund_summary: Dict, 
-                                profile_summary: Dict, cross_ref: Dict):
+    def generate_summary_report(self, price_summary: Dict, fund_summary: Dict,
+                                profile_summary: Dict, cross_ref: Dict,
+                                earnings_summary: Dict = None):
         """Generate final summary report."""
         print("\n" + "=" * 80)
         print(" SUMMARY REPORT")
         print("=" * 80)
-        
+
         print(f"\n🎯 KEY FINDINGS:")
         print(f"\n1. PRICE DATA:")
         print(f"   - Universe size: {price_summary['total_tickers']} tickers")
         print(f"   - Passing 200-bar filter: {price_summary['passed']} ({price_summary['passed']/price_summary['total_tickers']*100:.1f}%)")
         print(f"   - Failing 200-bar filter: {price_summary['failed']} ({price_summary['failed']/price_summary['total_tickers']*100:.1f}%)")
         print(f"   - Load errors: {price_summary['errors']}")
-        
+
         print(f"\n2. FUNDAMENTAL DATA:")
         print(f"   - Complete coverage: {fund_summary['complete']}/{fund_summary['total_checked']} ({fund_summary['complete']/fund_summary['total_checked']*100:.1f}%)")
         print(f"   - Missing: {fund_summary['missing']} tickers")
-        
+
         print(f"\n3. COMPANY PROFILES:")
         print(f"   - Complete coverage: {profile_summary['complete']}/{profile_summary['total_checked']} ({profile_summary['complete']/profile_summary['total_checked']*100:.1f}%)")
         print(f"   - Missing: {profile_summary['missing']} tickers")
-        
-        print(f"\n4. DATASET B ELIGIBILITY:")
-        print(f"   - Fully eligible (all data): {cross_ref['full_data']} tickers")
-        print(f"   - Percentage of passed price filter: {cross_ref['full_data']/price_summary['passed']*100:.1f}%")
-        
+
+        if earnings_summary and not earnings_summary.get('skipped', False):
+            print(f"\n4. EARNINGS DATA:")
+            print(f"   - With earnings cache: {earnings_summary['with_earnings']}/{earnings_summary['total_checked']} ({earnings_summary['with_earnings']/earnings_summary['total_checked']*100:.1f}%)")
+            print(f"   - Missing earnings: {earnings_summary['without_earnings']} tickers")
+            if earnings_summary['stale_fundamentals_count'] > 0:
+                print(f"   - ⚠️  STALE FUNDAMENTALS: {earnings_summary['stale_fundamentals_count']} tickers need update")
+
+            print(f"\n5. DATASET B ELIGIBILITY:")
+            print(f"   - Fully eligible (all data): {cross_ref['full_data']} tickers")
+            print(f"   - Percentage of passed price filter: {cross_ref['full_data']/price_summary['passed']*100:.1f}%")
+        else:
+            print(f"\n4. DATASET B ELIGIBILITY:")
+            print(f"   - Fully eligible (all data): {cross_ref['full_data']} tickers")
+            print(f"   - Percentage of passed price filter: {cross_ref['full_data']/price_summary['passed']*100:.1f}%")
+
         print(f"\n💡 RECOMMENDATIONS:")
-        
+
         if price_summary['failed'] > price_summary['passed'] * 0.3:
             print(f"\n   ⚠️  HIGH: {price_summary['failed']} tickers fail the 200-bar filter")
             print(f"      → Consider extending price data history collection")
             print(f"      → Or adjust the 200-bar threshold based on requirements")
-        
+
         if fund_summary['missing'] > fund_summary['total_checked'] * 0.2:
             print(f"\n   ⚠️  MEDIUM: {fund_summary['missing']} tickers lack fundamental data")
             print(f"      → Prioritize fundamental data collection for passed price tickers")
-        
+
         if profile_summary['missing'] > profile_summary['total_checked'] * 0.2:
             print(f"\n   ⚠️  MEDIUM: {profile_summary['missing']} tickers lack company profiles")
             print(f"      → Consider batch profile collection")
-        
+
+        if earnings_summary and not earnings_summary.get('skipped', False):
+            if earnings_summary['stale_fundamentals_count'] > 0:
+                print(f"\n   🔴 CRITICAL: {earnings_summary['stale_fundamentals_count']} tickers have stale fundamental data")
+                print(f"      → Run 'python data_curator.py --update-fundamentals' to refresh")
+                print(f"      → These tickers have new earnings reports not reflected in fundamental cache")
+
+            if earnings_summary['without_earnings'] > earnings_summary['total_checked'] * 0.3:
+                print(f"\n   ⚠️  MEDIUM: {earnings_summary['without_earnings']} tickers lack earnings data")
+                print(f"      → Consider updating earnings cache for better fundamental staleness detection")
+
         print("\n" + "=" * 80)
     
     def save_detailed_report(self, output_path: str = "data/data_health_report.json"):
@@ -693,7 +930,8 @@ class DataHealthAnalyzer:
             'generated_at': datetime.now().isoformat(),
             'price_results': self.price_results,
             'fundamental_results': self.fundamental_results,
-            'profile_results': self.profile_results
+            'profile_results': self.profile_results,
+            'earnings_results': self.earnings_results
         }
         
         output_file = Path(output_path)
@@ -746,13 +984,16 @@ class DataHealthAnalyzer:
         # 3. Company profile analysis
         profile_summary = self.analyze_company_profiles(passed_tickers)
 
-        # 4. Cross-reference analysis
+        # 4. Earnings health analysis
+        earnings_summary = self.analyze_earnings_health(passed_tickers)
+
+        # 5. Cross-reference analysis
         cross_ref = self.cross_reference_analysis(price_summary, fund_summary, profile_summary)
 
-        # 5. Summary report
-        self.generate_summary_report(price_summary, fund_summary, profile_summary, cross_ref)
+        # 6. Summary report
+        self.generate_summary_report(price_summary, fund_summary, profile_summary, cross_ref, earnings_summary)
 
-        # 6. Save detailed report
+        # 7. Save detailed report
         self.save_detailed_report()
 
         print("\n✅ Analysis complete!\n")
@@ -762,6 +1003,7 @@ class DataHealthAnalyzer:
             'fundamentals': fund_summary,
             'fundamental_quality': fund_quality,
             'profiles': profile_summary,
+            'earnings': earnings_summary,
             'cross_reference': cross_ref
         }
 

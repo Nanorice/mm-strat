@@ -390,8 +390,108 @@ class DataPipeline:
             path = self.output_dir / f'd3_{horizon_days}d.parquet'
             d3.to_parquet(path, index=False)
             logger.info(f"   Saved to {path}")
+            
+            # Also save D3 summary JSON for dashboard
+            self._save_d3_summary(d3, horizon_days)
         
         return d3
+    
+    def _save_d3_summary(self, d3: pd.DataFrame, horizon_days: int):
+        """Save D3 summary JSON for fast dashboard loading."""
+        import json
+        
+        # Calculate barrier outcome rates
+        n_total = len(d3)
+        
+        if 'barrier_outcome' in d3.columns:
+            outcome_counts = d3['barrier_outcome'].value_counts()
+            tp_rate = outcome_counts.get('TP', 0) / n_total * 100
+            sl_rate = outcome_counts.get('SL', 0) / n_total * 100
+            time_rate = outcome_counts.get('Time', 0) / n_total * 100
+        else:
+            # Use y_meta for label-based calculation
+            tp_rate = (d3['y_meta'] == 1).mean() * 100
+            sl_rate = (d3['y_meta'] == 0).mean() * 100
+            time_rate = 0
+        
+        summary = {
+            'generated_at': pd.Timestamp.now().isoformat(),
+            'horizon_days': horizon_days,
+            'total_trades': n_total,
+            'tp_rate': float(tp_rate),
+            'sl_rate': float(sl_rate),
+            'time_rate': float(time_rate),
+            'expectancy': float((d3['return_at_outcome'].mean() if 'return_at_outcome' in d3.columns else 0))
+        }
+        
+        path = self.output_dir / 'd3_summary.json'
+        with open(path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        logger.info(f"   Saved D3 summary to {path}")
+    
+    # =========================================================================
+    # STEP 5: REHYDRATE D3 (Trajectories with Barrier Exits)
+    # =========================================================================
+    def rehydrate_d3(
+        self,
+        d1: pd.DataFrame,
+        d3: pd.DataFrame,
+        n_jobs: int = -1,
+        save: bool = True,
+        horizon_days: int = 120
+    ) -> pd.DataFrame:
+        """
+        Rehydrate D3 using barrier exit days instead of SEPA exits.
+        
+        Creates multi-day trajectories truncated to barrier outcomes for backtesting.
+        
+        Args:
+            d1: D1 trades DataFrame
+            d3: D3 labels DataFrame (with days_to_outcome)
+            n_jobs: Parallel workers (-1 = all CPUs)
+            save: Save result to d3r_*.parquet (default: True)
+            horizon_days: Horizon used for file naming (default: 120)
+            
+        Returns:
+            Rehydrated DataFrame with trajectories ending at barrier exit
+        """
+        from src.data_engine import DataRepository, CacheMode
+        from src.features import FeatureEngineer
+        from src.fundamental_merger import FundamentalMerger
+        from src.dataset_rehydrator import DatasetRehydrator
+        
+        logger.info(f"Step 5: REHYDRATE D3 - {len(d3)} trades with barrier exits")
+        start_time = time.time()
+        
+        # Filter D1 to only trades in D3
+        d3_trade_ids = set(d3['trade_id'])
+        d1_filtered = d1[d1['trade_id'].isin(d3_trade_ids)].copy()
+        logger.info(f"   Filtered D1 to {len(d1_filtered):,} trades")
+        
+        # Initialize components
+        data_repo = DataRepository()
+        benchmark_data = data_repo.get_benchmark_data(mode=CacheMode.CACHE_ONLY)
+        feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
+        fund_merger = FundamentalMerger(force_cache_only=True)
+        
+        # Rehydrate with D3 exits
+        rehydrator = DatasetRehydrator(
+            data_repo, feature_engine, fund_merger,
+            d3_exits=d3  # Use barrier exits from D3
+        )
+        d3r = rehydrator.rehydrate_trades(d1_filtered, n_jobs=n_jobs)
+        
+        elapsed = time.time() - start_time
+        avg_days = len(d3r) / len(d1_filtered) if len(d1_filtered) > 0 else 0
+        logger.info(f"   Rehydrated: {len(d3r):,} rows ({avg_days:.1f} days/trade) in {elapsed:.1f}s")
+        
+        if save:
+            path = self.output_dir / f'd3r_{horizon_days}d.parquet'
+            d3r.to_parquet(path, index=False)
+            logger.info(f"   Saved to {path} ({path.stat().st_size / 1024 / 1024:.1f} MB)")
+        
+        return d3r
     
     # =========================================================================
     # UTILITY: Load existing data files

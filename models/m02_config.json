@@ -1,7 +1,7 @@
 {
   "model_name": "M02",
   "model_type": "classification",
-  "created_at": "2026-01-26T23:03:59.588852",
+  "created_at": "2026-01-27T00:59:07.643108",
   "feature_columns": [
     "RS",
     "alpha011",
@@ -47,45 +47,45 @@
       "test_year": 2021,
       "train_samples": 4168,
       "test_samples": 2863,
-      "accuracy": 0.7387355920363256,
-      "precision": 0.13669950738916256,
-      "recall": 0.7025316455696202,
+      "accuracy": 0.9102340202584701,
+      "precision": 0.19254658385093168,
+      "recall": 0.1962025316455696,
       "selection_edge": 0.0
     },
     {
       "test_year": 2022,
       "train_samples": 5809,
       "test_samples": 956,
-      "accuracy": 0.7719665271966527,
-      "precision": 0.08636363636363636,
-      "recall": 0.5277777777777778,
+      "accuracy": 0.9194560669456067,
+      "precision": 0.11320754716981132,
+      "recall": 0.16666666666666666,
       "selection_edge": 0.0
     },
     {
       "test_year": 2023,
       "train_samples": 5259,
       "test_samples": 1850,
-      "accuracy": 0.8308108108108108,
-      "precision": 0.17664670658682635,
-      "recall": 0.6082474226804123,
+      "accuracy": 0.9232432432432433,
+      "precision": 0.25806451612903225,
+      "recall": 0.24742268041237114,
       "selection_edge": 0.0
     },
     {
       "test_year": 2024,
       "train_samples": 5669,
       "test_samples": 2487,
-      "accuracy": 0.8323281061519904,
-      "precision": 0.16995073891625614,
-      "recall": 0.46308724832214765,
+      "accuracy": 0.9187776437474869,
+      "precision": 0.18823529411764706,
+      "recall": 0.10738255033557047,
       "selection_edge": 0.0
     },
     {
       "test_year": 2025,
       "train_samples": 5293,
       "test_samples": 1483,
-      "accuracy": 0.7255563047875927,
-      "precision": 0.19829424307036247,
-      "recall": 0.75,
+      "accuracy": 0.8853674983142279,
+      "precision": 0.27450980392156865,
+      "recall": 0.22580645161290322,
       "selection_edge": 0.0
     }
   ],

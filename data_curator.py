@@ -15,14 +15,14 @@ Usage Examples:
     # Quarterly fundamental refresh (force update)
     python data_curator.py --source sp500 --update-fundamentals --force
 
+    # Run only health check (earnings staleness, coverage, quality)
+    python data_curator.py --health-check
+
     # Run from watchlist file
     python data_curator.py --tickers-file my_watchlist.txt --update-prices
 
     # Full refresh with all data types
     python data_curator.py --source sp500 --update-all --force
-
-    # Just run health check on existing data
-    python data_curator.py --source sp500
 
     # Use FMP screener with custom criteria
     python data_curator.py --source fmp_screener --market-cap-min 5000000000 --price-min 10 --update-prices
@@ -181,26 +181,41 @@ def update_prices(
 def update_fundamentals(
     tickers: list,
     force: bool = False,
-    max_workers: int = 10
+    max_workers: int = 10,
+    use_earnings_calendar: bool = True
 ) -> dict:
     """
     Update fundamental data cache for given tickers.
-    
+
+    Smart Update (use_earnings_calendar=True):
+    - Uses earnings calendar to detect new quarterly reports
+    - Only fetches fundamentals for tickers with earnings after last cache update
+    - Reduces API calls by 90-95% for steady-state maintenance
+
+    Legacy Mode (use_earnings_calendar=False):
+    - Only checks for missing cache files
+    - No time-based staleness checks
+
     Args:
         tickers: List of ticker symbols
-        force: Force re-download all data
+        force: Force re-download all data (disables earnings calendar)
         max_workers: Number of parallel workers
-    
+        use_earnings_calendar: Use earnings calendar for intelligent updates (default: True)
+
     Returns:
         Dict mapping ticker to success status
     """
     print("\n3️⃣  Updating Fundamental Data...")
-    
+
+    if use_earnings_calendar and not force:
+        print("   📅 Using earnings calendar for intelligent updates...")
+
     fund_engine = FundamentalEngine()
     results = fund_engine.update_fundamentals_cache(
         tickers=tickers,
         force=force,
-        max_workers=max_workers
+        max_workers=max_workers,
+        use_earnings_calendar=use_earnings_calendar
     )
     success_count = sum(results.values())
     print(f"   ✅ Fundamentals update complete: {success_count}/{len(tickers)} updated")
@@ -267,7 +282,8 @@ def run_curation(
     market_cap_min: int = 1_000_000_000,
     price_min: float = 5.0,
     volume_min: int = 100_000,
-    from_date: Optional[str] = None
+    from_date: Optional[str] = None,
+    use_earnings_calendar: bool = True
 ):
     """
     Run the data curation pipeline.
@@ -287,6 +303,7 @@ def run_curation(
         price_min: FMP screener minimum price
         volume_min: FMP screener minimum volume
         from_date: Override start date for price fetching (bypasses incremental logic)
+        use_earnings_calendar: Use earnings calendar for intelligent fundamental updates (default: True)
     """
     start_time = time.time()
     
@@ -335,7 +352,7 @@ def run_curation(
     # 3. Update Fundamentals (if requested)
     # --------------------------------------------------------------------------
     if update_fundamentals_flag:
-        update_fundamentals(tickers, force=force, max_workers=max_workers)
+        update_fundamentals(tickers, force=force, max_workers=max_workers, use_earnings_calendar=use_earnings_calendar)
 
     # 4. Update Company Profiles (if requested)
     # --------------------------------------------------------------------------
@@ -367,6 +384,9 @@ Examples:
 
   # Quarterly fundamental refresh
   python data_curator.py --source sp500 --update-fundamentals --force
+
+  # Run only health check (earnings staleness, coverage, quality)
+  python data_curator.py --health-check
 
   # Use FMP screener with custom criteria
   python data_curator.py --source fmp_screener --market-cap-min 5000000000 --update-prices
@@ -401,6 +421,8 @@ Examples:
                               help="Update company profile cache")
     update_group.add_argument('--update-all', action='store_true',
                               help="Update all data types (prices, fundamentals, profiles)")
+    update_group.add_argument('--health-check', action='store_true',
+                              help="Run only data health analysis (earnings staleness detection, coverage, quality)")
     
     # Behavior flags
     behavior_group = parser.add_argument_group('Behavior Options')
@@ -415,14 +437,28 @@ Examples:
     behavior_group.add_argument('--from-date', type=str, default=None,
                                 help="Override start date for price fetching (YYYY-MM-DD). "
                                      "Bypasses incremental fetch logic. Use when tickers have insufficient history.")
-    
+    behavior_group.add_argument('--no-earnings-calendar', dest='use_earnings_calendar',
+                                action='store_false', default=True,
+                                help="Disable earnings calendar intelligence for fundamental updates (use legacy mode)")
+
     args = parser.parse_args()
-    
+
+    # Handle --health-check shortcut (runs only health analysis)
+    if args.health_check:
+        print("=" * 80)
+        print(f"DATA CURATOR - Health Check Only")
+        print("=" * 80)
+        run_health_check()
+        print("\n" + "=" * 80)
+        print("Health Check Complete")
+        print("=" * 80 + "\n")
+        sys.exit(0)
+
     # Handle --update-all shortcut
     update_prices_flag = args.update_prices or args.update_all
     update_fundamentals_flag = args.update_fundamentals or args.update_all
     update_profiles_flag = args.update_profiles or args.update_all
-    
+
     run_curation(
         source=args.source,
         custom_tickers=args.tickers,
@@ -437,5 +473,6 @@ Examples:
         market_cap_min=args.market_cap_min,
         price_min=args.price_min,
         volume_min=args.volume_min,
-        from_date=args.from_date
+        from_date=args.from_date,
+        use_earnings_calendar=args.use_earnings_calendar
     )

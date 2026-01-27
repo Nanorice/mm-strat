@@ -1,7 +1,7 @@
 {
   "model_name": "M01",
   "model_type": "regression",
-  "created_at": "2026-01-26T23:10:57.165191",
+  "created_at": "2026-01-27T20:53:22.843872",
   "feature_columns": [
     "alpha009",
     "alpha011",
@@ -30,51 +30,7123 @@
       "test_year": 2021,
       "train_samples": 4168,
       "test_samples": 2863,
-      "rmse": 16.866924784179854,
-      "mae": 10.256824070364594,
-      "selection_edge": -0.7591832539894225,
-      "top_decile_mean": 0.5191992266963437,
-      "top2_edge": 1.2416712978931967
+      "rmse": 18.134017776650676,
+      "mae": 10.661859632095732,
+      "selection_edge": 0.9817158703528095,
+      "top_decile_mean": 2.2600983510385757,
+      "top2_edge": 1.487604574321786
     },
     {
       "test_year": 2022,
       "train_samples": 5809,
       "test_samples": 956,
-      "rmse": 13.215570604934513,
-      "mae": 9.163907410675435,
-      "selection_edge": 1.687591293904544,
-      "top_decile_mean": -1.0059567445047066,
-      "top2_edge": 0.533884380600234
+      "rmse": 14.492667015823725,
+      "mae": 9.559796892454237,
+      "selection_edge": 1.3353714795221474,
+      "top_decile_mean": -1.3581765588871033,
+      "top2_edge": 0.3686282129539378
     },
     {
       "test_year": 2023,
       "train_samples": 5259,
       "test_samples": 1850,
-      "rmse": 19.34940422025076,
-      "mae": 10.23500187589029,
-      "selection_edge": 1.9952360245721545,
-      "top_decile_mean": 3.770038304982965,
-      "top2_edge": 1.6198341701923467
+      "rmse": 20.703321596696703,
+      "mae": 10.547637613965287,
+      "selection_edge": 2.240758717109845,
+      "top_decile_mean": 4.015560997520655,
+      "top2_edge": 1.6148353450193922
     },
     {
       "test_year": 2024,
       "train_samples": 5669,
       "test_samples": 2487,
-      "rmse": 18.44182427272304,
-      "mae": 9.585723497161421,
-      "selection_edge": 1.900583533430266,
-      "top_decile_mean": 3.4636906035706154,
-      "top2_edge": 1.0271980805322982
+      "rmse": 19.034632568665575,
+      "mae": 9.780721324270884,
+      "selection_edge": 3.766285672868136,
+      "top_decile_mean": 5.329392743008485,
+      "top2_edge": 2.4692310959762143
     },
     {
       "test_year": 2025,
       "train_samples": 5293,
       "test_samples": 2096,
-      "rmse": 17.434120213322473,
-      "mae": 8.225354913599983,
-      "selection_edge": 3.1596095453099404,
-      "top_decile_mean": 2.895192964647404,
-      "top2_edge": 3.8533294357887966
+      "rmse": 18.009410691085346,
+      "mae": 8.821334738979695,
+      "selection_edge": 4.776468217812892,
+      "top_decile_mean": 4.512051637150355,
+      "top2_edge": 2.8985165077747483
     }
-  ]
+  ],
+  "decile_performance": [
+    {
+      "decile": 1,
+      "mean_return": -1.2211699454497127,
+      "count": 1026
+    },
+    {
+      "decile": 2,
+      "mean_return": -1.0581739566827066,
+      "count": 1025
+    },
+    {
+      "decile": 3,
+      "mean_return": -0.6677640554233585,
+      "count": 1025
+    },
+    {
+      "decile": 4,
+      "mean_return": -0.17974662665453284,
+      "count": 1025
+    },
+    {
+      "decile": 5,
+      "mean_return": 1.1079085515044285,
+      "count": 1025
+    },
+    {
+      "decile": 6,
+      "mean_return": 1.2486555963036545,
+      "count": 1025
+    },
+    {
+      "decile": 7,
+      "mean_return": 1.9446162477133289,
+      "count": 1025
+    },
+    {
+      "decile": 8,
+      "mean_return": 1.6688133109224021,
+      "count": 1025
+    },
+    {
+      "decile": 9,
+      "mean_return": 1.3349441869581604,
+      "count": 1025
+    },
+    {
+      "decile": 10,
+      "mean_return": 3.3336035522792122,
+      "count": 1026
+    }
+  ],
+  "predictions_sample": [
+    {
+      "y_pred": 4.210000038146973,
+      "y_true": -15.57,
+      "decile": 9,
+      "ticker": "WTTR",
+      "date": "2022-06-07"
+    },
+    {
+      "y_pred": -2.890000104904175,
+      "y_true": -4.77,
+      "decile": 2,
+      "ticker": "OMC",
+      "date": "2024-10-16"
+    },
+    {
+      "y_pred": 12.979999542236328,
+      "y_true": -10.86,
+      "decile": 10,
+      "ticker": "WTTR",
+      "date": "2021-05-05"
+    },
+    {
+      "y_pred": -2.2300000190734863,
+      "y_true": 29.03,
+      "decile": 2,
+      "ticker": "MIRM",
+      "date": "2025-07-09"
+    },
+    {
+      "y_pred": -6.400000095367432,
+      "y_true": -24.1,
+      "decile": 1,
+      "ticker": "PPTA",
+      "date": "2024-12-06"
+    },
+    {
+      "y_pred": -0.7300000190734863,
+      "y_true": -7.43,
+      "decile": 4,
+      "ticker": "MFIC",
+      "date": "2021-05-07"
+    },
+    {
+      "y_pred": -0.20999999344348907,
+      "y_true": -8.33,
+      "decile": 5,
+      "ticker": "LYV",
+      "date": "2024-05-21"
+    },
+    {
+      "y_pred": -0.8399999737739563,
+      "y_true": -7.54,
+      "decile": 4,
+      "ticker": "BAC",
+      "date": "2024-03-21"
+    },
+    {
+      "y_pred": 0.17000000178813934,
+      "y_true": -1.52,
+      "decile": 6,
+      "ticker": "TER",
+      "date": "2023-06-12"
+    },
+    {
+      "y_pred": 0.41999998688697815,
+      "y_true": -5.1,
+      "decile": 6,
+      "ticker": "SSB",
+      "date": "2021-02-22"
+    },
+    {
+      "y_pred": -0.12999999523162842,
+      "y_true": -11.95,
+      "decile": 5,
+      "ticker": "IOT",
+      "date": "2024-03-08"
+    },
+    {
+      "y_pred": -2.9800000190734863,
+      "y_true": -6.37,
+      "decile": 1,
+      "ticker": "MATX",
+      "date": "2024-10-31"
+    },
+    {
+      "y_pred": -1.409999966621399,
+      "y_true": 11.88,
+      "decile": 3,
+      "ticker": "DY",
+      "date": "2024-05-21"
+    },
+    {
+      "y_pred": -3.4800000190734863,
+      "y_true": 4.5,
+      "decile": 1,
+      "ticker": "EA",
+      "date": "2025-09-26"
+    },
+    {
+      "y_pred": -3.0299999713897705,
+      "y_true": -5.08,
+      "decile": 1,
+      "ticker": "COGT",
+      "date": "2024-08-21"
+    },
+    {
+      "y_pred": 5.829999923706055,
+      "y_true": -6.6,
+      "decile": 9,
+      "ticker": "DVN",
+      "date": "2022-05-04"
+    },
+    {
+      "y_pred": -1.4700000286102295,
+      "y_true": -16.35,
+      "decile": 3,
+      "ticker": "ITRI",
+      "date": "2025-10-14"
+    },
+    {
+      "y_pred": -0.9300000071525574,
+      "y_true": -2.98,
+      "decile": 4,
+      "ticker": "GH",
+      "date": "2025-10-16"
+    },
+    {
+      "y_pred": -0.6399999856948853,
+      "y_true": 4.85,
+      "decile": 4,
+      "ticker": "CRS",
+      "date": "2025-10-23"
+    },
+    {
+      "y_pred": 1.9800000190734863,
+      "y_true": 2.5,
+      "decile": 8,
+      "ticker": "MNST",
+      "date": "2025-08-08"
+    },
+    {
+      "y_pred": -1.0,
+      "y_true": -14.32,
+      "decile": 4,
+      "ticker": "PHAT",
+      "date": "2025-12-19"
+    },
+    {
+      "y_pred": -3.309999942779541,
+      "y_true": 3.26,
+      "decile": 1,
+      "ticker": "NET",
+      "date": "2024-02-08"
+    },
+    {
+      "y_pred": 1.5,
+      "y_true": -7.29,
+      "decile": 7,
+      "ticker": "JBTM",
+      "date": "2025-02-25"
+    },
+    {
+      "y_pred": -1.3899999856948853,
+      "y_true": -3.53,
+      "decile": 3,
+      "ticker": "SUI",
+      "date": "2021-06-10"
+    },
+    {
+      "y_pred": 2.25,
+      "y_true": 16.05,
+      "decile": 8,
+      "ticker": "MLI",
+      "date": "2021-02-23"
+    },
+    {
+      "y_pred": 2.7799999713897705,
+      "y_true": 2.3,
+      "decile": 8,
+      "ticker": "KEY",
+      "date": "2021-04-26"
+    },
+    {
+      "y_pred": 14.140000343322754,
+      "y_true": 98.58,
+      "decile": 10,
+      "ticker": "SMCI",
+      "date": "2023-05-03"
+    },
+    {
+      "y_pred": 5.730000019073486,
+      "y_true": -2.32,
+      "decile": 9,
+      "ticker": "CARG",
+      "date": "2021-11-04"
+    },
+    {
+      "y_pred": -1.7599999904632568,
+      "y_true": -8.99,
+      "decile": 3,
+      "ticker": "COF",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": 12.979999542236328,
+      "y_true": 34.78,
+      "decile": 10,
+      "ticker": "OVV",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -3.200000047683716,
+      "y_true": -0.89,
+      "decile": 1,
+      "ticker": "NNN",
+      "date": "2021-02-23"
+    },
+    {
+      "y_pred": -7.139999866485596,
+      "y_true": 49.94,
+      "decile": 1,
+      "ticker": "MSTR",
+      "date": "2024-10-24"
+    },
+    {
+      "y_pred": -3.1700000762939453,
+      "y_true": -2.81,
+      "decile": 1,
+      "ticker": "GILD",
+      "date": "2025-10-17"
+    },
+    {
+      "y_pred": 4.849999904632568,
+      "y_true": 0.55,
+      "decile": 9,
+      "ticker": "DUOL",
+      "date": "2023-11-09"
+    },
+    {
+      "y_pred": -0.949999988079071,
+      "y_true": -6.28,
+      "decile": 4,
+      "ticker": "VRRM",
+      "date": "2021-05-04"
+    },
+    {
+      "y_pred": -1.399999976158142,
+      "y_true": 16.98,
+      "decile": 3,
+      "ticker": "EBAY",
+      "date": "2025-06-03"
+    },
+    {
+      "y_pred": 2.1600000858306885,
+      "y_true": -6.33,
+      "decile": 8,
+      "ticker": "NUE",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": -0.6800000071525574,
+      "y_true": -3.29,
+      "decile": 4,
+      "ticker": "NWS",
+      "date": "2025-02-04"
+    },
+    {
+      "y_pred": -4.25,
+      "y_true": -4.94,
+      "decile": 1,
+      "ticker": "BOOT",
+      "date": "2025-10-15"
+    },
+    {
+      "y_pred": 2.4000000953674316,
+      "y_true": 10.2,
+      "decile": 8,
+      "ticker": "ANIP",
+      "date": "2025-08-08"
+    },
+    {
+      "y_pred": 5.630000114440918,
+      "y_true": 0.98,
+      "decile": 9,
+      "ticker": "WBD",
+      "date": "2025-10-21"
+    },
+    {
+      "y_pred": 0.7400000095367432,
+      "y_true": -8.78,
+      "decile": 6,
+      "ticker": "MLI",
+      "date": "2022-03-18"
+    },
+    {
+      "y_pred": 9.520000457763672,
+      "y_true": -9.98,
+      "decile": 10,
+      "ticker": "DCO",
+      "date": "2021-04-05"
+    },
+    {
+      "y_pred": -0.6600000262260437,
+      "y_true": -3.69,
+      "decile": 4,
+      "ticker": "CTAS",
+      "date": "2023-12-13"
+    },
+    {
+      "y_pred": 4.989999771118164,
+      "y_true": -2.39,
+      "decile": 9,
+      "ticker": "FWONK",
+      "date": "2021-02-05"
+    },
+    {
+      "y_pred": 0.28999999165534973,
+      "y_true": 24.83,
+      "decile": 6,
+      "ticker": "XPO",
+      "date": "2024-02-02"
+    },
+    {
+      "y_pred": -0.3199999928474426,
+      "y_true": -5.3,
+      "decile": 5,
+      "ticker": "AZZ",
+      "date": "2023-10-11"
+    },
+    {
+      "y_pred": -2.299999952316284,
+      "y_true": -2.56,
+      "decile": 2,
+      "ticker": "WMT",
+      "date": "2025-10-14"
+    },
+    {
+      "y_pred": -3.5799999237060547,
+      "y_true": -8.01,
+      "decile": 1,
+      "ticker": "GL",
+      "date": "2025-02-28"
+    },
+    {
+      "y_pred": -2.259999990463257,
+      "y_true": -0.78,
+      "decile": 2,
+      "ticker": "UNP",
+      "date": "2022-03-03"
+    },
+    {
+      "y_pred": 15.789999961853027,
+      "y_true": -7.31,
+      "decile": 10,
+      "ticker": "SHOO",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -3.430000066757202,
+      "y_true": 17.21,
+      "decile": 1,
+      "ticker": "CRS",
+      "date": "2024-04-26"
+    },
+    {
+      "y_pred": -1.6399999856948853,
+      "y_true": 13.98,
+      "decile": 3,
+      "ticker": "DCO",
+      "date": "2025-06-17"
+    },
+    {
+      "y_pred": 1.1100000143051147,
+      "y_true": -10.08,
+      "decile": 7,
+      "ticker": "ARQT",
+      "date": "2025-03-05"
+    },
+    {
+      "y_pred": -13.430000305175781,
+      "y_true": -12.62,
+      "decile": 1,
+      "ticker": "RGTI",
+      "date": "2025-07-16"
+    },
+    {
+      "y_pred": 1.190000057220459,
+      "y_true": 18.31,
+      "decile": 7,
+      "ticker": "CNK",
+      "date": "2024-07-29"
+    },
+    {
+      "y_pred": -3.799999952316284,
+      "y_true": -1.54,
+      "decile": 1,
+      "ticker": "CRDO",
+      "date": "2024-01-19"
+    },
+    {
+      "y_pred": -1.8300000429153442,
+      "y_true": -12.7,
+      "decile": 3,
+      "ticker": "HWKN",
+      "date": "2024-11-25"
+    },
+    {
+      "y_pred": 0.8899999856948853,
+      "y_true": -9.38,
+      "decile": 6,
+      "ticker": "AA",
+      "date": "2024-05-20"
+    },
+    {
+      "y_pred": 0.14000000059604645,
+      "y_true": 19.14,
+      "decile": 5,
+      "ticker": "COST",
+      "date": "2023-12-05"
+    },
+    {
+      "y_pred": 0.5199999809265137,
+      "y_true": 0.2,
+      "decile": 6,
+      "ticker": "TTMI",
+      "date": "2021-04-01"
+    },
+    {
+      "y_pred": -5.510000228881836,
+      "y_true": -9.33,
+      "decile": 1,
+      "ticker": "RKT",
+      "date": "2025-09-05"
+    },
+    {
+      "y_pred": -3.5999999046325684,
+      "y_true": -4.29,
+      "decile": 1,
+      "ticker": "VSEC",
+      "date": "2024-06-25"
+    },
+    {
+      "y_pred": 3.3299999237060547,
+      "y_true": -7.03,
+      "decile": 9,
+      "ticker": "HURN",
+      "date": "2025-02-26"
+    },
+    {
+      "y_pred": 20.010000228881836,
+      "y_true": 23.6,
+      "decile": 10,
+      "ticker": "TRVI",
+      "date": "2025-09-10"
+    },
+    {
+      "y_pred": 30.290000915527344,
+      "y_true": -17.08,
+      "decile": 10,
+      "ticker": "CRK",
+      "date": "2022-08-22"
+    },
+    {
+      "y_pred": -1.649999976158142,
+      "y_true": 26.85,
+      "decile": 3,
+      "ticker": "AVY",
+      "date": "2021-02-03"
+    },
+    {
+      "y_pred": 6.730000019073486,
+      "y_true": 72.45,
+      "decile": 9,
+      "ticker": "MOD",
+      "date": "2023-11-14"
+    },
+    {
+      "y_pred": 25.90999984741211,
+      "y_true": 87.94,
+      "decile": 10,
+      "ticker": "DAVE",
+      "date": "2025-05-07"
+    },
+    {
+      "y_pred": -1.9800000190734863,
+      "y_true": 5.49,
+      "decile": 2,
+      "ticker": "PLXS",
+      "date": "2025-12-09"
+    },
+    {
+      "y_pred": 2.940000057220459,
+      "y_true": -7.38,
+      "decile": 8,
+      "ticker": "WH",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 3.3299999237060547,
+      "y_true": -2.23,
+      "decile": 9,
+      "ticker": "LNC",
+      "date": "2024-10-15"
+    },
+    {
+      "y_pred": 0.18000000715255737,
+      "y_true": -0.75,
+      "decile": 6,
+      "ticker": "AL",
+      "date": "2025-09-02"
+    },
+    {
+      "y_pred": -3.0799999237060547,
+      "y_true": -14.24,
+      "decile": 1,
+      "ticker": "SMTC",
+      "date": "2025-12-04"
+    },
+    {
+      "y_pred": 0.6299999952316284,
+      "y_true": 6.94,
+      "decile": 6,
+      "ticker": "LPG",
+      "date": "2023-05-19"
+    },
+    {
+      "y_pred": 1.059999942779541,
+      "y_true": 42.89,
+      "decile": 7,
+      "ticker": "EE",
+      "date": "2024-09-17"
+    },
+    {
+      "y_pred": -3.069999933242798,
+      "y_true": -6.48,
+      "decile": 1,
+      "ticker": "PLTR",
+      "date": "2025-12-19"
+    },
+    {
+      "y_pred": -0.4099999964237213,
+      "y_true": -3.03,
+      "decile": 5,
+      "ticker": "MA",
+      "date": "2023-04-28"
+    },
+    {
+      "y_pred": 6.519999980926514,
+      "y_true": -6.03,
+      "decile": 9,
+      "ticker": "PWP",
+      "date": "2023-12-04"
+    },
+    {
+      "y_pred": 0.03999999910593033,
+      "y_true": 3.21,
+      "decile": 5,
+      "ticker": "EXLS",
+      "date": "2021-11-02"
+    },
+    {
+      "y_pred": -0.8799999952316284,
+      "y_true": 22.05,
+      "decile": 4,
+      "ticker": "PNFP",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 13.699999809265137,
+      "y_true": -9.32,
+      "decile": 10,
+      "ticker": "SHLS",
+      "date": "2025-10-02"
+    },
+    {
+      "y_pred": 1.8799999952316284,
+      "y_true": -27.73,
+      "decile": 8,
+      "ticker": "LUMN",
+      "date": "2025-11-03"
+    },
+    {
+      "y_pred": -3.259999990463257,
+      "y_true": -3.33,
+      "decile": 1,
+      "ticker": "LMAT",
+      "date": "2024-08-23"
+    },
+    {
+      "y_pred": 4.449999809265137,
+      "y_true": 19.8,
+      "decile": 9,
+      "ticker": "WBS",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -4.380000114440918,
+      "y_true": 2.45,
+      "decile": 1,
+      "ticker": "GOOG",
+      "date": "2025-10-29"
+    },
+    {
+      "y_pred": -0.9300000071525574,
+      "y_true": -4.84,
+      "decile": 4,
+      "ticker": "TRN",
+      "date": "2024-07-23"
+    },
+    {
+      "y_pred": -0.75,
+      "y_true": -6.88,
+      "decile": 4,
+      "ticker": "ADBE",
+      "date": "2023-10-12"
+    },
+    {
+      "y_pred": 1.6100000143051147,
+      "y_true": 0.35,
+      "decile": 7,
+      "ticker": "ORA",
+      "date": "2022-08-04"
+    },
+    {
+      "y_pred": 1.6399999856948853,
+      "y_true": -1.73,
+      "decile": 7,
+      "ticker": "NFLX",
+      "date": "2021-10-21"
+    },
+    {
+      "y_pred": -1.5499999523162842,
+      "y_true": -7.64,
+      "decile": 3,
+      "ticker": "PHM",
+      "date": "2024-05-15"
+    },
+    {
+      "y_pred": -2.4800000190734863,
+      "y_true": 12.4,
+      "decile": 2,
+      "ticker": "IDXX",
+      "date": "2025-07-24"
+    },
+    {
+      "y_pred": -0.9900000095367432,
+      "y_true": 50.37,
+      "decile": 4,
+      "ticker": "QTWO",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": 0.9900000095367432,
+      "y_true": -7.83,
+      "decile": 7,
+      "ticker": "VEEV",
+      "date": "2024-03-13"
+    },
+    {
+      "y_pred": 0.7799999713897705,
+      "y_true": -0.34,
+      "decile": 6,
+      "ticker": "GLW",
+      "date": "2025-01-17"
+    },
+    {
+      "y_pred": -2.690000057220459,
+      "y_true": 5.5,
+      "decile": 2,
+      "ticker": "LSCC",
+      "date": "2023-02-01"
+    },
+    {
+      "y_pred": -2.069999933242798,
+      "y_true": 14.57,
+      "decile": 2,
+      "ticker": "CMI",
+      "date": "2024-08-01"
+    },
+    {
+      "y_pred": -1.8799999952316284,
+      "y_true": -4.27,
+      "decile": 3,
+      "ticker": "NDSN",
+      "date": "2024-02-22"
+    },
+    {
+      "y_pred": 2.549999952316284,
+      "y_true": -14.08,
+      "decile": 8,
+      "ticker": "INDV",
+      "date": "2022-05-31"
+    },
+    {
+      "y_pred": -1.2100000381469727,
+      "y_true": -8.76,
+      "decile": 3,
+      "ticker": "LEN",
+      "date": "2024-05-15"
+    },
+    {
+      "y_pred": 0.8199999928474426,
+      "y_true": -1.34,
+      "decile": 6,
+      "ticker": "LAUR",
+      "date": "2025-02-04"
+    },
+    {
+      "y_pred": 5.139999866485596,
+      "y_true": -4.38,
+      "decile": 9,
+      "ticker": "CHEF",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": -4.329999923706055,
+      "y_true": -7.49,
+      "decile": 1,
+      "ticker": "NATL",
+      "date": "2024-12-02"
+    },
+    {
+      "y_pred": -1.3200000524520874,
+      "y_true": 0.44,
+      "decile": 3,
+      "ticker": "MORN",
+      "date": "2021-08-03"
+    },
+    {
+      "y_pred": 2.009999990463257,
+      "y_true": -0.6,
+      "decile": 8,
+      "ticker": "SPXC",
+      "date": "2022-10-24"
+    },
+    {
+      "y_pred": 0.5699999928474426,
+      "y_true": -8.47,
+      "decile": 6,
+      "ticker": "AGYS",
+      "date": "2023-03-03"
+    },
+    {
+      "y_pred": 1.5199999809265137,
+      "y_true": -1.85,
+      "decile": 7,
+      "ticker": "NIC",
+      "date": "2025-07-01"
+    },
+    {
+      "y_pred": -1.5199999809265137,
+      "y_true": 21.66,
+      "decile": 3,
+      "ticker": "RSI",
+      "date": "2024-11-11"
+    },
+    {
+      "y_pred": 1.2100000381469727,
+      "y_true": 0.01,
+      "decile": 7,
+      "ticker": "UNP",
+      "date": "2021-03-26"
+    },
+    {
+      "y_pred": -1.6100000143051147,
+      "y_true": 5.62,
+      "decile": 3,
+      "ticker": "PEN",
+      "date": "2023-05-03"
+    },
+    {
+      "y_pred": -1.8700000047683716,
+      "y_true": -4.19,
+      "decile": 3,
+      "ticker": "ORLY",
+      "date": "2025-09-11"
+    },
+    {
+      "y_pred": 3.319999933242798,
+      "y_true": -6.64,
+      "decile": 8,
+      "ticker": "MTH",
+      "date": "2021-11-16"
+    },
+    {
+      "y_pred": 1.3200000524520874,
+      "y_true": 4.22,
+      "decile": 7,
+      "ticker": "CDP",
+      "date": "2024-08-29"
+    },
+    {
+      "y_pred": -0.9700000286102295,
+      "y_true": 10.41,
+      "decile": 4,
+      "ticker": "NDAQ",
+      "date": "2021-06-11"
+    },
+    {
+      "y_pred": -7.010000228881836,
+      "y_true": -13.37,
+      "decile": 1,
+      "ticker": "CRGY",
+      "date": "2024-11-21"
+    },
+    {
+      "y_pred": 0.5899999737739563,
+      "y_true": -2.45,
+      "decile": 6,
+      "ticker": "EXC",
+      "date": "2021-04-15"
+    },
+    {
+      "y_pred": -4.210000038146973,
+      "y_true": 0.11,
+      "decile": 1,
+      "ticker": "FOXA",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 21.170000076293945,
+      "y_true": -13.9,
+      "decile": 10,
+      "ticker": "AAL",
+      "date": "2021-06-02"
+    },
+    {
+      "y_pred": 5.5,
+      "y_true": -7.86,
+      "decile": 9,
+      "ticker": "MP",
+      "date": "2022-03-21"
+    },
+    {
+      "y_pred": -0.9900000095367432,
+      "y_true": -3.54,
+      "decile": 4,
+      "ticker": "CLH",
+      "date": "2023-03-31"
+    },
+    {
+      "y_pred": 4.059999942779541,
+      "y_true": -2.89,
+      "decile": 9,
+      "ticker": "CASH",
+      "date": "2021-04-28"
+    },
+    {
+      "y_pred": 0.38999998569488525,
+      "y_true": -1.76,
+      "decile": 6,
+      "ticker": "KNTK",
+      "date": "2023-10-17"
+    },
+    {
+      "y_pred": 4.260000228881836,
+      "y_true": 127.87,
+      "decile": 9,
+      "ticker": "SMCI",
+      "date": "2023-12-18"
+    },
+    {
+      "y_pred": -0.09000000357627869,
+      "y_true": 4.47,
+      "decile": 5,
+      "ticker": "ENSG",
+      "date": "2024-01-11"
+    },
+    {
+      "y_pred": 1.4600000381469727,
+      "y_true": -0.91,
+      "decile": 7,
+      "ticker": "AMAT",
+      "date": "2023-11-10"
+    },
+    {
+      "y_pred": -0.550000011920929,
+      "y_true": -1.64,
+      "decile": 4,
+      "ticker": "TKO",
+      "date": "2024-08-08"
+    },
+    {
+      "y_pred": 4.579999923706055,
+      "y_true": 6.04,
+      "decile": 9,
+      "ticker": "DHI",
+      "date": "2021-03-17"
+    },
+    {
+      "y_pred": 0.7900000214576721,
+      "y_true": 44.95,
+      "decile": 6,
+      "ticker": "CALM",
+      "date": "2024-07-17"
+    },
+    {
+      "y_pred": 1.4199999570846558,
+      "y_true": -4.39,
+      "decile": 7,
+      "ticker": "DD",
+      "date": "2024-09-24"
+    },
+    {
+      "y_pred": 0.8199999928474426,
+      "y_true": -7.68,
+      "decile": 6,
+      "ticker": "CG",
+      "date": "2021-07-29"
+    },
+    {
+      "y_pred": -0.07999999821186066,
+      "y_true": 10.18,
+      "decile": 5,
+      "ticker": "FLS",
+      "date": "2024-09-24"
+    },
+    {
+      "y_pred": 1.9800000190734863,
+      "y_true": -3.38,
+      "decile": 8,
+      "ticker": "CHRD",
+      "date": "2021-12-27"
+    },
+    {
+      "y_pred": -1.5,
+      "y_true": -3.5,
+      "decile": 3,
+      "ticker": "SSD",
+      "date": "2021-11-05"
+    },
+    {
+      "y_pred": 12.479999542236328,
+      "y_true": -6.46,
+      "decile": 10,
+      "ticker": "BTU",
+      "date": "2022-11-07"
+    },
+    {
+      "y_pred": -3.940000057220459,
+      "y_true": 20.77,
+      "decile": 1,
+      "ticker": "LRCX",
+      "date": "2025-09-11"
+    },
+    {
+      "y_pred": 0.8799999952316284,
+      "y_true": 9.37,
+      "decile": 6,
+      "ticker": "OFG",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": 20.469999313354492,
+      "y_true": -12.0,
+      "decile": 10,
+      "ticker": "ARLP",
+      "date": "2021-02-12"
+    },
+    {
+      "y_pred": -0.38999998569488525,
+      "y_true": -6.48,
+      "decile": 5,
+      "ticker": "IDCC",
+      "date": "2025-02-06"
+    },
+    {
+      "y_pred": -1.909999966621399,
+      "y_true": -9.64,
+      "decile": 2,
+      "ticker": "VEEV",
+      "date": "2021-02-10"
+    },
+    {
+      "y_pred": -2.0199999809265137,
+      "y_true": -2.83,
+      "decile": 2,
+      "ticker": "CNC",
+      "date": "2022-03-16"
+    },
+    {
+      "y_pred": -1.0199999809265137,
+      "y_true": -4.11,
+      "decile": 4,
+      "ticker": "LPX",
+      "date": "2024-11-05"
+    },
+    {
+      "y_pred": -1.149999976158142,
+      "y_true": -3.38,
+      "decile": 3,
+      "ticker": "BHE",
+      "date": "2024-02-01"
+    },
+    {
+      "y_pred": -0.25,
+      "y_true": -4.18,
+      "decile": 5,
+      "ticker": "LPLA",
+      "date": "2024-05-24"
+    },
+    {
+      "y_pred": -1.6100000143051147,
+      "y_true": 2.57,
+      "decile": 3,
+      "ticker": "UHS",
+      "date": "2025-10-28"
+    },
+    {
+      "y_pred": -2.690000057220459,
+      "y_true": -5.31,
+      "decile": 2,
+      "ticker": "FAST",
+      "date": "2025-08-19"
+    },
+    {
+      "y_pred": -1.3799999952316284,
+      "y_true": -12.06,
+      "decile": 3,
+      "ticker": "SHCO",
+      "date": "2025-01-29"
+    },
+    {
+      "y_pred": 12.199999809265137,
+      "y_true": 29.3,
+      "decile": 10,
+      "ticker": "LEU",
+      "date": "2025-09-15"
+    },
+    {
+      "y_pred": 2.049999952316284,
+      "y_true": 35.38,
+      "decile": 8,
+      "ticker": "ANET",
+      "date": "2023-10-31"
+    },
+    {
+      "y_pred": 6.349999904632568,
+      "y_true": -11.05,
+      "decile": 9,
+      "ticker": "NVRI",
+      "date": "2021-02-22"
+    },
+    {
+      "y_pred": 3.740000009536743,
+      "y_true": -8.93,
+      "decile": 9,
+      "ticker": "ACT",
+      "date": "2022-11-02"
+    },
+    {
+      "y_pred": -5.070000171661377,
+      "y_true": -8.44,
+      "decile": 1,
+      "ticker": "LAD",
+      "date": "2024-11-25"
+    },
+    {
+      "y_pred": 2.5799999237060547,
+      "y_true": -7.67,
+      "decile": 8,
+      "ticker": "LEGN",
+      "date": "2022-12-06"
+    },
+    {
+      "y_pred": -1.1299999952316284,
+      "y_true": -5.3,
+      "decile": 4,
+      "ticker": "NDAQ",
+      "date": "2024-04-09"
+    },
+    {
+      "y_pred": -2.130000114440918,
+      "y_true": -0.95,
+      "decile": 2,
+      "ticker": "FIX",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 10.15999984741211,
+      "y_true": 26.33,
+      "decile": 10,
+      "ticker": "ELF",
+      "date": "2023-02-02"
+    },
+    {
+      "y_pred": 1.899999976158142,
+      "y_true": 3.38,
+      "decile": 8,
+      "ticker": "HBAN",
+      "date": "2024-10-11"
+    },
+    {
+      "y_pred": 49.380001068115234,
+      "y_true": 10.3,
+      "decile": 10,
+      "ticker": "HUT",
+      "date": "2021-02-09"
+    },
+    {
+      "y_pred": 0.44999998807907104,
+      "y_true": -3.47,
+      "decile": 6,
+      "ticker": "DV",
+      "date": "2023-06-16"
+    },
+    {
+      "y_pred": 0.11999999731779099,
+      "y_true": 13.77,
+      "decile": 5,
+      "ticker": "AIT",
+      "date": "2024-09-18"
+    },
+    {
+      "y_pred": -0.3199999928474426,
+      "y_true": -3.28,
+      "decile": 5,
+      "ticker": "KTOS",
+      "date": "2025-01-06"
+    },
+    {
+      "y_pred": -3.7100000381469727,
+      "y_true": 10.62,
+      "decile": 1,
+      "ticker": "TTMI",
+      "date": "2025-09-18"
+    },
+    {
+      "y_pred": -1.4900000095367432,
+      "y_true": 8.64,
+      "decile": 3,
+      "ticker": "MCK",
+      "date": "2025-09-23"
+    },
+    {
+      "y_pred": -1.3200000524520874,
+      "y_true": -13.08,
+      "decile": 3,
+      "ticker": "EYE",
+      "date": "2021-10-15"
+    },
+    {
+      "y_pred": 12.600000381469727,
+      "y_true": -8.42,
+      "decile": 10,
+      "ticker": "ANIP",
+      "date": "2023-01-06"
+    },
+    {
+      "y_pred": -2.9100000858306885,
+      "y_true": -1.93,
+      "decile": 2,
+      "ticker": "INCY",
+      "date": "2022-07-20"
+    },
+    {
+      "y_pred": 9.050000190734863,
+      "y_true": 16.32,
+      "decile": 10,
+      "ticker": "QTWO",
+      "date": "2023-11-14"
+    },
+    {
+      "y_pred": -4.179999828338623,
+      "y_true": 7.83,
+      "decile": 1,
+      "ticker": "FUN",
+      "date": "2021-02-04"
+    },
+    {
+      "y_pred": -0.28999999165534973,
+      "y_true": -10.55,
+      "decile": 5,
+      "ticker": "AMAL",
+      "date": "2024-01-30"
+    },
+    {
+      "y_pred": -2.259999990463257,
+      "y_true": -7.56,
+      "decile": 2,
+      "ticker": "ROAD",
+      "date": "2024-05-22"
+    },
+    {
+      "y_pred": 0.17000000178813934,
+      "y_true": -7.18,
+      "decile": 6,
+      "ticker": "AN",
+      "date": "2024-09-27"
+    },
+    {
+      "y_pred": 0.23000000417232513,
+      "y_true": 6.69,
+      "decile": 6,
+      "ticker": "AAMI",
+      "date": "2024-10-14"
+    },
+    {
+      "y_pred": -1.4500000476837158,
+      "y_true": -2.65,
+      "decile": 3,
+      "ticker": "ACM",
+      "date": "2023-08-14"
+    },
+    {
+      "y_pred": -3.309999942779541,
+      "y_true": -6.21,
+      "decile": 1,
+      "ticker": "LFUS",
+      "date": "2022-01-04"
+    },
+    {
+      "y_pred": 3.9600000381469727,
+      "y_true": 29.29,
+      "decile": 9,
+      "ticker": "CMC",
+      "date": "2021-02-17"
+    },
+    {
+      "y_pred": 6.0,
+      "y_true": -16.14,
+      "decile": 9,
+      "ticker": "GAP",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": -0.3100000023841858,
+      "y_true": 19.5,
+      "decile": 5,
+      "ticker": "HUBB",
+      "date": "2023-04-25"
+    },
+    {
+      "y_pred": -1.440000057220459,
+      "y_true": -9.97,
+      "decile": 3,
+      "ticker": "MWA",
+      "date": "2024-05-09"
+    },
+    {
+      "y_pred": 1.3300000429153442,
+      "y_true": 38.93,
+      "decile": 7,
+      "ticker": "HAL",
+      "date": "2022-01-04"
+    },
+    {
+      "y_pred": -9.449999809265137,
+      "y_true": -19.87,
+      "decile": 1,
+      "ticker": "TERN",
+      "date": "2024-07-12"
+    },
+    {
+      "y_pred": 3.390000104904175,
+      "y_true": -7.38,
+      "decile": 9,
+      "ticker": "WDC",
+      "date": "2021-05-17"
+    },
+    {
+      "y_pred": 0.9800000190734863,
+      "y_true": -4.8,
+      "decile": 7,
+      "ticker": "HLT",
+      "date": "2022-02-15"
+    },
+    {
+      "y_pred": 0.4000000059604645,
+      "y_true": 13.93,
+      "decile": 6,
+      "ticker": "FULT",
+      "date": "2021-01-13"
+    },
+    {
+      "y_pred": -1.9800000190734863,
+      "y_true": 38.23,
+      "decile": 2,
+      "ticker": "CRL",
+      "date": "2021-04-06"
+    },
+    {
+      "y_pred": -0.07999999821186066,
+      "y_true": 6.96,
+      "decile": 5,
+      "ticker": "FIBK",
+      "date": "2021-02-12"
+    },
+    {
+      "y_pred": 1.1200000047683716,
+      "y_true": -0.64,
+      "decile": 7,
+      "ticker": "KALU",
+      "date": "2025-12-16"
+    },
+    {
+      "y_pred": -3.190000057220459,
+      "y_true": -0.59,
+      "decile": 1,
+      "ticker": "DY",
+      "date": "2025-11-19"
+    },
+    {
+      "y_pred": 1.3799999952316284,
+      "y_true": -6.71,
+      "decile": 7,
+      "ticker": "RMBS",
+      "date": "2023-11-14"
+    },
+    {
+      "y_pred": 7.670000076293945,
+      "y_true": 35.82,
+      "decile": 10,
+      "ticker": "NUVL",
+      "date": "2023-10-04"
+    },
+    {
+      "y_pred": -1.8600000143051147,
+      "y_true": -5.89,
+      "decile": 3,
+      "ticker": "LGIH",
+      "date": "2021-08-02"
+    },
+    {
+      "y_pred": 1.7100000381469727,
+      "y_true": -6.98,
+      "decile": 7,
+      "ticker": "TENB",
+      "date": "2024-02-07"
+    },
+    {
+      "y_pred": -2.2699999809265137,
+      "y_true": -4.45,
+      "decile": 2,
+      "ticker": "WFC",
+      "date": "2025-09-19"
+    },
+    {
+      "y_pred": 0.3400000035762787,
+      "y_true": -5.4,
+      "decile": 6,
+      "ticker": "MMM",
+      "date": "2025-05-12"
+    },
+    {
+      "y_pred": 3.1500000953674316,
+      "y_true": -0.07,
+      "decile": 8,
+      "ticker": "INSW",
+      "date": "2023-02-06"
+    },
+    {
+      "y_pred": -1.4500000476837158,
+      "y_true": -4.97,
+      "decile": 3,
+      "ticker": "SKY",
+      "date": "2024-09-13"
+    },
+    {
+      "y_pred": -2.299999952316284,
+      "y_true": -3.85,
+      "decile": 2,
+      "ticker": "QRVO",
+      "date": "2021-06-29"
+    },
+    {
+      "y_pred": -2.509999990463257,
+      "y_true": -7.97,
+      "decile": 2,
+      "ticker": "NBHC",
+      "date": "2022-01-10"
+    },
+    {
+      "y_pred": 0.1599999964237213,
+      "y_true": -4.23,
+      "decile": 5,
+      "ticker": "RRC",
+      "date": "2023-10-09"
+    },
+    {
+      "y_pred": 18.18000030517578,
+      "y_true": -5.21,
+      "decile": 10,
+      "ticker": "VTOL",
+      "date": "2023-11-02"
+    },
+    {
+      "y_pred": 0.029999999329447746,
+      "y_true": -5.64,
+      "decile": 5,
+      "ticker": "ROST",
+      "date": "2021-02-24"
+    },
+    {
+      "y_pred": -0.5899999737739563,
+      "y_true": -4.97,
+      "decile": 4,
+      "ticker": "ELF",
+      "date": "2021-10-26"
+    },
+    {
+      "y_pred": 2.0999999046325684,
+      "y_true": -5.98,
+      "decile": 8,
+      "ticker": "DIS",
+      "date": "2025-06-30"
+    },
+    {
+      "y_pred": -0.6700000166893005,
+      "y_true": -4.34,
+      "decile": 4,
+      "ticker": "MAS",
+      "date": "2023-07-12"
+    },
+    {
+      "y_pred": -0.550000011920929,
+      "y_true": -3.33,
+      "decile": 4,
+      "ticker": "PSN",
+      "date": "2023-10-11"
+    },
+    {
+      "y_pred": 3.0,
+      "y_true": 41.74,
+      "decile": 8,
+      "ticker": "WSM",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": -1.399999976158142,
+      "y_true": 14.35,
+      "decile": 3,
+      "ticker": "AMPH",
+      "date": "2023-06-02"
+    },
+    {
+      "y_pred": 0.5099999904632568,
+      "y_true": 16.36,
+      "decile": 6,
+      "ticker": "IP",
+      "date": "2021-03-01"
+    },
+    {
+      "y_pred": 37.52000045776367,
+      "y_true": -16.98,
+      "decile": 10,
+      "ticker": "AMSC",
+      "date": "2024-01-25"
+    },
+    {
+      "y_pred": 2.7799999713897705,
+      "y_true": -1.0,
+      "decile": 8,
+      "ticker": "SPB",
+      "date": "2021-04-06"
+    },
+    {
+      "y_pred": 0.4000000059604645,
+      "y_true": -4.71,
+      "decile": 6,
+      "ticker": "PSN",
+      "date": "2021-04-16"
+    },
+    {
+      "y_pred": 3.4000000953674316,
+      "y_true": -2.33,
+      "decile": 9,
+      "ticker": "REGN",
+      "date": "2022-02-11"
+    },
+    {
+      "y_pred": 13.880000114440918,
+      "y_true": -19.9,
+      "decile": 10,
+      "ticker": "RDW",
+      "date": "2023-09-14"
+    },
+    {
+      "y_pred": -2.7799999713897705,
+      "y_true": -8.55,
+      "decile": 2,
+      "ticker": "MBIN",
+      "date": "2024-03-06"
+    },
+    {
+      "y_pred": 0.9100000262260437,
+      "y_true": -8.24,
+      "decile": 7,
+      "ticker": "BK",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -0.5299999713897705,
+      "y_true": -2.66,
+      "decile": 4,
+      "ticker": "FA",
+      "date": "2023-12-13"
+    },
+    {
+      "y_pred": 4.059999942779541,
+      "y_true": -13.06,
+      "decile": 9,
+      "ticker": "DIOD",
+      "date": "2021-02-19"
+    },
+    {
+      "y_pred": 3.180000066757202,
+      "y_true": -9.23,
+      "decile": 8,
+      "ticker": "OSBC",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 1.6399999856948853,
+      "y_true": -9.65,
+      "decile": 7,
+      "ticker": "PRGS",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -1.6200000047683716,
+      "y_true": -1.89,
+      "decile": 3,
+      "ticker": "SGI",
+      "date": "2024-02-27"
+    },
+    {
+      "y_pred": 0.550000011920929,
+      "y_true": -6.41,
+      "decile": 6,
+      "ticker": "AX",
+      "date": "2021-08-11"
+    },
+    {
+      "y_pred": -3.7300000190734863,
+      "y_true": -5.5,
+      "decile": 1,
+      "ticker": "PEG",
+      "date": "2024-11-25"
+    },
+    {
+      "y_pred": -1.4900000095367432,
+      "y_true": 50.57,
+      "decile": 3,
+      "ticker": "DECK",
+      "date": "2023-10-27"
+    },
+    {
+      "y_pred": 0.5400000214576721,
+      "y_true": 28.36,
+      "decile": 6,
+      "ticker": "COKE",
+      "date": "2023-11-07"
+    },
+    {
+      "y_pred": 0.20999999344348907,
+      "y_true": -4.04,
+      "decile": 6,
+      "ticker": "MSFT",
+      "date": "2021-04-05"
+    },
+    {
+      "y_pred": 1.7400000095367432,
+      "y_true": 3.43,
+      "decile": 7,
+      "ticker": "OKE",
+      "date": "2024-02-27"
+    },
+    {
+      "y_pred": -2.359999895095825,
+      "y_true": 1.37,
+      "decile": 2,
+      "ticker": "AI",
+      "date": "2023-05-26"
+    },
+    {
+      "y_pred": 0.10999999940395355,
+      "y_true": 14.52,
+      "decile": 5,
+      "ticker": "GOOG",
+      "date": "2024-04-01"
+    },
+    {
+      "y_pred": 0.30000001192092896,
+      "y_true": -0.35,
+      "decile": 6,
+      "ticker": "LZB",
+      "date": "2024-05-31"
+    },
+    {
+      "y_pred": 0.14000000059604645,
+      "y_true": -0.07,
+      "decile": 5,
+      "ticker": "MATX",
+      "date": "2022-02-22"
+    },
+    {
+      "y_pred": 13.229999542236328,
+      "y_true": 16.99,
+      "decile": 10,
+      "ticker": "MGY",
+      "date": "2021-09-02"
+    },
+    {
+      "y_pred": 9.90999984741211,
+      "y_true": 0.08,
+      "decile": 10,
+      "ticker": "TRIP",
+      "date": "2024-02-13"
+    },
+    {
+      "y_pred": -0.41999998688697815,
+      "y_true": -7.34,
+      "decile": 5,
+      "ticker": "FOX",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 0.8899999856948853,
+      "y_true": -9.02,
+      "decile": 6,
+      "ticker": "AAON",
+      "date": "2023-07-17"
+    },
+    {
+      "y_pred": 1.6299999952316284,
+      "y_true": -2.97,
+      "decile": 7,
+      "ticker": "APO",
+      "date": "2023-08-03"
+    },
+    {
+      "y_pred": -0.5199999809265137,
+      "y_true": 1.64,
+      "decile": 5,
+      "ticker": "IQV",
+      "date": "2025-11-24"
+    },
+    {
+      "y_pred": 12.920000076293945,
+      "y_true": -14.51,
+      "decile": 10,
+      "ticker": "LBRT",
+      "date": "2022-06-06"
+    },
+    {
+      "y_pred": 23.780000686645508,
+      "y_true": 43.06,
+      "decile": 10,
+      "ticker": "PRKS",
+      "date": "2021-02-04"
+    },
+    {
+      "y_pred": 1.340000033378601,
+      "y_true": -1.69,
+      "decile": 7,
+      "ticker": "CR",
+      "date": "2024-11-05"
+    },
+    {
+      "y_pred": 0.5600000023841858,
+      "y_true": 16.83,
+      "decile": 6,
+      "ticker": "UMBF",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": 0.07999999821186066,
+      "y_true": -1.9,
+      "decile": 5,
+      "ticker": "DY",
+      "date": "2022-05-25"
+    },
+    {
+      "y_pred": 1.2100000381469727,
+      "y_true": -2.5,
+      "decile": 7,
+      "ticker": "CNOB",
+      "date": "2025-02-11"
+    },
+    {
+      "y_pred": 0.30000001192092896,
+      "y_true": -5.98,
+      "decile": 6,
+      "ticker": "WTS",
+      "date": "2023-05-05"
+    },
+    {
+      "y_pred": -0.9700000286102295,
+      "y_true": -3.58,
+      "decile": 4,
+      "ticker": "HEI",
+      "date": "2021-06-01"
+    },
+    {
+      "y_pred": 1.2300000190734863,
+      "y_true": -5.88,
+      "decile": 7,
+      "ticker": "DEI",
+      "date": "2024-05-14"
+    },
+    {
+      "y_pred": 0.550000011920929,
+      "y_true": -1.02,
+      "decile": 6,
+      "ticker": "UPWK",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": -0.6399999856948853,
+      "y_true": -5.21,
+      "decile": 4,
+      "ticker": "BMY",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": 0.46000000834465027,
+      "y_true": 43.61,
+      "decile": 6,
+      "ticker": "TDS",
+      "date": "2024-10-15"
+    },
+    {
+      "y_pred": 7.090000152587891,
+      "y_true": -8.03,
+      "decile": 10,
+      "ticker": "ROG",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -2.549999952316284,
+      "y_true": -11.11,
+      "decile": 2,
+      "ticker": "DXCM",
+      "date": "2023-03-02"
+    },
+    {
+      "y_pred": 6.989999771118164,
+      "y_true": -7.36,
+      "decile": 9,
+      "ticker": "WHD",
+      "date": "2021-06-02"
+    },
+    {
+      "y_pred": 13.229999542236328,
+      "y_true": 10.29,
+      "decile": 10,
+      "ticker": "LC",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": -0.8799999952316284,
+      "y_true": -0.72,
+      "decile": 4,
+      "ticker": "FCN",
+      "date": "2022-06-23"
+    },
+    {
+      "y_pred": -2.9000000953674316,
+      "y_true": -3.24,
+      "decile": 2,
+      "ticker": "FRPT",
+      "date": "2024-11-04"
+    },
+    {
+      "y_pred": -0.6200000047683716,
+      "y_true": 2.53,
+      "decile": 4,
+      "ticker": "MOH",
+      "date": "2021-09-17"
+    },
+    {
+      "y_pred": -2.819999933242798,
+      "y_true": 0.64,
+      "decile": 2,
+      "ticker": "SM",
+      "date": "2024-03-13"
+    },
+    {
+      "y_pred": 5.570000171661377,
+      "y_true": 34.75,
+      "decile": 9,
+      "ticker": "DVAX",
+      "date": "2021-08-05"
+    },
+    {
+      "y_pred": -0.8500000238418579,
+      "y_true": -6.0,
+      "decile": 4,
+      "ticker": "FWONA",
+      "date": "2023-06-14"
+    },
+    {
+      "y_pred": 2.75,
+      "y_true": 12.64,
+      "decile": 8,
+      "ticker": "IDCC",
+      "date": "2023-05-05"
+    },
+    {
+      "y_pred": 1.0499999523162842,
+      "y_true": -4.33,
+      "decile": 7,
+      "ticker": "IMKTA",
+      "date": "2022-02-11"
+    },
+    {
+      "y_pred": -3.190000057220459,
+      "y_true": -13.9,
+      "decile": 1,
+      "ticker": "STRL",
+      "date": "2024-07-15"
+    },
+    {
+      "y_pred": 1.1100000143051147,
+      "y_true": -7.02,
+      "decile": 7,
+      "ticker": "STBA",
+      "date": "2024-01-26"
+    },
+    {
+      "y_pred": -1.590000033378601,
+      "y_true": 16.37,
+      "decile": 3,
+      "ticker": "SKYW",
+      "date": "2021-02-08"
+    },
+    {
+      "y_pred": 1.9900000095367432,
+      "y_true": -12.88,
+      "decile": 8,
+      "ticker": "PTC",
+      "date": "2021-07-23"
+    },
+    {
+      "y_pred": -2.309999942779541,
+      "y_true": -5.08,
+      "decile": 2,
+      "ticker": "KMX",
+      "date": "2021-05-03"
+    },
+    {
+      "y_pred": 6.880000114440918,
+      "y_true": -19.08,
+      "decile": 9,
+      "ticker": "TAP",
+      "date": "2021-01-27"
+    },
+    {
+      "y_pred": -1.559999942779541,
+      "y_true": -1.09,
+      "decile": 3,
+      "ticker": "CAH",
+      "date": "2023-11-03"
+    },
+    {
+      "y_pred": 3.890000104904175,
+      "y_true": -7.82,
+      "decile": 9,
+      "ticker": "TTMI",
+      "date": "2025-02-06"
+    },
+    {
+      "y_pred": 0.6200000047683716,
+      "y_true": 41.58,
+      "decile": 6,
+      "ticker": "CSL",
+      "date": "2023-12-01"
+    },
+    {
+      "y_pred": 1.7899999618530273,
+      "y_true": 0.74,
+      "decile": 8,
+      "ticker": "FHN",
+      "date": "2025-12-19"
+    },
+    {
+      "y_pred": 5.400000095367432,
+      "y_true": 0.92,
+      "decile": 9,
+      "ticker": "INSW",
+      "date": "2024-01-12"
+    },
+    {
+      "y_pred": -1.5,
+      "y_true": -3.22,
+      "decile": 3,
+      "ticker": "CAH",
+      "date": "2024-02-28"
+    },
+    {
+      "y_pred": 2.2899999618530273,
+      "y_true": -3.43,
+      "decile": 8,
+      "ticker": "KMI",
+      "date": "2024-08-30"
+    },
+    {
+      "y_pred": 2.7100000381469727,
+      "y_true": -4.6,
+      "decile": 8,
+      "ticker": "CBZ",
+      "date": "2022-06-01"
+    },
+    {
+      "y_pred": -2.7899999618530273,
+      "y_true": -3.04,
+      "decile": 2,
+      "ticker": "COO",
+      "date": "2021-08-12"
+    },
+    {
+      "y_pred": 4.320000171661377,
+      "y_true": 6.07,
+      "decile": 9,
+      "ticker": "ONC",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": 5.449999809265137,
+      "y_true": -7.2,
+      "decile": 9,
+      "ticker": "DELL",
+      "date": "2022-01-10"
+    },
+    {
+      "y_pred": 8.75,
+      "y_true": -14.57,
+      "decile": 10,
+      "ticker": "SMCI",
+      "date": "2023-10-10"
+    },
+    {
+      "y_pred": -2.640000104904175,
+      "y_true": 0.37,
+      "decile": 2,
+      "ticker": "HLT",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": 3.5,
+      "y_true": -11.81,
+      "decile": 9,
+      "ticker": "IBP",
+      "date": "2021-01-19"
+    },
+    {
+      "y_pred": 4.269999980926514,
+      "y_true": -2.36,
+      "decile": 9,
+      "ticker": "BJ",
+      "date": "2022-02-14"
+    },
+    {
+      "y_pred": 2.609999895095825,
+      "y_true": 10.25,
+      "decile": 8,
+      "ticker": "CIEN",
+      "date": "2025-07-16"
+    },
+    {
+      "y_pred": 1.840000033378601,
+      "y_true": -1.49,
+      "decile": 8,
+      "ticker": "FHB",
+      "date": "2025-01-27"
+    },
+    {
+      "y_pred": -3.200000047683716,
+      "y_true": -7.57,
+      "decile": 1,
+      "ticker": "DIOD",
+      "date": "2023-02-02"
+    },
+    {
+      "y_pred": 0.7400000095367432,
+      "y_true": 13.62,
+      "decile": 6,
+      "ticker": "CVS",
+      "date": "2025-08-15"
+    },
+    {
+      "y_pred": 3.9700000286102295,
+      "y_true": 0.43,
+      "decile": 9,
+      "ticker": "STLD",
+      "date": "2022-03-17"
+    },
+    {
+      "y_pred": 0.3799999952316284,
+      "y_true": 1.59,
+      "decile": 6,
+      "ticker": "RSG",
+      "date": "2021-10-21"
+    },
+    {
+      "y_pred": -0.41999998688697815,
+      "y_true": -7.17,
+      "decile": 5,
+      "ticker": "KAI",
+      "date": "2025-02-14"
+    },
+    {
+      "y_pred": -1.1399999856948853,
+      "y_true": -2.36,
+      "decile": 4,
+      "ticker": "WSO",
+      "date": "2021-01-07"
+    },
+    {
+      "y_pred": -2.0399999618530273,
+      "y_true": -6.33,
+      "decile": 2,
+      "ticker": "LZB",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": 2.2300000190734863,
+      "y_true": -3.52,
+      "decile": 8,
+      "ticker": "MEDP",
+      "date": "2021-09-01"
+    },
+    {
+      "y_pred": 1.2100000381469727,
+      "y_true": -2.87,
+      "decile": 7,
+      "ticker": "HEI",
+      "date": "2022-01-14"
+    },
+    {
+      "y_pred": 0.699999988079071,
+      "y_true": 12.3,
+      "decile": 6,
+      "ticker": "CPRX",
+      "date": "2022-02-08"
+    },
+    {
+      "y_pred": 5.289999961853027,
+      "y_true": 31.09,
+      "decile": 9,
+      "ticker": "APA",
+      "date": "2022-01-04"
+    },
+    {
+      "y_pred": -2.450000047683716,
+      "y_true": -3.58,
+      "decile": 2,
+      "ticker": "KBR",
+      "date": "2023-10-11"
+    },
+    {
+      "y_pred": 5.0,
+      "y_true": -8.88,
+      "decile": 9,
+      "ticker": "RELY",
+      "date": "2023-07-24"
+    },
+    {
+      "y_pred": 19.56999969482422,
+      "y_true": 8.02,
+      "decile": 10,
+      "ticker": "TMDX",
+      "date": "2023-01-23"
+    },
+    {
+      "y_pred": 5.980000019073486,
+      "y_true": -10.18,
+      "decile": 9,
+      "ticker": "NUVB",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": -2.1500000953674316,
+      "y_true": -2.52,
+      "decile": 2,
+      "ticker": "WAFD",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": -1.690000057220459,
+      "y_true": -0.25,
+      "decile": 3,
+      "ticker": "JNJ",
+      "date": "2025-10-03"
+    },
+    {
+      "y_pred": 47.56999969482422,
+      "y_true": 5.86,
+      "decile": 10,
+      "ticker": "SEI",
+      "date": "2021-02-09"
+    },
+    {
+      "y_pred": 0.20000000298023224,
+      "y_true": -3.01,
+      "decile": 6,
+      "ticker": "HUBB",
+      "date": "2023-08-25"
+    },
+    {
+      "y_pred": -1.0499999523162842,
+      "y_true": 5.56,
+      "decile": 4,
+      "ticker": "NIC",
+      "date": "2021-02-08"
+    },
+    {
+      "y_pred": 0.019999999552965164,
+      "y_true": -4.17,
+      "decile": 5,
+      "ticker": "TWO",
+      "date": "2021-06-09"
+    },
+    {
+      "y_pred": -8.140000343322754,
+      "y_true": -9.4,
+      "decile": 1,
+      "ticker": "AMLX",
+      "date": "2023-01-24"
+    },
+    {
+      "y_pred": -2.8499999046325684,
+      "y_true": 2.28,
+      "decile": 2,
+      "ticker": "DY",
+      "date": "2025-09-26"
+    },
+    {
+      "y_pred": 7.159999847412109,
+      "y_true": 1.73,
+      "decile": 10,
+      "ticker": "LLY",
+      "date": "2021-01-11"
+    },
+    {
+      "y_pred": 7.769999980926514,
+      "y_true": 4.73,
+      "decile": 10,
+      "ticker": "AVAH",
+      "date": "2025-09-02"
+    },
+    {
+      "y_pred": 4.590000152587891,
+      "y_true": 21.99,
+      "decile": 9,
+      "ticker": "PFS",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 2.809999942779541,
+      "y_true": 3.1,
+      "decile": 8,
+      "ticker": "MUSA",
+      "date": "2024-02-08"
+    },
+    {
+      "y_pred": 4.71999979019165,
+      "y_true": -4.11,
+      "decile": 9,
+      "ticker": "RNST",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": -1.8600000143051147,
+      "y_true": -5.54,
+      "decile": 3,
+      "ticker": "HSIC",
+      "date": "2021-08-02"
+    },
+    {
+      "y_pred": 2.2300000190734863,
+      "y_true": 47.01,
+      "decile": 8,
+      "ticker": "VRNS",
+      "date": "2023-10-16"
+    },
+    {
+      "y_pred": 6.28000020980835,
+      "y_true": 7.65,
+      "decile": 9,
+      "ticker": "NSSC",
+      "date": "2021-02-08"
+    },
+    {
+      "y_pred": -1.7799999713897705,
+      "y_true": -6.11,
+      "decile": 3,
+      "ticker": "RUSHA",
+      "date": "2024-03-20"
+    },
+    {
+      "y_pred": -1.7799999713897705,
+      "y_true": -0.27,
+      "decile": 3,
+      "ticker": "PB",
+      "date": "2021-02-22"
+    },
+    {
+      "y_pred": -1.0,
+      "y_true": 2.12,
+      "decile": 4,
+      "ticker": "PLD",
+      "date": "2021-07-12"
+    },
+    {
+      "y_pred": 0.5799999833106995,
+      "y_true": -6.47,
+      "decile": 6,
+      "ticker": "EIG",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": -0.7400000095367432,
+      "y_true": -3.71,
+      "decile": 4,
+      "ticker": "SPGI",
+      "date": "2021-12-13"
+    },
+    {
+      "y_pred": 0.44999998807907104,
+      "y_true": -6.47,
+      "decile": 6,
+      "ticker": "LEN",
+      "date": "2023-01-31"
+    },
+    {
+      "y_pred": 1.9700000286102295,
+      "y_true": -0.26,
+      "decile": 8,
+      "ticker": "CRWD",
+      "date": "2025-09-18"
+    },
+    {
+      "y_pred": 1.7200000286102295,
+      "y_true": -21.62,
+      "decile": 7,
+      "ticker": "TERN",
+      "date": "2022-11-30"
+    },
+    {
+      "y_pred": 0.7300000190734863,
+      "y_true": -8.07,
+      "decile": 6,
+      "ticker": "PHIN",
+      "date": "2024-09-19"
+    },
+    {
+      "y_pred": 0.6200000047683716,
+      "y_true": 0.12,
+      "decile": 6,
+      "ticker": "TTEK",
+      "date": "2024-05-02"
+    },
+    {
+      "y_pred": 3.4800000190734863,
+      "y_true": -6.6,
+      "decile": 9,
+      "ticker": "BBT",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 2.0899999141693115,
+      "y_true": -8.08,
+      "decile": 8,
+      "ticker": "MEDP",
+      "date": "2023-10-24"
+    },
+    {
+      "y_pred": 0.5299999713897705,
+      "y_true": -10.02,
+      "decile": 6,
+      "ticker": "LPX",
+      "date": "2024-05-15"
+    },
+    {
+      "y_pred": -5.5,
+      "y_true": -7.52,
+      "decile": 1,
+      "ticker": "PR",
+      "date": "2021-09-15"
+    },
+    {
+      "y_pred": -1.9800000190734863,
+      "y_true": -4.44,
+      "decile": 2,
+      "ticker": "HWC",
+      "date": "2025-01-15"
+    },
+    {
+      "y_pred": 5.869999885559082,
+      "y_true": 17.35,
+      "decile": 9,
+      "ticker": "SLVM",
+      "date": "2022-10-06"
+    },
+    {
+      "y_pred": 0.9800000190734863,
+      "y_true": 7.59,
+      "decile": 7,
+      "ticker": "ORLY",
+      "date": "2022-10-24"
+    },
+    {
+      "y_pred": 2.7899999618530273,
+      "y_true": 9.64,
+      "decile": 8,
+      "ticker": "GTES",
+      "date": "2021-01-14"
+    },
+    {
+      "y_pred": -0.5099999904632568,
+      "y_true": 3.91,
+      "decile": 5,
+      "ticker": "PRI",
+      "date": "2023-01-25"
+    },
+    {
+      "y_pred": 12.010000228881836,
+      "y_true": 2.82,
+      "decile": 10,
+      "ticker": "SMCI",
+      "date": "2023-02-16"
+    },
+    {
+      "y_pred": 0.3499999940395355,
+      "y_true": -3.47,
+      "decile": 6,
+      "ticker": "FSS",
+      "date": "2024-11-22"
+    },
+    {
+      "y_pred": -0.23999999463558197,
+      "y_true": -0.95,
+      "decile": 5,
+      "ticker": "KO",
+      "date": "2024-08-26"
+    },
+    {
+      "y_pred": 2.0399999618530273,
+      "y_true": -3.65,
+      "decile": 8,
+      "ticker": "STLD",
+      "date": "2022-10-13"
+    },
+    {
+      "y_pred": -0.3499999940395355,
+      "y_true": -2.57,
+      "decile": 5,
+      "ticker": "TRN",
+      "date": "2024-05-01"
+    },
+    {
+      "y_pred": -1.309999942779541,
+      "y_true": -4.03,
+      "decile": 3,
+      "ticker": "ATO",
+      "date": "2025-04-22"
+    },
+    {
+      "y_pred": -0.7799999713897705,
+      "y_true": 19.55,
+      "decile": 4,
+      "ticker": "BX",
+      "date": "2024-07-23"
+    },
+    {
+      "y_pred": 2.0999999046325684,
+      "y_true": -4.48,
+      "decile": 8,
+      "ticker": "OBK",
+      "date": "2025-01-23"
+    },
+    {
+      "y_pred": 2.5999999046325684,
+      "y_true": -4.5,
+      "decile": 8,
+      "ticker": "EXE",
+      "date": "2022-08-11"
+    },
+    {
+      "y_pred": -1.6200000047683716,
+      "y_true": -3.07,
+      "decile": 3,
+      "ticker": "LNT",
+      "date": "2021-08-16"
+    },
+    {
+      "y_pred": -2.7799999713897705,
+      "y_true": -16.54,
+      "decile": 2,
+      "ticker": "CBZ",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": -2.9700000286102295,
+      "y_true": -7.76,
+      "decile": 1,
+      "ticker": "ACMR",
+      "date": "2025-09-17"
+    },
+    {
+      "y_pred": 7.570000171661377,
+      "y_true": 0.59,
+      "decile": 10,
+      "ticker": "VERX",
+      "date": "2023-08-22"
+    },
+    {
+      "y_pred": -0.2199999988079071,
+      "y_true": -7.24,
+      "decile": 5,
+      "ticker": "AMBA",
+      "date": "2025-11-06"
+    },
+    {
+      "y_pred": 0.28999999165534973,
+      "y_true": 0.3,
+      "decile": 6,
+      "ticker": "SYBT",
+      "date": "2022-10-13"
+    },
+    {
+      "y_pred": -0.28999999165534973,
+      "y_true": -5.79,
+      "decile": 5,
+      "ticker": "DEI",
+      "date": "2021-06-01"
+    },
+    {
+      "y_pred": 0.6899999976158142,
+      "y_true": -0.24,
+      "decile": 6,
+      "ticker": "AXP",
+      "date": "2024-04-22"
+    },
+    {
+      "y_pred": -3.799999952316284,
+      "y_true": -3.87,
+      "decile": 1,
+      "ticker": "WRB",
+      "date": "2025-05-30"
+    },
+    {
+      "y_pred": 0.9700000286102295,
+      "y_true": -0.61,
+      "decile": 7,
+      "ticker": "XEL",
+      "date": "2024-10-31"
+    },
+    {
+      "y_pred": -0.6299999952316284,
+      "y_true": -6.19,
+      "decile": 4,
+      "ticker": "UWMC",
+      "date": "2023-06-13"
+    },
+    {
+      "y_pred": -0.9900000095367432,
+      "y_true": -9.16,
+      "decile": 4,
+      "ticker": "TOST",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": 7.570000171661377,
+      "y_true": -9.32,
+      "decile": 10,
+      "ticker": "TNGX",
+      "date": "2025-09-17"
+    },
+    {
+      "y_pred": 0.949999988079071,
+      "y_true": -9.99,
+      "decile": 7,
+      "ticker": "CHRD",
+      "date": "2022-03-07"
+    },
+    {
+      "y_pred": -1.690000057220459,
+      "y_true": 17.65,
+      "decile": 3,
+      "ticker": "SLM",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": -0.8799999952316284,
+      "y_true": 8.2,
+      "decile": 4,
+      "ticker": "KRP",
+      "date": "2021-09-13"
+    },
+    {
+      "y_pred": -7.71999979019165,
+      "y_true": -19.71,
+      "decile": 1,
+      "ticker": "HIMS",
+      "date": "2024-11-25"
+    },
+    {
+      "y_pred": 3.2200000286102295,
+      "y_true": 0.5,
+      "decile": 8,
+      "ticker": "DOC",
+      "date": "2024-07-26"
+    },
+    {
+      "y_pred": 1.3600000143051147,
+      "y_true": -6.9,
+      "decile": 7,
+      "ticker": "HUN",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 1.940000057220459,
+      "y_true": -6.81,
+      "decile": 8,
+      "ticker": "GE",
+      "date": "2024-07-23"
+    },
+    {
+      "y_pred": -0.20999999344348907,
+      "y_true": 8.33,
+      "decile": 5,
+      "ticker": "AXP",
+      "date": "2024-01-26"
+    },
+    {
+      "y_pred": 1.4900000095367432,
+      "y_true": -5.15,
+      "decile": 7,
+      "ticker": "CB",
+      "date": "2021-12-16"
+    },
+    {
+      "y_pred": 1.840000033378601,
+      "y_true": -5.1,
+      "decile": 8,
+      "ticker": "MMM",
+      "date": "2025-07-10"
+    },
+    {
+      "y_pred": -4.269999980926514,
+      "y_true": -9.95,
+      "decile": 1,
+      "ticker": "RRX",
+      "date": "2023-08-01"
+    },
+    {
+      "y_pred": -3.9100000858306885,
+      "y_true": -8.05,
+      "decile": 1,
+      "ticker": "RCL",
+      "date": "2025-01-28"
+    },
+    {
+      "y_pred": 82.75,
+      "y_true": -15.51,
+      "decile": 10,
+      "ticker": "ELAN",
+      "date": "2024-05-08"
+    },
+    {
+      "y_pred": -6.059999942779541,
+      "y_true": -9.85,
+      "decile": 1,
+      "ticker": "PSIX",
+      "date": "2024-11-07"
+    },
+    {
+      "y_pred": 18.850000381469727,
+      "y_true": -9.87,
+      "decile": 10,
+      "ticker": "AROC",
+      "date": "2022-05-31"
+    },
+    {
+      "y_pred": 0.3799999952316284,
+      "y_true": 3.59,
+      "decile": 6,
+      "ticker": "AVGO",
+      "date": "2024-06-11"
+    },
+    {
+      "y_pred": -2.119999885559082,
+      "y_true": -5.21,
+      "decile": 2,
+      "ticker": "EPAC",
+      "date": "2023-12-20"
+    },
+    {
+      "y_pred": -3.430000066757202,
+      "y_true": -6.0,
+      "decile": 1,
+      "ticker": "LEA",
+      "date": "2021-06-01"
+    },
+    {
+      "y_pred": -2.700000047683716,
+      "y_true": 34.09,
+      "decile": 2,
+      "ticker": "TGTX",
+      "date": "2023-04-10"
+    },
+    {
+      "y_pred": 0.6100000143051147,
+      "y_true": -6.84,
+      "decile": 6,
+      "ticker": "MPC",
+      "date": "2023-01-23"
+    },
+    {
+      "y_pred": 0.9200000166893005,
+      "y_true": -7.72,
+      "decile": 7,
+      "ticker": "MD",
+      "date": "2021-08-06"
+    },
+    {
+      "y_pred": -1.100000023841858,
+      "y_true": -6.78,
+      "decile": 4,
+      "ticker": "ITGR",
+      "date": "2023-07-27"
+    },
+    {
+      "y_pred": 0.38999998569488525,
+      "y_true": 2.25,
+      "decile": 6,
+      "ticker": "STRL",
+      "date": "2021-11-01"
+    },
+    {
+      "y_pred": 5.840000152587891,
+      "y_true": 6.66,
+      "decile": 9,
+      "ticker": "R",
+      "date": "2021-03-08"
+    },
+    {
+      "y_pred": 0.07999999821186066,
+      "y_true": -8.54,
+      "decile": 5,
+      "ticker": "BLD",
+      "date": "2024-07-12"
+    },
+    {
+      "y_pred": 0.3799999952316284,
+      "y_true": 23.39,
+      "decile": 6,
+      "ticker": "PINS",
+      "date": "2023-10-31"
+    },
+    {
+      "y_pred": -0.4699999988079071,
+      "y_true": -3.68,
+      "decile": 5,
+      "ticker": "MO",
+      "date": "2021-01-28"
+    },
+    {
+      "y_pred": -2.3299999237060547,
+      "y_true": -7.16,
+      "decile": 2,
+      "ticker": "GVA",
+      "date": "2021-11-05"
+    },
+    {
+      "y_pred": 2.8499999046325684,
+      "y_true": 7.56,
+      "decile": 8,
+      "ticker": "WM",
+      "date": "2021-03-25"
+    },
+    {
+      "y_pred": 0.550000011920929,
+      "y_true": -2.63,
+      "decile": 6,
+      "ticker": "CB",
+      "date": "2022-02-02"
+    },
+    {
+      "y_pred": 0.5799999833106995,
+      "y_true": -4.73,
+      "decile": 6,
+      "ticker": "SCI",
+      "date": "2024-07-17"
+    },
+    {
+      "y_pred": -1.899999976158142,
+      "y_true": -1.61,
+      "decile": 2,
+      "ticker": "KR",
+      "date": "2021-06-22"
+    },
+    {
+      "y_pred": 1.6100000143051147,
+      "y_true": 6.41,
+      "decile": 7,
+      "ticker": "DECK",
+      "date": "2022-11-18"
+    },
+    {
+      "y_pred": -0.05999999865889549,
+      "y_true": -3.41,
+      "decile": 5,
+      "ticker": "HCA",
+      "date": "2021-12-16"
+    },
+    {
+      "y_pred": -1.2599999904632568,
+      "y_true": -0.21,
+      "decile": 3,
+      "ticker": "JJSF",
+      "date": "2023-08-01"
+    },
+    {
+      "y_pred": 3.5,
+      "y_true": 15.6,
+      "decile": 9,
+      "ticker": "LAD",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 2.430000066757202,
+      "y_true": 64.13,
+      "decile": 8,
+      "ticker": "COCO",
+      "date": "2023-02-10"
+    },
+    {
+      "y_pred": -1.690000057220459,
+      "y_true": -1.26,
+      "decile": 3,
+      "ticker": "CVBF",
+      "date": "2022-07-21"
+    },
+    {
+      "y_pred": -0.1899999976158142,
+      "y_true": 3.69,
+      "decile": 5,
+      "ticker": "BDC",
+      "date": "2021-05-05"
+    },
+    {
+      "y_pred": 0.28999999165534973,
+      "y_true": 15.73,
+      "decile": 6,
+      "ticker": "TTD",
+      "date": "2024-09-18"
+    },
+    {
+      "y_pred": -1.2400000095367432,
+      "y_true": 2.42,
+      "decile": 3,
+      "ticker": "HEI",
+      "date": "2025-12-19"
+    },
+    {
+      "y_pred": -3.049999952316284,
+      "y_true": -5.5,
+      "decile": 1,
+      "ticker": "AVB",
+      "date": "2022-03-29"
+    },
+    {
+      "y_pred": 7.389999866485596,
+      "y_true": -1.45,
+      "decile": 10,
+      "ticker": "OUST",
+      "date": "2024-05-09"
+    },
+    {
+      "y_pred": -2.5399999618530273,
+      "y_true": -2.73,
+      "decile": 2,
+      "ticker": "YUM",
+      "date": "2025-03-07"
+    },
+    {
+      "y_pred": -0.23999999463558197,
+      "y_true": -7.45,
+      "decile": 5,
+      "ticker": "OFG",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": -7.900000095367432,
+      "y_true": 13.0,
+      "decile": 1,
+      "ticker": "COGT",
+      "date": "2025-11-10"
+    },
+    {
+      "y_pred": -3.190000057220459,
+      "y_true": -0.85,
+      "decile": 1,
+      "ticker": "EVTC",
+      "date": "2021-12-03"
+    },
+    {
+      "y_pred": 3.9700000286102295,
+      "y_true": 2.43,
+      "decile": 9,
+      "ticker": "NOV",
+      "date": "2021-04-29"
+    },
+    {
+      "y_pred": -0.14000000059604645,
+      "y_true": -8.86,
+      "decile": 5,
+      "ticker": "EQT",
+      "date": "2023-11-03"
+    },
+    {
+      "y_pred": 0.4000000059604645,
+      "y_true": -9.2,
+      "decile": 6,
+      "ticker": "ASB",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 2.109999895095825,
+      "y_true": 4.2,
+      "decile": 8,
+      "ticker": "EHC",
+      "date": "2025-04-25"
+    },
+    {
+      "y_pred": 1.7599999904632568,
+      "y_true": 12.54,
+      "decile": 7,
+      "ticker": "PH",
+      "date": "2023-06-06"
+    },
+    {
+      "y_pred": -0.6600000262260437,
+      "y_true": 1.29,
+      "decile": 4,
+      "ticker": "WMT",
+      "date": "2025-11-26"
+    },
+    {
+      "y_pred": -1.3300000429153442,
+      "y_true": -4.27,
+      "decile": 3,
+      "ticker": "ALL",
+      "date": "2021-08-23"
+    },
+    {
+      "y_pred": 0.15000000596046448,
+      "y_true": -6.28,
+      "decile": 5,
+      "ticker": "KBH",
+      "date": "2024-11-25"
+    },
+    {
+      "y_pred": -2.180000066757202,
+      "y_true": 0.0,
+      "decile": 2,
+      "ticker": "VTR",
+      "date": "2021-06-02"
+    },
+    {
+      "y_pred": 0.2800000011920929,
+      "y_true": -2.92,
+      "decile": 6,
+      "ticker": "IDT",
+      "date": "2024-03-01"
+    },
+    {
+      "y_pred": 3.380000114440918,
+      "y_true": 27.96,
+      "decile": 9,
+      "ticker": "GEV",
+      "date": "2025-05-21"
+    },
+    {
+      "y_pred": 1.2999999523162842,
+      "y_true": -8.89,
+      "decile": 7,
+      "ticker": "NOG",
+      "date": "2023-09-01"
+    },
+    {
+      "y_pred": -2.890000104904175,
+      "y_true": -0.34,
+      "decile": 2,
+      "ticker": "SCD",
+      "date": "2024-03-13"
+    },
+    {
+      "y_pred": -1.059999942779541,
+      "y_true": -6.42,
+      "decile": 4,
+      "ticker": "INTU",
+      "date": "2021-04-13"
+    },
+    {
+      "y_pred": -1.9700000286102295,
+      "y_true": -0.69,
+      "decile": 2,
+      "ticker": "LH",
+      "date": "2025-01-30"
+    },
+    {
+      "y_pred": 0.6299999952316284,
+      "y_true": 0.49,
+      "decile": 6,
+      "ticker": "YETI",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 4.789999961853027,
+      "y_true": -13.48,
+      "decile": 9,
+      "ticker": "TOST",
+      "date": "2023-02-01"
+    },
+    {
+      "y_pred": 0.09000000357627869,
+      "y_true": -6.1,
+      "decile": 5,
+      "ticker": "GCMG",
+      "date": "2023-12-27"
+    },
+    {
+      "y_pred": -3.549999952316284,
+      "y_true": -2.8,
+      "decile": 1,
+      "ticker": "NVDA",
+      "date": "2025-09-30"
+    },
+    {
+      "y_pred": -0.6299999952316284,
+      "y_true": -1.25,
+      "decile": 4,
+      "ticker": "THG",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 14.380000114440918,
+      "y_true": 20.35,
+      "decile": 10,
+      "ticker": "TDW",
+      "date": "2024-03-01"
+    },
+    {
+      "y_pred": 8.0600004196167,
+      "y_true": 6.92,
+      "decile": 10,
+      "ticker": "EWTX",
+      "date": "2024-09-19"
+    },
+    {
+      "y_pred": 1.149999976158142,
+      "y_true": 7.57,
+      "decile": 7,
+      "ticker": "PSN",
+      "date": "2022-10-18"
+    },
+    {
+      "y_pred": -1.1299999952316284,
+      "y_true": -6.28,
+      "decile": 4,
+      "ticker": "BSX",
+      "date": "2021-07-27"
+    },
+    {
+      "y_pred": -2.809999942779541,
+      "y_true": -5.72,
+      "decile": 2,
+      "ticker": "VLO",
+      "date": "2022-10-04"
+    },
+    {
+      "y_pred": 5.659999847412109,
+      "y_true": -1.81,
+      "decile": 9,
+      "ticker": "RUSHA",
+      "date": "2021-11-05"
+    },
+    {
+      "y_pred": -5.610000133514404,
+      "y_true": 0.57,
+      "decile": 1,
+      "ticker": "TYRA",
+      "date": "2025-11-20"
+    },
+    {
+      "y_pred": 6.840000152587891,
+      "y_true": 7.92,
+      "decile": 9,
+      "ticker": "ZION",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 0.7400000095367432,
+      "y_true": -1.29,
+      "decile": 6,
+      "ticker": "AVGO",
+      "date": "2021-08-27"
+    },
+    {
+      "y_pred": 1.2899999618530273,
+      "y_true": 33.24,
+      "decile": 7,
+      "ticker": "KNTK",
+      "date": "2024-08-29"
+    },
+    {
+      "y_pred": -1.4800000190734863,
+      "y_true": 10.29,
+      "decile": 3,
+      "ticker": "EME",
+      "date": "2024-09-19"
+    },
+    {
+      "y_pred": -4.730000019073486,
+      "y_true": -23.74,
+      "decile": 1,
+      "ticker": "CAPR",
+      "date": "2024-10-04"
+    },
+    {
+      "y_pred": -1.899999976158142,
+      "y_true": -4.41,
+      "decile": 2,
+      "ticker": "RGLD",
+      "date": "2024-09-13"
+    },
+    {
+      "y_pred": 1.440000057220459,
+      "y_true": 4.68,
+      "decile": 7,
+      "ticker": "GLW",
+      "date": "2024-09-19"
+    },
+    {
+      "y_pred": -2.3299999237060547,
+      "y_true": -3.58,
+      "decile": 2,
+      "ticker": "KTB",
+      "date": "2025-01-21"
+    },
+    {
+      "y_pred": -0.6899999976158142,
+      "y_true": -0.97,
+      "decile": 4,
+      "ticker": "SO",
+      "date": "2021-08-20"
+    },
+    {
+      "y_pred": -0.9900000095367432,
+      "y_true": -5.78,
+      "decile": 4,
+      "ticker": "EXP",
+      "date": "2023-01-31"
+    },
+    {
+      "y_pred": 7.989999771118164,
+      "y_true": 1.6,
+      "decile": 10,
+      "ticker": "VTOL",
+      "date": "2021-08-27"
+    },
+    {
+      "y_pred": -3.1500000953674316,
+      "y_true": 4.3,
+      "decile": 1,
+      "ticker": "OKE",
+      "date": "2024-11-05"
+    },
+    {
+      "y_pred": -3.859999895095825,
+      "y_true": 7.28,
+      "decile": 1,
+      "ticker": "SMTC",
+      "date": "2024-11-25"
+    },
+    {
+      "y_pred": 1.9900000095367432,
+      "y_true": 21.63,
+      "decile": 8,
+      "ticker": "UFPT",
+      "date": "2022-10-26"
+    },
+    {
+      "y_pred": -0.6100000143051147,
+      "y_true": -7.96,
+      "decile": 4,
+      "ticker": "VIAV",
+      "date": "2025-12-08"
+    },
+    {
+      "y_pred": -3.450000047683716,
+      "y_true": 2.68,
+      "decile": 1,
+      "ticker": "IRTC",
+      "date": "2025-05-02"
+    },
+    {
+      "y_pred": 3.619999885559082,
+      "y_true": -5.96,
+      "decile": 9,
+      "ticker": "PCVX",
+      "date": "2022-08-24"
+    },
+    {
+      "y_pred": 4.21999979019165,
+      "y_true": -14.6,
+      "decile": 9,
+      "ticker": "ARQT",
+      "date": "2024-12-17"
+    },
+    {
+      "y_pred": -0.8100000023841858,
+      "y_true": -2.82,
+      "decile": 4,
+      "ticker": "CMS",
+      "date": "2024-08-01"
+    },
+    {
+      "y_pred": -2.430000066757202,
+      "y_true": -7.11,
+      "decile": 2,
+      "ticker": "PODD",
+      "date": "2025-11-12"
+    },
+    {
+      "y_pred": 3.240000009536743,
+      "y_true": 11.67,
+      "decile": 8,
+      "ticker": "RNST",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -1.190000057220459,
+      "y_true": -4.8,
+      "decile": 3,
+      "ticker": "FCF",
+      "date": "2024-07-24"
+    },
+    {
+      "y_pred": 5.480000019073486,
+      "y_true": -9.98,
+      "decile": 9,
+      "ticker": "BROS",
+      "date": "2025-08-07"
+    },
+    {
+      "y_pred": 2.9200000762939453,
+      "y_true": -3.88,
+      "decile": 8,
+      "ticker": "PRA",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 0.6700000166893005,
+      "y_true": 4.45,
+      "decile": 6,
+      "ticker": "GCMG",
+      "date": "2024-03-26"
+    },
+    {
+      "y_pred": -1.840000033378601,
+      "y_true": -13.71,
+      "decile": 3,
+      "ticker": "ABBV",
+      "date": "2025-03-10"
+    },
+    {
+      "y_pred": -0.8500000238418579,
+      "y_true": -2.53,
+      "decile": 4,
+      "ticker": "FRME",
+      "date": "2025-01-30"
+    },
+    {
+      "y_pred": -2.559999942779541,
+      "y_true": -2.97,
+      "decile": 2,
+      "ticker": "UPBD",
+      "date": "2023-07-18"
+    },
+    {
+      "y_pred": 0.8600000143051147,
+      "y_true": -2.65,
+      "decile": 6,
+      "ticker": "BDC",
+      "date": "2021-12-27"
+    },
+    {
+      "y_pred": -0.49000000953674316,
+      "y_true": 18.53,
+      "decile": 5,
+      "ticker": "IBM",
+      "date": "2023-11-30"
+    },
+    {
+      "y_pred": -2.0399999618530273,
+      "y_true": -3.29,
+      "decile": 2,
+      "ticker": "WGO",
+      "date": "2023-07-12"
+    },
+    {
+      "y_pred": -1.1100000143051147,
+      "y_true": 11.14,
+      "decile": 4,
+      "ticker": "KBR",
+      "date": "2021-03-25"
+    },
+    {
+      "y_pred": 0.7099999785423279,
+      "y_true": -2.0,
+      "decile": 6,
+      "ticker": "GFF",
+      "date": "2025-03-24"
+    },
+    {
+      "y_pred": -0.5799999833106995,
+      "y_true": -2.8,
+      "decile": 4,
+      "ticker": "BKH",
+      "date": "2021-03-19"
+    },
+    {
+      "y_pred": 1.590000033378601,
+      "y_true": -1.09,
+      "decile": 7,
+      "ticker": "BRBR",
+      "date": "2024-10-15"
+    },
+    {
+      "y_pred": -0.38999998569488525,
+      "y_true": -4.21,
+      "decile": 5,
+      "ticker": "CNC",
+      "date": "2021-05-20"
+    },
+    {
+      "y_pred": -0.20999999344348907,
+      "y_true": 8.01,
+      "decile": 5,
+      "ticker": "CI",
+      "date": "2022-10-13"
+    },
+    {
+      "y_pred": 2.5799999237060547,
+      "y_true": -5.71,
+      "decile": 8,
+      "ticker": "PANW",
+      "date": "2023-11-28"
+    },
+    {
+      "y_pred": -1.7000000476837158,
+      "y_true": -5.03,
+      "decile": 3,
+      "ticker": "OUT",
+      "date": "2021-06-09"
+    },
+    {
+      "y_pred": 4.110000133514404,
+      "y_true": -1.99,
+      "decile": 9,
+      "ticker": "EQR",
+      "date": "2021-03-12"
+    },
+    {
+      "y_pred": 0.6100000143051147,
+      "y_true": -34.94,
+      "decile": 6,
+      "ticker": "GSAT",
+      "date": "2021-09-08"
+    },
+    {
+      "y_pred": 1.4500000476837158,
+      "y_true": 15.68,
+      "decile": 7,
+      "ticker": "VNOM",
+      "date": "2021-09-02"
+    },
+    {
+      "y_pred": 2.049999952316284,
+      "y_true": 0.98,
+      "decile": 8,
+      "ticker": "SAFE",
+      "date": "2021-07-09"
+    },
+    {
+      "y_pred": -1.4299999475479126,
+      "y_true": 18.33,
+      "decile": 3,
+      "ticker": "PZZA",
+      "date": "2021-06-21"
+    },
+    {
+      "y_pred": -4.53000020980835,
+      "y_true": -7.9,
+      "decile": 1,
+      "ticker": "HPE",
+      "date": "2025-01-15"
+    },
+    {
+      "y_pred": -2.0999999046325684,
+      "y_true": 10.54,
+      "decile": 2,
+      "ticker": "DLTR",
+      "date": "2022-02-18"
+    },
+    {
+      "y_pred": 0.49000000953674316,
+      "y_true": -5.06,
+      "decile": 6,
+      "ticker": "CMA",
+      "date": "2021-10-20"
+    },
+    {
+      "y_pred": -2.950000047683716,
+      "y_true": -1.76,
+      "decile": 1,
+      "ticker": "ROK",
+      "date": "2021-11-02"
+    },
+    {
+      "y_pred": 2.25,
+      "y_true": -0.52,
+      "decile": 8,
+      "ticker": "YETI",
+      "date": "2025-12-01"
+    },
+    {
+      "y_pred": 4.28000020980835,
+      "y_true": -6.6,
+      "decile": 9,
+      "ticker": "DMLP",
+      "date": "2021-07-26"
+    },
+    {
+      "y_pred": 0.23999999463558197,
+      "y_true": 2.3,
+      "decile": 6,
+      "ticker": "CSGS",
+      "date": "2022-02-08"
+    },
+    {
+      "y_pred": 5.989999771118164,
+      "y_true": -7.54,
+      "decile": 9,
+      "ticker": "BA",
+      "date": "2023-01-12"
+    },
+    {
+      "y_pred": 2.890000104904175,
+      "y_true": -4.62,
+      "decile": 8,
+      "ticker": "WDAY",
+      "date": "2023-03-29"
+    },
+    {
+      "y_pred": 14.399999618530273,
+      "y_true": -18.01,
+      "decile": 10,
+      "ticker": "CELH",
+      "date": "2021-06-02"
+    },
+    {
+      "y_pred": -0.550000011920929,
+      "y_true": 34.47,
+      "decile": 4,
+      "ticker": "URI",
+      "date": "2023-12-01"
+    },
+    {
+      "y_pred": 5.130000114440918,
+      "y_true": -4.83,
+      "decile": 9,
+      "ticker": "PSN",
+      "date": "2022-06-02"
+    },
+    {
+      "y_pred": -0.3799999952316284,
+      "y_true": 1.14,
+      "decile": 5,
+      "ticker": "JBTM",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 0.03999999910593033,
+      "y_true": -3.08,
+      "decile": 5,
+      "ticker": "FBK",
+      "date": "2022-03-16"
+    },
+    {
+      "y_pred": 4.679999828338623,
+      "y_true": -14.95,
+      "decile": 9,
+      "ticker": "OLMA",
+      "date": "2024-02-01"
+    },
+    {
+      "y_pred": -0.23999999463558197,
+      "y_true": 22.07,
+      "decile": 5,
+      "ticker": "VTR",
+      "date": "2024-07-02"
+    },
+    {
+      "y_pred": 11.329999923706055,
+      "y_true": 8.65,
+      "decile": 10,
+      "ticker": "NXT",
+      "date": "2024-05-22"
+    },
+    {
+      "y_pred": -3.009999990463257,
+      "y_true": -14.85,
+      "decile": 1,
+      "ticker": "ACMR",
+      "date": "2024-01-10"
+    },
+    {
+      "y_pred": -0.1599999964237213,
+      "y_true": -4.91,
+      "decile": 5,
+      "ticker": "INGR",
+      "date": "2021-05-17"
+    },
+    {
+      "y_pred": 6.550000190734863,
+      "y_true": -10.5,
+      "decile": 9,
+      "ticker": "PLNT",
+      "date": "2021-01-11"
+    },
+    {
+      "y_pred": -0.6600000262260437,
+      "y_true": 11.08,
+      "decile": 4,
+      "ticker": "BLK",
+      "date": "2021-03-26"
+    },
+    {
+      "y_pred": 2.0999999046325684,
+      "y_true": -6.92,
+      "decile": 8,
+      "ticker": "KTOS",
+      "date": "2024-07-23"
+    },
+    {
+      "y_pred": 0.03999999910593033,
+      "y_true": 19.13,
+      "decile": 5,
+      "ticker": "EXP",
+      "date": "2023-04-20"
+    },
+    {
+      "y_pred": 21.6299991607666,
+      "y_true": -13.58,
+      "decile": 10,
+      "ticker": "BLFS",
+      "date": "2021-08-25"
+    },
+    {
+      "y_pred": 2.0299999713897705,
+      "y_true": 15.54,
+      "decile": 8,
+      "ticker": "AROC",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 6.239999771118164,
+      "y_true": -8.43,
+      "decile": 9,
+      "ticker": "EPD",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": 0.019999999552965164,
+      "y_true": 4.92,
+      "decile": 5,
+      "ticker": "AIR",
+      "date": "2024-04-22"
+    },
+    {
+      "y_pred": -0.8700000047683716,
+      "y_true": -1.4,
+      "decile": 4,
+      "ticker": "LBRDA",
+      "date": "2021-06-25"
+    },
+    {
+      "y_pred": 0.05999999865889549,
+      "y_true": 18.05,
+      "decile": 5,
+      "ticker": "ARCB",
+      "date": "2021-10-05"
+    },
+    {
+      "y_pred": -3.1600000858306885,
+      "y_true": -8.93,
+      "decile": 1,
+      "ticker": "DECK",
+      "date": "2024-05-24"
+    },
+    {
+      "y_pred": -0.6800000071525574,
+      "y_true": -3.02,
+      "decile": 4,
+      "ticker": "HXL",
+      "date": "2021-05-27"
+    },
+    {
+      "y_pred": -0.30000001192092896,
+      "y_true": -3.67,
+      "decile": 5,
+      "ticker": "TMHC",
+      "date": "2024-07-12"
+    },
+    {
+      "y_pred": 1.5700000524520874,
+      "y_true": -5.87,
+      "decile": 7,
+      "ticker": "MOS",
+      "date": "2025-09-24"
+    },
+    {
+      "y_pred": -6.579999923706055,
+      "y_true": -13.13,
+      "decile": 1,
+      "ticker": "TYRA",
+      "date": "2024-06-06"
+    },
+    {
+      "y_pred": -0.029999999329447746,
+      "y_true": -1.02,
+      "decile": 5,
+      "ticker": "MGEE",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": -2.380000114440918,
+      "y_true": 0.07,
+      "decile": 2,
+      "ticker": "ROST",
+      "date": "2025-11-21"
+    },
+    {
+      "y_pred": -3.6600000858306885,
+      "y_true": -0.05,
+      "decile": 1,
+      "ticker": "COCO",
+      "date": "2025-12-02"
+    },
+    {
+      "y_pred": 4.210000038146973,
+      "y_true": 1.13,
+      "decile": 9,
+      "ticker": "UNF",
+      "date": "2025-01-07"
+    },
+    {
+      "y_pred": 1.2000000476837158,
+      "y_true": 6.87,
+      "decile": 7,
+      "ticker": "SCI",
+      "date": "2021-07-20"
+    },
+    {
+      "y_pred": -0.6200000047683716,
+      "y_true": 28.04,
+      "decile": 4,
+      "ticker": "SFNC",
+      "date": "2021-01-05"
+    },
+    {
+      "y_pred": 2.440000057220459,
+      "y_true": -14.2,
+      "decile": 8,
+      "ticker": "VST",
+      "date": "2022-06-07"
+    },
+    {
+      "y_pred": 0.5199999809265137,
+      "y_true": -0.43,
+      "decile": 6,
+      "ticker": "MTG",
+      "date": "2023-07-13"
+    },
+    {
+      "y_pred": -1.5,
+      "y_true": -0.57,
+      "decile": 3,
+      "ticker": "CHRW",
+      "date": "2025-10-30"
+    },
+    {
+      "y_pred": 3.680000066757202,
+      "y_true": 0.18,
+      "decile": 9,
+      "ticker": "CDE",
+      "date": "2024-05-09"
+    },
+    {
+      "y_pred": -9.930000305175781,
+      "y_true": -2.81,
+      "decile": 1,
+      "ticker": "RVMD",
+      "date": "2025-12-08"
+    },
+    {
+      "y_pred": -1.6799999475479126,
+      "y_true": -5.75,
+      "decile": 3,
+      "ticker": "UNH",
+      "date": "2022-04-06"
+    },
+    {
+      "y_pred": -0.07999999821186066,
+      "y_true": -5.53,
+      "decile": 5,
+      "ticker": "SYF",
+      "date": "2024-09-19"
+    },
+    {
+      "y_pred": -0.800000011920929,
+      "y_true": -0.11,
+      "decile": 4,
+      "ticker": "MAC",
+      "date": "2021-11-01"
+    },
+    {
+      "y_pred": -7.309999942779541,
+      "y_true": -8.6,
+      "decile": 1,
+      "ticker": "HL",
+      "date": "2025-10-16"
+    },
+    {
+      "y_pred": 1.9700000286102295,
+      "y_true": 9.79,
+      "decile": 8,
+      "ticker": "HUBG",
+      "date": "2021-08-27"
+    },
+    {
+      "y_pred": 0.3199999928474426,
+      "y_true": 14.17,
+      "decile": 6,
+      "ticker": "NFLX",
+      "date": "2023-12-18"
+    },
+    {
+      "y_pred": -1.059999942779541,
+      "y_true": -5.65,
+      "decile": 4,
+      "ticker": "EYE",
+      "date": "2021-04-22"
+    },
+    {
+      "y_pred": -0.9599999785423279,
+      "y_true": -1.06,
+      "decile": 4,
+      "ticker": "CMCSA",
+      "date": "2023-07-27"
+    },
+    {
+      "y_pred": 2.069999933242798,
+      "y_true": -5.79,
+      "decile": 8,
+      "ticker": "WAB",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -1.3600000143051147,
+      "y_true": -3.99,
+      "decile": 3,
+      "ticker": "EXPD",
+      "date": "2021-11-04"
+    },
+    {
+      "y_pred": -0.2199999988079071,
+      "y_true": 17.44,
+      "decile": 5,
+      "ticker": "CVS",
+      "date": "2021-10-25"
+    },
+    {
+      "y_pred": 9.850000381469727,
+      "y_true": 3.65,
+      "decile": 10,
+      "ticker": "PRVA",
+      "date": "2022-07-21"
+    },
+    {
+      "y_pred": -2.9700000286102295,
+      "y_true": 1.92,
+      "decile": 1,
+      "ticker": "CMI",
+      "date": "2025-11-24"
+    },
+    {
+      "y_pred": -0.9599999785423279,
+      "y_true": -5.61,
+      "decile": 4,
+      "ticker": "FRPT",
+      "date": "2021-02-04"
+    },
+    {
+      "y_pred": -2.319999933242798,
+      "y_true": -2.98,
+      "decile": 2,
+      "ticker": "MOH",
+      "date": "2024-02-12"
+    },
+    {
+      "y_pred": 2.4100000858306885,
+      "y_true": -1.24,
+      "decile": 8,
+      "ticker": "SEM",
+      "date": "2024-11-01"
+    },
+    {
+      "y_pred": 1.1799999475479126,
+      "y_true": 4.46,
+      "decile": 7,
+      "ticker": "UTHR",
+      "date": "2022-11-02"
+    },
+    {
+      "y_pred": -3.8399999141693115,
+      "y_true": -9.87,
+      "decile": 1,
+      "ticker": "JBL",
+      "date": "2025-09-22"
+    },
+    {
+      "y_pred": 1.3700000047683716,
+      "y_true": 6.03,
+      "decile": 7,
+      "ticker": "HWKN",
+      "date": "2023-08-11"
+    },
+    {
+      "y_pred": -1.100000023841858,
+      "y_true": -2.29,
+      "decile": 4,
+      "ticker": "COST",
+      "date": "2024-11-08"
+    },
+    {
+      "y_pred": 7.039999961853027,
+      "y_true": -2.54,
+      "decile": 9,
+      "ticker": "OPCH",
+      "date": "2021-06-07"
+    },
+    {
+      "y_pred": -2.200000047683716,
+      "y_true": -3.98,
+      "decile": 2,
+      "ticker": "CRVL",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 9.760000228881836,
+      "y_true": -1.04,
+      "decile": 10,
+      "ticker": "CELH",
+      "date": "2023-06-05"
+    },
+    {
+      "y_pred": 2.640000104904175,
+      "y_true": -10.43,
+      "decile": 8,
+      "ticker": "CMC",
+      "date": "2022-01-04"
+    },
+    {
+      "y_pred": 6.75,
+      "y_true": 17.66,
+      "decile": 9,
+      "ticker": "VAC",
+      "date": "2021-02-17"
+    },
+    {
+      "y_pred": 4.849999904632568,
+      "y_true": -3.85,
+      "decile": 9,
+      "ticker": "DKNG",
+      "date": "2023-07-10"
+    },
+    {
+      "y_pred": 3.6500000953674316,
+      "y_true": -4.24,
+      "decile": 9,
+      "ticker": "CTRI",
+      "date": "2025-11-05"
+    },
+    {
+      "y_pred": -1.3200000524520874,
+      "y_true": -0.85,
+      "decile": 3,
+      "ticker": "NYT",
+      "date": "2025-11-13"
+    },
+    {
+      "y_pred": 0.2800000011920929,
+      "y_true": -4.0,
+      "decile": 6,
+      "ticker": "NWE",
+      "date": "2021-04-09"
+    },
+    {
+      "y_pred": -0.03999999910593033,
+      "y_true": 2.05,
+      "decile": 5,
+      "ticker": "EZPW",
+      "date": "2025-09-08"
+    },
+    {
+      "y_pred": -0.6000000238418579,
+      "y_true": -8.2,
+      "decile": 4,
+      "ticker": "BMI",
+      "date": "2024-12-10"
+    },
+    {
+      "y_pred": -2.359999895095825,
+      "y_true": -1.71,
+      "decile": 2,
+      "ticker": "CR",
+      "date": "2024-04-24"
+    },
+    {
+      "y_pred": 1.25,
+      "y_true": -2.81,
+      "decile": 7,
+      "ticker": "VCTR",
+      "date": "2023-07-12"
+    },
+    {
+      "y_pred": -0.3700000047683716,
+      "y_true": -4.66,
+      "decile": 5,
+      "ticker": "APH",
+      "date": "2021-10-21"
+    },
+    {
+      "y_pred": -2.380000114440918,
+      "y_true": -7.08,
+      "decile": 2,
+      "ticker": "WMS",
+      "date": "2024-05-15"
+    },
+    {
+      "y_pred": -0.5199999809265137,
+      "y_true": -5.06,
+      "decile": 4,
+      "ticker": "AMAT",
+      "date": "2021-08-02"
+    },
+    {
+      "y_pred": -0.11999999731779099,
+      "y_true": 3.73,
+      "decile": 5,
+      "ticker": "TRMK",
+      "date": "2021-02-22"
+    },
+    {
+      "y_pred": 0.0,
+      "y_true": 1.89,
+      "decile": 5,
+      "ticker": "PAYX",
+      "date": "2021-03-09"
+    },
+    {
+      "y_pred": 4.590000152587891,
+      "y_true": 10.98,
+      "decile": 9,
+      "ticker": "AMD",
+      "date": "2021-10-25"
+    },
+    {
+      "y_pred": -3.390000104904175,
+      "y_true": 0.9,
+      "decile": 1,
+      "ticker": "FOXA",
+      "date": "2025-12-04"
+    },
+    {
+      "y_pred": 9.180000305175781,
+      "y_true": 26.15,
+      "decile": 10,
+      "ticker": "IVZ",
+      "date": "2021-01-20"
+    },
+    {
+      "y_pred": 3.609999895095825,
+      "y_true": -6.43,
+      "decile": 9,
+      "ticker": "JXN",
+      "date": "2023-12-19"
+    },
+    {
+      "y_pred": 0.18000000715255737,
+      "y_true": -1.26,
+      "decile": 6,
+      "ticker": "INDB",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": 0.7300000190734863,
+      "y_true": 2.38,
+      "decile": 6,
+      "ticker": "ARCC",
+      "date": "2021-02-10"
+    },
+    {
+      "y_pred": -0.7699999809265137,
+      "y_true": -1.79,
+      "decile": 4,
+      "ticker": "KFY",
+      "date": "2024-05-09"
+    },
+    {
+      "y_pred": -2.049999952316284,
+      "y_true": 4.13,
+      "decile": 2,
+      "ticker": "ZTS",
+      "date": "2021-10-29"
+    },
+    {
+      "y_pred": 1.7100000381469727,
+      "y_true": 0.13,
+      "decile": 7,
+      "ticker": "KW",
+      "date": "2021-10-12"
+    },
+    {
+      "y_pred": 0.3799999952316284,
+      "y_true": -4.77,
+      "decile": 6,
+      "ticker": "SPB",
+      "date": "2021-11-12"
+    },
+    {
+      "y_pred": 2.2200000286102295,
+      "y_true": 23.77,
+      "decile": 8,
+      "ticker": "VLY",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -2.2200000286102295,
+      "y_true": 9.34,
+      "decile": 2,
+      "ticker": "WYNN",
+      "date": "2021-02-05"
+    },
+    {
+      "y_pred": 1.7400000095367432,
+      "y_true": -6.5,
+      "decile": 7,
+      "ticker": "CRVL",
+      "date": "2021-03-12"
+    },
+    {
+      "y_pred": 0.009999999776482582,
+      "y_true": -0.53,
+      "decile": 5,
+      "ticker": "FAST",
+      "date": "2021-10-29"
+    },
+    {
+      "y_pred": -4.389999866485596,
+      "y_true": 7.24,
+      "decile": 1,
+      "ticker": "HOOD",
+      "date": "2025-09-09"
+    },
+    {
+      "y_pred": 0.5699999928474426,
+      "y_true": -0.53,
+      "decile": 6,
+      "ticker": "LZB",
+      "date": "2024-11-12"
+    },
+    {
+      "y_pred": -3.200000047683716,
+      "y_true": -7.76,
+      "decile": 1,
+      "ticker": "VRSK",
+      "date": "2024-07-29"
+    },
+    {
+      "y_pred": 2.9800000190734863,
+      "y_true": -2.73,
+      "decile": 8,
+      "ticker": "AM",
+      "date": "2021-06-07"
+    },
+    {
+      "y_pred": 7.320000171661377,
+      "y_true": -8.9,
+      "decile": 10,
+      "ticker": "EXE",
+      "date": "2025-06-20"
+    },
+    {
+      "y_pred": 10.770000457763672,
+      "y_true": -1.25,
+      "decile": 10,
+      "ticker": "BOOT",
+      "date": "2021-05-14"
+    },
+    {
+      "y_pred": 0.949999988079071,
+      "y_true": -1.9,
+      "decile": 7,
+      "ticker": "DOV",
+      "date": "2024-09-17"
+    },
+    {
+      "y_pred": -2.6500000953674316,
+      "y_true": 24.67,
+      "decile": 2,
+      "ticker": "INOD",
+      "date": "2025-09-09"
+    },
+    {
+      "y_pred": 0.47999998927116394,
+      "y_true": 19.8,
+      "decile": 6,
+      "ticker": "ALSN",
+      "date": "2023-04-28"
+    },
+    {
+      "y_pred": -0.12999999523162842,
+      "y_true": -6.15,
+      "decile": 5,
+      "ticker": "GOOG",
+      "date": "2022-02-02"
+    },
+    {
+      "y_pred": 0.8999999761581421,
+      "y_true": -4.79,
+      "decile": 6,
+      "ticker": "CHRW",
+      "date": "2022-08-10"
+    },
+    {
+      "y_pred": -3.3399999141693115,
+      "y_true": -4.91,
+      "decile": 1,
+      "ticker": "FG",
+      "date": "2025-01-29"
+    },
+    {
+      "y_pred": -0.550000011920929,
+      "y_true": 10.27,
+      "decile": 4,
+      "ticker": "PTEN",
+      "date": "2021-05-05"
+    },
+    {
+      "y_pred": 0.8899999856948853,
+      "y_true": 15.2,
+      "decile": 6,
+      "ticker": "AMBA",
+      "date": "2024-11-22"
+    },
+    {
+      "y_pred": 6.289999961853027,
+      "y_true": 51.72,
+      "decile": 9,
+      "ticker": "TDC",
+      "date": "2021-01-25"
+    },
+    {
+      "y_pred": 0.9300000071525574,
+      "y_true": -0.82,
+      "decile": 7,
+      "ticker": "FFIV",
+      "date": "2023-11-29"
+    },
+    {
+      "y_pred": 4.909999847412109,
+      "y_true": -9.95,
+      "decile": 9,
+      "ticker": "PAY",
+      "date": "2024-07-26"
+    },
+    {
+      "y_pred": -0.9800000190734863,
+      "y_true": 0.77,
+      "decile": 4,
+      "ticker": "XYL",
+      "date": "2021-08-03"
+    },
+    {
+      "y_pred": -0.1599999964237213,
+      "y_true": -3.66,
+      "decile": 5,
+      "ticker": "ULTA",
+      "date": "2022-11-28"
+    },
+    {
+      "y_pred": 2.559999942779541,
+      "y_true": 23.58,
+      "decile": 8,
+      "ticker": "LTH",
+      "date": "2024-06-26"
+    },
+    {
+      "y_pred": 0.44999998807907104,
+      "y_true": -0.67,
+      "decile": 6,
+      "ticker": "MPC",
+      "date": "2021-05-05"
+    },
+    {
+      "y_pred": 1.2200000286102295,
+      "y_true": -4.52,
+      "decile": 7,
+      "ticker": "CNM",
+      "date": "2023-10-12"
+    },
+    {
+      "y_pred": 5.059999942779541,
+      "y_true": -8.22,
+      "decile": 9,
+      "ticker": "UTI",
+      "date": "2024-03-28"
+    },
+    {
+      "y_pred": 0.3700000047683716,
+      "y_true": -1.53,
+      "decile": 6,
+      "ticker": "PFSI",
+      "date": "2023-01-11"
+    },
+    {
+      "y_pred": -0.9300000071525574,
+      "y_true": 18.19,
+      "decile": 4,
+      "ticker": "CHEF",
+      "date": "2024-11-22"
+    },
+    {
+      "y_pred": -1.9700000286102295,
+      "y_true": 37.96,
+      "decile": 2,
+      "ticker": "CVNA",
+      "date": "2024-09-18"
+    },
+    {
+      "y_pred": 1.8799999952316284,
+      "y_true": -4.41,
+      "decile": 8,
+      "ticker": "DX",
+      "date": "2021-01-21"
+    },
+    {
+      "y_pred": -0.2199999988079071,
+      "y_true": -5.95,
+      "decile": 5,
+      "ticker": "CBT",
+      "date": "2022-07-29"
+    },
+    {
+      "y_pred": 1.7799999713897705,
+      "y_true": -3.9,
+      "decile": 7,
+      "ticker": "LOB",
+      "date": "2025-12-18"
+    },
+    {
+      "y_pred": 1.850000023841858,
+      "y_true": -4.4,
+      "decile": 8,
+      "ticker": "VSH",
+      "date": "2021-04-06"
+    },
+    {
+      "y_pred": -0.5799999833106995,
+      "y_true": -7.1,
+      "decile": 4,
+      "ticker": "LBRT",
+      "date": "2024-01-30"
+    },
+    {
+      "y_pred": -3.0799999237060547,
+      "y_true": 1.93,
+      "decile": 1,
+      "ticker": "STLD",
+      "date": "2025-10-27"
+    },
+    {
+      "y_pred": 2.140000104904175,
+      "y_true": -4.78,
+      "decile": 8,
+      "ticker": "STRL",
+      "date": "2023-01-03"
+    },
+    {
+      "y_pred": -4.610000133514404,
+      "y_true": -9.64,
+      "decile": 1,
+      "ticker": "FYBR",
+      "date": "2024-09-04"
+    },
+    {
+      "y_pred": -3.7899999618530273,
+      "y_true": 4.82,
+      "decile": 1,
+      "ticker": "DV",
+      "date": "2024-01-17"
+    },
+    {
+      "y_pred": 0.05999999865889549,
+      "y_true": -4.32,
+      "decile": 5,
+      "ticker": "SAIC",
+      "date": "2023-04-03"
+    },
+    {
+      "y_pred": 1.6399999856948853,
+      "y_true": 24.49,
+      "decile": 7,
+      "ticker": "HLT",
+      "date": "2023-11-13"
+    },
+    {
+      "y_pred": -3.0,
+      "y_true": -7.9,
+      "decile": 1,
+      "ticker": "GFS",
+      "date": "2023-02-14"
+    },
+    {
+      "y_pred": 0.8799999952316284,
+      "y_true": -3.74,
+      "decile": 6,
+      "ticker": "TRU",
+      "date": "2025-01-30"
+    },
+    {
+      "y_pred": -5.409999847412109,
+      "y_true": 0.19,
+      "decile": 1,
+      "ticker": "ENS",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 0.7400000095367432,
+      "y_true": -28.32,
+      "decile": 6,
+      "ticker": "VRT",
+      "date": "2025-01-21"
+    },
+    {
+      "y_pred": 0.6200000047683716,
+      "y_true": 25.83,
+      "decile": 6,
+      "ticker": "MSI",
+      "date": "2021-03-22"
+    },
+    {
+      "y_pred": -0.30000001192092896,
+      "y_true": -4.75,
+      "decile": 5,
+      "ticker": "KTB",
+      "date": "2024-08-01"
+    },
+    {
+      "y_pred": 0.46000000834465027,
+      "y_true": 14.34,
+      "decile": 6,
+      "ticker": "ZS",
+      "date": "2023-11-14"
+    },
+    {
+      "y_pred": 0.9900000095367432,
+      "y_true": -9.68,
+      "decile": 7,
+      "ticker": "APPF",
+      "date": "2021-02-10"
+    },
+    {
+      "y_pred": -5.789999961853027,
+      "y_true": -0.11,
+      "decile": 1,
+      "ticker": "ATRO",
+      "date": "2025-11-26"
+    },
+    {
+      "y_pred": 3.9800000190734863,
+      "y_true": -8.4,
+      "decile": 9,
+      "ticker": "ANDE",
+      "date": "2021-02-09"
+    },
+    {
+      "y_pred": 1.9600000381469727,
+      "y_true": -4.59,
+      "decile": 8,
+      "ticker": "CNX",
+      "date": "2023-10-12"
+    },
+    {
+      "y_pred": -2.200000047683716,
+      "y_true": 4.49,
+      "decile": 2,
+      "ticker": "AMAL",
+      "date": "2022-05-03"
+    },
+    {
+      "y_pred": -2.2200000286102295,
+      "y_true": 2.33,
+      "decile": 2,
+      "ticker": "DEI",
+      "date": "2024-07-23"
+    },
+    {
+      "y_pred": 4.25,
+      "y_true": -2.3,
+      "decile": 9,
+      "ticker": "EHC",
+      "date": "2025-01-31"
+    },
+    {
+      "y_pred": -11.520000457763672,
+      "y_true": -20.63,
+      "decile": 1,
+      "ticker": "LUNR",
+      "date": "2024-11-22"
+    },
+    {
+      "y_pred": -2.309999942779541,
+      "y_true": 0.84,
+      "decile": 2,
+      "ticker": "FHI",
+      "date": "2025-08-04"
+    },
+    {
+      "y_pred": 6.630000114440918,
+      "y_true": -4.61,
+      "decile": 9,
+      "ticker": "VRT",
+      "date": "2021-01-19"
+    },
+    {
+      "y_pred": 3.859999895095825,
+      "y_true": 3.69,
+      "decile": 9,
+      "ticker": "BAC",
+      "date": "2024-10-11"
+    },
+    {
+      "y_pred": 3.450000047683716,
+      "y_true": 1.18,
+      "decile": 9,
+      "ticker": "VST",
+      "date": "2021-01-11"
+    },
+    {
+      "y_pred": -2.950000047683716,
+      "y_true": -1.34,
+      "decile": 2,
+      "ticker": "PSMT",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": 0.9200000166893005,
+      "y_true": -4.86,
+      "decile": 7,
+      "ticker": "WTS",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -2.4800000190734863,
+      "y_true": -1.14,
+      "decile": 2,
+      "ticker": "NWS",
+      "date": "2025-06-30"
+    },
+    {
+      "y_pred": 1.309999942779541,
+      "y_true": 3.17,
+      "decile": 7,
+      "ticker": "SIGI",
+      "date": "2021-03-05"
+    },
+    {
+      "y_pred": 4.320000171661377,
+      "y_true": -3.59,
+      "decile": 9,
+      "ticker": "ATGE",
+      "date": "2022-10-25"
+    },
+    {
+      "y_pred": 3.259999990463257,
+      "y_true": -1.04,
+      "decile": 8,
+      "ticker": "CTS",
+      "date": "2022-05-17"
+    },
+    {
+      "y_pred": -3.5899999141693115,
+      "y_true": -5.63,
+      "decile": 1,
+      "ticker": "DXCM",
+      "date": "2023-04-19"
+    },
+    {
+      "y_pred": -1.2799999713897705,
+      "y_true": -1.18,
+      "decile": 3,
+      "ticker": "AME",
+      "date": "2024-02-29"
+    },
+    {
+      "y_pred": -1.2999999523162842,
+      "y_true": -16.33,
+      "decile": 3,
+      "ticker": "JBL",
+      "date": "2024-03-01"
+    },
+    {
+      "y_pred": -0.5,
+      "y_true": -6.86,
+      "decile": 5,
+      "ticker": "CRDO",
+      "date": "2024-04-11"
+    },
+    {
+      "y_pred": 5.010000228881836,
+      "y_true": -54.66,
+      "decile": 9,
+      "ticker": "LUNR",
+      "date": "2023-02-16"
+    },
+    {
+      "y_pred": 1.3799999952316284,
+      "y_true": -4.59,
+      "decile": 7,
+      "ticker": "ALEX",
+      "date": "2021-05-03"
+    },
+    {
+      "y_pred": 19.389999389648438,
+      "y_true": -9.98,
+      "decile": 10,
+      "ticker": "SBGI",
+      "date": "2021-03-08"
+    },
+    {
+      "y_pred": 12.510000228881836,
+      "y_true": 59.15,
+      "decile": 10,
+      "ticker": "CLMT",
+      "date": "2021-10-01"
+    },
+    {
+      "y_pred": 1.8200000524520874,
+      "y_true": 3.2,
+      "decile": 8,
+      "ticker": "APLE",
+      "date": "2021-02-16"
+    },
+    {
+      "y_pred": -3.4600000381469727,
+      "y_true": -8.78,
+      "decile": 1,
+      "ticker": "ESAB",
+      "date": "2025-02-18"
+    },
+    {
+      "y_pred": -2.7100000381469727,
+      "y_true": -4.83,
+      "decile": 2,
+      "ticker": "PFSI",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": 1.0299999713897705,
+      "y_true": 7.09,
+      "decile": 7,
+      "ticker": "TPB",
+      "date": "2025-07-30"
+    },
+    {
+      "y_pred": -3.0,
+      "y_true": -1.47,
+      "decile": 1,
+      "ticker": "MET",
+      "date": "2025-01-16"
+    },
+    {
+      "y_pred": 3.130000114440918,
+      "y_true": -6.62,
+      "decile": 8,
+      "ticker": "KN",
+      "date": "2024-06-12"
+    },
+    {
+      "y_pred": 10.210000038146973,
+      "y_true": -25.38,
+      "decile": 10,
+      "ticker": "LGND",
+      "date": "2021-02-09"
+    },
+    {
+      "y_pred": 3.4700000286102295,
+      "y_true": 10.04,
+      "decile": 9,
+      "ticker": "PARR",
+      "date": "2022-10-05"
+    },
+    {
+      "y_pred": 5.409999847412109,
+      "y_true": -10.1,
+      "decile": 9,
+      "ticker": "EQT",
+      "date": "2021-03-26"
+    },
+    {
+      "y_pred": 0.33000001311302185,
+      "y_true": -4.31,
+      "decile": 6,
+      "ticker": "OSBC",
+      "date": "2023-02-03"
+    },
+    {
+      "y_pred": 1.3700000047683716,
+      "y_true": -5.35,
+      "decile": 7,
+      "ticker": "TXRH",
+      "date": "2023-05-17"
+    },
+    {
+      "y_pred": 1.9299999475479126,
+      "y_true": -3.11,
+      "decile": 8,
+      "ticker": "ITT",
+      "date": "2024-05-07"
+    },
+    {
+      "y_pred": 7.5,
+      "y_true": -7.32,
+      "decile": 10,
+      "ticker": "OI",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 0.5400000214576721,
+      "y_true": 6.52,
+      "decile": 6,
+      "ticker": "PLXS",
+      "date": "2021-03-01"
+    },
+    {
+      "y_pred": -2.1500000953674316,
+      "y_true": -3.91,
+      "decile": 2,
+      "ticker": "LZB",
+      "date": "2025-01-29"
+    },
+    {
+      "y_pred": 1.4500000476837158,
+      "y_true": 28.94,
+      "decile": 7,
+      "ticker": "NUVL",
+      "date": "2023-04-18"
+    },
+    {
+      "y_pred": -1.090000033378601,
+      "y_true": -5.61,
+      "decile": 4,
+      "ticker": "IRM",
+      "date": "2021-08-31"
+    },
+    {
+      "y_pred": 0.41999998688697815,
+      "y_true": -2.6,
+      "decile": 6,
+      "ticker": "ENTG",
+      "date": "2021-03-31"
+    },
+    {
+      "y_pred": -0.6899999976158142,
+      "y_true": -1.32,
+      "decile": 4,
+      "ticker": "ICE",
+      "date": "2023-08-29"
+    },
+    {
+      "y_pred": -0.7400000095367432,
+      "y_true": -0.88,
+      "decile": 4,
+      "ticker": "BKNG",
+      "date": "2023-08-04"
+    },
+    {
+      "y_pred": 4.429999828338623,
+      "y_true": 0.72,
+      "decile": 9,
+      "ticker": "AR",
+      "date": "2025-05-08"
+    },
+    {
+      "y_pred": -1.5199999809265137,
+      "y_true": -9.35,
+      "decile": 3,
+      "ticker": "ANDE",
+      "date": "2023-04-19"
+    },
+    {
+      "y_pred": -1.3899999856948853,
+      "y_true": -1.91,
+      "decile": 3,
+      "ticker": "LEGN",
+      "date": "2023-04-21"
+    },
+    {
+      "y_pred": 2.890000104904175,
+      "y_true": -8.95,
+      "decile": 8,
+      "ticker": "CMA",
+      "date": "2024-05-15"
+    },
+    {
+      "y_pred": 7.289999961853027,
+      "y_true": 9.68,
+      "decile": 10,
+      "ticker": "GIII",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -0.8999999761581421,
+      "y_true": -2.54,
+      "decile": 4,
+      "ticker": "IT",
+      "date": "2025-01-30"
+    },
+    {
+      "y_pred": -1.7200000286102295,
+      "y_true": -1.38,
+      "decile": 3,
+      "ticker": "AUB",
+      "date": "2023-02-02"
+    },
+    {
+      "y_pred": 1.8200000524520874,
+      "y_true": 1.11,
+      "decile": 8,
+      "ticker": "SBUX",
+      "date": "2025-01-27"
+    },
+    {
+      "y_pred": -3.0899999141693115,
+      "y_true": -7.34,
+      "decile": 1,
+      "ticker": "FWONK",
+      "date": "2025-10-06"
+    },
+    {
+      "y_pred": 3.1700000762939453,
+      "y_true": -2.36,
+      "decile": 8,
+      "ticker": "CXW",
+      "date": "2024-02-29"
+    },
+    {
+      "y_pred": -1.059999942779541,
+      "y_true": 5.49,
+      "decile": 4,
+      "ticker": "REGN",
+      "date": "2024-01-02"
+    },
+    {
+      "y_pred": 11.100000381469727,
+      "y_true": -6.64,
+      "decile": 10,
+      "ticker": "ACLS",
+      "date": "2021-01-13"
+    },
+    {
+      "y_pred": 1.9199999570846558,
+      "y_true": 3.02,
+      "decile": 8,
+      "ticker": "WTS",
+      "date": "2023-06-07"
+    },
+    {
+      "y_pred": -0.7799999713897705,
+      "y_true": 19.44,
+      "decile": 4,
+      "ticker": "HWM",
+      "date": "2025-05-01"
+    },
+    {
+      "y_pred": 2.1700000762939453,
+      "y_true": -1.05,
+      "decile": 8,
+      "ticker": "SPB",
+      "date": "2023-06-21"
+    },
+    {
+      "y_pred": -1.1399999856948853,
+      "y_true": -4.1,
+      "decile": 4,
+      "ticker": "AOS",
+      "date": "2023-07-14"
+    },
+    {
+      "y_pred": -0.07999999821186066,
+      "y_true": -6.29,
+      "decile": 5,
+      "ticker": "WSO",
+      "date": "2023-09-27"
+    },
+    {
+      "y_pred": 20.639999389648438,
+      "y_true": -12.99,
+      "decile": 10,
+      "ticker": "PRKS",
+      "date": "2021-01-07"
+    },
+    {
+      "y_pred": 0.5799999833106995,
+      "y_true": -3.85,
+      "decile": 6,
+      "ticker": "MPLX",
+      "date": "2024-11-21"
+    },
+    {
+      "y_pred": -0.05999999865889549,
+      "y_true": -7.71,
+      "decile": 5,
+      "ticker": "HALO",
+      "date": "2024-11-04"
+    },
+    {
+      "y_pred": -1.0700000524520874,
+      "y_true": -0.83,
+      "decile": 4,
+      "ticker": "TJX",
+      "date": "2025-11-12"
+    },
+    {
+      "y_pred": 1.5199999809265137,
+      "y_true": 15.58,
+      "decile": 7,
+      "ticker": "CBT",
+      "date": "2021-02-16"
+    },
+    {
+      "y_pred": 10.079999923706055,
+      "y_true": 14.56,
+      "decile": 10,
+      "ticker": "CCB",
+      "date": "2021-02-12"
+    },
+    {
+      "y_pred": -4.090000152587891,
+      "y_true": -5.8,
+      "decile": 1,
+      "ticker": "QXO",
+      "date": "2025-09-05"
+    },
+    {
+      "y_pred": -0.8500000238418579,
+      "y_true": -2.47,
+      "decile": 4,
+      "ticker": "SKWD",
+      "date": "2025-05-02"
+    },
+    {
+      "y_pred": 1.409999966621399,
+      "y_true": -2.78,
+      "decile": 7,
+      "ticker": "PK",
+      "date": "2023-12-13"
+    },
+    {
+      "y_pred": -1.5,
+      "y_true": -9.28,
+      "decile": 3,
+      "ticker": "META",
+      "date": "2024-07-05"
+    },
+    {
+      "y_pred": -12.760000228881836,
+      "y_true": -3.13,
+      "decile": 1,
+      "ticker": "CDTX",
+      "date": "2025-07-23"
+    },
+    {
+      "y_pred": 0.5400000214576721,
+      "y_true": 17.15,
+      "decile": 6,
+      "ticker": "PPG",
+      "date": "2021-03-08"
+    },
+    {
+      "y_pred": 5.429999828338623,
+      "y_true": -0.15,
+      "decile": 9,
+      "ticker": "XPRO",
+      "date": "2023-02-01"
+    },
+    {
+      "y_pred": 0.5400000214576721,
+      "y_true": 32.08,
+      "decile": 6,
+      "ticker": "CRDO",
+      "date": "2024-05-28"
+    },
+    {
+      "y_pred": 0.550000011920929,
+      "y_true": -2.37,
+      "decile": 6,
+      "ticker": "EBAY",
+      "date": "2024-05-24"
+    },
+    {
+      "y_pred": 0.2800000011920929,
+      "y_true": 5.62,
+      "decile": 6,
+      "ticker": "HTGC",
+      "date": "2021-01-19"
+    },
+    {
+      "y_pred": -2.369999885559082,
+      "y_true": -7.16,
+      "decile": 2,
+      "ticker": "HUBB",
+      "date": "2025-12-11"
+    },
+    {
+      "y_pred": 3.5799999237060547,
+      "y_true": -15.2,
+      "decile": 9,
+      "ticker": "PCT",
+      "date": "2023-07-31"
+    },
+    {
+      "y_pred": -0.44999998807907104,
+      "y_true": 2.01,
+      "decile": 5,
+      "ticker": "CBRE",
+      "date": "2024-02-15"
+    },
+    {
+      "y_pred": 1.5700000524520874,
+      "y_true": 19.31,
+      "decile": 7,
+      "ticker": "UGI",
+      "date": "2021-02-10"
+    },
+    {
+      "y_pred": -3.609999895095825,
+      "y_true": -2.69,
+      "decile": 1,
+      "ticker": "JBHT",
+      "date": "2024-02-14"
+    },
+    {
+      "y_pred": -1.909999966621399,
+      "y_true": -6.58,
+      "decile": 2,
+      "ticker": "MHK",
+      "date": "2021-08-12"
+    },
+    {
+      "y_pred": 6.480000019073486,
+      "y_true": 2.11,
+      "decile": 9,
+      "ticker": "WT",
+      "date": "2021-03-10"
+    },
+    {
+      "y_pred": 1.1299999952316284,
+      "y_true": -4.23,
+      "decile": 7,
+      "ticker": "FSK",
+      "date": "2021-08-10"
+    },
+    {
+      "y_pred": -0.20000000298023224,
+      "y_true": -6.52,
+      "decile": 5,
+      "ticker": "TJX",
+      "date": "2021-05-03"
+    },
+    {
+      "y_pred": -1.5,
+      "y_true": -7.03,
+      "decile": 3,
+      "ticker": "GTLS",
+      "date": "2021-07-21"
+    },
+    {
+      "y_pred": 3.869999885559082,
+      "y_true": -2.51,
+      "decile": 9,
+      "ticker": "UWMC",
+      "date": "2023-07-12"
+    },
+    {
+      "y_pred": 1.3200000524520874,
+      "y_true": -4.56,
+      "decile": 7,
+      "ticker": "PII",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 1.0800000429153442,
+      "y_true": 34.89,
+      "decile": 7,
+      "ticker": "IRM",
+      "date": "2024-06-06"
+    },
+    {
+      "y_pred": 8.0600004196167,
+      "y_true": -9.81,
+      "decile": 10,
+      "ticker": "COHU",
+      "date": "2021-04-05"
+    },
+    {
+      "y_pred": -2.049999952316284,
+      "y_true": -0.08,
+      "decile": 2,
+      "ticker": "DXCM",
+      "date": "2023-06-05"
+    },
+    {
+      "y_pred": 0.03999999910593033,
+      "y_true": -7.18,
+      "decile": 5,
+      "ticker": "TRGP",
+      "date": "2023-03-03"
+    },
+    {
+      "y_pred": 2.069999933242798,
+      "y_true": -9.38,
+      "decile": 8,
+      "ticker": "OCFC",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -2.319999933242798,
+      "y_true": -3.19,
+      "decile": 2,
+      "ticker": "TOWN",
+      "date": "2025-01-27"
+    },
+    {
+      "y_pred": -3.0899999141693115,
+      "y_true": -4.05,
+      "decile": 1,
+      "ticker": "NRDS",
+      "date": "2024-02-14"
+    },
+    {
+      "y_pred": -1.8700000047683716,
+      "y_true": -6.68,
+      "decile": 3,
+      "ticker": "DMLP",
+      "date": "2023-02-27"
+    },
+    {
+      "y_pred": -0.2800000011920929,
+      "y_true": 2.4,
+      "decile": 5,
+      "ticker": "EL",
+      "date": "2025-12-02"
+    },
+    {
+      "y_pred": -1.850000023841858,
+      "y_true": 17.08,
+      "decile": 3,
+      "ticker": "TGTX",
+      "date": "2024-10-29"
+    },
+    {
+      "y_pred": -2.7200000286102295,
+      "y_true": 46.98,
+      "decile": 2,
+      "ticker": "TPL",
+      "date": "2024-09-18"
+    },
+    {
+      "y_pred": 7.710000038146973,
+      "y_true": 7.66,
+      "decile": 10,
+      "ticker": "MPWR",
+      "date": "2021-07-28"
+    },
+    {
+      "y_pred": 0.7599999904632568,
+      "y_true": -7.66,
+      "decile": 6,
+      "ticker": "OGS",
+      "date": "2022-04-06"
+    },
+    {
+      "y_pred": 2.940000057220459,
+      "y_true": 1.96,
+      "decile": 8,
+      "ticker": "CECO",
+      "date": "2023-01-10"
+    },
+    {
+      "y_pred": -3.140000104904175,
+      "y_true": -22.99,
+      "decile": 1,
+      "ticker": "MANH",
+      "date": "2025-01-24"
+    },
+    {
+      "y_pred": 8.779999732971191,
+      "y_true": -9.88,
+      "decile": 10,
+      "ticker": "CCB",
+      "date": "2021-05-10"
+    },
+    {
+      "y_pred": 0.7799999713897705,
+      "y_true": -5.09,
+      "decile": 6,
+      "ticker": "JPM",
+      "date": "2024-05-17"
+    },
+    {
+      "y_pred": -3.559999942779541,
+      "y_true": 3.31,
+      "decile": 1,
+      "ticker": "VTR",
+      "date": "2021-02-18"
+    },
+    {
+      "y_pred": -1.340000033378601,
+      "y_true": -1.83,
+      "decile": 3,
+      "ticker": "DCI",
+      "date": "2025-12-04"
+    },
+    {
+      "y_pred": 3.7799999713897705,
+      "y_true": -7.67,
+      "decile": 9,
+      "ticker": "SEM",
+      "date": "2021-01-04"
+    },
+    {
+      "y_pred": 6.110000133514404,
+      "y_true": -3.83,
+      "decile": 9,
+      "ticker": "TCBI",
+      "date": "2021-02-16"
+    },
+    {
+      "y_pred": 1.100000023841858,
+      "y_true": -7.81,
+      "decile": 7,
+      "ticker": "VRTX",
+      "date": "2022-08-15"
+    },
+    {
+      "y_pred": 3.4200000762939453,
+      "y_true": 3.5,
+      "decile": 9,
+      "ticker": "CIEN",
+      "date": "2025-12-09"
+    },
+    {
+      "y_pred": 1.2200000286102295,
+      "y_true": -1.03,
+      "decile": 7,
+      "ticker": "JOE",
+      "date": "2022-02-25"
+    },
+    {
+      "y_pred": -2.619999885559082,
+      "y_true": 1.87,
+      "decile": 2,
+      "ticker": "VCTR",
+      "date": "2025-07-16"
+    },
+    {
+      "y_pred": 3.809999942779541,
+      "y_true": -4.75,
+      "decile": 9,
+      "ticker": "URBN",
+      "date": "2021-01-11"
+    },
+    {
+      "y_pred": 2.430000066757202,
+      "y_true": -3.42,
+      "decile": 8,
+      "ticker": "FULT",
+      "date": "2024-06-28"
+    },
+    {
+      "y_pred": -0.6200000047683716,
+      "y_true": -5.94,
+      "decile": 4,
+      "ticker": "FND",
+      "date": "2023-07-11"
+    },
+    {
+      "y_pred": 2.9700000286102295,
+      "y_true": 17.09,
+      "decile": 8,
+      "ticker": "AHR",
+      "date": "2025-05-09"
+    },
+    {
+      "y_pred": 0.23999999463558197,
+      "y_true": -0.15,
+      "decile": 6,
+      "ticker": "HWC",
+      "date": "2024-10-15"
+    },
+    {
+      "y_pred": -0.4300000071525574,
+      "y_true": -2.0,
+      "decile": 5,
+      "ticker": "HQH",
+      "date": "2024-08-09"
+    },
+    {
+      "y_pred": 6.230000019073486,
+      "y_true": -18.69,
+      "decile": 9,
+      "ticker": "MP",
+      "date": "2024-12-03"
+    },
+    {
+      "y_pred": -3.0999999046325684,
+      "y_true": -2.58,
+      "decile": 1,
+      "ticker": "LOB",
+      "date": "2022-01-04"
+    },
+    {
+      "y_pred": 1.5199999809265137,
+      "y_true": 4.14,
+      "decile": 7,
+      "ticker": "CTRI",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": -0.8399999737739563,
+      "y_true": -9.62,
+      "decile": 4,
+      "ticker": "KAR",
+      "date": "2023-07-12"
+    },
+    {
+      "y_pred": 1.9500000476837158,
+      "y_true": 12.43,
+      "decile": 8,
+      "ticker": "LPX",
+      "date": "2021-11-19"
+    },
+    {
+      "y_pred": 0.25,
+      "y_true": 20.45,
+      "decile": 6,
+      "ticker": "PSN",
+      "date": "2024-01-12"
+    },
+    {
+      "y_pred": 0.8399999737739563,
+      "y_true": -7.42,
+      "decile": 6,
+      "ticker": "CPRX",
+      "date": "2023-04-06"
+    },
+    {
+      "y_pred": 1.3600000143051147,
+      "y_true": -7.45,
+      "decile": 7,
+      "ticker": "TRMK",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 1.440000057220459,
+      "y_true": -4.36,
+      "decile": 7,
+      "ticker": "SGRY",
+      "date": "2023-06-14"
+    },
+    {
+      "y_pred": -1.3700000047683716,
+      "y_true": -8.77,
+      "decile": 3,
+      "ticker": "VSEC",
+      "date": "2024-05-03"
+    },
+    {
+      "y_pred": -1.5800000429153442,
+      "y_true": -1.17,
+      "decile": 3,
+      "ticker": "OSIS",
+      "date": "2024-11-21"
+    },
+    {
+      "y_pred": -1.7799999713897705,
+      "y_true": -1.13,
+      "decile": 3,
+      "ticker": "HI",
+      "date": "2023-06-02"
+    },
+    {
+      "y_pred": 1.159999966621399,
+      "y_true": 1.78,
+      "decile": 7,
+      "ticker": "APH",
+      "date": "2021-07-29"
+    },
+    {
+      "y_pred": -4.139999866485596,
+      "y_true": -16.42,
+      "decile": 1,
+      "ticker": "AXON",
+      "date": "2025-02-18"
+    },
+    {
+      "y_pred": -12.979999542236328,
+      "y_true": -9.91,
+      "decile": 1,
+      "ticker": "ROOT",
+      "date": "2025-03-05"
+    },
+    {
+      "y_pred": 18.780000686645508,
+      "y_true": 46.79,
+      "decile": 10,
+      "ticker": "NUTX",
+      "date": "2025-04-01"
+    },
+    {
+      "y_pred": 0.27000001072883606,
+      "y_true": 0.86,
+      "decile": 6,
+      "ticker": "AM",
+      "date": "2021-09-15"
+    },
+    {
+      "y_pred": -1.6100000143051147,
+      "y_true": -5.86,
+      "decile": 3,
+      "ticker": "PPG",
+      "date": "2023-07-11"
+    },
+    {
+      "y_pred": 3.6600000858306885,
+      "y_true": 2.98,
+      "decile": 9,
+      "ticker": "BTSG",
+      "date": "2025-09-08"
+    },
+    {
+      "y_pred": -6.46999979019165,
+      "y_true": 12.54,
+      "decile": 1,
+      "ticker": "REVG",
+      "date": "2024-03-28"
+    },
+    {
+      "y_pred": -2.859999895095825,
+      "y_true": 5.59,
+      "decile": 2,
+      "ticker": "SNX",
+      "date": "2025-07-10"
+    },
+    {
+      "y_pred": -1.6100000143051147,
+      "y_true": -5.65,
+      "decile": 3,
+      "ticker": "CACC",
+      "date": "2021-12-31"
+    },
+    {
+      "y_pred": -3.9800000190734863,
+      "y_true": 3.44,
+      "decile": 1,
+      "ticker": "CBT",
+      "date": "2024-08-23"
+    },
+    {
+      "y_pred": -1.9500000476837158,
+      "y_true": 37.54,
+      "decile": 2,
+      "ticker": "MU",
+      "date": "2024-03-01"
+    },
+    {
+      "y_pred": -11.270000457763672,
+      "y_true": 2.5,
+      "decile": 1,
+      "ticker": "COHR",
+      "date": "2025-12-04"
+    },
+    {
+      "y_pred": 9.600000381469727,
+      "y_true": 37.47,
+      "decile": 10,
+      "ticker": "U",
+      "date": "2025-07-07"
+    },
+    {
+      "y_pred": 2.700000047683716,
+      "y_true": -5.59,
+      "decile": 8,
+      "ticker": "VCYT",
+      "date": "2023-07-11"
+    },
+    {
+      "y_pred": -1.3200000524520874,
+      "y_true": -7.58,
+      "decile": 3,
+      "ticker": "DCO",
+      "date": "2025-10-24"
+    },
+    {
+      "y_pred": 1.7599999904632568,
+      "y_true": 4.12,
+      "decile": 7,
+      "ticker": "CMA",
+      "date": "2024-10-15"
+    },
+    {
+      "y_pred": 0.7900000214576721,
+      "y_true": 30.65,
+      "decile": 6,
+      "ticker": "KIM",
+      "date": "2021-01-13"
+    },
+    {
+      "y_pred": -2.140000104904175,
+      "y_true": -0.21,
+      "decile": 2,
+      "ticker": "JLL",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": -2.8399999141693115,
+      "y_true": -4.5,
+      "decile": 2,
+      "ticker": "KLAC",
+      "date": "2024-08-15"
+    },
+    {
+      "y_pred": -2.069999933242798,
+      "y_true": -1.81,
+      "decile": 2,
+      "ticker": "AIZ",
+      "date": "2025-12-17"
+    },
+    {
+      "y_pred": -5.309999942779541,
+      "y_true": -0.58,
+      "decile": 1,
+      "ticker": "BKU",
+      "date": "2025-12-11"
+    },
+    {
+      "y_pred": 0.7099999785423279,
+      "y_true": -8.77,
+      "decile": 6,
+      "ticker": "COGT",
+      "date": "2024-09-03"
+    },
+    {
+      "y_pred": -1.9900000095367432,
+      "y_true": -14.39,
+      "decile": 2,
+      "ticker": "DAN",
+      "date": "2023-01-31"
+    },
+    {
+      "y_pred": -1.8200000524520874,
+      "y_true": 18.08,
+      "decile": 3,
+      "ticker": "NTRA",
+      "date": "2024-11-08"
+    },
+    {
+      "y_pred": 16.549999237060547,
+      "y_true": -9.09,
+      "decile": 10,
+      "ticker": "GTLB",
+      "date": "2023-12-13"
+    },
+    {
+      "y_pred": 0.2800000011920929,
+      "y_true": -9.4,
+      "decile": 6,
+      "ticker": "TPH",
+      "date": "2021-01-20"
+    },
+    {
+      "y_pred": -1.5199999809265137,
+      "y_true": -7.34,
+      "decile": 3,
+      "ticker": "SKYW",
+      "date": "2023-08-31"
+    },
+    {
+      "y_pred": 2.6500000953674316,
+      "y_true": -5.79,
+      "decile": 8,
+      "ticker": "MTSI",
+      "date": "2024-03-07"
+    },
+    {
+      "y_pred": 0.30000001192092896,
+      "y_true": -4.46,
+      "decile": 6,
+      "ticker": "EQIX",
+      "date": "2023-05-04"
+    },
+    {
+      "y_pred": 7.440000057220459,
+      "y_true": 18.22,
+      "decile": 10,
+      "ticker": "CBRE",
+      "date": "2021-02-19"
+    },
+    {
+      "y_pred": -2.5899999141693115,
+      "y_true": -7.69,
+      "decile": 2,
+      "ticker": "PEN",
+      "date": "2025-04-24"
+    },
+    {
+      "y_pred": 2.9600000381469727,
+      "y_true": -7.14,
+      "decile": 8,
+      "ticker": "JBTM",
+      "date": "2021-06-01"
+    },
+    {
+      "y_pred": 4.920000076293945,
+      "y_true": -10.78,
+      "decile": 9,
+      "ticker": "FBP",
+      "date": "2022-01-07"
+    },
+    {
+      "y_pred": 2.25,
+      "y_true": -0.58,
+      "decile": 8,
+      "ticker": "SBRA",
+      "date": "2024-06-28"
+    },
+    {
+      "y_pred": 0.6600000262260437,
+      "y_true": -11.75,
+      "decile": 6,
+      "ticker": "IDYA",
+      "date": "2023-01-12"
+    },
+    {
+      "y_pred": 1.2000000476837158,
+      "y_true": -5.32,
+      "decile": 7,
+      "ticker": "LMAT",
+      "date": "2023-06-12"
+    },
+    {
+      "y_pred": -1.600000023841858,
+      "y_true": 2.26,
+      "decile": 3,
+      "ticker": "MAIN",
+      "date": "2024-12-26"
+    },
+    {
+      "y_pred": 1.409999966621399,
+      "y_true": 10.58,
+      "decile": 7,
+      "ticker": "FLR",
+      "date": "2022-10-31"
+    },
+    {
+      "y_pred": -5.71999979019165,
+      "y_true": -1.96,
+      "decile": 1,
+      "ticker": "UAL",
+      "date": "2025-12-16"
+    },
+    {
+      "y_pred": 0.30000001192092896,
+      "y_true": 3.85,
+      "decile": 6,
+      "ticker": "CACI",
+      "date": "2023-06-16"
+    },
+    {
+      "y_pred": -3.4100000858306885,
+      "y_true": -3.79,
+      "decile": 1,
+      "ticker": "NFG",
+      "date": "2025-07-15"
+    },
+    {
+      "y_pred": -1.3899999856948853,
+      "y_true": -0.78,
+      "decile": 3,
+      "ticker": "AKAM",
+      "date": "2023-11-29"
+    },
+    {
+      "y_pred": 2.009999990463257,
+      "y_true": -2.29,
+      "decile": 8,
+      "ticker": "TPB",
+      "date": "2025-01-30"
+    },
+    {
+      "y_pred": -0.15000000596046448,
+      "y_true": 11.19,
+      "decile": 5,
+      "ticker": "WRB",
+      "date": "2024-01-19"
+    },
+    {
+      "y_pred": 0.44999998807907104,
+      "y_true": -4.77,
+      "decile": 6,
+      "ticker": "FIBK",
+      "date": "2024-10-16"
+    },
+    {
+      "y_pred": 1.4700000286102295,
+      "y_true": -3.12,
+      "decile": 7,
+      "ticker": "ALGN",
+      "date": "2023-06-30"
+    },
+    {
+      "y_pred": 0.5600000023841858,
+      "y_true": 18.35,
+      "decile": 6,
+      "ticker": "JLL",
+      "date": "2021-07-26"
+    },
+    {
+      "y_pred": 1.909999966621399,
+      "y_true": -10.11,
+      "decile": 8,
+      "ticker": "DY",
+      "date": "2021-05-07"
+    },
+    {
+      "y_pred": 3.0,
+      "y_true": -9.48,
+      "decile": 8,
+      "ticker": "SLG",
+      "date": "2021-06-10"
+    },
+    {
+      "y_pred": 0.09000000357627869,
+      "y_true": -7.99,
+      "decile": 5,
+      "ticker": "FWONA",
+      "date": "2022-08-17"
+    },
+    {
+      "y_pred": -3.369999885559082,
+      "y_true": -4.55,
+      "decile": 1,
+      "ticker": "TSLA",
+      "date": "2025-12-12"
+    },
+    {
+      "y_pred": -1.440000057220459,
+      "y_true": -2.02,
+      "decile": 3,
+      "ticker": "CMPO",
+      "date": "2025-08-22"
+    },
+    {
+      "y_pred": -1.840000033378601,
+      "y_true": 2.19,
+      "decile": 3,
+      "ticker": "STT",
+      "date": "2025-12-09"
+    },
+    {
+      "y_pred": -1.090000033378601,
+      "y_true": -3.27,
+      "decile": 4,
+      "ticker": "DRI",
+      "date": "2023-01-10"
+    },
+    {
+      "y_pred": -1.4900000095367432,
+      "y_true": 21.58,
+      "decile": 3,
+      "ticker": "EVLV",
+      "date": "2025-06-24"
+    },
+    {
+      "y_pred": 19.600000381469727,
+      "y_true": 350.0,
+      "decile": 10,
+      "ticker": "AEVA",
+      "date": "2025-03-26"
+    },
+    {
+      "y_pred": 2.049999952316284,
+      "y_true": 1.24,
+      "decile": 8,
+      "ticker": "STRA",
+      "date": "2023-01-06"
+    },
+    {
+      "y_pred": 2.2100000381469727,
+      "y_true": 8.09,
+      "decile": 8,
+      "ticker": "ALRM",
+      "date": "2023-12-29"
+    },
+    {
+      "y_pred": -1.6299999952316284,
+      "y_true": -3.8,
+      "decile": 3,
+      "ticker": "CINF",
+      "date": "2021-10-25"
+    },
+    {
+      "y_pred": -5.010000228881836,
+      "y_true": -9.72,
+      "decile": 1,
+      "ticker": "DYN",
+      "date": "2024-05-20"
+    },
+    {
+      "y_pred": -3.4000000953674316,
+      "y_true": -4.92,
+      "decile": 1,
+      "ticker": "HLIT",
+      "date": "2021-10-14"
+    },
+    {
+      "y_pred": -0.4099999964237213,
+      "y_true": 21.4,
+      "decile": 5,
+      "ticker": "PKG",
+      "date": "2024-07-17"
+    },
+    {
+      "y_pred": -2.240000009536743,
+      "y_true": -4.41,
+      "decile": 2,
+      "ticker": "GKOS",
+      "date": "2024-08-21"
+    },
+    {
+      "y_pred": 0.23999999463558197,
+      "y_true": -9.27,
+      "decile": 6,
+      "ticker": "HUBB",
+      "date": "2025-01-22"
+    },
+    {
+      "y_pred": 6.409999847412109,
+      "y_true": -4.27,
+      "decile": 9,
+      "ticker": "PINS",
+      "date": "2023-09-05"
+    },
+    {
+      "y_pred": -5.400000095367432,
+      "y_true": -8.41,
+      "decile": 1,
+      "ticker": "RDNT",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": -2.0999999046325684,
+      "y_true": -6.61,
+      "decile": 2,
+      "ticker": "KFY",
+      "date": "2024-09-19"
+    },
+    {
+      "y_pred": 2.5,
+      "y_true": 16.08,
+      "decile": 8,
+      "ticker": "BCC",
+      "date": "2021-03-08"
+    },
+    {
+      "y_pred": -0.44999998807907104,
+      "y_true": -5.89,
+      "decile": 5,
+      "ticker": "ENVA",
+      "date": "2024-04-23"
+    },
+    {
+      "y_pred": -6.96999979019165,
+      "y_true": -3.62,
+      "decile": 1,
+      "ticker": "POWL",
+      "date": "2025-10-15"
+    },
+    {
+      "y_pred": 7.159999847412109,
+      "y_true": -6.32,
+      "decile": 10,
+      "ticker": "PVH",
+      "date": "2021-04-12"
+    },
+    {
+      "y_pred": 29.799999237060547,
+      "y_true": 14.19,
+      "decile": 10,
+      "ticker": "HLX",
+      "date": "2021-03-05"
+    },
+    {
+      "y_pred": -2.0399999618530273,
+      "y_true": 15.1,
+      "decile": 2,
+      "ticker": "PRAX",
+      "date": "2024-07-11"
+    },
+    {
+      "y_pred": 2.5399999618530273,
+      "y_true": -3.15,
+      "decile": 8,
+      "ticker": "EXLS",
+      "date": "2022-10-28"
+    },
+    {
+      "y_pred": -5.110000133514404,
+      "y_true": 19.31,
+      "decile": 1,
+      "ticker": "EOSE",
+      "date": "2024-12-16"
+    },
+    {
+      "y_pred": 7.809999942779541,
+      "y_true": -11.31,
+      "decile": 10,
+      "ticker": "BURL",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": 0.7200000286102295,
+      "y_true": 9.03,
+      "decile": 6,
+      "ticker": "ELAN",
+      "date": "2023-12-19"
+    },
+    {
+      "y_pred": -1.6200000047683716,
+      "y_true": -0.86,
+      "decile": 3,
+      "ticker": "PAG",
+      "date": "2025-07-02"
+    },
+    {
+      "y_pred": -3.940000057220459,
+      "y_true": -3.65,
+      "decile": 1,
+      "ticker": "VIRT",
+      "date": "2024-11-11"
+    },
+    {
+      "y_pred": 1.3200000524520874,
+      "y_true": -9.66,
+      "decile": 7,
+      "ticker": "FBNC",
+      "date": "2021-03-08"
+    },
+    {
+      "y_pred": 3.0,
+      "y_true": 90.1,
+      "decile": 8,
+      "ticker": "IESC",
+      "date": "2023-11-22"
+    },
+    {
+      "y_pred": -0.6200000047683716,
+      "y_true": -9.46,
+      "decile": 4,
+      "ticker": "MTRN",
+      "date": "2023-07-10"
+    },
+    {
+      "y_pred": -1.2400000095367432,
+      "y_true": -9.95,
+      "decile": 3,
+      "ticker": "ONTO",
+      "date": "2023-07-28"
+    },
+    {
+      "y_pred": -1.7400000095367432,
+      "y_true": -6.87,
+      "decile": 3,
+      "ticker": "EFX",
+      "date": "2021-12-13"
+    },
+    {
+      "y_pred": 2.7699999809265137,
+      "y_true": 9.79,
+      "decile": 8,
+      "ticker": "FSS",
+      "date": "2021-02-22"
+    },
+    {
+      "y_pred": 1.6799999475479126,
+      "y_true": 10.47,
+      "decile": 7,
+      "ticker": "AROC",
+      "date": "2023-07-24"
+    },
+    {
+      "y_pred": 3.299999952316284,
+      "y_true": -8.47,
+      "decile": 8,
+      "ticker": "MODG",
+      "date": "2024-07-29"
+    },
+    {
+      "y_pred": -0.27000001072883606,
+      "y_true": -3.83,
+      "decile": 5,
+      "ticker": "ULTA",
+      "date": "2021-05-28"
+    },
+    {
+      "y_pred": 1.159999966621399,
+      "y_true": 2.78,
+      "decile": 7,
+      "ticker": "PLMR",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": 3.1500000953674316,
+      "y_true": -3.29,
+      "decile": 8,
+      "ticker": "ACA",
+      "date": "2022-10-03"
+    },
+    {
+      "y_pred": -1.3799999952316284,
+      "y_true": -2.82,
+      "decile": 3,
+      "ticker": "ISRG",
+      "date": "2025-01-15"
+    },
+    {
+      "y_pred": 3.759999990463257,
+      "y_true": -10.19,
+      "decile": 9,
+      "ticker": "DBRG",
+      "date": "2023-09-14"
+    },
+    {
+      "y_pred": 5.460000038146973,
+      "y_true": -20.25,
+      "decile": 9,
+      "ticker": "ENPH",
+      "date": "2021-11-19"
+    },
+    {
+      "y_pred": 0.46000000834465027,
+      "y_true": -3.8,
+      "decile": 6,
+      "ticker": "SNPS",
+      "date": "2023-10-06"
+    },
+    {
+      "y_pred": -5.010000228881836,
+      "y_true": -4.49,
+      "decile": 1,
+      "ticker": "RRX",
+      "date": "2024-10-14"
+    },
+    {
+      "y_pred": 0.6600000262260437,
+      "y_true": 2.04,
+      "decile": 6,
+      "ticker": "WH",
+      "date": "2021-10-01"
+    },
+    {
+      "y_pred": 0.6700000166893005,
+      "y_true": -1.06,
+      "decile": 6,
+      "ticker": "CB",
+      "date": "2021-10-27"
+    },
+    {
+      "y_pred": -1.6399999856948853,
+      "y_true": -2.04,
+      "decile": 3,
+      "ticker": "SEIC",
+      "date": "2024-11-26"
+    },
+    {
+      "y_pred": -0.6700000166893005,
+      "y_true": 2.61,
+      "decile": 4,
+      "ticker": "AWR",
+      "date": "2021-11-05"
+    },
+    {
+      "y_pred": 0.4699999988079071,
+      "y_true": -2.12,
+      "decile": 6,
+      "ticker": "ET",
+      "date": "2024-11-06"
+    },
+    {
+      "y_pred": 1.9700000286102295,
+      "y_true": -5.86,
+      "decile": 8,
+      "ticker": "BAC",
+      "date": "2024-01-30"
+    },
+    {
+      "y_pred": 0.6100000143051147,
+      "y_true": 7.2,
+      "decile": 6,
+      "ticker": "FFIV",
+      "date": "2023-12-12"
+    },
+    {
+      "y_pred": 4.070000171661377,
+      "y_true": 20.68,
+      "decile": 9,
+      "ticker": "EYE",
+      "date": "2025-05-12"
+    },
+    {
+      "y_pred": 0.25999999046325684,
+      "y_true": 21.59,
+      "decile": 6,
+      "ticker": "VRT",
+      "date": "2021-04-14"
+    },
+    {
+      "y_pred": -1.590000033378601,
+      "y_true": 16.68,
+      "decile": 3,
+      "ticker": "ESE",
+      "date": "2025-05-01"
+    },
+    {
+      "y_pred": 0.6299999952316284,
+      "y_true": 4.76,
+      "decile": 6,
+      "ticker": "ODFL",
+      "date": "2021-10-21"
+    },
+    {
+      "y_pred": 0.44999998807907104,
+      "y_true": -2.01,
+      "decile": 6,
+      "ticker": "DMLP",
+      "date": "2022-07-21"
+    },
+    {
+      "y_pred": -0.9900000095367432,
+      "y_true": -6.6,
+      "decile": 4,
+      "ticker": "PEGA",
+      "date": "2025-06-27"
+    },
+    {
+      "y_pred": -1.3300000429153442,
+      "y_true": -3.53,
+      "decile": 3,
+      "ticker": "TRMK",
+      "date": "2025-01-29"
+    },
+    {
+      "y_pred": 1.7400000095367432,
+      "y_true": -6.73,
+      "decile": 7,
+      "ticker": "HEI",
+      "date": "2024-11-13"
+    },
+    {
+      "y_pred": 6.840000152587891,
+      "y_true": -2.94,
+      "decile": 9,
+      "ticker": "PBI",
+      "date": "2024-11-04"
+    },
+    {
+      "y_pred": 1.8300000429153442,
+      "y_true": -1.13,
+      "decile": 8,
+      "ticker": "RMBS",
+      "date": "2023-01-18"
+    },
+    {
+      "y_pred": 9.420000076293945,
+      "y_true": 107.76,
+      "decile": 10,
+      "ticker": "TPL",
+      "date": "2021-01-04"
+    },
+    {
+      "y_pred": 2.5899999141693115,
+      "y_true": -9.39,
+      "decile": 8,
+      "ticker": "BBWI",
+      "date": "2024-05-15"
+    },
+    {
+      "y_pred": -2.0399999618530273,
+      "y_true": -4.13,
+      "decile": 2,
+      "ticker": "WAB",
+      "date": "2025-06-30"
+    },
+    {
+      "y_pred": 22.360000610351562,
+      "y_true": -18.42,
+      "decile": 10,
+      "ticker": "INOD",
+      "date": "2021-02-08"
+    },
+    {
+      "y_pred": -2.0399999618530273,
+      "y_true": 0.03,
+      "decile": 2,
+      "ticker": "PGR",
+      "date": "2025-02-11"
+    },
+    {
+      "y_pred": 22.959999084472656,
+      "y_true": -13.07,
+      "decile": 10,
+      "ticker": "BKR",
+      "date": "2021-01-14"
+    },
+    {
+      "y_pred": 5.070000171661377,
+      "y_true": -9.86,
+      "decile": 9,
+      "ticker": "CUK",
+      "date": "2021-03-03"
+    },
+    {
+      "y_pred": 7.349999904632568,
+      "y_true": 2.17,
+      "decile": 10,
+      "ticker": "AMRC",
+      "date": "2021-06-15"
+    },
+    {
+      "y_pred": 2.240000009536743,
+      "y_true": 13.59,
+      "decile": 8,
+      "ticker": "GPOR",
+      "date": "2023-08-09"
+    },
+    {
+      "y_pred": 0.05000000074505806,
+      "y_true": 4.11,
+      "decile": 5,
+      "ticker": "CRBG",
+      "date": "2024-03-20"
+    },
+    {
+      "y_pred": -0.14000000059604645,
+      "y_true": -3.79,
+      "decile": 5,
+      "ticker": "CBZ",
+      "date": "2022-03-29"
+    },
+    {
+      "y_pred": -2.890000104904175,
+      "y_true": 0.75,
+      "decile": 2,
+      "ticker": "JNJ",
+      "date": "2025-12-11"
+    },
+    {
+      "y_pred": -2.109999895095825,
+      "y_true": -1.04,
+      "decile": 2,
+      "ticker": "NDSN",
+      "date": "2024-03-28"
+    },
+    {
+      "y_pred": 0.8500000238418579,
+      "y_true": -11.17,
+      "decile": 6,
+      "ticker": "VTOL",
+      "date": "2025-11-03"
+    },
+    {
+      "y_pred": 1.9900000095367432,
+      "y_true": 21.34,
+      "decile": 8,
+      "ticker": "CDW",
+      "date": "2021-02-01"
+    },
+    {
+      "y_pred": 3.1700000762939453,
+      "y_true": -9.16,
+      "decile": 8,
+      "ticker": "CNX",
+      "date": "2022-05-25"
+    },
+    {
+      "y_pred": 5.289999961853027,
+      "y_true": 6.38,
+      "decile": 9,
+      "ticker": "ESI",
+      "date": "2021-04-29"
+    },
+    {
+      "y_pred": 2.5299999713897705,
+      "y_true": -6.28,
+      "decile": 8,
+      "ticker": "MRCY",
+      "date": "2025-03-14"
+    },
+    {
+      "y_pred": -7.059999942779541,
+      "y_true": -4.57,
+      "decile": 1,
+      "ticker": "PRCT",
+      "date": "2024-01-09"
+    },
+    {
+      "y_pred": -0.17000000178813934,
+      "y_true": 0.5,
+      "decile": 5,
+      "ticker": "STT",
+      "date": "2021-10-15"
+    },
+    {
+      "y_pred": 5.360000133514404,
+      "y_true": -10.55,
+      "decile": 9,
+      "ticker": "GSHD",
+      "date": "2023-12-21"
+    },
+    {
+      "y_pred": -1.0399999618530273,
+      "y_true": 43.28,
+      "decile": 4,
+      "ticker": "HCC",
+      "date": "2021-12-20"
+    },
+    {
+      "y_pred": 9.220000267028809,
+      "y_true": -10.16,
+      "decile": 10,
+      "ticker": "TNL",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -0.6000000238418579,
+      "y_true": -11.96,
+      "decile": 4,
+      "ticker": "SNX",
+      "date": "2024-06-18"
+    },
+    {
+      "y_pred": -0.33000001311302185,
+      "y_true": -2.82,
+      "decile": 5,
+      "ticker": "APG",
+      "date": "2025-10-31"
+    },
+    {
+      "y_pred": 0.5400000214576721,
+      "y_true": -44.84,
+      "decile": 6,
+      "ticker": "NSSC",
+      "date": "2023-08-11"
+    },
+    {
+      "y_pred": -1.1799999475479126,
+      "y_true": -7.66,
+      "decile": 3,
+      "ticker": "AMKR",
+      "date": "2021-06-09"
+    },
+    {
+      "y_pred": -1.4299999475479126,
+      "y_true": 3.87,
+      "decile": 3,
+      "ticker": "SEE",
+      "date": "2021-11-03"
+    },
+    {
+      "y_pred": -10.380000114440918,
+      "y_true": -7.32,
+      "decile": 1,
+      "ticker": "SMMT",
+      "date": "2025-07-16"
+    },
+    {
+      "y_pred": 12.3100004196167,
+      "y_true": 290.53,
+      "decile": 10,
+      "ticker": "DAVE",
+      "date": "2024-01-10"
+    },
+    {
+      "y_pred": -5.119999885559082,
+      "y_true": -12.09,
+      "decile": 1,
+      "ticker": "DAR",
+      "date": "2022-04-20"
+    },
+    {
+      "y_pred": 0.10000000149011612,
+      "y_true": -5.48,
+      "decile": 5,
+      "ticker": "URI",
+      "date": "2024-07-15"
+    },
+    {
+      "y_pred": -0.25,
+      "y_true": -1.69,
+      "decile": 5,
+      "ticker": "LIN",
+      "date": "2021-07-30"
+    },
+    {
+      "y_pred": -1.4500000476837158,
+      "y_true": -3.8,
+      "decile": 3,
+      "ticker": "LKQ",
+      "date": "2021-08-31"
+    },
+    {
+      "y_pred": 1.6299999952316284,
+      "y_true": -9.55,
+      "decile": 7,
+      "ticker": "HAYW",
+      "date": "2025-10-29"
+    },
+    {
+      "y_pred": -3.4800000190734863,
+      "y_true": 0.0,
+      "decile": 1,
+      "ticker": "EWBC",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 0.8600000143051147,
+      "y_true": -3.69,
+      "decile": 6,
+      "ticker": "LOPE",
+      "date": "2023-04-11"
+    },
+    {
+      "y_pred": 0.09000000357627869,
+      "y_true": -8.44,
+      "decile": 5,
+      "ticker": "MMSI",
+      "date": "2021-02-11"
+    },
+    {
+      "y_pred": -3.380000114440918,
+      "y_true": -0.08,
+      "decile": 1,
+      "ticker": "FOX",
+      "date": "2025-12-22"
+    },
+    {
+      "y_pred": 0.3199999928474426,
+      "y_true": 0.44,
+      "decile": 6,
+      "ticker": "KBH",
+      "date": "2024-02-12"
+    },
+    {
+      "y_pred": 3.8399999141693115,
+      "y_true": -10.49,
+      "decile": 9,
+      "ticker": "AVAV",
+      "date": "2024-08-28"
+    },
+    {
+      "y_pred": -2.700000047683716,
+      "y_true": 3.58,
+      "decile": 2,
+      "ticker": "ULTA",
+      "date": "2023-01-05"
+    },
+    {
+      "y_pred": 1.7000000476837158,
+      "y_true": 4.57,
+      "decile": 7,
+      "ticker": "TFIN",
+      "date": "2024-10-17"
+    },
+    {
+      "y_pred": 0.5199999809265137,
+      "y_true": 50.65,
+      "decile": 6,
+      "ticker": "EPAM",
+      "date": "2021-03-31"
+    },
+    {
+      "y_pred": 12.539999961853027,
+      "y_true": -6.67,
+      "decile": 10,
+      "ticker": "REX",
+      "date": "2021-02-24"
+    },
+    {
+      "y_pred": 1.590000033378601,
+      "y_true": -1.47,
+      "decile": 7,
+      "ticker": "GVA",
+      "date": "2023-12-06"
+    },
+    {
+      "y_pred": 1.2899999618530273,
+      "y_true": 6.6,
+      "decile": 7,
+      "ticker": "KRP",
+      "date": "2022-02-18"
+    },
+    {
+      "y_pred": -4.869999885559082,
+      "y_true": -27.64,
+      "decile": 1,
+      "ticker": "FSLY",
+      "date": "2024-02-02"
+    },
+    {
+      "y_pred": 2.2300000190734863,
+      "y_true": -1.18,
+      "decile": 8,
+      "ticker": "PLNT",
+      "date": "2025-05-21"
+    },
+    {
+      "y_pred": -3.0399999618530273,
+      "y_true": -4.65,
+      "decile": 1,
+      "ticker": "SEE",
+      "date": "2022-02-18"
+    },
+    {
+      "y_pred": -0.09000000357627869,
+      "y_true": -4.25,
+      "decile": 5,
+      "ticker": "ODFL",
+      "date": "2023-04-24"
+    },
+    {
+      "y_pred": -2.0899999141693115,
+      "y_true": 11.98,
+      "decile": 2,
+      "ticker": "RTX",
+      "date": "2025-05-15"
+    },
+    {
+      "y_pred": -2.799999952316284,
+      "y_true": 0.24,
+      "decile": 2,
+      "ticker": "LUV",
+      "date": "2025-07-10"
+    },
+    {
+      "y_pred": 2.2899999618530273,
+      "y_true": 12.95,
+      "decile": 8,
+      "ticker": "TREX",
+      "date": "2023-12-20"
+    },
+    {
+      "y_pred": -0.9800000190734863,
+      "y_true": 8.26,
+      "decile": 4,
+      "ticker": "EQR",
+      "date": "2021-05-24"
+    },
+    {
+      "y_pred": -6.960000038146973,
+      "y_true": -5.26,
+      "decile": 1,
+      "ticker": "SEMR",
+      "date": "2024-05-07"
+    },
+    {
+      "y_pred": 0.9399999976158142,
+      "y_true": -1.88,
+      "decile": 7,
+      "ticker": "GWW",
+      "date": "2023-10-06"
+    },
+    {
+      "y_pred": 0.7200000286102295,
+      "y_true": -7.53,
+      "decile": 6,
+      "ticker": "DLX",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": 1.5,
+      "y_true": 9.27,
+      "decile": 7,
+      "ticker": "WAB",
+      "date": "2024-09-17"
+    },
+    {
+      "y_pred": -2.450000047683716,
+      "y_true": -3.55,
+      "decile": 2,
+      "ticker": "PCAR",
+      "date": "2023-01-24"
+    },
+    {
+      "y_pred": 5.130000114440918,
+      "y_true": -6.94,
+      "decile": 9,
+      "ticker": "SSRM",
+      "date": "2025-06-02"
+    },
+    {
+      "y_pred": -0.5799999833106995,
+      "y_true": 9.7,
+      "decile": 4,
+      "ticker": "ASH",
+      "date": "2021-10-13"
+    },
+    {
+      "y_pred": 0.25,
+      "y_true": 1.85,
+      "decile": 6,
+      "ticker": "AWI",
+      "date": "2024-10-16"
+    },
+    {
+      "y_pred": 1.5399999618530273,
+      "y_true": -7.11,
+      "decile": 7,
+      "ticker": "AIG",
+      "date": "2022-01-07"
+    },
+    {
+      "y_pred": 16.40999984741211,
+      "y_true": 47.29,
+      "decile": 10,
+      "ticker": "MTDR",
+      "date": "2021-01-07"
+    },
+    {
+      "y_pred": 33.959999084472656,
+      "y_true": 8.58,
+      "decile": 10,
+      "ticker": "HTZ",
+      "date": "2025-04-16"
+    },
+    {
+      "y_pred": 1.809999942779541,
+      "y_true": -2.53,
+      "decile": 8,
+      "ticker": "CBT",
+      "date": "2024-02-15"
+    },
+    {
+      "y_pred": 1.1100000143051147,
+      "y_true": 121.47,
+      "decile": 7,
+      "ticker": "VITL",
+      "date": "2024-03-01"
+    },
+    {
+      "y_pred": -4.800000190734863,
+      "y_true": -2.53,
+      "decile": 1,
+      "ticker": "WBD",
+      "date": "2025-11-18"
+    },
+    {
+      "y_pred": -4.150000095367432,
+      "y_true": -8.49,
+      "decile": 1,
+      "ticker": "ITT",
+      "date": "2025-10-29"
+    },
+    {
+      "y_pred": -6.610000133514404,
+      "y_true": -20.77,
+      "decile": 1,
+      "ticker": "ANF",
+      "date": "2025-12-29"
+    },
+    {
+      "y_pred": 3.359999895095825,
+      "y_true": -5.26,
+      "decile": 9,
+      "ticker": "OGN",
+      "date": "2024-07-25"
+    },
+    {
+      "y_pred": 2.0899999141693115,
+      "y_true": -5.12,
+      "decile": 8,
+      "ticker": "NXST",
+      "date": "2022-01-12"
+    },
+    {
+      "y_pred": -4.420000076293945,
+      "y_true": 1.5,
+      "decile": 1,
+      "ticker": "ECVT",
+      "date": "2025-07-07"
+    },
+    {
+      "y_pred": -3.059999942779541,
+      "y_true": -6.3,
+      "decile": 1,
+      "ticker": "UNH",
+      "date": "2024-11-08"
+    },
+    {
+      "y_pred": -2.259999990463257,
+      "y_true": 12.44,
+      "decile": 2,
+      "ticker": "DKNG",
+      "date": "2024-01-18"
+    },
+    {
+      "y_pred": 1.0700000524520874,
+      "y_true": 23.82,
+      "decile": 7,
+      "ticker": "F",
+      "date": "2021-01-12"
+    },
+    {
+      "y_pred": 1.6399999856948853,
+      "y_true": 8.45,
+      "decile": 7,
+      "ticker": "PATK",
+      "date": "2024-07-16"
+    },
+    {
+      "y_pred": -0.46000000834465027,
+      "y_true": -5.6,
+      "decile": 5,
+      "ticker": "AJG",
+      "date": "2024-09-09"
+    },
+    {
+      "y_pred": -1.5,
+      "y_true": -3.12,
+      "decile": 3,
+      "ticker": "EXTR",
+      "date": "2022-03-18"
+    },
+    {
+      "y_pred": 0.3700000047683716,
+      "y_true": 0.99,
+      "decile": 6,
+      "ticker": "TREX",
+      "date": "2023-07-11"
+    },
+    {
+      "y_pred": 0.41999998688697815,
+      "y_true": -10.42,
+      "decile": 6,
+      "ticker": "AIT",
+      "date": "2021-11-18"
+    },
+    {
+      "y_pred": -3.5999999046325684,
+      "y_true": -10.69,
+      "decile": 1,
+      "ticker": "ROAD",
+      "date": "2024-07-23"
+    },
+    {
+      "y_pred": -1.2799999713897705,
+      "y_true": -2.55,
+      "decile": 3,
+      "ticker": "HTGC",
+      "date": "2023-07-19"
+    },
+    {
+      "y_pred": -1.75,
+      "y_true": -3.89,
+      "decile": 3,
+      "ticker": "PBH",
+      "date": "2025-05-08"
+    },
+    {
+      "y_pred": -2.1700000762939453,
+      "y_true": -5.57,
+      "decile": 2,
+      "ticker": "EQIX",
+      "date": "2024-03-01"
+    },
+    {
+      "y_pred": -2.5299999713897705,
+      "y_true": -7.33,
+      "decile": 2,
+      "ticker": "AXSM",
+      "date": "2023-06-14"
+    },
+    {
+      "y_pred": 1.0800000429153442,
+      "y_true": -1.71,
+      "decile": 7,
+      "ticker": "BRO",
+      "date": "2021-06-24"
+    },
+    {
+      "y_pred": 3.299999952316284,
+      "y_true": 6.21,
+      "decile": 8,
+      "ticker": "PLAB",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 1.659999966621399,
+      "y_true": 0.5,
+      "decile": 7,
+      "ticker": "LLY",
+      "date": "2022-03-03"
+    },
+    {
+      "y_pred": -2.1700000762939453,
+      "y_true": -8.54,
+      "decile": 2,
+      "ticker": "BIPC",
+      "date": "2021-07-02"
+    },
+    {
+      "y_pred": -0.1599999964237213,
+      "y_true": -0.22,
+      "decile": 5,
+      "ticker": "VFC",
+      "date": "2024-12-17"
+    },
+    {
+      "y_pred": 0.949999988079071,
+      "y_true": -11.74,
+      "decile": 7,
+      "ticker": "PVH",
+      "date": "2021-09-01"
+    },
+    {
+      "y_pred": 0.1899999976158142,
+      "y_true": -8.03,
+      "decile": 6,
+      "ticker": "WWW",
+      "date": "2021-01-06"
+    },
+    {
+      "y_pred": -4.079999923706055,
+      "y_true": -1.77,
+      "decile": 1,
+      "ticker": "DEC",
+      "date": "2024-04-09"
+    },
+    {
+      "y_pred": 2.4800000190734863,
+      "y_true": 18.43,
+      "decile": 8,
+      "ticker": "VSAT",
+      "date": "2021-09-23"
+    },
+    {
+      "y_pred": -0.44999998807907104,
+      "y_true": -3.9,
+      "decile": 5,
+      "ticker": "PANW",
+      "date": "2025-01-28"
+    },
+    {
+      "y_pred": -1.190000057220459,
+      "y_true": -3.36,
+      "decile": 3,
+      "ticker": "ASGN",
+      "date": "2024-02-29"
+    },
+    {
+      "y_pred": -0.5,
+      "y_true": -8.06,
+      "decile": 5,
+      "ticker": "ACM",
+      "date": "2024-11-22"
+    },
+    {
+      "y_pred": -1.2999999523162842,
+      "y_true": 5.1,
+      "decile": 3,
+      "ticker": "F",
+      "date": "2021-05-21"
+    },
+    {
+      "y_pred": -0.019999999552965164,
+      "y_true": 3.47,
+      "decile": 5,
+      "ticker": "VRTX",
+      "date": "2023-03-24"
+    },
+    {
+      "y_pred": 0.9700000286102295,
+      "y_true": 8.39,
+      "decile": 7,
+      "ticker": "RUSHA",
+      "date": "2023-06-06"
+    },
+    {
+      "y_pred": 5.050000190734863,
+      "y_true": -7.01,
+      "decile": 9,
+      "ticker": "MDGL",
+      "date": "2023-04-18"
+    },
+    {
+      "y_pred": 1.8700000047683716,
+      "y_true": -7.56,
+      "decile": 8,
+      "ticker": "VLY",
+      "date": "2025-01-27"
+    },
+    {
+      "y_pred": -0.7799999713897705,
+      "y_true": -3.54,
+      "decile": 4,
+      "ticker": "PGR",
+      "date": "2022-04-07"
+    },
+    {
+      "y_pred": 2.2799999713897705,
+      "y_true": 1.49,
+      "decile": 8,
+      "ticker": "GCMG",
+      "date": "2025-01-03"
+    },
+    {
+      "y_pred": -1.159999966621399,
+      "y_true": -4.31,
+      "decile": 3,
+      "ticker": "CDTX",
+      "date": "2025-09-24"
+    },
+    {
+      "y_pred": 0.25,
+      "y_true": -2.57,
+      "decile": 6,
+      "ticker": "COF",
+      "date": "2021-08-06"
+    },
+    {
+      "y_pred": -2.3499999046325684,
+      "y_true": -5.65,
+      "decile": 2,
+      "ticker": "ZBH",
+      "date": "2023-04-19"
+    },
+    {
+      "y_pred": 6.289999961853027,
+      "y_true": -8.36,
+      "decile": 9,
+      "ticker": "UPBD",
+      "date": "2021-05-27"
+    },
+    {
+      "y_pred": -1.6699999570846558,
+      "y_true": -5.64,
+      "decile": 3,
+      "ticker": "JBHT",
+      "date": "2022-01-04"
+    },
+    {
+      "y_pred": 1.5099999904632568,
+      "y_true": -4.71,
+      "decile": 7,
+      "ticker": "ACM",
+      "date": "2021-11-08"
+    },
+    {
+      "y_pred": 0.4699999988079071,
+      "y_true": -7.38,
+      "decile": 6,
+      "ticker": "MWA",
+      "date": "2021-11-02"
+    },
+    {
+      "y_pred": 3.4800000190734863,
+      "y_true": -6.39,
+      "decile": 9,
+      "ticker": "STAA",
+      "date": "2025-11-21"
+    },
+    {
+      "y_pred": 3.25,
+      "y_true": 2.11,
+      "decile": 8,
+      "ticker": "PSMT",
+      "date": "2024-02-22"
+    },
+    {
+      "y_pred": 0.46000000834465027,
+      "y_true": -7.02,
+      "decile": 6,
+      "ticker": "BAH",
+      "date": "2021-01-08"
+    },
+    {
+      "y_pred": 0.009999999776482582,
+      "y_true": 49.56,
+      "decile": 5,
+      "ticker": "TLN",
+      "date": "2025-06-03"
+    },
+    {
+      "y_pred": 8.460000038146973,
+      "y_true": -7.04,
+      "decile": 10,
+      "ticker": "GOLF",
+      "date": "2021-05-06"
+    },
+    {
+      "y_pred": 1.1799999475479126,
+      "y_true": -6.2,
+      "decile": 7,
+      "ticker": "WD",
+      "date": "2024-05-14"
+    },
+    {
+      "y_pred": 1.9299999475479126,
+      "y_true": -1.91,
+      "decile": 8,
+      "ticker": "MDT",
+      "date": "2025-11-25"
+    },
+    {
+      "y_pred": 3.5299999713897705,
+      "y_true": -10.26,
+      "decile": 9,
+      "ticker": "DVN",
+      "date": "2025-12-10"
+    },
+    {
+      "y_pred": 0.47999998927116394,
+      "y_true": -5.74,
+      "decile": 6,
+      "ticker": "ARES",
+      "date": "2023-10-06"
+    },
+    {
+      "y_pred": 0.8899999856948853,
+      "y_true": -4.35,
+      "decile": 6,
+      "ticker": "BDC",
+      "date": "2023-01-12"
+    },
+    {
+      "y_pred": -0.20000000298023224,
+      "y_true": -1.24,
+      "decile": 5,
+      "ticker": "KBR",
+      "date": "2023-04-11"
+    },
+    {
+      "y_pred": 3.130000114440918,
+      "y_true": -6.87,
+      "decile": 8,
+      "ticker": "JEF",
+      "date": "2021-01-04"
+    },
+    {
+      "y_pred": 0.6700000166893005,
+      "y_true": -3.5,
+      "decile": 6,
+      "ticker": "JPM",
+      "date": "2023-02-07"
+    },
+    {
+      "y_pred": -0.4300000071525574,
+      "y_true": 5.96,
+      "decile": 5,
+      "ticker": "CUBI",
+      "date": "2025-07-01"
+    },
+    {
+      "y_pred": -0.5799999833106995,
+      "y_true": -4.97,
+      "decile": 4,
+      "ticker": "CSCO",
+      "date": "2025-02-13"
+    },
+    {
+      "y_pred": 3.2699999809265137,
+      "y_true": -8.49,
+      "decile": 8,
+      "ticker": "AGX",
+      "date": "2024-08-30"
+    },
+    {
+      "y_pred": -0.7699999809265137,
+      "y_true": -2.13,
+      "decile": 4,
+      "ticker": "ESE",
+      "date": "2023-12-14"
+    },
+    {
+      "y_pred": -2.2799999713897705,
+      "y_true": 1.57,
+      "decile": 2,
+      "ticker": "BRO",
+      "date": "2025-02-13"
+    },
+    {
+      "y_pred": 1.2999999523162842,
+      "y_true": -4.13,
+      "decile": 7,
+      "ticker": "HESM",
+      "date": "2021-09-16"
+    },
+    {
+      "y_pred": 0.949999988079071,
+      "y_true": -0.18,
+      "decile": 7,
+      "ticker": "CLH",
+      "date": "2024-03-05"
+    },
+    {
+      "y_pred": -3.4600000381469727,
+      "y_true": -12.52,
+      "decile": 1,
+      "ticker": "SEZL",
+      "date": "2024-06-06"
+    },
+    {
+      "y_pred": -0.14000000059604645,
+      "y_true": -6.6,
+      "decile": 5,
+      "ticker": "BIO",
+      "date": "2021-02-09"
+    },
+    {
+      "y_pred": -1.7200000286102295,
+      "y_true": -3.39,
+      "decile": 3,
+      "ticker": "SWKS",
+      "date": "2021-04-01"
+    },
+    {
+      "y_pred": 2.7699999809265137,
+      "y_true": 9.24,
+      "decile": 8,
+      "ticker": "EXE",
+      "date": "2022-02-25"
+    },
+    {
+      "y_pred": 0.17000000178813934,
+      "y_true": -4.44,
+      "decile": 6,
+      "ticker": "IDA",
+      "date": "2025-04-03"
+    },
+    {
+      "y_pred": -2.9100000858306885,
+      "y_true": -2.43,
+      "decile": 2,
+      "ticker": "CLX",
+      "date": "2023-08-03"
+    },
+    {
+      "y_pred": 2.640000104904175,
+      "y_true": -7.7,
+      "decile": 8,
+      "ticker": "POWL",
+      "date": "2023-12-04"
+    },
+    {
+      "y_pred": -1.7400000095367432,
+      "y_true": -4.53,
+      "decile": 3,
+      "ticker": "BIPC",
+      "date": "2025-01-24"
+    }
+  ],
+  "error_analysis": {
+    "FOMO": {
+      "count": 726,
+      "avg_missed_return": 13.871689616538141
+    },
+    "Toxic": {
+      "count": 1174,
+      "avg_loss": -11.017292627298065
+    },
+    "True_Positive": {
+      "count": 1055,
+      "avg_return": 20.565613149394334
+    },
+    "True_Negative": {
+      "count": 930,
+      "avg_return": -10.236912479244966
+    }
+  }
 }
