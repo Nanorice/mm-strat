@@ -20,7 +20,14 @@
       "Bash(.venvScriptspython.exe test_delta_features.py)",
       "Bash(C:/Users/Hang/PycharmProjects/quantamental/.venv/Scripts/Activate.ps1)",
       "Bash(jupyter nbconvert:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(sqlite3:*)",
+      "Bash(.venvScriptspython.exe check_fang_data.py)",
+      "Bash(cd:*)",
+      "Bash(.venvScriptspython.exe model_runner.py m03 --help)",
+      "Bash(.venv/Scripts/python:*)"
     ],
     "deny": [],
     "ask": [],

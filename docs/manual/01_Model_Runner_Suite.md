@@ -253,7 +253,7 @@ Fold 3: Train [2020-2022] → Test [2023]
 - Edge > 5% = strong signal
 - Edge < 2% = weak/marginal signal
 
-### Survivor Model (M01)
+### Survivor Model (M01) [Isn't this deprecated?]
 
 **Purpose:** Train only on trades that didn't hit structural stop-loss
 

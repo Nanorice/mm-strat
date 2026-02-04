@@ -80,10 +80,7 @@ class DataPipeline:
         
         # Initialize components
         data_repo = DataRepository()
-        benchmark_data = data_repo.get_benchmark_data(
-            mode=CacheMode.HISTORICAL,
-            date_range=(start_date, outcome_end)
-        )
+        benchmark_data = data_repo.get_benchmark_data(mode=CacheMode.CACHE_ONLY)
         
         if benchmark_data is None:
             raise RuntimeError("Failed to load benchmark (SPY) data.")
@@ -123,19 +120,23 @@ class DataPipeline:
     # STEP 2: FEATURES (Generate D2 - Feature Enrichment)
     # =========================================================================
     def features(
-        self, 
-        d1: pd.DataFrame, 
+        self,
+        d1: pd.DataFrame,
         n_jobs: int = -1,
-        save: bool = True
+        save: bool = True,
+        include_m03: bool = True,
+        apply_preprocessing: bool = True,
     ) -> pd.DataFrame:
         """
         Enrich D1 trades with ML features at entry date (D2).
-        
+
         Args:
             d1: DataFrame from scan() step
             n_jobs: Parallel workers (-1 = all CPUs)
             save: Save result to d2.parquet (default: True)
-            
+            include_m03: Add M03 regime features (default: True)
+            apply_preprocessing: Apply FeaturePreprocessor to generate log_* features (default: True)
+
         Returns:
             DataFrame with trade info + features
         """
@@ -246,14 +247,70 @@ class DataPipeline:
         d1_keys = d1[['date', 'ticker', 'label', 'return_pct', 'days_held', 'exit_reason']]
         merged = pd.merge(d1_keys, d2, on=['date', 'ticker'], how='inner')
         
+        # Phase 4: Add M03 regime features
+        if include_m03:
+            from src.pipeline.m03_regime import M03RegimeCalculator, verify_m03_features
+            
+            logger.info("   Phase 4: Adding M03 regime features...")
+            
+            m03_path = Path('models/m03_history.parquet')
+            if m03_path.exists():
+                try:
+                    # Generate normalized features
+                    calc = M03RegimeCalculator()
+                    date_min = merged['date'].min().strftime('%Y-%m-%d')
+                    date_max = merged['date'].max().strftime('%Y-%m-%d')
+                    
+                    m03_features = calc.generate_m01_features(
+                        start_date=date_min,
+                        end_date=date_max,
+                    )
+                    
+                    # Merge by date
+                    m03_features = m03_features.reset_index()
+                    m03_features['date'] = pd.to_datetime(m03_features['date'])
+                    merged = pd.merge(merged, m03_features, on='date', how='left')
+                    
+                    # Verify and report
+                    verification = verify_m03_features(merged, raise_on_error=False)
+                    n_m03_cols = len(M03RegimeCalculator.M01_FEATURE_COLUMNS)
+                    
+                    if verification['nulls']['total'] > 0:
+                        null_pct = verification['nulls']['total'] / len(merged) / n_m03_cols * 100
+                        logger.warning(f"   M03 features have {null_pct:.1f}% NaN (likely pre-2003 trades)")
+                    
+                    logger.info(f"   Added {n_m03_cols} M03 features")
+                except Exception as e:
+                    logger.warning(f"   Failed to add M03 features: {e}")
+            else:
+                logger.warning(f"   M03 history not found at {m03_path}, skipping")
+
+        # Phase 5: Apply feature preprocessing (log transforms, winsorization)
+        if apply_preprocessing:
+            preprocessing_path = Path('models/preprocessing_config.json')
+            if preprocessing_path.exists():
+                try:
+                    from src.feature_preprocessor import FeaturePreprocessor
+
+                    logger.info("   Phase 5: Applying feature preprocessing...")
+                    preprocessor = FeaturePreprocessor.load(str(preprocessing_path))
+                    n_cols_before = len(merged.columns)
+                    merged = preprocessor.transform(merged)
+                    n_new_cols = len(merged.columns) - n_cols_before
+                    logger.info(f"   Applied preprocessing: added {n_new_cols} log_* features")
+                except Exception as e:
+                    logger.warning(f"   Failed to apply preprocessing: {e}")
+            else:
+                logger.warning(f"   Preprocessing config not found at {preprocessing_path}, skipping")
+
         elapsed = time.time() - start_time
         logger.info(f"   Final: {len(merged)} rows, {len(merged.columns)} columns in {elapsed:.1f}s")
-        
+
         if save:
             path = self.output_dir / 'd2.parquet'
             merged.to_parquet(path, index=False)
             logger.info(f"   Saved to {path}")
-        
+
         return merged
     
     # =========================================================================
@@ -334,11 +391,13 @@ class DataPipeline:
         max_time: int = 30,
         n_jobs: int = -1,
         save: bool = True,
-        horizon_days: int = 120
+        horizon_days: Optional[int] = None,
+        include_m03: bool = True,
+        apply_preprocessing: bool = True
     ) -> pd.DataFrame:
         """
         Apply triple barrier labels to rehydrated data (D3).
-        
+
         Args:
             d2r: DataFrame from hydrate() step
             k_sl: Stop loss ATR multiplier (default: 1.0)
@@ -347,8 +406,10 @@ class DataPipeline:
             max_time: Maximum time barrier in days (default: 30)
             n_jobs: Parallel workers (-1 = all CPUs)
             save: Save result to d3_*.parquet (default: True)
-            horizon_days: Horizon used for file naming (default: 120)
-            
+            horizon_days: Horizon used for file naming (None = 120d default)
+            include_m03: Add M03 regime features (default: True)
+            apply_preprocessing: Apply FeaturePreprocessor to generate log_* features (default: True)
+
         Returns:
             DataFrame with y_meta labels (1 = TP hit, 0 = SL/Time hit)
         """
@@ -357,11 +418,14 @@ class DataPipeline:
             HybridBarrierParams,
             compute_expectancy
         )
-        
+
+        # Default horizon for file naming
+        effective_horizon = horizon_days if horizon_days is not None else 120
+
         logger.info(f"Step 4: LABEL - Applying triple barriers")
         logger.info(f"   Params: k_sl={k_sl}, k_tp={k_tp}, min_tp={min_tp:.0%}, max_time={max_time}")
         start_time = time.time()
-        
+
         params = HybridBarrierParams(
             k_sl=k_sl,
             k_tp=k_tp,
@@ -369,7 +433,7 @@ class DataPipeline:
             max_time=max_time,
             min_time=20
         )
-        
+
         d3 = TripleBarrierLabeler.label_dataset(
             d2_rehydrated=d2r,
             params=params,
@@ -377,32 +441,95 @@ class DataPipeline:
             n_jobs=n_jobs,
             use_vectorized=True
         )
-        
+
+        # Add M03 regime features
+        if include_m03:
+            from src.pipeline.m03_regime import M03RegimeCalculator, verify_m03_features
+
+            m03_path = Path('models/m03_history.parquet')
+            if m03_path.exists():
+                try:
+                    calc = M03RegimeCalculator()
+
+                    # D3 may have 'Date' (from D2R) instead of 'date'
+                    date_col = 'date' if 'date' in d3.columns else 'Date'
+                    date_min = d3[date_col].min()
+                    date_max = d3[date_col].max()
+
+                    # Handle both datetime and string formats
+                    if hasattr(date_min, 'strftime'):
+                        date_min = date_min.strftime('%Y-%m-%d')
+                        date_max = date_max.strftime('%Y-%m-%d')
+
+                    m03_features = calc.generate_m01_features(
+                        start_date=date_min,
+                        end_date=date_max,
+                    )
+
+                    # Merge by date - align column names
+                    m03_features = m03_features.reset_index()
+                    m03_features['date'] = pd.to_datetime(m03_features['date'])
+
+                    # Create merge key in d3 if needed
+                    if date_col == 'Date':
+                        d3['_merge_date'] = pd.to_datetime(d3['Date'])
+                        m03_features = m03_features.rename(columns={'date': '_merge_date'})
+                        d3 = pd.merge(d3, m03_features, on='_merge_date', how='left')
+                        d3 = d3.drop(columns=['_merge_date'])
+                    else:
+                        d3['date'] = pd.to_datetime(d3['date'])
+                        d3 = pd.merge(d3, m03_features, on='date', how='left')
+
+                    n_m03_cols = len(M03RegimeCalculator.M01_FEATURE_COLUMNS)
+                    logger.info(f"   Added {n_m03_cols} M03 features to D3")
+                except Exception as e:
+                    logger.warning(f"   Failed to add M03 features: {e}")
+            else:
+                logger.warning(f"   M03 history not found at {m03_path}, skipping")
+
+        # Apply feature preprocessing (log transforms, winsorization)
+        if apply_preprocessing:
+            preprocessing_path = Path('models/preprocessing_config.json')
+            if preprocessing_path.exists():
+                try:
+                    from src.feature_preprocessor import FeaturePreprocessor
+
+                    preprocessor = FeaturePreprocessor.load(str(preprocessing_path))
+                    n_cols_before = len(d3.columns)
+                    d3 = preprocessor.transform(d3)
+                    n_new_cols = len(d3.columns) - n_cols_before
+                    logger.info(f"   Applied preprocessing: added {n_new_cols} log_* features")
+                except Exception as e:
+                    logger.warning(f"   Failed to apply preprocessing: {e}")
+            else:
+                logger.warning(f"   Preprocessing config not found at {preprocessing_path}, skipping")
+
         # Calculate metrics
         metrics = compute_expectancy(d3)
         tp_rate = (d3['y_meta'] == 1).mean()
-        
+
         elapsed = time.time() - start_time
         logger.info(f"   Labeled {len(d3):,} trades in {elapsed:.1f}s")
         logger.info(f"   TP rate: {tp_rate:.1%}, Expectancy: {metrics['expectancy']:.2%}")
-        
+
         if save:
-            path = self.output_dir / f'd3_{horizon_days}d.parquet'
+            path = self.output_dir / f'd3_{effective_horizon}d.parquet'
             d3.to_parquet(path, index=False)
             logger.info(f"   Saved to {path}")
-            
-            # Also save D3 summary JSON for dashboard
-            self._save_d3_summary(d3, horizon_days)
-        
+
+            # Also save D3 summary JSON for dashboard (includes barrier params)
+            barrier_params = {'k_sl': k_sl, 'k_tp': k_tp, 'min_tp': min_tp, 'max_time': max_time}
+            self._save_d3_summary(d3, effective_horizon, barrier_params)
+
         return d3
     
-    def _save_d3_summary(self, d3: pd.DataFrame, horizon_days: int):
+    def _save_d3_summary(self, d3: pd.DataFrame, horizon_days: int, barrier_params: dict = None):
         """Save D3 summary JSON for fast dashboard loading."""
         import json
-        
+
         # Calculate barrier outcome rates
         n_total = len(d3)
-        
+
         if 'barrier_outcome' in d3.columns:
             outcome_counts = d3['barrier_outcome'].value_counts()
             tp_rate = outcome_counts.get('TP', 0) / n_total * 100
@@ -413,7 +540,7 @@ class DataPipeline:
             tp_rate = (d3['y_meta'] == 1).mean() * 100
             sl_rate = (d3['y_meta'] == 0).mean() * 100
             time_rate = 0
-        
+
         summary = {
             'generated_at': pd.Timestamp.now().isoformat(),
             'horizon_days': horizon_days,
@@ -423,11 +550,15 @@ class DataPipeline:
             'time_rate': float(time_rate),
             'expectancy': float((d3['return_at_outcome'].mean() if 'return_at_outcome' in d3.columns else 0))
         }
-        
+
+        # Include barrier params if provided
+        if barrier_params:
+            summary['barrier_params'] = barrier_params
+
         path = self.output_dir / 'd3_summary.json'
         with open(path, 'w') as f:
             json.dump(summary, f, indent=2)
-        
+
         logger.info(f"   Saved D3 summary to {path}")
     
     # =========================================================================
@@ -520,9 +651,15 @@ class DataPipeline:
             raise FileNotFoundError(f"D2R not found: {path}")
         return pd.read_parquet(path)
     
-    def load_d3(self, horizon_days: int = 120) -> pd.DataFrame:
-        """Load existing D3 data."""
-        path = self.output_dir / f'd3_{horizon_days}d.parquet'
+    def load_d3(self, horizon_days: Optional[int] = None) -> pd.DataFrame:
+        """Load existing D3 data.
+        
+        Args:
+            horizon_days: Horizon in days. If None, uses SEPA default (120d).
+        """
+        # Default to 120d (SEPA standard) when horizon not specified
+        effective_horizon = horizon_days if horizon_days is not None else 120
+        path = self.output_dir / f'd3_{effective_horizon}d.parquet'
         if not path.exists():
             raise FileNotFoundError(f"D3 not found: {path}")
         return pd.read_parquet(path)

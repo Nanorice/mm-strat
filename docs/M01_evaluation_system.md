@@ -45,8 +45,20 @@ We will systematically generate and evaluate the following four target definitio
     * *Hypothesis:* Normalizes the target to "R-multiples." This penalizes high-volatility stocks that move fast but don't effectively cover their risk, preventing the model from becoming a "volatility detector."
 
 * **Option D: Log-Space (Tail Smoothing)**
-    * *Definition:* `y = log(1 + MFE)`
+    * *Definition:* `y = sign(MFE) × log(1 + |MFE|)`
     * *Hypothesis:* Compresses massive outliers (e.g., +200% runners) so they don't dominate the loss function, while still preserving their rank order against mediocre trades.
+
+* **Option E: Log-Hybrid (The Golden Target)**
+    * *Definition:*
+        * If Winner (no stop triggered): `x = MFE`
+        * If Loser (stop triggered): `x = Realized Loss` (actual loss at stop trigger)
+        * Final: `y = sign(x) × ln(1 + |x|)`
+    * *Stop Loss Triggers (first one triggered ends trade):*
+        1. **Structural Trigger (Hard Stop at -10%):** Close < Entry × 0.90
+           - Loss = Close return (Close-only reduces intraday noise)
+        2. **Technical Trigger (Trend Break with Buffer):** Close < (SMA_50 - 1.0 × ATR)
+           - Loss = Close return at trigger day (ATR buffer prevents whipsaws)
+    * *Hypothesis:* Combines loser accountability (Option B) with log compression (Option D). Close-only triggers reduce noise from intraday wicks.
 
 ### B. The Scorecard Infra (The Evaluator)
 We will build a `ModelEvaluator` class that generates a "Scorecard" for every model run. This scorecard prioritizes **Ranking Quality** over Point Accuracy.
@@ -78,3 +90,38 @@ A common failure mode for "Upside Predictors" is that they simply learn to ident
 
 ### 3. Data Integrity
 Filtering out losers (Option A) is theoretically unsound for a ranking model. The model must learn what a "bad trade" looks like to effectively down-rank it. Options B and D reintroduce the losers into the dataset with specific transformations to handle their negative signal appropriately.
+
+---
+
+## 4. Ablation Study Results (2026-01-28)
+
+| Model | Target | IC | Edge Sharpe | Status |
+|-------|--------|-----|-------------|--------|
+| M01_A | return_pct | 0.131 | 3.69 | Baseline |
+| M01_B | hybrid_floor | 0.062 | 2.81 | ❌ Low IC |
+| M01_C | risk_adjusted | 0.160 | 2.78 | ❌ Low consistency |
+| **M01_D** | **log_space** | **0.338** | **5.48** | ✅ **Winner** |
+| M01_E | log_hybrid | 0.158 | 1.49 | ❌ Stop logic adds noise |
+
+### Decision: M01_D (log_space) for Production 🏆
+
+**Formula:** `y = sign(MFE) × log(1 + |MFE|)`
+
+**Rationale:**
+- Highest IC (0.338) = best ranking quality
+- Highest Edge Sharpe (5.48) = most consistent across folds
+- Simple, interpretable, no complex stop-loss logic needed
+
+---
+
+## 5. Next Steps
+
+### Phase 2: Production Integration (Current)
+1. [ ] Update M01 trainer default target to `log_space`
+2. [ ] Calibrate predictions via isotonic regression
+3. [ ] Run volatility detector test (ATR correlation)
+4. [ ] Generate calibration curves
+
+### Phase 3: M02 Integration (Future)
+1. [ ] Connect M01 ranking to M02 probability filtering
+2. [ ] Implement combined score: `final_score = rank(M01) × P(success|M02)`

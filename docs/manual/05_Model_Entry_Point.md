@@ -4,11 +4,13 @@ type: reference
 layer: model_runner
 status: stable
 created: 2026-01-27
+updated: 2026-01-29
 tags:
   - cli
   - usage
   - commands
   - model-runner
+  - workflow
 dependencies:
   - "[[02_Data_Pipeline]]"
   - "[[03_M01_Trainer]]"
@@ -30,18 +32,20 @@ Command-line interface for running model training workflows. Provides end-to-end
 - Model training (M01, M02)
 - Hyperparameter tuning
 - Report generation
+- **Automated workflow** with EDA screening and feature selection
 
 ---
 
 ## Usage Pattern
 
 ```bash
-python model_runner.py <model> [options]
+python model_runner.py <command> [options]
 ```
 
-**Models:**
+**Commands:**
 - `m01` - Return predictor (regression)
-- `m02` - Ignition classifier (classification)
+- `m02` - Loser detector (classification)
+- `workflow` - Automated M01 pipeline with EDA + feature selection
 
 ---
 
@@ -160,6 +164,59 @@ python model_runner.py m02 --steps label train \
     --max-time 20 \
     --report
 ```
+
+---
+
+## Workflow Command (NEW)
+
+Automated M01 pipeline that handles EDA screening, feature selection, training, and reporting.
+
+### Full Workflow
+
+```bash
+python model_runner.py workflow --start 2018-01-01 --end 2023-12-31
+```
+
+**What It Does:**
+1. Load D2 dataset (or generate if missing)
+2. Run EDA screening on `M01_CANDIDATE_FEATURES`
+3. Auto-select features passing KS threshold
+4. Train M01 with selected features
+5. Generate report
+
+---
+
+### Workflow Steps
+
+Control which steps to execute:
+
+```bash
+# EDA only (test new features without training)
+python model_runner.py workflow --steps load eda select --ks-threshold 0.10
+
+# Full workflow with tuning
+python model_runner.py workflow --tune
+
+# Skip auto-selection (use existing M01_FEATURES)
+python model_runner.py workflow --no-auto-select
+```
+
+---
+
+### Workflow-Specific Options
+
+```bash
+--ks-threshold FLOAT     # KS test threshold for feature screening (default: 0.15)
+--no-auto-select         # Skip feature auto-selection, use M01_FEATURES
+--steps STEPS            # Which steps to run: load, eda, select, train, report
+```
+
+**KS Threshold Guidelines:**
+| Threshold | Strictness | Description |
+|-----------|------------|-------------|
+| 0.15 | Industry standard | Conservative, only top features |
+| **0.10** | Recommended | Balance of coverage and quality |
+| 0.05 | Permissive | Exploratory analysis |
 
 ---
 
@@ -426,7 +483,34 @@ python model_runner.py m02 --steps scan hydrate --horizon 0
 | Custom barriers | `python model_runner.py m02 --k-tp 5.0 --report` |
 | Data generation only | `python model_runner.py m01 --steps scan features` |
 | Training only | `python model_runner.py m01 --steps train --report` |
+| **Full workflow** | `python model_runner.py workflow --report` |
+| **EDA screening only** | `python model_runner.py workflow --steps load eda select` |
+| **Workflow with tuning** | `python model_runner.py workflow --tune` |
 
 ---
 
-*Last updated: 2026-01-27*
+## Daily Scanner with ML
+
+The daily scanner integrates both M01 and M02 for production scoring.
+
+```bash
+# Run with M02 Loser Detector
+python daily_scanner.py --use-ml
+```
+
+**Output Columns:**
+| Column | Description |
+|--------|-------------|
+| `final_score` | Combined M01 × M02 survival |
+| `m02_loser_proba` | P(stop-loss hit) |
+| `m02_survival` | 1 - P(loser) |
+| `final_score_rank` | Rank by final_score (1=best) |
+
+**Sorting Options in Dashboard:**
+1. Final Score (M01 × Survival) - recommended
+2. M01 Rank (Expected Return)
+3. M02 Survival (1 - Loser Prob)
+
+---
+
+*Last updated: 2026-01-29*

@@ -81,6 +81,37 @@ def load_d3_summary():
     return None
 
 
+@st.cache_data(ttl=60)
+def discover_model_versions(model_prefix: str = 'm01') -> list:
+    """
+    Discover available model versions by scanning for config files.
+    
+    Looks for files matching pattern: {model_prefix}*_config.json
+    Returns list of model names (e.g., ['m01', 'm01_v2', 'm01_bench'])
+    """
+    pattern = f'models/{model_prefix}*_config.json'
+    files = glob.glob(pattern)
+    
+    versions = []
+    for f in files:
+        # Extract model name from path (e.g., 'models/m01_v2_config.json' -> 'm01_v2')
+        filename = Path(f).stem  # 'm01_v2_config'
+        if filename.endswith('_config'):
+            model_name = filename[:-7]  # Remove '_config' suffix
+            # Verify it has validation metrics (is a trained model)
+            try:
+                with open(f, 'r') as fp:
+                    config = json.load(fp)
+                    if 'validation_metrics' in config or 'feature_columns' in config:
+                        versions.append(model_name)
+            except:
+                pass
+    
+    # Sort with base model first
+    versions.sort(key=lambda x: (x != model_prefix, x))
+    return versions
+
+
 # =============================================================================
 # PAGE 1: D1 ANALYSIS (Load pre-generated stats)
 # =============================================================================
@@ -205,28 +236,47 @@ def render_m01_report():
     st.title("📈 M01 Report: Return Regressor")
     st.markdown("Walk-forward validation results and feature importance.")
 
-    # Load from pre-generated config
-    config = load_model_config('m01')
-    importance_df = load_feature_importance('m01')
-
-    if config is None:
-        st.warning("M01 model not trained yet.")
+    # Model version selector
+    available_versions = discover_model_versions('m01')
+    
+    if not available_versions:
+        st.warning("No M01 models trained yet.")
         st.markdown("""
         **To train and generate report:**
         ```bash
-        python model.py m01 --steps train --report
+        python model_runner.py m01 --steps train --report
         ```
         """)
+        return
+    
+    # Format display names (e.g., 'm01' -> 'M01', 'm01_v2' -> 'M01_V2')
+    display_names = {v: v.upper() for v in available_versions}
+    
+    selected_model = st.selectbox(
+        "Select Model Version",
+        options=available_versions,
+        format_func=lambda x: display_names[x],
+        help="Compare different model versions trained with different feature sets"
+    )
+
+    # Load from pre-generated config
+    config = load_model_config(selected_model)
+    importance_df = load_feature_importance(selected_model)
+
+    if config is None:
+        st.warning(f"{selected_model.upper()} model config not found.")
         return
 
     # Model metadata
     st.markdown("### Model Information")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Model Type", config.get('model_type', 'N/A').upper())
+        st.metric("Model", config.get('model_name', selected_model).upper())
     with col2:
-        st.metric("Features", len(config.get('feature_columns', [])))
+        st.metric("Model Type", config.get('model_type', 'N/A').upper())
     with col3:
+        st.metric("Features", len(config.get('feature_columns', [])))
+    with col4:
         created = config.get('created_at', 'N/A')[:10] if config.get('created_at') else 'N/A'
         st.metric("Created", created)
 

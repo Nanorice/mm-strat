@@ -65,6 +65,9 @@ training_output.txt
 commit_message*.txt
 nul
 
+# archive
+archive/
+
 # Test coverage
 htmlcov/
 .coverage

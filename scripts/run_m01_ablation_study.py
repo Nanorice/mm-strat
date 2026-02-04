@@ -3,11 +3,12 @@
 M01 Ablation Study: Compare Target Definitions
 ===============================================
 
-Trains 4 M01 models with different target definitions and compares results:
+Trains 5 M01 models with different target definitions and compares results:
 - M01_A: Baseline survivor MFE (return_pct)
 - M01_B: Hybrid floor (capped loser penalty)
 - M01_C: Risk-adjusted (MFE / ATR)
 - M01_D: Log-space (tail smoothing)
+- M01_E: Log-hybrid (The Golden Target - loser accountability + log compression)
 
 Usage:
     python scripts/run_m01_ablation_study.py --start 2020-01-01 --end 2023-12-31
@@ -17,6 +18,7 @@ Output:
     - models/model_report_M01_B_*.md
     - models/model_report_M01_C_*.md
     - models/model_report_M01_D_*.md
+    - models/model_report_M01_E_*.md
     - Comparison table printed to console
 """
 
@@ -25,6 +27,7 @@ import logging
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # Add project root to path
@@ -72,7 +75,7 @@ def load_data(start_date: str, end_date: str):
 
 def run_ablation_study(start_date: str, end_date: str, skip_training: bool = False):
     """
-    Run ablation study comparing 4 target definitions.
+    Run ablation study comparing 5 target definitions.
     
     Args:
         start_date: Training start date
@@ -116,6 +119,12 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
                 'type': 'log_space',
                 'desc': 'Log-Space (tail smoothing)',
                 'survivor_model': False
+            },
+            {
+                'name': 'M01_E',
+                'type': 'log_hybrid',
+                'desc': 'Log-Hybrid (The Golden Target)',
+                'survivor_model': False
             }
         ])
     
@@ -155,25 +164,78 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
                 target='target' if 'target' in d2_with_target.columns else 'return_pct',
                 survivor_model=config['survivor_model']
             )
-            
+
+            # Check if training produced results
+            if model is None or metrics_df.empty:
+                logger.warning(f"No model trained for {config['name']} - insufficient data for walk-forward validation")
+                logger.warning(f"   Tip: Need at least 4 years of data (3yr train + 1yr test)")
+                continue
+
             # Generate report
             report_path = trainer.generate_report(model, metrics_df, start_date, end_date)
-            
-            # Extract scorecard metrics
-            avg_edge = metrics_df['selection_edge'].mean()
-            edge_std = metrics_df['selection_edge'].std()
-            edge_sharpe = avg_edge / edge_std if edge_std > 0 else 0
-            
+
+            # =====================================================================
+            # CRITICAL FIX: Evaluate against RETURN_PCT, not the transformed target
+            # =====================================================================
+            # The metrics_df from trainer evaluates against the transformed target.
+            # For a fair comparison, re-evaluate predictions against return_pct.
+            # This measures which training target produces the best RANKING for
+            # actual trading outcomes.
+            from scipy.stats import spearmanr
+            from src.evaluation import analyze_deciles
+
+            all_preds = trainer._all_predictions if hasattr(trainer, '_all_predictions') else pd.DataFrame()
+
+            # The predictions DataFrame already contains return_pct from original data
+            if not all_preds.empty and 'return_pct' in all_preds.columns and 'y_pred' in all_preds.columns:
+                valid_mask = all_preds['return_pct'].notna() & all_preds['y_pred'].notna()
+                y_pred = all_preds.loc[valid_mask, 'y_pred'].values
+                y_true_return = all_preds.loc[valid_mask, 'return_pct'].values
+
+                # Calculate IC against return_pct
+                ic, _ = spearmanr(y_pred, y_true_return)
+
+                # Calculate selection_edge against return_pct
+                decile_result = analyze_deciles(y_true_return, y_pred)
+                selection_edge = decile_result['selection_edge']
+
+                # Calculate per-fold metrics for edge_sharpe
+                fold_edges = []
+                for fold_id in all_preds.loc[valid_mask, 'fold'].unique():
+                    fold_mask = valid_mask & (all_preds['fold'] == fold_id)
+                    if fold_mask.sum() >= 10:
+                        fold_preds = all_preds.loc[fold_mask, 'y_pred'].values
+                        fold_returns = all_preds.loc[fold_mask, 'return_pct'].values
+                        fold_decile = analyze_deciles(fold_returns, fold_preds)
+                        fold_edges.append(fold_decile['selection_edge'])
+
+                if len(fold_edges) > 1:
+                    edge_sharpe = np.mean(fold_edges) / np.std(fold_edges) if np.std(fold_edges) > 0 else 0
+                    avg_edge = np.mean(fold_edges)
+                else:
+                    edge_sharpe = 0
+                    avg_edge = selection_edge
+
+                avg_ic = ic
+                logger.info(f"   Re-evaluated against return_pct: IC={avg_ic:.3f}, Edge={avg_edge:.2f}%")
+            else:
+                # Fall back to trainer metrics
+                avg_edge = metrics_df['selection_edge'].mean()
+                edge_std = metrics_df['selection_edge'].std()
+                edge_sharpe = avg_edge / edge_std if edge_std > 0 else 0
+                avg_ic = metrics_df['ic'].mean() if 'ic' in metrics_df.columns else 0
+
             results.append({
                 'model': config['name'],
                 'target_type': config['type'],
+                'avg_ic': avg_ic,
                 'avg_edge': avg_edge,
                 'edge_sharpe': edge_sharpe,
                 'avg_rmse': metrics_df['rmse'].mean(),
                 'report_path': report_path
             })
             
-            logger.info(f"Completed {config['name']}: Edge={avg_edge:+.2f}%, Sharpe={edge_sharpe:.2f}")
+            logger.info(f"Completed {config['name']}: IC={avg_ic:.3f} Edge={avg_edge:+.2f}%")
             
         except Exception as e:
             logger.error(f"Failed to train {config['name']}: {e}")
@@ -191,7 +253,7 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
         
         # Winner selection based on edge_sharpe
         winner = comparison_df.loc[comparison_df['edge_sharpe'].idxmax()]
-        print(f"\n🏆 RECOMMENDED TARGET: {winner['model']}")
+        print(f"\n[WINNER] RECOMMENDED TARGET: {winner['model']}")
         print(f"   Target Type: {winner['target_type']}")
         print(f"   Selection Edge: {winner['avg_edge']:+.2f}%")
         print(f"   Edge Sharpe: {winner['edge_sharpe']:.2f}")

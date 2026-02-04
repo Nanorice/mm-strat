@@ -39,7 +39,90 @@ def get_data_repo():
     return DataRepository()
 
 
-# ==================== PAGE 1: SIGNAL REVIEW ====================
+def render_m03_sidebar_widget():
+    """Render M03 Market Regime widget in sidebar with score, pillars, and gating status."""
+    try:
+        from src.pipeline import M03RegimeCalculator
+        
+        calc = M03RegimeCalculator()
+        result = calc.calculate()
+        gating = calc.should_gate_signal(score=result['score'])
+        
+        score = result['score']
+        category = result['category'].upper().replace('_', ' ')
+        pillars = result['pillars']
+        
+        # Category color mapping
+        category_colors = {
+            'STRONG BULL': '#00C853',  # Green
+            'BULL': '#4CAF50',          # Light green
+            'NEUTRAL': '#FFC107',       # Yellow
+            'BEAR': '#FF5722',          # Orange
+            'STRONG BEAR': '#D32F2F',   # Red
+        }
+        
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📊 M03 Market Regime")
+        
+        # Score gauge with color
+        color = category_colors.get(category, '#9E9E9E')
+        st.sidebar.markdown(
+            f'<div style="text-align:center; padding:10px; background:{color}20; border-radius:10px; border:2px solid {color};">' +
+            f'<span style="font-size:32px; font-weight:bold; color:{color};">{score:.0f}</span>' +
+            f'<span style="font-size:16px; color:#666;"> / 100</span><br>' +
+            f'<span style="font-weight:bold; color:{color};">{category}</span></div>',
+            unsafe_allow_html=True
+        )
+        
+        # Pillar breakdown with collapsible detail
+        with st.sidebar.expander("📈 Pillar Details", expanded=False):
+            # Trend pillar
+            trend = pillars['trend']
+            st.markdown(f"**🔵 Trend** ({int(trend['weight']*100)}%): Score `{trend['score']:.0f}`")
+            if trend.get('spy_close') and trend.get('sma_200'):
+                pct = trend.get('pct_above_sma', 0)
+                arrow = "📈" if pct > 0 else "📉"
+                st.caption(f"   {arrow} SPY ${trend['spy_close']:.0f} vs SMA200 ${trend['sma_200']:.0f} ({pct:+.1f}%)")
+            
+            st.markdown("---")
+            
+            # Liquidity pillar  
+            liq = pillars['liquidity']
+            st.markdown(f"**🟢 Liquidity** ({int(liq['weight']*100)}%): Score `{liq['score']:.0f}`")
+            if liq.get('net_liquidity'):
+                slope = liq.get('slope_pct', 0)
+                arrow = "📈" if slope > 0 else "📉"
+                st.caption(f"   {arrow} Net Liq ${liq['net_liquidity']/1000:.2f}T, Slope {slope*100:.2f}%/day")
+            else:
+                st.caption("   ⚠️ Liquidity data unavailable")
+            
+            st.markdown("---")
+            
+            # Risk appetite pillar
+            risk = pillars['risk_appetite']
+            st.markdown(f"**🔴 Risk Appetite** ({int(risk['weight']*100)}%): Score `{risk['score']:.0f}`")
+            vix = risk.get('vix')
+            hy = risk.get('hy_spread')
+            if vix is not None:
+                vix_emoji = "😌" if vix < 20 else ("😰" if vix < 30 else "🔥")
+                st.caption(f"   {vix_emoji} VIX: {vix:.1f}")
+            if hy is not None:
+                hy_emoji = "✅" if hy < 4.5 else ("⚠️" if hy < 6 else "🚨")
+                st.caption(f"   {hy_emoji} HY Spread: {hy:.2f}%")
+        
+        # Gating status
+        if not gating['allow_longs']:
+            st.sidebar.error("⛔ **Long Signals BLOCKED**")
+        elif gating['reduced_sizing']:
+            st.sidebar.warning("⚠️ **Reduced Position Size**")
+        else:
+            st.sidebar.success("✅ **Full Risk On**")
+        
+    except Exception as e:
+        st.sidebar.warning(f"M03 unavailable: {e}")
+
+
+# ==================== PAGE 1: SIGNAL REVIEW ======================================
 
 def refresh_ml_scores(db: DatabaseManager, data_repo: DataRepository):
     """Refresh ML scores for all tickers in buy_list using latest trading day data."""
@@ -254,23 +337,25 @@ def render_signal_review_page(db: DatabaseManager, data_repo: DataRepository):
             st.rerun()
 
     # Feature Information Panel
-    with st.expander("ℹ️ Dual-Model System (M01 + M01_3BAR_V2)", expanded=False):
+    with st.expander("ℹ️ M01 + M02 Loser Detector System", expanded=False):
         st.markdown("""
         **Two ML models work together to score SEPA setups:**
 
-        ### M01 (Regressor) - 21 features
+        ### M01 (Regressor) - Expected Return
         - **Output:** Expected Return (%)
         - **Alpha Factors:** alpha009, alpha011, alpha013, alpha041, alpha060, alpha101
         - **Technical:** nATR, RS, VCP_Ratio, SMA_50_Slope, Price_vs_SMA_50/200
         - **Fundamental:** operating_margin, eps_growth_yoy, revenue_accel, pe_ratio
 
-        ### M01_3BAR_V2 (Classifier) - 43 features
-        - **Output:** Ignition Probability (0-1), SL/TP prices
-        - **Uses Triple Barrier Labels:** k_sl=1.0, k_tp=4.0, min_tp=20%, max_time=30d
-        - **SL Price:** Close - (1.0 × ATR)
-        - **TP Price:** Close × (1 + MAX(20%, 4.0 × ATR%))
+        ### M02 Loser Detector (Classifier) - Survival Filter
+        - **Output:** P(loser) = probability of hitting stop-loss
+        - **Purpose:** Identify trades likely to fail early
+        - **Survival** = 1 - P(loser) = probability of NOT hitting stop-loss
 
-        **Ranking:** Each model generates independent ranks (lower = better).
+        ### Final Score (Combined)
+        - **Formula:** `Final_Score = M01_Vol_Adj × (1 - P(loser))`
+        - **Interpretation:** Expected return scaled down by loser risk
+        - **Ranking:** Higher final_score = better opportunity (lower rank #)
         """)
 
     # Fetch active buy list
@@ -280,13 +365,13 @@ def render_signal_review_page(db: DatabaseManager, data_repo: DataRepository):
         st.info("No active signals in the buy list.")
         return
 
-    # Prepare display columns - dual-model support
-    # Define all dual-model columns we want to display
+    # Prepare display columns - M02 Loser Detector support
+    # Define all columns we want to display
     display_columns = [
         'ticker', 'signal_date',
-        'm01_expected_return', 'm01_rank',      # M01 outputs
-        'm01_3bar_prob', 'm01_3bar_rank',       # M01_3BAR outputs
-        'm01_3bar_sl_price', 'm01_3bar_tp_price',
+        'final_score', 'final_score_rank',       # Combined M01 × M02 output
+        'm01_expected_return', 'm01_rank',        # M01 outputs
+        'm02_loser_proba', 'm02_survival',        # M02 Loser Detector outputs
         'rs', 'volume_ratio', 'signal_price', 'current_price'
     ]
     
@@ -299,29 +384,61 @@ def render_signal_review_page(db: DatabaseManager, data_repo: DataRepository):
         buy_list_df['signal_price'] * 100
     ).round(2)
 
-    # Sort selector for dual-model ranks
-    sort_options = {'M01 Rank (Expected Return)': 'm01_rank', 'M01_3BAR Rank (Ignition Prob)': 'm01_3bar_rank'}
+    # Sort selector for M02 final_score ranking
+    sort_options = {
+        'Final Score (M01 × Survival)': 'final_score_rank',
+        'M01 Rank (Expected Return)': 'm01_rank',
+        'M02 Survival (1 - Loser Prob)': 'm02_survival'
+    }
     sort_by_label = st.selectbox("📊 Primary Sort By:", options=list(sort_options.keys()), index=0)
     sort_col = sort_options[sort_by_label]
     
-    # Sort by selected rank
+    # Sort by selected rank/score
     if sort_col in buy_list_df.columns:
-        buy_list_df = buy_list_df.sort_values(by=sort_col, ascending=True, na_position='last')
+        # For ranks, ascending (1=best); for scores, descending (higher=better)
+        ascending = 'rank' in sort_col.lower()
+        buy_list_df = buy_list_df.sort_values(by=sort_col, ascending=ascending, na_position='last')
     
     # Prepare display DataFrame with renamed columns
     display_df = buy_list_df[display_columns + ['price_chg_%']].copy()
     
     # Rename columns for clearer display
     col_rename = {
-        'm01_expected_return': 'M01_Exp%',
-        'm01_rank': 'M01_#',
-        'm01_3bar_prob': '3Bar_Prob',
-        'm01_3bar_rank': '3Bar_#',
-        'm01_3bar_sl_price': 'SL_Price',
-        'm01_3bar_tp_price': 'TP_Price',
+        'final_score': 'Final',
+        'final_score_rank': 'F#',
+        'm01_expected_return': 'M01_%',
+        'm01_rank': 'M01#',
+        'm02_loser_proba': 'Loser%',
+        'm02_survival': 'Surv%',
         'volume_ratio': 'Vol_Ratio'
     }
     display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
+
+    # Fix binary-encoded float columns (SQLite BLOB issue from numpy.float32)
+    import struct
+    def decode_blob_float(val):
+        """Decode binary blob to float if needed."""
+        if isinstance(val, bytes):
+            try:
+                return struct.unpack('f', val)[0]  # 4-byte float (numpy.float32)
+            except struct.error:
+                try:
+                    return struct.unpack('d', val)[0]  # 8-byte double (numpy.float64)
+                except struct.error:
+                    return np.nan
+        return val
+
+    for col in ['M01_%', 'Loser%', 'Surv%', 'Final']:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(decode_blob_float)
+
+    # Scale probabilities to percentage (stored as 0-1)
+    if 'Loser%' in display_df.columns:
+        display_df['Loser%'] = (display_df['Loser%'] * 100).round(1)
+    if 'Surv%' in display_df.columns:
+        display_df['Surv%'] = (display_df['Surv%'] * 100).round(1)
+    if 'M01_%' in display_df.columns:
+        display_df['M01_%'] = display_df['M01_%'].round(2)
 
     # Display sortable dataframe with row selection
     st.markdown("**Click a row to select ticker for Deep Dive:**")
@@ -958,6 +1075,449 @@ def render_history_analytics_page(db: DatabaseManager):
         st.plotly_chart(fig, use_container_width=True)
 
 
+# ==================== PAGE 4: M03 HISTORICAL REGIME ====================
+
+# Regime color mapping for background bands
+REGIME_COLORS = {
+    'STRONG_BULL': 'rgba(0, 200, 83, 0.15)',
+    'STRONG BULL': 'rgba(0, 200, 83, 0.15)',
+    'BULL': 'rgba(76, 175, 80, 0.15)',
+    'NEUTRAL': 'rgba(255, 193, 7, 0.15)',
+    'BEAR': 'rgba(255, 87, 34, 0.15)',
+    'STRONG_BEAR': 'rgba(211, 47, 47, 0.15)',
+    'STRONG BEAR': 'rgba(211, 47, 47, 0.15)',
+}
+
+def load_regime_history(start_date: str, end_date: str, use_ground_truth: bool = False) -> pd.DataFrame:
+    """Load M03 regime history data, optionally merged with ground truth labels."""
+    # Load M03 history
+    models_dir = config.BASE_DIR / 'models'
+    history_path = models_dir / "m03_history.parquet"
+    csv_path = models_dir / "m03_history.csv"
+    
+    if history_path.exists():
+        df = pd.read_parquet(history_path)
+    elif csv_path.exists():
+        df = pd.read_csv(csv_path, parse_dates=['date'])
+    else:
+        st.error("M03 history file not found. Run M03 evaluation first.")
+        return pd.DataFrame()
+    
+    # Ensure date index
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date')
+    
+    # Filter date range
+    df = df[(df.index >= pd.to_datetime(start_date)) & (df.index <= pd.to_datetime(end_date))]
+    
+    if use_ground_truth:
+        try:
+            from src.evaluation.m03_ground_truth import load_ground_truth_df
+            gt_df = load_ground_truth_df(start_date, end_date)
+            df = df.merge(gt_df[['ground_truth_regime']], left_index=True, right_index=True, how='left')
+            df['display_category'] = df['ground_truth_regime'].fillna('NEUTRAL')
+        except Exception as e:
+            st.warning(f"Ground truth data unavailable: {e}")
+            df['display_category'] = df['category'].str.upper().str.replace('_', ' ')
+    else:
+        df['display_category'] = df['category'].str.upper().str.replace('_', ' ')
+    
+    return df.reset_index()
+
+
+def add_regime_background(fig, df, row=1, col=1):
+    """Add regime-colored background bands to a plotly figure."""
+    if df.empty or 'display_category' not in df.columns:
+        return
+    
+    # Find contiguous regime periods
+    df = df.copy()
+    df['regime_change'] = df['display_category'] != df['display_category'].shift()
+    df['regime_group'] = df['regime_change'].cumsum()
+    
+    for group_id, group_df in df.groupby('regime_group'):
+        regime = group_df['display_category'].iloc[0]
+        color = REGIME_COLORS.get(regime, 'rgba(128, 128, 128, 0.1)')
+        
+        # Extend x1 by 1 day to eliminate gaps between consecutive regimes
+        # This ensures the rectangle covers the full day span
+        x1_extended = group_df['date'].max() + pd.Timedelta(days=1)
+        
+        fig.add_vrect(
+            x0=group_df['date'].min(),
+            x1=x1_extended,
+            fillcolor=color,
+            layer="below",
+            line_width=0,
+            row=row, col=col
+        )
+
+
+def create_spy_regime_chart(df: pd.DataFrame) -> go.Figure:
+    """Create SPY candlestick chart with SMAs and regime background coloring."""
+    if df.empty:
+        return go.Figure()
+    
+    # Create figure with secondary y-axis for regime score
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=[0.7, 0.3],
+        subplot_titles=("SPY Price with Moving Averages", "M03 Score")
+    )
+    
+    # Candlestick chart
+    fig.add_trace(
+        go.Candlestick(
+            x=df['date'],
+            open=df['spy_close'] * 0.998,  # Simulate OHLC from close
+            high=df['spy_close'] * 1.002,
+            low=df['spy_close'] * 0.996,
+            close=df['spy_close'],
+            name='SPY',
+            increasing_line_color='#26a69a',
+            decreasing_line_color='#ef5350',
+            showlegend=False
+        ),
+        row=1, col=1
+    )
+    
+    # Add SMAs if we have the data - Using SMA_200 from data and calculating others
+    sma_colors = {
+        5: '#E91E63',    # Pink
+        10: '#9C27B0',   # Purple
+        20: '#3F51B5',   # Indigo
+        50: '#2196F3',   # Blue
+        100: '#00BCD4',  # Cyan
+        200: '#FF9800',  # Orange
+    }
+    
+    # Calculate SMAs from spy_close
+    for period, color in sma_colors.items():
+        if period == 200 and 'sma_200' in df.columns:
+            sma_values = df['sma_200']
+        else:
+            sma_values = df['spy_close'].rolling(window=period, min_periods=1).mean()
+        
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=sma_values,
+                name=f'SMA {period}',
+                line=dict(color=color, width=1),
+                hovertemplate=f'SMA{period}: %{{y:.2f}}<extra></extra>'
+            ),
+            row=1, col=1
+        )
+    
+    # Add regime background to price chart
+    add_regime_background(fig, df, row=1, col=1)
+    
+    # M03 Score line in bottom panel
+    fig.add_trace(
+        go.Scatter(
+            x=df['date'],
+            y=df['score'],
+            name='M03 Score',
+            line=dict(color='#1E88E5', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(30, 136, 229, 0.2)'
+        ),
+        row=2, col=1
+    )
+    
+    # Add threshold lines
+    fig.add_hline(y=75, line_dash="dash", line_color="green", annotation_text="Strong Bull", row=2, col=1)
+    fig.add_hline(y=60, line_dash="dot", line_color="lightgreen", row=2, col=1)
+    fig.add_hline(y=45, line_dash="dash", line_color="orange", annotation_text="Neutral", row=2, col=1)
+    fig.add_hline(y=25, line_dash="dot", line_color="salmon", row=2, col=1)
+    
+    fig.update_layout(
+        height=600,
+        xaxis_rangeslider_visible=False,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template='plotly_white',
+        margin=dict(l=50, r=50, t=60, b=30)
+    )
+    
+    # Remove weekend gaps
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    fig.update_yaxes(tickprefix="$", row=1, col=1)
+    fig.update_yaxes(range=[0, 100], row=2, col=1)
+    
+    return fig
+
+
+def create_liquidity_chart(df: pd.DataFrame) -> go.Figure:
+    """Create liquidity chart with 3 components and net liquidity on right axis."""
+    if df.empty:
+        return go.Figure()
+    
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=[0.7, 0.3],
+        specs=[[{"secondary_y": True}], [{}]],
+        subplot_titles=("Fed Liquidity Components", "Liquidity Pillar Score")
+    )
+    
+    # Fed Assets (primary axis)
+    if 'fed_assets' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['fed_assets'] / 1000,  # Convert to $T
+                name='Fed Assets',
+                line=dict(color='#4CAF50', width=2)
+            ),
+            row=1, col=1, secondary_y=False
+        )
+    
+    # TGA (primary axis)
+    if 'tga' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['tga'] / 1000,  # Convert to $T
+                name='TGA',
+                line=dict(color='#FF5722', width=2)
+            ),
+            row=1, col=1, secondary_y=False
+        )
+    
+    # RRP (primary axis)
+    if 'rrp' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['rrp'] / 1000,  # Convert to $T
+                name='RRP',
+                line=dict(color='#9C27B0', width=2)
+            ),
+            row=1, col=1, secondary_y=False
+        )
+    
+    # Net Liquidity (secondary axis)
+    if 'net_liquidity' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['net_liquidity'] / 1000,  # Convert to $T
+                name='Net Liquidity',
+                line=dict(color='#1E88E5', width=3),
+                fill='tozeroy',
+                fillcolor='rgba(30, 136, 229, 0.1)'
+            ),
+            row=1, col=1, secondary_y=True
+        )
+    
+    # Add regime background
+    add_regime_background(fig, df, row=1, col=1)
+    
+    # Liquidity pillar score
+    if 'liquidity_score' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['liquidity_score'],
+                name='Liquidity Score',
+                line=dict(color='#1E88E5', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(30, 136, 229, 0.2)'
+            ),
+            row=2, col=1
+        )
+    
+    fig.add_hline(y=50, line_dash="dash", line_color="gray", annotation_text="Neutral", row=2, col=1)
+    
+    fig.update_layout(
+        height=550,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template='plotly_white'
+    )
+    
+    fig.update_yaxes(title_text="Components ($T)", secondary_y=False, row=1, col=1)
+    fig.update_yaxes(title_text="Net Liquidity ($T)", secondary_y=True, row=1, col=1)
+    fig.update_yaxes(range=[0, 100], row=2, col=1)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    
+    return fig
+
+
+def create_risk_appetite_chart(df: pd.DataFrame) -> go.Figure:
+    """Create VIX + HY Spread chart with dual axes and regime markers."""
+    if df.empty:
+        return go.Figure()
+    
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=[0.7, 0.3],
+        specs=[[{"secondary_y": True}], [{}]],
+        subplot_titles=("VIX & HY Spread", "Risk Appetite Pillar Score")
+    )
+    
+    # VIX (left axis)
+    if 'vix' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['vix'],
+                name='VIX',
+                line=dict(color='#F44336', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(244, 67, 54, 0.1)'
+            ),
+            row=1, col=1, secondary_y=False
+        )
+    
+    # HY Spread (right axis)
+    if 'hy_spread' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['hy_spread'],
+                name='HY Spread (%)',
+                line=dict(color='#3F51B5', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(63, 81, 181, 0.1)'
+            ),
+            row=1, col=1, secondary_y=True
+        )
+    
+    # Add threshold lines for VIX
+    fig.add_hline(y=20, line_dash="dash", line_color="orange", annotation_text="VIX 20", row=1, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="red", annotation_text="VIX 30", row=1, col=1)
+    
+    # Add regime background
+    add_regime_background(fig, df, row=1, col=1)
+    
+    # Risk appetite score
+    if 'risk_appetite_score' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['risk_appetite_score'],
+                name='Risk Appetite Score',
+                line=dict(color='#1E88E5', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(30, 136, 229, 0.2)'
+            ),
+            row=2, col=1
+        )
+    
+    fig.add_hline(y=50, line_dash="dash", line_color="gray", annotation_text="Neutral", row=2, col=1)
+    
+    fig.update_layout(
+        height=550,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template='plotly_white'
+    )
+    
+    fig.update_yaxes(title_text="VIX", secondary_y=False, row=1, col=1)
+    fig.update_yaxes(title_text="HY Spread (%)", secondary_y=True, row=1, col=1)
+    fig.update_yaxes(range=[0, 100], row=2, col=1)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    
+    return fig
+
+
+def render_m03_evaluation_summary():
+    """Display M03 evaluation metrics from the latest evaluation file."""
+    eval_dir = config.BASE_DIR / 'models'
+    eval_files = sorted(eval_dir.glob("m03_evaluation_*.md"), reverse=True)
+    
+    if not eval_files:
+        st.info("No M03 evaluation files found. Run M03 evaluation to generate metrics.")
+        return
+    
+    latest_eval = eval_files[0]
+    
+    with st.expander(f"📋 Latest M03 Evaluation ({latest_eval.name})", expanded=True):
+        try:
+            content = latest_eval.read_text(encoding='utf-8')
+            # Display key metrics section only
+            st.markdown(content[:3000] if len(content) > 3000 else content)
+        except Exception as e:
+            st.error(f"Error reading evaluation file: {e}")
+
+
+def render_m03_regime_page():
+    """M03 Historical Regime visualization page."""
+    st.title("📊 M03 Historical Regime Analysis")
+    
+    st.markdown("""
+    Visualize the three pillars of the M03 Market Regime model:
+    - **Trend**: SPY price vs moving averages
+    - **Liquidity**: Fed Balance Sheet components (Fed Assets, TGA, RRP)
+    - **Risk Appetite**: VIX and High Yield Credit Spreads
+    """)
+    
+    # Toggle and date controls
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        use_ground_truth = st.toggle(
+            "📌 Use Ground Truth Labels",
+            value=False,
+            help="Switch between model-calculated regime and hand-labeled ground truth"
+        )
+    
+    with col2:
+        start_date = st.date_input(
+            "Start Date",
+            value=datetime.now() - timedelta(days=365 * 2),
+            min_value=datetime(2003, 1, 1),
+            max_value=datetime.now()
+        )
+    
+    with col3:
+        end_date = st.date_input(
+            "End Date",
+            value=datetime.now(),
+            min_value=datetime(2003, 1, 1),
+            max_value=datetime.now()
+        )
+    
+    # Load data
+    with st.spinner("Loading M03 regime history..."):
+        regime_df = load_regime_history(str(start_date), str(end_date), use_ground_truth=use_ground_truth)
+    
+    if regime_df.empty:
+        st.warning("No data available for the selected date range.")
+        return
+    
+    source_label = "Ground Truth" if use_ground_truth else "Model Output"
+    st.caption(f"📌 Showing: **{source_label}** | Data range: {regime_df['date'].min().strftime('%Y-%m-%d')} to {regime_df['date'].max().strftime('%Y-%m-%d')} ({len(regime_df)} days)")
+    
+    # 1. SPY Chart with SMAs and regime coloring
+    st.subheader("📈 SPY Price & Trend Pillar")
+    fig_spy = create_spy_regime_chart(regime_df)
+    st.plotly_chart(fig_spy, use_container_width=True)
+    
+    # 2. Liquidity Chart
+    st.subheader("💧 Liquidity Pillar")
+    fig_liq = create_liquidity_chart(regime_df)
+    st.plotly_chart(fig_liq, use_container_width=True)
+    
+    # 3. VIX + HY Spread Chart
+    st.subheader("🔥 Risk Appetite Pillar")
+    fig_risk = create_risk_appetite_chart(regime_df)
+    st.plotly_chart(fig_risk, use_container_width=True)
+    
+    # 4. M03 Evaluation Summary
+    st.markdown("---")
+    st.subheader("📋 M03 Evaluation Summary")
+    render_m03_evaluation_summary()
+
+
 # ==================== MAIN APPLICATION ROUTER ====================
 
 def main():
@@ -967,6 +1527,9 @@ def main():
 
     # Sidebar navigation
     st.sidebar.title("🎯 TradeOps Dashboard")
+    
+    # M03 Regime Widget (shown at top of sidebar on all pages)
+    render_m03_sidebar_widget()
 
     # Refresh button (fixes real-time data updates)
     if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
@@ -981,6 +1544,7 @@ def main():
             "Signal Review",
             "Manual Override", 
             "History/Analytics",
+            "📊 M03 Regime",
             "📊 D1 Analysis",
             "📊 M01 Report",
             "📊 M02 Report",
@@ -994,7 +1558,7 @@ def main():
     clean_page = page.replace("📊 ", "")
     
     # Route to selected page
-    if clean_page in ["D1 Analysis", "M01 Report", "M02 Report", "Dual-Model", "Backtest"]:
+    if clean_page in ["D1 Analysis", "M01 Report", "M02 Report", "Dual-Model", "Backtest", "M03 Regime"]:
         # ML Report pages
         from src.dashboard_reports import (
             render_d1_analysis,
@@ -1014,6 +1578,8 @@ def main():
             render_dual_model()
         elif clean_page == "Backtest":
             render_backtest()
+        elif clean_page == "M03 Regime":
+            render_m03_regime_page()
     else:
         # Trading pages
         if clean_page == "Signal Review":

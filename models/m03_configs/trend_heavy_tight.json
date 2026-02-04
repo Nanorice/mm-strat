@@ -1,0 +1,38 @@
+{
+  "model_name": "M03",
+  "model_type": "factor_calculator",
+  "version": "1.1.0",
+  "archetype": "trend_heavy",
+  "vix_curve": "tight",
+  "description": "Trend Dominant + Nervous VIX sensitivity (steeper curve)",
+  "hypothesis": "Fixes Bull AUC (0.663) via trend dominance.",
+  "pillars": {
+    "trend": {
+      "weight": 0.5,
+      "sma_period": 200
+    },
+    "liquidity": {
+      "weight": 0.2,
+      "slope_lookback": 20
+    },
+    "risk_appetite": {
+      "weight": 0.3,
+      "vix_bull_threshold": 15,
+      "vix_bear_threshold": 20,
+      "vix_extreme_threshold": 30,
+      "spread_bull_threshold": 4.0,
+      "spread_bear_threshold": 6.0,
+      "spread_extreme_threshold": 8.0
+    }
+  },
+  "thresholds": {
+    "strong_bull": 80,
+    "bull": 60,
+    "neutral": 40,
+    "bear": 20
+  },
+  "gating_rules": {
+    "long_allow_min": 30,
+    "long_reduced_min": 50
+  }
+}

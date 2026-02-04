@@ -60,6 +60,10 @@ class EarningsEngine:
         self._call_timestamps = []
         self._rate_limit_lock = threading.Lock()
 
+        # Quota exhaustion tracking (shared across all workers)
+        self._quota_exhausted = False
+        self._quota_lock = threading.Lock()
+
     def _rate_limit_check(self):
         """
         Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
@@ -83,7 +87,7 @@ class EarningsEngine:
 
             self._call_timestamps.append(now)
 
-    def _fetch_ticker_earnings(self, ticker: str, limit: int = 1000) -> Optional[pd.DataFrame]:
+    def _fetch_ticker_earnings(self, ticker: str, limit: int = 1000, max_retries: int = 2) -> Optional[pd.DataFrame]:
         """
         Fetch earnings history + future schedule from FMP.
 
@@ -92,11 +96,16 @@ class EarningsEngine:
         Args:
             ticker: Stock symbol
             limit: Max number of earnings records to fetch
+            max_retries: Maximum number of retry attempts (default: 2)
 
         Returns:
             DataFrame with earnings data, or None if failed
         """
-        self._rate_limit_check()
+        # Check if quota is exhausted (shared flag across all workers)
+        with self._quota_lock:
+            if self._quota_exhausted:
+                logger.debug(f"{ticker}: Skipping earnings fetch due to quota exhaustion")
+                return None
 
         url = f"{self.base_url}/earnings"
         params = {
@@ -105,25 +114,83 @@ class EarningsEngine:
             'limit': limit
         }
 
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+        for attempt in range(max_retries):
+            self._rate_limit_check()
 
-            if not data or not isinstance(data, list):
-                logger.debug(f"No earnings data for {ticker}")
+            try:
+                response = requests.get(url, params=params, timeout=30)
+
+                # Handle rate limit (429) - check if it's quota exhaustion or transient rate limit
+                if response.status_code == 429:
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('message', '').lower() if isinstance(error_data, dict) else ''
+                    except:
+                        error_msg = ''
+
+                    # Check for quota exhaustion keywords
+                    is_quota_exhausted = any(keyword in error_msg for keyword in [
+                        'limit reached', 'quota', 'subscription', 'upgrade', 'plan'
+                    ])
+
+                    if is_quota_exhausted:
+                        # Set global flag to stop all workers from retrying
+                        with self._quota_lock:
+                            if not self._quota_exhausted:
+                                self._quota_exhausted = True
+                                logger.error(f"API QUOTA EXHAUSTED: {error_msg}")
+                                logger.error("All further API calls will be skipped. Please check your FMP API plan.")
+                        return None
+
+                    # Transient rate limit - retry with backoff
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 10  # 10s, 20s
+                        logger.warning(f"{ticker}: Rate limit (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"{ticker}: Rate limit (429), max retries exceeded")
+                        return None
+
+                response.raise_for_status()
+                data = response.json()
+
+                if not data or not isinstance(data, list):
+                    logger.debug(f"No earnings data for {ticker}")
+                    return None
+
+                df = pd.DataFrame(data)
+                df = self._parse_earnings_response(df, ticker)
+                return df
+
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 5  # 5s, 10s
+                    logger.warning(f"{ticker}: Timeout, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"API timeout for {ticker}: {e}")
+                    return None
+            except requests.exceptions.RequestException as e:
+                # Don't retry on client errors (400-499 except 429)
+                if hasattr(e, 'response') and e.response is not None and 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+                    logger.error(f"API client error for {ticker}: {e}")
+                    return None
+                # Retry on server errors (500+) and network errors
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 5  # 5s, 10s
+                    logger.warning(f"{ticker}: Request error, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"API request failed for {ticker}: {e}")
+                    return None
+            except Exception as e:
+                logger.error(f"Unexpected error fetching earnings for {ticker}: {e}")
                 return None
 
-            df = pd.DataFrame(data)
-            df = self._parse_earnings_response(df, ticker)
-            return df
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for {ticker}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error fetching earnings for {ticker}: {e}")
-            return None
+        return None
 
     def _parse_earnings_response(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         """

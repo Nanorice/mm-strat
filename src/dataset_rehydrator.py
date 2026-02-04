@@ -274,4 +274,4 @@ class DatasetRehydrator:
             if not trade_df[date_col].is_monotonic_increasing:
                 logger.error(f"Trade {trade_id} not chronologically ordered!")
 
-        logger.info("✓ Validation complete")
+        logger.info("[OK] Validation complete")

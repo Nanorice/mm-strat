@@ -1,0 +1,756 @@
+{
+  "version": "1.0",
+  "kurtosis_threshold": 10.0,
+  "tail_alpha_threshold": 1.2,
+  "lower_percentile": 1.0,
+  "upper_percentile": 99.0,
+  "features": {
+    "Open": {
+      "original_kurtosis": 328.06372997980685,
+      "tail_alpha_ratio": 0.8736992529322732,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.478300000000001,
+      "upper_bound": 559.9455999999989
+    },
+    "High": {
+      "original_kurtosis": 339.9148725463215,
+      "tail_alpha_ratio": 0.8568936651803504,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.9083000000000006,
+      "upper_bound": 576.6079999999993
+    },
+    "Low": {
+      "original_kurtosis": 330.4573244259192,
+      "tail_alpha_ratio": 0.8726412037139731,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.4,
+      "upper_bound": 558.33
+    },
+    "Close": {
+      "original_kurtosis": 345.4239664153204,
+      "tail_alpha_ratio": 0.857953843710327,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.8083,
+      "upper_bound": 574.925499999998
+    },
+    "Volume": {
+      "original_kurtosis": 1315.0383340638407,
+      "tail_alpha_ratio": 2.4947700491772973,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "SMA_50": {
+      "original_kurtosis": 318.9420269329356,
+      "tail_alpha_ratio": 0.8449268549916527,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 3.873094,
+      "upper_bound": 531.035393999998
+    },
+    "Price_vs_SMA_50": {
+      "original_kurtosis": 2474.3458874960616,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "SMA_150": {
+      "original_kurtosis": 308.90270858806974,
+      "tail_alpha_ratio": 0.8324315071077282,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 3.2468526666666664,
+      "upper_bound": 491.4104906666653
+    },
+    "Price_vs_SMA_150": {
+      "original_kurtosis": 1052.7684637052512,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "SMA_200": {
+      "original_kurtosis": 309.0518524934919,
+      "tail_alpha_ratio": 0.8529418807893988,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 3.04947094,
+      "upper_bound": 479.7996754999987
+    },
+    "Price_vs_SMA_200": {
+      "original_kurtosis": 929.3681869187378,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "ATR": {
+      "original_kurtosis": 1321.5251415089642,
+      "tail_alpha_ratio": 1.0315909623000048,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.17916428571428564,
+      "upper_bound": 16.867142857142856
+    },
+    "High_52W": {
+      "original_kurtosis": 340.2262908228752,
+      "tail_alpha_ratio": 0.8675050674764448,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.95,
+      "upper_bound": 582.0087999999936
+    },
+    "Low_52W": {
+      "original_kurtosis": 308.8824564163701,
+      "tail_alpha_ratio": 0.7397121851563,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 1.2583000000000002,
+      "upper_bound": 361.06549999999976
+    },
+    "Vol_MA": {
+      "original_kurtosis": 670.4340266967017,
+      "tail_alpha_ratio": 2.255956765445392,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Vol_Ratio": {
+      "original_kurtosis": 140.89178993918145,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "High_20D": {
+      "original_kurtosis": 341.26305580541504,
+      "tail_alpha_ratio": 0.874435620338336,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.478300000000001,
+      "upper_bound": 558.7830999999993
+    },
+    "RS": {
+      "original_kurtosis": 1022.9226502692418,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "RS_MA": {
+      "original_kurtosis": 623.5633866216145,
+      "tail_alpha_ratio": 0.8984837957208489,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.009094584337882275,
+      "upper_bound": 1.2714760666480078
+    },
+    "nATR": {
+      "original_kurtosis": 13.184529829938135,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "VCP_Ratio": {
+      "original_kurtosis": 22.355213998925134,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": 0.6900487427624236,
+      "upper_bound": 1.8153268902965989
+    },
+    "Consolidation_Width": {
+      "original_kurtosis": 23.266961315111192,
+      "tail_alpha_ratio": 3.63901750982786,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dry_Up_Volume": {
+      "original_kurtosis": 51.408619907204034,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "RSI_Regime": {
+      "original_kurtosis": NaN,
+      "tail_alpha_ratio": 1.0,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 1.0,
+      "upper_bound": 1.0
+    },
+    "Is_Green_Day": {
+      "original_kurtosis": 14.194617538482564,
+      "tail_alpha_ratio": 1.0,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 1.0
+    },
+    "SMA_50_Slope": {
+      "original_kurtosis": 153.32999581559915,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -0.27750228977059144,
+      "upper_bound": 1.228465244645937
+    },
+    "Lowest_Low_20D": {
+      "original_kurtosis": 334.6577122212147,
+      "tail_alpha_ratio": 0.8275281178411464,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 3.3483,
+      "upper_bound": 506.9464499999997
+    },
+    "Dist_From_20D_Low": {
+      "original_kurtosis": 3433.6470524585584,
+      "tail_alpha_ratio": 3.7182282857362123,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Highest_High_20D": {
+      "original_kurtosis": 339.9148725463215,
+      "tail_alpha_ratio": 0.8568936651803504,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.9083000000000006,
+      "upper_bound": 576.6079999999993
+    },
+    "Dist_From_20D_High": {
+      "original_kurtosis": 139.40661649539186,
+      "tail_alpha_ratio": 1.099234404246086,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -0.06818636185453125,
+      "upper_bound": 0.0
+    },
+    "Dist_From_52W_Low": {
+      "original_kurtosis": 15613.481191818533,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "rs_velocity": {
+      "original_kurtosis": 7011.0801034927235,
+      "tail_alpha_ratio": 1.1294787061928886,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -0.00013564804754726835,
+      "upper_bound": 0.018482094184349502
+    },
+    "volume_acceleration": {
+      "original_kurtosis": 1014.388109540734,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "breakout_momentum": {
+      "original_kurtosis": 12.529133193144308,
+      "tail_alpha_ratio": 1.8480212311287263,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "consolidation_duration": {
+      "original_kurtosis": 21.545559538752727,
+      "tail_alpha_ratio": 1.3202948891582633,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "price_momentum_curve": {
+      "original_kurtosis": 493.8142813006455,
+      "tail_alpha_ratio": 1.0112585741480684,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -4.609999999999967,
+      "upper_bound": 28.05340000000002
+    },
+    "immediate_thrust": {
+      "original_kurtosis": 493.8142813006455,
+      "tail_alpha_ratio": 1.0112585741480684,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -4.609999999999967,
+      "upper_bound": 28.05340000000002
+    },
+    "log_volume_velocity": {
+      "original_kurtosis": 37.4192931976541,
+      "tail_alpha_ratio": 3.033715561288851,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "price_accel_10d": {
+      "original_kurtosis": 1233.7926399331734,
+      "tail_alpha_ratio": 1.0377066496967529,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -0.9151699999999998,
+      "upper_bound": 6.210118173999948
+    },
+    "nATR_Lag1": {
+      "original_kurtosis": 19.763128725993443,
+      "tail_alpha_ratio": 3.789331891902488,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "ATR_Lag1": {
+      "original_kurtosis": 879.5766260853371,
+      "tail_alpha_ratio": 1.078987614464126,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.16642857142857156,
+      "upper_bound": 15.702564285714255
+    },
+    "VCP_Ratio_Lag1": {
+      "original_kurtosis": 19.68824396665685,
+      "tail_alpha_ratio": 1.9362058550343797,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Consolidation_Width_Lag1": {
+      "original_kurtosis": 22.153036368254682,
+      "tail_alpha_ratio": 3.9905866988443632,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_50_Lag1": {
+      "original_kurtosis": 264.856804104665,
+      "tail_alpha_ratio": 3.272094324837938,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_150_Lag1": {
+      "original_kurtosis": 428.11669137469784,
+      "tail_alpha_ratio": 3.4936033187754556,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_200_Lag1": {
+      "original_kurtosis": 458.81010555822746,
+      "tail_alpha_ratio": 3.581741615597967,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_Lag1": {
+      "original_kurtosis": 946.1521408134413,
+      "tail_alpha_ratio": 0.8629420197790689,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.010240572150857987,
+      "upper_bound": 1.3239011826774265
+    },
+    "RS_MA_Lag1": {
+      "original_kurtosis": 620.1122409467267,
+      "tail_alpha_ratio": 0.8958095501002573,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.00907453854067887,
+      "upper_bound": 1.2693384830121617
+    },
+    "Dry_Up_Volume_Lag1": {
+      "original_kurtosis": 66.87977922393814,
+      "tail_alpha_ratio": 2.456641685108731,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "High_52W_Lag1": {
+      "original_kurtosis": 346.9040774600099,
+      "tail_alpha_ratio": 0.8788633269025766,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.82,
+      "upper_bound": 572.4463000000001
+    },
+    "Low_52W_Lag1": {
+      "original_kurtosis": 309.3532317506594,
+      "tail_alpha_ratio": 0.7394571810254013,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 1.2479,
+      "upper_bound": 361.0714999999999
+    },
+    "Lowest_Low_20D_Lag1": {
+      "original_kurtosis": 335.93288380403186,
+      "tail_alpha_ratio": 0.8229491474473566,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 3.34,
+      "upper_bound": 506.91085000000004
+    },
+    "Highest_High_20D_Lag1": {
+      "original_kurtosis": 338.60783073428206,
+      "tail_alpha_ratio": 0.8713156349587314,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.58,
+      "upper_bound": 563.1971999999997
+    },
+    "Dist_From_52W_Low_Lag1": {
+      "original_kurtosis": 18511.8037603535,
+      "tail_alpha_ratio": 2.7834532121674744,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_Low_Lag1": {
+      "original_kurtosis": 6005.42863607948,
+      "tail_alpha_ratio": 3.057026328447854,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_High_Lag1": {
+      "original_kurtosis": 33.76609943054191,
+      "tail_alpha_ratio": 1.0525569419824699,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -0.11751574192345471,
+      "upper_bound": -0.000136876894758596
+    },
+    "nATR_Delta": {
+      "original_kurtosis": 16947.341738011048,
+      "tail_alpha_ratio": 1.2621986833475,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "ATR_Delta": {
+      "original_kurtosis": 19461.06669475603,
+      "tail_alpha_ratio": 2.157520908619247,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "VCP_Ratio_Delta": {
+      "original_kurtosis": 10889.861902516863,
+      "tail_alpha_ratio": 2.059971808060011,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Consolidation_Width_Delta": {
+      "original_kurtosis": 944.2541359356197,
+      "tail_alpha_ratio": 1.4515839175906864,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_50_Delta": {
+      "original_kurtosis": 17470.360725830447,
+      "tail_alpha_ratio": 1.138948290424515,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -27.387750925724752,
+      "upper_bound": 23.31128498759194
+    },
+    "Price_vs_SMA_150_Delta": {
+      "original_kurtosis": 17549.431895748225,
+      "tail_alpha_ratio": 1.125808438324077,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3.589727797861344,
+      "upper_bound": 5.559863731568579
+    },
+    "Price_vs_SMA_200_Delta": {
+      "original_kurtosis": 12797.340274166825,
+      "tail_alpha_ratio": 1.63551079836511,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_Delta": {
+      "original_kurtosis": 12333.604269154148,
+      "tail_alpha_ratio": 3.427579902966353,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_MA_Delta": {
+      "original_kurtosis": 2188.358454981223,
+      "tail_alpha_ratio": 3.90028595798872,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dry_Up_Volume_Delta": {
+      "original_kurtosis": 3059.3666793951575,
+      "tail_alpha_ratio": 2.8702231510136786,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "High_52W_Delta": {
+      "original_kurtosis": 14695.232191102703,
+      "tail_alpha_ratio": 2.77245597027863,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Low_52W_Delta": {
+      "original_kurtosis": 2644.6964334057707,
+      "tail_alpha_ratio": 1.3979240447127885,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Lowest_Low_20D_Delta": {
+      "original_kurtosis": 487.7190576204298,
+      "tail_alpha_ratio": 1.8447229396163733,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Highest_High_20D_Delta": {
+      "original_kurtosis": 12622.286498545023,
+      "tail_alpha_ratio": 3.112873212414647,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RSI_14_Delta": {
+      "original_kurtosis": 126.24504113690267,
+      "tail_alpha_ratio": 1.5684127017712388,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_52W_Low_Delta": {
+      "original_kurtosis": 19460.106130246983,
+      "tail_alpha_ratio": 2.506454434690536,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_Low_Delta": {
+      "original_kurtosis": 18153.057077468635,
+      "tail_alpha_ratio": 1.4243486060885298,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_High_Delta": {
+      "original_kurtosis": 3020.579716038439,
+      "tail_alpha_ratio": 0.8616032575125688,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -1.0,
+      "upper_bound": 17.280047413793156
+    },
+    "alpha001": {
+      "original_kurtosis": 165.13691329682666,
+      "tail_alpha_ratio": 2.783547143773773,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "alpha009": {
+      "original_kurtosis": 1004.840076009436,
+      "tail_alpha_ratio": 1.083545723292875,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -24.660199999999985,
+      "upper_bound": 7.741699999999984
+    },
+    "alpha012": {
+      "original_kurtosis": 1094.0197279181355,
+      "tail_alpha_ratio": 0.9246192166626171,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -25.028499999999983,
+      "upper_bound": 6.431699999999964
+    },
+    "alpha041": {
+      "original_kurtosis": 334.4670714527805,
+      "tail_alpha_ratio": 0.8670713397437452,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 4.590547504373091,
+      "upper_bound": 560.25401503785
+    },
+    "alpha004": {
+      "original_kurtosis": 16.63988219708157,
+      "tail_alpha_ratio": 0.9899091123560824,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -9.0,
+      "upper_bound": -3.0
+    },
+    "alpha060": {
+      "original_kurtosis": 24.582390465546663,
+      "tail_alpha_ratio": 1.9544624727737214,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "alpha046": {
+      "original_kurtosis": 392.5160439081512,
+      "tail_alpha_ratio": 0.966699240300601,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3.8615299999999984,
+      "upper_bound": 1.0
+    },
+    "alpha049": {
+      "original_kurtosis": 1361.2988395508746,
+      "tail_alpha_ratio": 0.943131809506487,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -24.265099999999997,
+      "upper_bound": 1.0
+    },
+    "alpha051": {
+      "original_kurtosis": 1351.5571071667728,
+      "tail_alpha_ratio": 0.9204490091477822,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -24.2517,
+      "upper_bound": 1.0
+    },
+    "revenue_growth_yoy": {
+      "original_kurtosis": 4431.238795670699,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "net_income_growth_yoy": {
+      "original_kurtosis": 2106.469342212832,
+      "tail_alpha_ratio": 1.3580439837463936,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "eps_growth_yoy": {
+      "original_kurtosis": 3539.7145472018206,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "eps_accel": {
+      "original_kurtosis": 7779.362808921567,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "revenue_accel": {
+      "original_kurtosis": 4439.086877796498,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "revenue_cagr_3y": {
+      "original_kurtosis": 852.522131438418,
+      "tail_alpha_ratio": 1.9332413008745566,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "eps_stability_score": {
+      "original_kurtosis": 17251.17806248644,
+      "tail_alpha_ratio": 1.0959428355170995,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 7.822856734680804,
+      "upper_bound": 7293.018829094061
+    },
+    "revenue": {
+      "original_kurtosis": 105.4706971619421,
+      "tail_alpha_ratio": 0.6947478041427156,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 47105000000.0
+    },
+    "netIncome": {
+      "original_kurtosis": 8740.29983433647,
+      "tail_alpha_ratio": 0.6796110877136788,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -422600000.0,
+      "upper_bound": 5222640000.0000725
+    },
+    "operatingCashFlow": {
+      "original_kurtosis": 1748.3259501551202,
+      "tail_alpha_ratio": 0.6837926840245916,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -719235719.9999999,
+      "upper_bound": 8229440000.00006
+    },
+    "freeCashFlow": {
+      "original_kurtosis": 2183.519041934749,
+      "tail_alpha_ratio": 0.7211308420388731,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -1196000000.0,
+      "upper_bound": 5961000000.0
+    },
+    "debt_to_equity": {
+      "original_kurtosis": 5473.55361303973,
+      "tail_alpha_ratio": 1.4750670669065833,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "current_ratio": {
+      "original_kurtosis": 9063.390001501599,
+      "tail_alpha_ratio": 1.2465174295604158,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "quick_ratio": {
+      "original_kurtosis": 9036.557515577486,
+      "tail_alpha_ratio": 1.253299375637712,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "gross_margin": {
+      "original_kurtosis": 14307.800661176678,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -17.050960072407413,
+      "upper_bound": 100.0
+    },
+    "operating_margin": {
+      "original_kurtosis": 9836.296621412299,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -712.8222804356818,
+      "upper_bound": 75.79377569077911
+    },
+    "roe": {
+      "original_kurtosis": 3222.7698477464737,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -79.88478528790817,
+      "upper_bound": 80.20700379459473
+    },
+    "roa": {
+      "original_kurtosis": 14115.155496938572,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -16.57773201667497,
+      "upper_bound": 10.484309971553023
+    },
+    "net_margin": {
+      "original_kurtosis": 7734.021691541241,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -710.1876593574706,
+      "upper_bound": 83.36377303166971
+    },
+    "inventory_growth_yoy": {
+      "original_kurtosis": 1912.8050791315093,
+      "tail_alpha_ratio": 0.8704633937289021,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3107.6190476190477,
+      "upper_bound": 3219.0205037919923
+    },
+    "inventory_vs_sales_spread": {
+      "original_kurtosis": 9099.456305270358,
+      "tail_alpha_ratio": 0.8409941033616751,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3289.9510745100874,
+      "upper_bound": 3177.538250661361
+    },
+    "earnings_quality_score": {
+      "original_kurtosis": 10327.024650445595,
+      "transform": "winsorize",
+      "category": "bounded",
+      "lower_bound": -20.37038843471433,
+      "upper_bound": 26.373879444637115
+    },
+    "fcf_margin": {
+      "original_kurtosis": 4926.8809109055865,
+      "tail_alpha_ratio": 1.2112124732314278,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "gross_margin_trend": {
+      "original_kurtosis": 9450.513474840318,
+      "tail_alpha_ratio": 1.9796224428574714,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "days_since_report": {
+      "original_kurtosis": 728.6749181232816,
+      "tail_alpha_ratio": 1.2309319446462816,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "days_since_earnings": {
+      "original_kurtosis": 728.6749181232816,
+      "tail_alpha_ratio": 1.2309319446462816,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "pb_ratio": {
+      "original_kurtosis": 20.156005667801196,
+      "transform": "log",
+      "category": "explosive"
+    }
+  },
+  "created_at": "2026-02-01T19:29:38.569211"
+}

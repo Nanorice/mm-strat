@@ -147,6 +147,24 @@ d2 = pipeline.features(d1, n_jobs=-1)
 - **Alpha Factors:** Momentum, mean reversion, volume patterns
 - **Fundamental:** EPS growth, profit margins, debt ratios
 
+**Preprocessing (New 2026-01-30):**
+After feature extraction, the pipeline applies consistent transformations:
+
+```python
+# During training (model_trainer.py):
+from src.feature_preprocessor import FeaturePreprocessor
+
+preprocessor = FeaturePreprocessor()
+preprocessor.fit(d2, feature_cols, target='return_pct')  # Learn bounds
+d2 = preprocessor.transform(d2)                          # Apply log/winsorize
+preprocessor.save('models/preprocessing_config.json')   # Save for inference
+```
+
+| Transform | Features | Effect |
+|-----------|----------|--------|
+| Log | volume_acceleration, Vol_Ratio, etc. | Creates `log_*` prefix column |
+| Winsorize | RSI_14, margins, etc. | Clips to learned bounds |
+
 ---
 
 ### 3. hydrate() - Multi-Day Trajectories

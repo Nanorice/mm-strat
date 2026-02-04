@@ -19,11 +19,12 @@ PRICE_DATA_DIR = DATA_DIR / 'price'
 FUNDAMENTALS_DIR = DATA_DIR / 'fundamentals'
 COMPANY_INFO_DIR = DATA_DIR / 'company_info'
 EARNINGS_DIR = DATA_DIR / 'earnings'
+MACRO_DATA_DIR = DATA_DIR / 'macro'
 DATABASE_DIR = BASE_DIR / 'database'
 NOTEBOOKS_DIR = BASE_DIR / 'notebooks'
 
 # Ensure directories exist
-for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, EARNINGS_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
+for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, EARNINGS_DIR, MACRO_DATA_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # ==============================================================================
@@ -67,6 +68,34 @@ DATA_CACHE_DAYS = 1  # Re-download if data older than N days
 FMP_API_KEY = os.getenv('FMP_API_KEY', '')  # Load from .env file
 FMP_BASE_URL = 'https://financialmodelingprep.com/stable'
 FMP_BATCH_SIZE = 50  # Target tickers per batch (actual batch size varies by URL length)
+
+# Fred API Key
+FRED_API_KEY = os.getenv('FRED_API_KEY', '')  # Load from .env file
+
+# ==============================================================================
+# MACROECONOMIC DATA SETTINGS (M03 Regime Model)
+# ==============================================================================
+# FRED Series for Net Liquidity calculation
+# Net Liquidity = (WALCL/1000) - WTREGEN - RRPONTSYD
+# Note: WALCL is in Millions, others are in Billions
+FRED_SERIES = {
+    'WALCL': {'name': 'Fed Total Assets', 'freq': 'W', 'unit': 'millions'},
+    'WTREGEN': {'name': 'Treasury General Account', 'freq': 'W', 'unit': 'billions'},
+    'RRPONTSYD': {'name': 'Reverse Repo (Overnight)', 'freq': 'D', 'unit': 'billions'},
+    'BAMLH0A0HYM2': {'name': 'HY Credit Spread (OAS)', 'freq': 'D', 'unit': 'percent'},
+}
+
+# M03 Regime Score Thresholds (0-100 scale)
+M03_REGIME_THRESHOLDS = {
+    'strong_bull': 80,
+    'bull': 60,
+    'neutral': 40,
+    'bear': 20,
+}
+
+# M03 Signal Gating
+M03_LONG_ALLOW_MIN = 30   # Skip longs if regime score < 30
+M03_LONG_REDUCED_MIN = 50  # Reduced sizing if regime score < 50
 
 # ==============================================================================
 # STRATEGY PARAMETERS - SEPA (Specific Entry Point Analysis)

@@ -169,16 +169,28 @@ class DatabaseManager:
         }
         self._ensure_columns_exist('buy_list', lagged_columns)
 
-        # Dual-model columns (M01 + M01_3BAR_V2)
+        # Dual-model columns (M01 + M02 Loser Detector)
         dual_model_columns = {
             'm01_expected_return': 'REAL',  # M01 regressor output
             'm01_rank': 'INTEGER',          # M01 rank (1=best expected return)
-            'm01_3bar_prob': 'REAL',        # M01_3BAR_V2 classifier output (0-1)
-            'm01_3bar_rank': 'INTEGER',     # M01_3BAR rank (1=best prob)
+            'm01_3bar_prob': 'REAL',        # Legacy M01_3BAR_V2 classifier output (0-1)
+            'm01_3bar_rank': 'INTEGER',     # Legacy M01_3BAR rank (1=best prob)
             'm01_3bar_sl_price': 'REAL',    # Stop loss price = Close - (k_sl × ATR)
-            'm01_3bar_tp_price': 'REAL'     # Target price = Close × (1 + MAX(min_tp, k_tp × ATR%))
+            'm01_3bar_tp_price': 'REAL',    # Target price = Close × (1 + MAX(min_tp, k_tp × ATR%))
+            # M02 Loser Detector columns (new)
+            'm02_loser_proba': 'REAL',      # P(loser) - probability of hitting stop-loss
+            'm02_survival': 'REAL',         # 1 - P(loser) - survival probability
+            'final_score': 'REAL',          # M01_adj × m02_survival
+            'final_score_rank': 'INTEGER'   # Final score rank (1=best)
         }
         self._ensure_columns_exist('buy_list', dual_model_columns)
+
+        # M03 Regime columns
+        m03_columns = {
+            'm03_regime_score': 'REAL',     # 0-100 regime risk score
+            'm03_regime_category': 'TEXT',  # strong_bull, bull, neutral, bear, strong_bear
+        }
+        self._ensure_columns_exist('buy_list', m03_columns)
 
         logger.info(f"Database initialized at {self.db_path}")
 
@@ -572,7 +584,11 @@ class DatabaseManager:
         allowed_columns = {
             'm01_expected_return', 'm01_rank', 'm01_3bar_prob', 'm01_3bar_rank',
             'm01_3bar_sl_price', 'm01_3bar_tp_price', 'ml_rank', 'ml_probability',
-            'ml_expected_return', 'ml_model_version', 'ml_score_date'
+            'ml_expected_return', 'ml_model_version', 'ml_score_date',
+            # M02 Loser Detector columns
+            'm02_loser_proba', 'm02_survival', 'final_score', 'final_score_rank',
+            # M03 Regime columns
+            'm03_regime_score', 'm03_regime_category'
         }
         if column not in allowed_columns:
             raise ValueError(f"Column '{column}' not allowed for update")

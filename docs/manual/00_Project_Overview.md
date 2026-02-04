@@ -4,12 +4,14 @@ type: overview
 layer: all
 status: stable
 created: 2026-01-27
+updated: 2026-01-29
 tags:
   - architecture
   - index
   - navigation
   - sepa
   - ml
+  - dual-model
 ---
 
 # Quantamental SEPA System - Technical Manual
@@ -86,12 +88,19 @@ The system is organized into five layers, from data acquisition to visualization
 **Components:**
 - [[02_Data_Pipeline|DataPipeline]] ([data_pipeline.py](../../src/pipeline/data_pipeline.py)) - Orchestrates D1→D2→D2R→D3 workflow
 - [[03_M01_Trainer|M01 Trainer]] ([m01_trainer.py](../../src/pipeline/m01_trainer.py)) - Return predictor (XGBoost Regression)
-- [[04_M02_Trainer|M02 Trainer]] ([m02_trainer.py](../../src/pipeline/m02_trainer.py)) - Ignition classifier (XGBoost Classification)
+- [[04_M02_Trainer|M02 Loser Detector]] ([m02_trainer.py](../../src/pipeline/m02_trainer.py)) - Stop-loss predictor (XGBoost Classification)
+- [[06_M03_Regime|M03 Regime Calculator]] ([m03_regime.py](../../src/pipeline/m03_regime.py)) - Market regime scoring
 - [[05_Model_Entry_Point|Model CLI]] ([model_runner.py](../../model_runner.py)) - Command-line interface
+- **M01Workflow** ([m01_workflow.py](../../src/pipeline/m01_workflow.py)) - Automated EDA + training pipeline
+- **FeatureScreener** ([feature_screener.py](../../src/evaluation/feature_screener.py)) - KS-based feature selection
+- **ProductionScorer** ([production_scorer.py](../../src/pipeline/production_scorer.py)) - Dual-model scoring
+- **MacroEngine** ([macro_engine.py](../../src/macro_engine.py)) - FRED data fetching for M03
 
 **Model Outputs:**
 - **M01:** Predicts expected return % → Ranks candidates
-- **M02:** Predicts TP hit probability → Filters low-quality setups
+- **M02:** Predicts P(stop-loss hit) → Filters high-risk trades
+- **M03:** Scores market regime (0-100) → Gates position sizing
+- **Final Score:** `M01_adj × (1 - P(loser)) × regime_multiplier` → Risk-adjusted ranking
 
 ---
 
@@ -162,8 +171,21 @@ The system is organized into five layers, from data acquisition to visualization
 # M01 (Return Predictor)
 python model_runner.py m01 --start 2018-01-01 --end 2023-12-31 --report
 
-# M02 (Ignition Classifier)
+# M02 (Loser Detector)
 python model_runner.py m02 --start 2018-01-01 --end 2023-12-31 --report
+
+# M03 (Market Regime)
+python model_runner.py m03 --history --start 2003-03-01 --end 2024-12-31 --csv
+
+# Full Workflow (EDA + Feature Selection + Training)
+python model_runner.py workflow --start 2018-01-01 --end 2023-12-31
+```
+
+### Production Scoring
+
+```bash
+# Daily scanner with dual-model scoring
+python daily_scanner.py --use-ml
 ```
 
 See [[05_Model_Entry_Point|CLI Documentation]] for detailed usage.
@@ -190,6 +212,7 @@ python data_curator.py --source sp500 --update-all
 3. [[03_M01_Trainer|M01: Return Predictor]]
 4. [[04_M02_Trainer|M02: Ignition Classifier]]
 5. [[05_Model_Entry_Point|CLI Reference]]
+6. [[06_M03_Regime|M03: Market Regime Calculator]]
 
 ### Supporting Layers
 - [[06_Feature_Config|Feature Configuration]]
@@ -225,7 +248,25 @@ python data_curator.py --source sp500 --update-all
 **Triple Barrier Labeling:**
 - Labels trades as TP (profit target hit) or SL (stop-loss hit)
 - Accounts for path-dependency (when exit happens)
-- Used by M02 for ignition prediction
+- Used by M02 for loser detection
+
+**Dual-Model Scoring:**
+- M01 ranks candidates by expected return
+- M02 predicts P(stop-loss hit) - "Loser Detector"
+- Final Score = M01_adj × (1 - P(loser))
+- Filters out high-risk trades while preserving ranking
+
+**M03 Market Regime:**
+- Three-pillar scoring: Trend (SPY vs SMA) + Liquidity (Fed Net Liq) + Risk Appetite (VIX + HY spread)
+- Score 0-100 → Categories: strong_bear, bear, neutral, bull, strong_bull
+- Gates position sizing: strong_bear = 0x, bear = 0x, neutral = 0.5x, bull = 1.0x
+- Uses T+1 publication lag to avoid lookahead bias in backtests
+
+**Feature Selection Pipeline:**
+- Uses KS (Kolmogorov-Smirnov) test
+- Compares Q1 (bottom 25%) vs Q4 (top 25%) return distributions
+- Features with significant distribution shift pass screening
+- Recommended threshold: 0.10
 
 **Survivor Model:**
 - M01 variant that filters "crashed" trades (MAE < structural stop)
@@ -239,30 +280,46 @@ python data_curator.py --source sp500 --update-all
 ```
 quantamental/
 ├── model_runner.py               # CLI entry point
+├── daily_scanner.py              # Daily stock scanner with ML
 ├── data_curator.py               # Daily data maintenance
 ├── dashboard.py                  # Streamlit UI
 ├── src/
 │   ├── pipeline/
 │   │   ├── data_pipeline.py      # D1→D2→D3 orchestration
 │   │   ├── m01_trainer.py        # Return regression
-│   │   ├── m02_trainer.py        # Ignition classification
+│   │   ├── m02_trainer.py        # Loser detection
+│   │   ├── m03_regime.py         # Market regime calculator
+│   │   ├── m01_workflow.py       # Automated EDA + training
+│   │   ├── production_scorer.py  # Dual-model scoring
 │   │   └── base_trainer.py       # Shared training logic
+│   ├── evaluation/
+│   │   ├── feature_screener.py   # KS-based feature selection
+│   │   ├── metrics.py            # IC, Precision@K, Recall@K
+│   │   └── targets.py            # Target engineering
 │   ├── data_engine.py            # Price cache
 │   ├── fundamental_engine.py     # Fundamental cache
 │   ├── earnings_engine.py        # Earnings tracking
+│   ├── macro_engine.py           # FRED data for M03
 │   ├── features.py               # Feature engineering
 │   ├── strategy.py               # SEPA screener
 │   ├── trade_simulator_fast.py   # Historical simulation
 │   ├── triple_barrier_labeler.py # Meta-labeling
 │   └── feature_config.py         # Feature definitions
+├── scripts/
+│   ├── run_m01_ablation_study.py # Target comparison study
+│   └── run_m01_phase4_deployment.py # Production deployment
 ├── data/
 │   ├── ml/                       # ML datasets (D1, D2, D3)
 │   ├── price/                    # Price cache
 │   ├── fundamentals/             # Fundamental cache
-│   └── earnings/                 # Earnings cache
+│   ├── earnings/                 # Earnings cache
+│   └── macro/                    # FRED macro cache (WALCL, VIX, etc.)
 ├── models/
 │   ├── m01.json                  # M01 model
-│   ├── m02.json                  # M02 model
+│   ├── m02.json                  # M02 Loser Detector
+│   ├── m03_config.json           # M03 regime thresholds
+│   ├── m03_history.parquet       # Historical regime scores
+│   ├── production_scoring_config.json # Position sizing
 │   └── *_config.json             # Model configs
 └── docs/
     └── manual/                   # This documentation
@@ -270,4 +327,4 @@ quantamental/
 
 ---
 
-*Last updated: 2026-01-27*
+*Last updated: 2026-01-31*

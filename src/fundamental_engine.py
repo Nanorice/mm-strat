@@ -56,6 +56,10 @@ class FundamentalEngine:
         self._call_timestamps = []
         self._rate_limit_lock = threading.Lock()
 
+        # Quota exhaustion tracking (shared across all workers)
+        self._quota_exhausted = False
+        self._quota_lock = threading.Lock()
+
     def _is_cache_stale(self, file_path: Path) -> bool:
         """
         Check if cached fundamental data is stale and needs refresh.
@@ -104,18 +108,24 @@ class FundamentalEngine:
             # Record this call
             self._call_timestamps.append(now)
 
-    def _fetch_statement(self, ticker: str, statement_type: str, max_retries: int = 3) -> Optional[pd.DataFrame]:
+    def _fetch_statement(self, ticker: str, statement_type: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
         """
         Fetch a single financial statement from FMP API with retry logic.
 
         Args:
             ticker: Stock symbol
             statement_type: 'income-statement' or 'balance-sheet-statement'
-            max_retries: Maximum number of retry attempts (default: 3)
+            max_retries: Maximum number of retry attempts (default: 2)
 
         Returns:
             DataFrame with financial statement data, or None if failed
         """
+        # Check if quota is exhausted (shared flag across all workers)
+        with self._quota_lock:
+            if self._quota_exhausted:
+                logger.debug(f"{ticker} {statement_type}: Skipping due to quota exhaustion")
+                return None
+
         # Build URL - FMP stable endpoint uses query parameters
         url = f"{self.base_url}/{statement_type}"
         params = {
@@ -132,10 +142,31 @@ class FundamentalEngine:
             try:
                 response = requests.get(url, params=params, timeout=30)
 
-                # Handle rate limit (429) with exponential backoff
+                # Handle rate limit (429) - check if it's quota exhaustion or transient rate limit
                 if response.status_code == 429:
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('message', '').lower() if isinstance(error_data, dict) else ''
+                    except:
+                        error_msg = ''
+
+                    # Check for quota exhaustion keywords
+                    is_quota_exhausted = any(keyword in error_msg for keyword in [
+                        'limit reached', 'quota', 'subscription', 'upgrade', 'plan'
+                    ])
+
+                    if is_quota_exhausted:
+                        # Set global flag to stop all workers from retrying
+                        with self._quota_lock:
+                            if not self._quota_exhausted:
+                                self._quota_exhausted = True
+                                logger.error(f"API QUOTA EXHAUSTED: {error_msg}")
+                                logger.error("All further API calls will be skipped. Please check your FMP API plan.")
+                        return None
+
+                    # Transient rate limit - retry with backoff
                     if attempt < max_retries - 1:
-                        wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                        wait_time = (2 ** attempt) * 10  # 10s, 20s (more aggressive backoff)
                         logger.warning(f"{ticker} {statement_type}: Rate limit (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                         continue

@@ -124,3 +124,105 @@ For each variant, fill this table (per fold, then aggregate):
 * **(b)** $\log(1 + \mathrm{MFE})$: often a strong default for heavy tails [Cont 2001]; tends to improve stability.
 * **(c)** $\mathrm{MFE} / \mathrm{ATR}_{\text{entry}}$: yes, this is a direct way to push M01 toward "upside without being a volatility detector".
 * **(d) Loser deletion:** evaluate as an ablation, but expect poorer real-world behavior; it usually inflates apparent upside and breaks calibration when deployed.
+
+---
+
+## Ablation Study Results (2026-01-28)
+
+**Run:** `python scripts/run_m01_ablation_study.py --start 2018-01-01 --end 2025-12-31`
+
+| Model | Target Type | avg_ic | avg_edge | edge_sharpe | avg_rmse |
+|-------|-------------|--------|----------|-------------|----------|
+| M01_A | return_pct | 0.131 | +7.40% | 3.69 | 25.02% |
+| M01_B | hybrid_floor | 0.062 | +9.50% | 2.81 | 23.77% |
+| M01_C | risk_adjusted | 0.160 | +1.28% | 2.78 | 4.94 |
+| **M01_D** | **log_space** | **0.338** | +0.80% | **5.48** | 1.02 |
+| M01_E | log_hybrid | 0.158 | +0.26% | 1.49 | 1.96 |
+
+### Key Findings
+
+1. **M01_D (log_space) is the winner** 🏆
+   - Highest IC (0.338) = best ranking quality
+   - Highest edge_sharpe (5.48) = most consistent across folds
+   - Simple formula: `y = sign(MFE) × log(1 + |MFE|)`
+
+2. **Option E (log_hybrid) did not improve over D**
+   - Added stop-loss logic (structural + technical triggers)
+   - IC: 0.158 vs D's 0.338
+   - Hypothesis: Punishing losers with realized losses adds noise
+
+3. **Caveat: MFE-based targets don't punish losers**
+   - MFE = Maximum Favorable Excursion = highest point during trade
+   - Even crashed trades can have positive MFE
+   - Model learns "which trades have high upside potential?" not "which trades will be profitable?"
+
+### Target Option Definitions
+
+| Option | Formula | Behavior |
+|--------|---------|----------|
+| A | `y = return_pct` | Raw realized return (baseline) |
+| B | `y = MFE if winner else max(-10%, -2×ATR)` | Capped loser penalty |
+| C | `y = MFE / nATR` | ATR-normalized (anti-vol-detector) |
+| D | `y = sign(MFE) × log(1 + |MFE|)` | Log-compressed (tail smoothing) ✅ |
+| E | `y = sign(x) × log(1 + |x|)` where x = MFE or realized loss | Log-hybrid with stop triggers |
+
+---
+
+## ✅ Decision: Use M01_D (log_space) for Production
+
+**Rationale:**
+- Best IC (0.338) means model is best at ranking trades by upside potential
+- Edge Sharpe of 5.48 indicates consistent performance across time
+- Simple, interpretable formula
+
+---
+
+## Phase 2: Production Integration (COMPLETED 2026-01-28)
+
+### Completed Steps
+1. [x] **Update M01 trainer default target to `log_space`**
+   - Modified `m01_trainer.py` default from `return_pct` to `log_space`
+   - Added `_compute_log_space_target()` method using TargetEngineer
+
+2. [x] **Calibrate predictions (isotonic regression on OOS deciles)**
+   - Added `calibrate()` method with isotonic regression
+   - Monotonic calibration achieved: Decile 1 → 1.42, Decile 10 → 2.76
+   - Calibration error: 0.83
+
+3. [x] **Run volatility detector test (correlation with ATR)**
+   - Added `run_volatility_detector_test()` method
+   - **CRITICAL FINDING:** Model is a volatility detector
+     - Pred-ATR Correlation: +0.763 (high)
+     - Top Decile High-ATR %: 94.6%
+     - Within-bucket IC: +0.210 (still positive, but lower)
+
+4. [x] **Generate calibration curves for production**
+   - Created `m01_calibration.json` with decile boundaries
+   - Created `m01_calibrator.pkl` for production use
+
+### Artifacts Generated
+- `models/m01_calibrator.pkl` - Isotonic regression calibrator
+- `models/m01_calibration.json` - Decile calibration curves
+- `scripts/run_m01_production_calibration.py` - Full pipeline script
+
+### Volatility Detector Warning
+
+The model shows strong correlation with ATR (+0.76), meaning it preferentially selects high-volatility stocks. This is a known limitation:
+
+**Why this happens:**
+- MFE (Max Favorable Excursion) is naturally higher for volatile stocks
+- Log transform compresses but doesn't eliminate this bias
+- High-IC doesn't mean volatility-independent ranking
+
+**Mitigation options for Phase 3:**
+1. Add volatility filter in production (cap nATR at 8%)
+2. Use Option C (risk_adjusted = MFE/ATR) which had lower vol-correlation
+3. Blend M01 with M02 crash probability to penalize high-vol picks
+
+---
+
+## Phase 3: M02 Integration (NEXT)
+1. [ ] Connect M01 ranking to M02 probability filtering
+2. [ ] Implement combined scoring: `final_score = rank(M01) × P(success|M02)`
+3. [ ] Add volatility cap or penalty to reduce vol-detector behavior
+

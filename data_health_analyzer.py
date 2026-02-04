@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple, Optional
 import json
 from collections import defaultdict, Counter
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
@@ -160,9 +161,126 @@ class DataHealthAnalyzer:
             }
         }
     
+    def _analyze_single_fundamental(self, ticker: str, critical_columns: Dict) -> Dict:
+        """
+        Worker function to analyze a single ticker's fundamental data.
+
+        Args:
+            ticker: Stock symbol
+            critical_columns: Dictionary of critical columns to check
+
+        Returns:
+            Dictionary with quality metrics for this ticker
+        """
+        fund_file = self.fundamentals_dir / f"{ticker}.parquet"
+
+        if not fund_file.exists():
+            return {
+                'ticker': ticker,
+                'overall_score': 0,
+                'status': 'no_file',
+                'issues': ['Fundamental file does not exist'],
+                'column_data': {},
+                'filing_date_issue': None,
+                'freshness': None,
+                'num_quarters': 0
+            }
+
+        try:
+            df = pd.read_parquet(fund_file)
+
+            if df is None or df.empty:
+                return {
+                    'ticker': ticker,
+                    'overall_score': 0,
+                    'status': 'empty',
+                    'issues': ['Fundamental data is empty'],
+                    'column_data': {},
+                    'filing_date_issue': None,
+                    'freshness': None,
+                    'num_quarters': 0
+                }
+
+            issues = []
+            category_scores = {}
+            column_data = {}
+
+            # Check each category
+            for category, cols in critical_columns.items():
+                available = [col for col in cols if col in df.columns]
+                category_score = len(available) / len(cols) if cols else 0
+                category_scores[category] = category_score
+
+                # Track column availability and completeness
+                for col in available:
+                    completeness = (df[col].notna().sum() / len(df)) * 100
+                    if col not in column_data:
+                        column_data[col] = []
+                    column_data[col].append(completeness)
+
+                # Track missing critical columns
+                missing = [col for col in cols if col not in df.columns]
+                if missing:
+                    issues.append(f"Missing {category}: {', '.join(missing)}")
+
+            # Check filing_date quality
+            filing_date_issue = None
+            freshness = None
+
+            if 'filing_date' in df.columns:
+                df['filing_date'] = pd.to_datetime(df['filing_date'], errors='coerce')
+                null_count = df['filing_date'].isna().sum()
+                if null_count > 0:
+                    filing_date_issue = (ticker, null_count, len(df))
+                    issues.append(f"filing_date: {null_count}/{len(df)} null values")
+
+                # Check data freshness
+                if df['filing_date'].notna().any():
+                    most_recent = df['filing_date'].max()
+                    age_days = (datetime.now() - most_recent).days if pd.notna(most_recent) else None
+                    if age_days:
+                        freshness = (ticker, age_days, most_recent)
+                        if age_days > 180:  # 6 months
+                            issues.append(f"Stale data: {age_days} days old")
+            else:
+                issues.append("No filing_date column")
+
+            # Check quarterly coverage (should have at least 8 quarters for YoY)
+            num_quarters = len(df)
+            if num_quarters < 8:
+                issues.append(f"Insufficient history: only {num_quarters} quarters")
+
+            # Calculate overall quality score
+            overall_score = np.mean(list(category_scores.values())) * 100
+
+            return {
+                'ticker': ticker,
+                'overall_score': overall_score,
+                'category_scores': category_scores,
+                'num_quarters': num_quarters,
+                'issues': issues,
+                'status': 'excellent' if overall_score >= 90 else 'good' if overall_score >= 70 else 'fair' if overall_score >= 50 else 'poor',
+                'column_data': column_data,
+                'filing_date_issue': filing_date_issue,
+                'freshness': freshness
+            }
+
+        except Exception as e:
+            return {
+                'ticker': ticker,
+                'overall_score': 0,
+                'status': 'error',
+                'issues': [f"Error loading: {str(e)}"],
+                'column_data': {},
+                'filing_date_issue': None,
+                'freshness': None,
+                'num_quarters': 0
+            }
+
     def analyze_fundamental_data_quality(self, price_universe: List[str]) -> Dict:
         """
         Analyze fundamental data quality with focus on key screening columns.
+        Uses parallel processing for fast analysis of large universes.
 
         Key columns for Minervini/Growth screening:
         - Growth: revenue, eps, netIncome, revenue_growth_yoy, eps_growth_yoy
@@ -193,7 +311,7 @@ class DataHealthAnalyzer:
         for category, cols in critical_columns.items():
             print(f"   {category}: {', '.join(cols)}")
 
-        print(f"\n📁 Analyzing {len(price_universe)} tickers from price universe")
+        print(f"\n📁 Analyzing {len(price_universe)} tickers from price universe (parallel processing)")
         print(f"📂 Fundamentals directory: {self.fundamentals_dir}\n")
 
         # Results tracking
@@ -204,95 +322,54 @@ class DataHealthAnalyzer:
         data_freshness = []
         quarterly_coverage = []
 
-        # Process each ticker
+        # Parallel processing
         processed_count = 0
-        for ticker in price_universe:
-            # Check if fundamental file exists
-            fund_file = self.fundamentals_dir / f"{ticker}.parquet"
+        total_tickers = len(price_universe)
 
-            if not fund_file.exists():
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            # Submit all tasks
+            futures = {
+                executor.submit(self._analyze_single_fundamental, ticker, critical_columns): ticker
+                for ticker in price_universe
+            }
+
+            # Process results as they complete
+            for future in as_completed(futures):
+                result = future.result()
+                ticker = result['ticker']
+
+                # Store quality score
                 quality_scores[ticker] = {
-                    'overall_score': 0,
-                    'status': 'no_file',
-                    'issues': ['Fundamental file does not exist']
+                    'overall_score': result['overall_score'],
+                    'category_scores': result.get('category_scores', {}),
+                    'num_quarters': result['num_quarters'],
+                    'issues': result['issues'],
+                    'status': result['status']
                 }
-                continue
 
-            try:
-                df = pd.read_parquet(fund_file)
+                # Aggregate column data
+                if result['status'] not in ['no_file', 'empty', 'error']:
+                    processed_count += 1
 
-                if df is None or df.empty:
-                    quality_scores[ticker] = {
-                        'overall_score': 0,
-                        'status': 'empty',
-                        'issues': ['Fundamental data is empty']
-                    }
-                    continue
-
-                processed_count += 1
-                issues = []
-                category_scores = {}
-
-                # Check each category
-                for category, cols in critical_columns.items():
-                    available = [col for col in cols if col in df.columns]
-                    category_score = len(available) / len(cols) if cols else 0
-                    category_scores[category] = category_score
-
-                    # Track column availability
-                    for col in available:
+                    # Merge column data
+                    for col, completeness_list in result['column_data'].items():
                         column_availability[col] += 1
-                        # Calculate completeness (% non-null)
-                        completeness = (df[col].notna().sum() / len(df)) * 100
-                        column_completeness[col].append(completeness)
+                        column_completeness[col].extend(completeness_list)
 
-                    # Track missing critical columns
-                    missing = [col for col in cols if col not in df.columns]
-                    if missing:
-                        issues.append(f"Missing {category}: {', '.join(missing)}")
+                    # Collect filing date issues
+                    if result['filing_date_issue']:
+                        filing_date_issues.append(result['filing_date_issue'])
 
-                # Check filing_date quality
-                if 'filing_date' in df.columns:
-                    df['filing_date'] = pd.to_datetime(df['filing_date'], errors='coerce')
-                    null_count = df['filing_date'].isna().sum()
-                    if null_count > 0:
-                        filing_date_issues.append((ticker, null_count, len(df)))
-                        issues.append(f"filing_date: {null_count}/{len(df)} null values")
+                    # Collect freshness data
+                    if result['freshness']:
+                        data_freshness.append(result['freshness'])
 
-                    # Check data freshness
-                    if df['filing_date'].notna().any():
-                        most_recent = df['filing_date'].max()
-                        age_days = (datetime.now() - most_recent).days if pd.notna(most_recent) else None
-                        if age_days:
-                            data_freshness.append((ticker, age_days, most_recent))
-                            if age_days > 180:  # 6 months
-                                issues.append(f"Stale data: {age_days} days old")
-                else:
-                    issues.append("No filing_date column")
+                    # Collect quarterly coverage
+                    quarterly_coverage.append((ticker, result['num_quarters']))
 
-                # Check quarterly coverage (should have at least 8 quarters for YoY)
-                num_quarters = len(df)
-                quarterly_coverage.append((ticker, num_quarters))
-                if num_quarters < 8:
-                    issues.append(f"Insufficient history: only {num_quarters} quarters")
-
-                # Calculate overall quality score
-                overall_score = np.mean(list(category_scores.values())) * 100
-
-                quality_scores[ticker] = {
-                    'overall_score': overall_score,
-                    'category_scores': category_scores,
-                    'num_quarters': num_quarters,
-                    'issues': issues,
-                    'status': 'excellent' if overall_score >= 90 else 'good' if overall_score >= 70 else 'fair' if overall_score >= 50 else 'poor'
-                }
-
-            except Exception as e:
-                quality_scores[ticker] = {
-                    'overall_score': 0,
-                    'status': 'error',
-                    'issues': [f"Error loading: {str(e)}"]
-                }
+                # Log progress every 100 tickers
+                if len(quality_scores) % 100 == 0 or len(quality_scores) == total_tickers:
+                    print(f"Progress: {len(quality_scores)}/{total_tickers} tickers analyzed ({len(quality_scores)/total_tickers*100:.1f}%)")
 
         # Print results
         print(f"\n✅ Successfully analyzed: {processed_count} tickers\n")
@@ -665,7 +742,13 @@ class DataHealthAnalyzer:
         print(f"Total earnings cache files: {len(earnings_files)}\n")
 
         # Analyze each ticker
+        total_tickers = len(price_universe)
+        processed = 0
         for ticker in price_universe:
+            processed += 1
+            # Log progress every 100 tickers
+            if processed % 100 == 0 or processed == total_tickers:
+                print(f"Progress: {processed}/{total_tickers} tickers analyzed ({processed/total_tickers*100:.1f}%)")
             if ticker not in earnings_files:
                 without_earnings.append(ticker)
                 self.earnings_results[ticker] = {

@@ -31,6 +31,8 @@ from src.features import FeatureEngineer
 from src.utils import get_latest_trading_day
 from src.ml_scorer import MLScorer
 from src.fundamental_merger import FundamentalMerger
+from src.feature_preprocessor import FeaturePreprocessor
+from data_curator import update_fundamentals, update_macro_data
 
 # Setup logging
 logging.basicConfig(
@@ -38,6 +40,21 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def to_python_float(val):
+    """Convert numpy float types to Python native float for SQLite storage.
+
+    SQLite's Python adapter stores numpy.float32/float64 as BLOBs, not REAL.
+    This ensures proper storage and retrieval.
+    """
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return None
+    if isinstance(val, (np.floating, np.integer)):
+        return float(val)
+    if isinstance(val, float):
+        return val
+    return None
 
 
 def load_ml_scorer(model_path: Optional[str] = None) -> Optional[MLScorer]:
@@ -60,8 +77,74 @@ def load_ml_scorer(model_path: Optional[str] = None) -> Optional[MLScorer]:
         return None
 
 
+def load_production_scorer():
+    """Load ProductionScorer with M01+M02 models.
+
+    Uses the new M02 Loser Detector with formula:
+    Final_Score = M01_Vol_Adj × (1 - P(loser))
+
+    Returns:
+        ProductionScorer instance or None if loading failed
+    """
+    from src.pipeline import ProductionScorer
+
+    try:
+        scorer = ProductionScorer()
+        scorer.load_models()
+
+        print(f"\n[ProductionScorer] Loaded M01 + M02 Loser Detector")
+        print(f"      M01: {config.ML_M01_MODEL}")
+        print(f"      M02: models/m02.json (Loser Detector)")
+        print(f"      Formula: Final_Score = M01_adj × (1 - P(loser))")
+
+        return scorer
+    except Exception as e:
+        print(f"\n[WARN] ProductionScorer loading failed: {e}")
+        print("        Proceeding without ML scoring...\n")
+        return None
+
+
+def load_m03_regime(scan_date: str = None) -> dict:
+    """Load M03 Market Regime Calculator and compute regime score.
+
+    Args:
+        scan_date: Date to calculate regime for (YYYY-MM-DD)
+
+    Returns:
+        Dict with 'score', 'category', 'allow_longs', 'reduced_sizing', 'pillars'
+        Returns None if calculation fails
+    """
+    from src.pipeline import M03RegimeCalculator
+
+    try:
+        regime = M03RegimeCalculator()
+        result = regime.calculate(as_of_date=scan_date)
+        gating = regime.should_gate_signal(score=result['score'])
+
+        # Merge gating info into result
+        result['allow_longs'] = gating['allow_longs']
+        result['reduced_sizing'] = gating['reduced_sizing']
+
+        category_display = result['category'].upper().replace('_', ' ')
+        print(f"\n[M03 Regime] Score: {result['score']:.1f} ({category_display})")
+        print(f"      Trend: {result['pillars']['trend']['score']:.0f} | "
+              f"Liquidity: {result['pillars']['liquidity']['score']:.0f} | "
+              f"Risk: {result['pillars']['risk_appetite']['score']:.0f}")
+
+        if not gating['allow_longs']:
+            print(f"      [GATE] Longs BLOCKED (score < {config.M03_LONG_ALLOW_MIN})")
+        elif gating['reduced_sizing']:
+            print(f"      [GATE] Reduced sizing (score < {config.M03_LONG_REDUCED_MIN})")
+
+        return result
+    except Exception as e:
+        print(f"\n[WARN] M03 Regime calculation failed: {e}")
+        print("        Proceeding without regime gating...\n")
+        return None
+
+
 def load_dual_ml_scorers() -> tuple:
-    """Load both M01 and M01_3BAR_V2 models.
+    """Load both M01 and M01_3BAR_V2 models (LEGACY - use load_production_scorer instead).
     
     Returns:
         tuple: (m01_scorer, m01_3bar_scorer) - either can be None if loading failed
@@ -210,6 +293,48 @@ def update_dual_ml_ranks(db: DatabaseManager, scan_date_str: str):
                 db.update_buy_list_column(ticker, 'm01_3bar_rank', int(rank))
 
             logger.info(f"Ranked {len(m01_3bar_entries)} tickers by M01_3BAR_V2 ignition prob")
+
+
+def update_final_score_ranks(db: DatabaseManager, scan_date_str: str):
+    """Calculate ranks for final_score (M01 × M02 survival).
+    
+    Final score combines M01 expected return with M02 loser detector:
+    Final_Score = M01_Vol_Adj × (1 - P(loser))
+    
+    Higher final_score = better opportunity (high return, low loser risk)
+    """
+    buy_list_df = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+
+    if buy_list_df.empty:
+        return
+
+    # Rank by final_score (higher = better)
+    if 'final_score' in buy_list_df.columns:
+        valid_entries = buy_list_df[buy_list_df['final_score'].notna()].copy()
+        if len(valid_entries) > 0:
+            scores = valid_entries['final_score'].values
+            sorted_indices = np.argsort(scores)[::-1]
+            ranks = np.empty(len(scores), dtype=int)
+            ranks[sorted_indices] = np.arange(1, len(scores) + 1)
+
+            for ticker, rank in zip(valid_entries['ticker'], ranks):
+                db.update_buy_list_column(ticker, 'final_score_rank', int(rank))
+
+            logger.info(f"Ranked {len(valid_entries)} tickers by final_score (M01 × M02 survival)")
+
+    # Also rank by M01 expected return for backwards compatibility
+    if 'm01_expected_return' in buy_list_df.columns:
+        m01_entries = buy_list_df[buy_list_df['m01_expected_return'].notna()].copy()
+        if len(m01_entries) > 0:
+            scores = m01_entries['m01_expected_return'].values
+            sorted_indices = np.argsort(scores)[::-1]
+            ranks = np.empty(len(scores), dtype=int)
+            ranks[sorted_indices] = np.arange(1, len(scores) + 1)
+
+            for ticker, rank in zip(m01_entries['ticker'], ranks):
+                db.update_buy_list_column(ticker, 'm01_rank', int(rank))
+
+            logger.info(f"Ranked {len(m01_entries)} tickers by M01 expected return")
 
 
 def prepare_ml_candidates(tickers: List[str], enriched_data: dict,
@@ -428,11 +553,11 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     """
     start_time = time.time()
 
-    # Initialize dual ML scorers
-    m01_scorer, m01_3bar_scorer = load_dual_ml_scorers() if use_ml else (None, None)
-    use_ml = (m01_scorer is not None or m01_3bar_scorer is not None)  # Update flag if at least one loaded
+    # Initialize ProductionScorer (M01 + M02 Loser Detector)
+    production_scorer = load_production_scorer() if use_ml else None
+    use_ml = (production_scorer is not None)  # Update flag if scorer loaded
 
-    # Determine scan date
+    # Determine scan date (need this early for M03)
     if scan_date:
         scan_date_obj = pd.Timestamp(scan_date)
     else:
@@ -442,6 +567,12 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     print("=" * 80)
     print(f" DAILY SCANNER | {scan_date_str}")
     print("=" * 80)
+
+    # Load M03 Market Regime
+    m03_result = load_m03_regime(scan_date_str)
+    m03_score = m03_result['score'] if m03_result else None
+    m03_category = m03_result['category'] if m03_result else None
+    m03_allow_longs = m03_result['allow_longs'] if m03_result else True  # Default to allow if no regime
 
     total_steps = 5 if use_ml else 4
 
@@ -470,6 +601,18 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     success_count = sum(results.values())
     update_time = time.time() - update_start
     print(f"       Updated {success_count}/{len(tickers)} tickers in {update_time:.1f}s")
+    
+    # Update Fundamentals (Smart Update)
+    print(f"\n[2a] Updating Fundamentals (Earnings-Aware)...")
+    fund_start = time.time()
+    update_fundamentals(tickers, use_earnings_calendar=True, max_workers=10)
+    print(f"       Fundamental update check complete in {time.time() - fund_start:.1f}s")
+
+    # Update Macro Data (M03 Regime)
+    print(f"\n[2b] Updating Macro Data (M03 Regime)...")
+    macro_start = time.time()
+    update_macro_data(force=False)
+    print(f"       Macro data update check complete in {time.time() - macro_start:.1f}s")
 
     # ========================================================================
     # STEP 3: Load and Filter Data
@@ -541,11 +684,11 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     print(f"       [4.3] New triggers: {len(new_triggers_today)} stocks")
 
     # ========================================================================
-    # STEP 5 (Optional): Dual-Model Scoring (M01 + M01_3BAR_V2)
+    # STEP 5 (Optional): M01 + M02 Loser Detector Scoring
     # ========================================================================
-    dual_scores = {}
-    if use_ml and (m01_scorer or m01_3bar_scorer):
-        print(f"\n[5/{total_steps}] Dual-Model Scoring...")
+    ml_scores_df = None
+    if use_ml and production_scorer:
+        print(f"\n[5/{total_steps}] M01 + M02 Loser Detector Scoring...")
         ml_start = time.time()
 
         # Get all tickers to score (new triggers + existing buy list)
@@ -570,17 +713,36 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             print(f"       [5.2] Feature preparation complete in {prep_time:.2f}s ({prep_time/len(tickers_to_score)*1000:.1f}ms/ticker)")
 
             if len(candidates_df) > 0:
-                print(f"       [5.3] Running dual-model inference...")
+                # Apply preprocessing transforms (same as training)
+                # This ensures log/winsorize transforms are applied consistently
+                preprocess_config_path = Path('models/preprocessing_config.json')
+                if preprocess_config_path.exists():
+                    try:
+                        preprocessor = FeaturePreprocessor.load(str(preprocess_config_path))
+                        candidates_df = preprocessor.transform(candidates_df)
+                        print(f"       [5.2b] Applied preprocessing transforms from {preprocess_config_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not load preprocessing config: {e}")
+                
+                print(f"       [5.3] Running ProductionScorer (M01 + M02 Loser Detector)...")
                 score_start = time.time()
-                dual_scores = score_with_dual_models(candidates_df, m01_scorer, m01_3bar_scorer, scan_date_str)
+                
+                # Use ProductionScorer.score() which implements:
+                # Final_Score = M01_Vol_Adj × (1 - P(loser))
+                ml_scores_df = production_scorer.score(
+                    candidates_df,
+                    use_volatility_adjustment=True,
+                    use_m02=True
+                )
+                
                 score_time = time.time() - score_start
                 ml_time = time.time() - ml_start
 
-                m01_valid = sum(1 for s in dual_scores.values() if s.get('m01_expected_return') is not None)
-                m01_3bar_valid = sum(1 for s in dual_scores.values() if s.get('m01_3bar_prob') is not None)
+                valid_scores = ml_scores_df['final_score'].notna().sum() if 'final_score' in ml_scores_df.columns else 0
+                m02_valid = ml_scores_df['m02_loser_proba'].notna().sum() if 'm02_loser_proba' in ml_scores_df.columns else 0
                 print(f"       [5.3] Inference complete in {score_time:.2f}s ({score_time/len(candidates_df)*1000:.1f}ms/ticker)")
                 print(f"       [5.x] Total ML scoring time: {ml_time:.2f}s")
-                print(f"             M01 valid: {m01_valid}, M01_3BAR valid: {m01_3bar_valid}")
+                print(f"             Valid final scores: {valid_scores}, M02 loser proba: {m02_valid}")
             else:
                 print("       [WARN] No candidates with sufficient data")
         else:
@@ -612,6 +774,12 @@ def run_daily_scanner(scan_date: Optional[str] = None,
     tickers_to_remove = tickers_in_buy_list - trend_ok_tickers
     tickers_to_update = tickers_in_buy_list & trend_ok_tickers
 
+    # M03 Regime Gating: Skip longs if regime prohibits
+    if not m03_allow_longs and tickers_to_add:
+        gated_count = len(tickers_to_add)
+        print(f"\n       [M03 GATE] Blocking {gated_count} new signal(s) due to bearish regime")
+        tickers_to_add = []  # Clear all additions
+
     # Execute additions
     for trigger in tickers_to_add:
         ticker = trigger['ticker']
@@ -641,29 +809,26 @@ def run_daily_scanner(scan_date: Optional[str] = None,
         else:
             ma50 = ma150 = ma200 = high_52w = low_52w = None
 
-        # Get dual-model scores
+        # Get M02 Loser Detector scores from ml_scores_df
         m01_expected_return = None
-        m01_3bar_prob = None
-        m01_3bar_sl_price = None
-        m01_3bar_tp_price = None
-        ml_features_dict = None
+        m02_loser_proba = None
+        m02_survival = None
+        final_score = None
         ml_model_ver = None
         
-        if ticker in dual_scores:
-            ts = dual_scores[ticker]
-            m01_expected_return = ts.get('m01_expected_return')
-            m01_3bar_prob = ts.get('m01_3bar_prob')
-            m01_3bar_sl_price = ts.get('m01_3bar_sl_price')
-            m01_3bar_tp_price = ts.get('m01_3bar_tp_price')
-            # Flatten features from both models for dashboard compatibility
-            # Dashboard expects a flat dict, not nested structure
-            ml_features_dict = {}
-            ml_features_dict.update(ts.get('m01_features', {}))
-            ml_features_dict.update(ts.get('m01_3bar_features', {}))
-            ml_model_ver = f"M01+M01_3BAR_V2"
+        if ml_scores_df is not None and len(ml_scores_df) > 0:
+            ticker_row = ml_scores_df[ml_scores_df['ticker'] == ticker]
+            if len(ticker_row) > 0:
+                row_data = ticker_row.iloc[0]
+                # Convert numpy types to Python float for SQLite storage
+                m01_expected_return = to_python_float(row_data.get('m01_score'))
+                m02_loser_proba = to_python_float(row_data.get('m02_loser_proba'))
+                m02_survival = to_python_float(row_data.get('m02_survival'))
+                final_score = to_python_float(row_data.get('final_score'))
+                ml_model_ver = "M01+M02_LoserDetector"
 
-        # For legacy compatibility, also set ml_probability and ml_expected_return  
-        ml_prob = m01_3bar_prob  # Use 3bar as default probability
+        # For legacy compatibility
+        ml_prob = m02_survival  # Use survival probability as legacy ml_probability
         ml_expected_return_legacy = m01_expected_return
 
         db.add_to_buy_list(
@@ -684,19 +849,30 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             # Legacy ML columns (backward compatibility)
             ml_probability=ml_prob,
             ml_expected_return=ml_expected_return_legacy,
-            ml_model_type='dual',
+            ml_model_type='m02_loser_detector',
             ml_rank=None,  # Will be calculated later
             ml_model_version=ml_model_ver,
-            ml_score_date=scan_date_str if (m01_expected_return or m01_3bar_prob) else None,
-            ml_features=ml_features_dict,
-            # Dual-model columns
+            ml_score_date=scan_date_str if final_score else None,
+            ml_features=None,  # Features now embedded in ProductionScorer
+            # M01 columns
             m01_expected_return=m01_expected_return,
-            m01_rank=None,  # Calculated later
-            m01_3bar_prob=m01_3bar_prob,
-            m01_3bar_rank=None,  # Calculated later
-            m01_3bar_sl_price=m01_3bar_sl_price,
-            m01_3bar_tp_price=m01_3bar_tp_price
+            m01_rank=None  # Calculated later
         )
+        
+        # Update M02 columns separately (new columns)
+        if m02_loser_proba is not None:
+            db.update_buy_list_column(ticker, 'm02_loser_proba', m02_loser_proba)
+        if m02_survival is not None:
+            db.update_buy_list_column(ticker, 'm02_survival', m02_survival)
+        if final_score is not None:
+            db.update_buy_list_column(ticker, 'final_score', final_score)
+
+        # Update M03 Regime columns
+        if m03_score is not None:
+            db.update_buy_list_column(ticker, 'm03_regime_score', m03_score)
+        if m03_category is not None:
+            db.update_buy_list_column(ticker, 'm03_regime_category', m03_category)
+
         db.log_buy_list_activity(
             ticker=ticker,
             action='ADDED',
@@ -741,25 +917,23 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             else:
                 ma50 = ma150 = ma200 = high_52w = low_52w = None
 
-            # Get dual-model scores
+            # Get M02 Loser Detector scores from ml_scores_df
             m01_expected_return = None
-            m01_3bar_prob = None
-            m01_3bar_sl_price = None
-            m01_3bar_tp_price = None
-            ml_features_dict = None
+            m02_loser_proba = None
+            m02_survival = None
+            final_score = None
             ml_model_ver = None
             
-            if ticker in dual_scores:
-                ts = dual_scores[ticker]
-                m01_expected_return = ts.get('m01_expected_return')
-                m01_3bar_prob = ts.get('m01_3bar_prob')
-                m01_3bar_sl_price = ts.get('m01_3bar_sl_price')
-                m01_3bar_tp_price = ts.get('m01_3bar_tp_price')
-                # Flatten features from both models for dashboard compatibility
-                ml_features_dict = {}
-                ml_features_dict.update(ts.get('m01_features', {}))
-                ml_features_dict.update(ts.get('m01_3bar_features', {}))
-                ml_model_ver = "M01+M01_3BAR_V2"
+            if ml_scores_df is not None and len(ml_scores_df) > 0:
+                ticker_row = ml_scores_df[ml_scores_df['ticker'] == ticker]
+                if len(ticker_row) > 0:
+                    row_data = ticker_row.iloc[0]
+                    # Convert numpy types to Python float for SQLite storage
+                    m01_expected_return = to_python_float(row_data.get('m01_score'))
+                    m02_loser_proba = to_python_float(row_data.get('m02_loser_proba'))
+                    m02_survival = to_python_float(row_data.get('m02_survival'))
+                    final_score = to_python_float(row_data.get('final_score'))
+                    ml_model_ver = "M01+M02_LoserDetector"
 
             import json
             # Update legacy columns
@@ -774,23 +948,23 @@ def run_daily_scanner(scan_date: Optional[str] = None,
                 ma200=ma200,
                 high_52w=high_52w,
                 low_52w=low_52w,
-                ml_probability=m01_3bar_prob,
+                ml_probability=m02_survival,
                 ml_expected_return=m01_expected_return,
-                ml_model_type='dual',
+                ml_model_type='m02_loser_detector',
                 ml_model_version=ml_model_ver,
-                ml_score_date=scan_date_str if (m01_expected_return or m01_3bar_prob) else None,
-                ml_features=json.dumps(ml_features_dict) if ml_features_dict else None
+                ml_score_date=scan_date_str if final_score else None,
+                ml_features=None
             )
             
-            # Update dual-model columns individually
+            # Update M02 columns
             if m01_expected_return is not None:
                 db.update_buy_list_column(ticker, 'm01_expected_return', m01_expected_return)
-            if m01_3bar_prob is not None:
-                db.update_buy_list_column(ticker, 'm01_3bar_prob', m01_3bar_prob)
-            if m01_3bar_sl_price is not None:
-                db.update_buy_list_column(ticker, 'm01_3bar_sl_price', m01_3bar_sl_price)
-            if m01_3bar_tp_price is not None:
-                db.update_buy_list_column(ticker, 'm01_3bar_tp_price', m01_3bar_tp_price)
+            if m02_loser_proba is not None:
+                db.update_buy_list_column(ticker, 'm02_loser_proba', m02_loser_proba)
+            if m02_survival is not None:
+                db.update_buy_list_column(ticker, 'm02_survival', m02_survival)
+            if final_score is not None:
+                db.update_buy_list_column(ticker, 'final_score', final_score)
 
     # Execute removals
     for ticker in tickers_to_remove:
@@ -802,9 +976,9 @@ def run_daily_scanner(scan_date: Optional[str] = None,
             reason='trend_broken'
         )
 
-    # Recalculate dual-model ML ranks
-    if use_ml and (m01_scorer or m01_3bar_scorer):
-        update_dual_ml_ranks(db, scan_date_str)
+    # Recalculate final_score ranks
+    if use_ml and production_scorer:
+        update_final_score_ranks(db, scan_date_str)
 
     print(f"       +{len(tickers_to_add)} added, -{len(tickers_to_remove)} removed")
     print(f"       Active buy list: {len(tickers_in_buy_list) + len(tickers_to_add) - len(tickers_to_remove)} tickers")

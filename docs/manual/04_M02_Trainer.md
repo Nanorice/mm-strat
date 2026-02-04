@@ -1,23 +1,25 @@
 ---
-title: M02 Trainer - Ignition Classifier
+title: M02 Trainer - Loser Detector
 type: component
 layer: model_runner
 status: stable
 created: 2026-01-27
+updated: 2026-01-29
 tags:
   - ml
   - classification
   - m02
   - xgboost
   - triple-barrier
-  - ignition
+  - loser-detection
+  - risk-filter
 dependencies:
   - "[[02_Data_Pipeline]]"
   - "[[06_Feature_Config]]"
   - "[[08_Strategy_Layer#Triple Barrier Labeler]]"
 ---
 
-# M02 Trainer: Ignition Classifier
+# M02 Trainer: Loser Detector
 
 **File:** [src/pipeline/m02_trainer.py](../../src/pipeline/m02_trainer.py)
 **Class:** `M02Trainer`
@@ -28,12 +30,15 @@ dependencies:
 
 ## Purpose
 
-M02 predicts **ignition probability** - the likelihood of hitting profit target (TP) before stop-loss (SL). It uses triple barrier meta-labeling to filter low-quality setups.
+M02 predicts **stop-loss hit probability** - the likelihood of hitting SL before TP or time exit. It uses triple barrier meta-labeling to **filter high-risk trades**.
+
+> [!important] Critical Pivot (2026-01-28)
+> M02 was originally designed as an "Ignition Classifier" (predict TP hits). With only 5.4% TP rate, the model learned to always predict "no TP" (91% accuracy but useless). **Inverting to predict SL hits (61.6% base rate)** produces a learnable, useful model.
 
 **Use Case:**
-- Risk filtering: Skip trades with low TP probability
-- Ensemble with M01: Combine ranking (M01) + filtering (M02)
-- Position sizing: Higher score = larger position
+- **Risk filtering:** Penalize trades likely to hit stop-loss
+- **Dual-model scoring:** `Final_Score = M01_adj × (1 - P(loser))`
+- Position sizing: Lower P(loser) = larger position
 
 ---
 
@@ -42,9 +47,9 @@ M02 predicts **ignition probability** - the likelihood of hitting profit target 
 **Algorithm:** XGBoost Classifier
 
 **Target Variable:**
-- `y_meta` - Binary label (1 = TP hit first, 0 = SL/Time hit first)
+- `y_loser` - Binary label (1 = SL hit, 0 = TP or Time exit)
 
-**Output:** Probability [0, 1] of hitting TP before SL
+**Output:** Probability [0, 1] of hitting stop-loss
 
 **Training Data:** [[02_Data_Pipeline#D3 Labeled Dataset|D3 Dataset]] (trades + features + barrier labels)
 
@@ -171,12 +176,12 @@ Default: MAX(20%, 4.0 × nATR)
 Max holding period: 30 days
 ```
 
-### Labeling Logic
+### Labeling Logic (Inverted for Loser Detection)
 
 For each trade trajectory in [[02_Data_Pipeline#D2R Rehydrated Trajectories|D2R]]:
 1. Check each day: Did price hit SL, TP, or Time barrier?
-2. **y_meta = 1** → TP hit first (winner)
-3. **y_meta = 0** → SL or Time hit first (loser)
+2. **y_loser = 1** → SL hit first (loser)
+3. **y_loser = 0** → TP or Time exit (survivor)
 
 **Example:**
 ```
@@ -185,10 +190,13 @@ Trade Entry: $100, nATR = 5%
 - TP = MAX($120, $120) = $120 (+20%)
 - Time = 30 days
 
-Day 3: Price = $92 → SL hit → y_meta = 0
-Day 12: Price = $122 → TP hit → y_meta = 1
-Day 31: Time limit → y_meta = 0
+Day 3: Price = $92 → SL hit → y_loser = 1
+Day 12: Price = $122 → TP hit → y_loser = 0
+Day 31: Time limit → y_loser = 0
 ```
+
+> [!note] Why Invert?
+> With 5.4% TP rate vs 61.6% SL rate, the model learns better patterns when predicting the majority class (SL). We then **invert the scoring formula** to penalize high P(loser).
 
 ---
 
@@ -406,22 +414,67 @@ print(high_confidence[['ticker', 'date', 'ignition_prob']])
 
 ---
 
-## Integration with M01
+## Dual-Model Scoring (Production)
 
-### Ensemble Approach
+The recommended production approach combines M01 ranking with M02 loser filtering.
 
-```python
-# Weighted average of M01 and M02 scores
-final_score = 0.6 * m01_prediction + 0.4 * m02_probability
+**File:** [src/pipeline/production_scorer.py](../../src/pipeline/production_scorer.py)
+**Class:** `ProductionScorer`
+
+### Scoring Formula
+
+```
+Final_Score = M01_Vol_Adj × (1 - P(loser))
+            = M01_Vol_Adj × m02_survival
 ```
 
-### Filter Approach
+Where:
+- `M01_Vol_Adj` = M01 prediction / nATR (volatility-adjusted)
+- `P(loser)` = M02 probability of hitting stop-loss
+- `m02_survival` = 1 - P(loser)
+
+### ProductionScorer Usage
 
 ```python
-# Use M02 as filter, M01 for ranking
-candidates = df[df['m02_prob'] > 0.6]  # Filter by ignition
-top_10 = candidates.nlargest(10, 'm01_return')  # Rank by return
+from src.pipeline import ProductionScorer
+
+scorer = ProductionScorer()
+scorer.load_models()
+
+# Score with M02 Loser Detector (RECOMMENDED)
+scores = scorer.score(candidates, use_m02=True)
+
+# Output columns:
+# - m01_score: Raw M01 prediction
+# - adjusted_score: Vol-adjusted M01
+# - m02_loser_proba: P(hitting stop-loss)
+# - m02_survival: 1 - P(loser)
+# - final_score: adjusted_score × m02_survival
+
+positions = scorer.get_position_sizes(scores, portfolio_value=100000)
 ```
+
+### Performance Improvement (2022 Crisis Simulation)
+
+| Configuration | IC | p-value | Selection Edge | Top Decile |
+|--------------|-----|---------|----------------|------------|
+| Vol-Adjusted M01 Only | +0.094 | 0.0036 | +6.46% | 3.77% |
+| **M01 + M02 Loser Detector** | **+0.304** | **<0.0001** | **+10.02%** | **7.33%** |
+
+> [!success] IC improved 3.2x with the inverted M02
+> The loser detector successfully filters out trades likely to hit stop-loss.
+
+### Daily Scanner Integration
+
+```bash
+# Run with M02 Loser Detector
+python daily_scanner.py --use-ml
+```
+
+**Output Columns:**
+- `final_score`: Combined M01 × M02 score
+- `m02_loser_proba`: Stop-loss hit probability (Loser%)
+- `m02_survival`: 1 - P(loser) (Surv%)
 
 ---
 
@@ -452,15 +505,33 @@ top_10 = candidates.nlargest(10, 'm01_return')  # Rank by return
 
 ## Key Insights
 
-> [!tip] Precision vs Recall Trade-Off
-> For trading models, **precision > recall**. Better to miss 70% of winners (low recall) than to take many false positives (low precision).
+> [!tip] Invert the Target for Imbalanced Data
+> When one class is rare (5.4% TP rate), invert the target to predict the majority class (61.6% SL rate). This produces a learnable model.
+
+> [!tip] Accuracy Drop is Intentional
+> Old TP model: 91% accuracy (useless - always predicted "no TP")
+> New SL model: 57% accuracy (useful - actually learns patterns)
+> **Don't optimize for accuracy with imbalanced data.**
+
+> [!info] The Loser Detector Insight
+> ```
+> Problem: 5.4% TP rate → Model learns "always predict no TP" → 94.6% accuracy but useless
+> Solution: 61.6% SL rate → Model learns actual patterns → 57% accuracy but useful
+>           Formula: Final = M01_adj × (1 - P(loser))
+>           ↳ High P(loser) → penalize the trade
+> ```
 
 > [!info] Velocity Features Matter
 > Static features (RSI, MACD) don't predict ignition timing. Use velocity features: rs_velocity, volume_acceleration, breakout_momentum.
 
-> [!warning] Class Imbalance
-> With TP rate ~5%, the model sees 95% negative examples. Use scale_pos_weight to balance training. Don't trust raw accuracy - focus on precision/recall.
+> [!success] M02 Training Comparison
+> | Metric | Old (TP Target) | New (SL Target) |
+> |--------|-----------------|-----------------|
+> | Accuracy | 91.4% | 57.3% |
+> | Precision | 21% | **66%** |
+> | Recall | 21% | **68%** |
+> | Crisis IC | -0.075 | **+0.304** |
 
 ---
 
-*Last updated: 2026-01-27*
+*Last updated: 2026-01-29*

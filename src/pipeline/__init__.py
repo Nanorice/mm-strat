@@ -39,5 +39,17 @@ from .data_pipeline import DataPipeline
 from .base_trainer import BaseTrainer
 from .m01_trainer import M01Trainer
 from .m02_trainer import M02Trainer
+from .m03_regime import M03RegimeCalculator
+from .production_scorer import ProductionScorer
+from .m01_workflow import M01Workflow, WorkflowConfig
 
-__all__ = ['DataPipeline', 'BaseTrainer', 'M01Trainer', 'M02Trainer']
+__all__ = [
+    'DataPipeline',
+    'BaseTrainer',
+    'M01Trainer',
+    'M02Trainer',
+    'M03RegimeCalculator',
+    'ProductionScorer',
+    'M01Workflow',
+    'WorkflowConfig'
+]

@@ -164,7 +164,7 @@ DELTA_FEATURES = [f"{feature}_Delta" for feature in FEATURES_TO_LAG]
 # MODEL-SPECIFIC FEATURE SETS
 # =============================================================================
 # M01: SEPA Signal Regressor Model (Predicts: expected return)
-M01_FEATURES = [
+M01_Bench_FEATURES = [
     # Alphas
     'alpha009', 
     'alpha011', 
@@ -189,6 +189,133 @@ M01_FEATURES = [
     'revenue_accel', 
     'pe_ratio', 
     'eps_accel', 
+]
+
+# including M03 features makes M01 worse
+M01_V2_FEATURES = [
+    'alpha011',
+    'log_nATR',  # log-transformed
+    'log_Price_vs_SMA_200',  # log-transformed
+    'log_Dist_From_52W_Low',  # log-transformed
+    'eps_stability_score',
+    'alpha013',
+    'operating_margin',
+    'log_alpha060',  # log-transformed
+    "m03_regime_cat",
+    'm03_pillar_risk',
+    'log_debt_to_equity',  # log-transformed
+    'm03_pillar_trend',
+    'log_RS_Delta',  # log-transformed
+    'log_current_ratio',  # log-transformed
+    'log_fcf_margin',  # log-transformed
+    'earnings_quality_score',
+    'rs_velocity',
+    'log_nATR_Delta',  # log-transformed
+    'm03_score',
+    'log_volume_velocity',  # already log-transformed
+    'log_alpha001',  # log-transformed
+    'alpha054',
+    'alpha101',
+    'log_days_since_report',  # log-transformed
+    'roe',
+    'price_accel_10d',
+    'alpha041',
+    'Price_vs_SMA_50_Delta',
+    'roa',
+    'RSI_14',
+    'm03_pillar_liq',
+    'alpha012',
+    'log_RS_MA_Delta',  # log-transformed
+    'log_Dry_Up_Volume_Delta',  # log-transformed
+    'alpha015',
+    'pe_ratio',
+    'log_revenue_growth_yoy',  # log-transformed
+    'is_declining_earnings',
+    'log_Dry_Up_Volume',  # log-transformed
+    'log_Dist_From_20D_Low_Delta',  # log-transformed
+    'SMA_50_Slope',
+    'peg_adjusted',
+    'log_revenue_cagr_3y',  # log-transformed
+    'gross_margin',
+    'log_Price_vs_SMA_200_Delta',  # log-transformed
+    'inventory_growth_yoy',
+    'alpha006',
+    'Dist_From_20D_High_Delta',
+    'log_pb_ratio',  # log-transformed
+    'log_revenue_accel',  # log-transformed
+    'log_eps_accel',  # log-transformed
+    'alpha002',
+    'log_volume_acceleration',  # log-transformed
+    'ps_ratio',
+    'm03_delta_5d',
+    'log_gross_margin_trend',  # log-transformed
+    'VCP_Ratio',
+    'Dist_From_52W_High',
+    'log_breakout_momentum',  # log-transformed
+    'Price_vs_SMA_150_Delta',
+    'm03_regime_vol',
+    'm03_delta_20d',
+    'Is_Green_Day',
+]
+
+M01_FEATURES = [
+    'log_Price_vs_SMA_200',  # log-transformed
+    'alpha011',
+    'log_nATR',  # log-transformed
+    'alpha013',
+    'log_RS_Delta',  # log-transformed
+    'log_Dist_From_52W_Low',  # log-transformed
+    'log_alpha060',  # log-transformed
+    'log_current_ratio',  # log-transformed
+    'eps_stability_score',
+    'operating_margin',
+    'log_Dry_Up_Volume_Delta',  # log-transformed
+    'Price_vs_SMA_50_Delta',
+    'alpha101',
+    'log_debt_to_equity',  # log-transformed
+    'log_volume_velocity',  # already log-transformed
+    'log_eps_growth_yoy',  # log-transformed
+    'log_alpha001',  # log-transformed
+    'rs_velocity',
+    'alpha054',
+    'earnings_quality_score',
+    'nATR_Delta',
+    'log_revenue_growth_yoy',  # log-transformed
+    'price_accel_10d',
+    'log_fcf_margin',  # log-transformed
+    'alpha006',
+    'log_Dist_From_20D_Low_Delta',  # log-transformed
+    'pe_ratio',
+    'RSI_14',
+    'log_RS_MA_Delta',  # log-transformed
+    'log_revenue_accel',  # log-transformed
+    'inventory_vs_sales_spread',
+    'roa',
+    'alpha012',
+    'alpha015',
+    'log_revenue_cagr_3y',  # log-transformed
+    'Price_vs_SMA_150_Delta',
+    'alpha041',
+    'log_breakout_momentum',  # log-transformed
+    'roe',
+    'alpha002',
+    'alpha009',
+    'Dist_From_20D_High_Delta',
+    'log_eps_accel',  # log-transformed
+    'VCP_Ratio',
+    'days_since_report',
+    'log_pb_ratio',  # log-transformed
+    'log_Price_vs_SMA_200_Delta',  # log-transformed
+    'peg_adjusted',
+    'ps_ratio',
+    'log_gross_margin_trend',  # log-transformed
+    'log_Dry_Up_Volume',  # log-transformed
+    'log_volume_acceleration',  # log-transformed
+    'gross_margin',
+    'SMA_50_Slope',
+    'Dist_From_52W_High',
+    'Is_Green_Day',
+    'log_Lowest_Low_20D_Delta',  # log-transformed
 ]
 
 # M01_3BAR: Triple Barrier Meta-Labeling Model (Baseline)
@@ -260,6 +387,65 @@ M02_FEATURES = M01_3BAR_VELOCITY_ONLY.copy()
 
 # Backward compatibility aliases (deprecated - use M02_FEATURES)
 M01_3BAR_FEATURES_V2 = M02_FEATURES
+
+# =============================================================================
+# FEATURE PRE-FILTERS (Applied before KS threshold screening)
+# =============================================================================
+# These columns are excluded BEFORE statistical screening because they are:
+# - Metadata (not features)
+# - Raw/non-stationary (absolute prices, volumes)
+# - Structurally redundant (lagged versions used to compute deltas)
+
+# Metadata columns (not features)
+EXCLUDE_METADATA = ['date', 'ticker', 'label', 'return_pct', 'days_held', 'exit_reason', 'year']
+
+# Raw price/volume columns (non-stationary, can cause data leakage)
+EXCLUDE_RAW_COLUMNS = [
+    'Open', 'High', 'Low', 'Close', 'Volume',
+    'High_52W', 'Low_52W', 'ATR', 'Vol_MA', 'High_20D',
+    'ATR_Lag1', 'High_52W_Lag1', 'Low_52W_Lag1',
+    'is_stale', 'has_fundamentals',
+    'SMA_50', 'SMA_150', 'SMA_200', 'RS_MA',
+]
+
+# Price structure columns (absolute values, not normalized)
+EXCLUDE_PRICE_STRUCTURE = [
+    'Lowest_Low_20D', 'Highest_High_20D',
+    'Lowest_Low_20D_Lag1', 'Highest_High_20D_Lag1',
+]
+
+# Lag features (use deltas instead, avoid double-counting)
+EXCLUDE_LAG_FEATURES = [f"{f}_Lag1" for f in FEATURES_TO_LAG]
+
+# Raw fundamental columns (use derived ratios instead)
+EXCLUDE_RAW_FUNDAMENTALS = ['operatingCashFlow', 'freeCashFlow', 'netIncome', 'revenue']
+
+# Combined exclusion list for FeatureScreener pre-filtering
+# NOTE: High correlation is computed dynamically in FeatureScreener, not hardcoded
+FEATURE_EXCLUSION_LIST = (
+    EXCLUDE_METADATA +
+    EXCLUDE_RAW_COLUMNS +
+    EXCLUDE_PRICE_STRUCTURE +
+    EXCLUDE_LAG_FEATURES +
+    EXCLUDE_RAW_FUNDAMENTALS
+)
+
+
+# =============================================================================
+# CANDIDATE FEATURES FOR AUTOMATED WORKFLOW
+# =============================================================================
+# Add experimental features here to test in the automated workflow.
+# The workflow will screen these using KS test and select those that pass.
+M01_CANDIDATE_FEATURES = M01_FEATURES + [
+    # Add experimental features below (uncomment to include):
+    # --- Regime Features (Future) ---
+    # 'regime_vix',
+    # 'regime_momentum',
+    # 'regime_breadth',
+    # --- Sector Features (Future) ---
+    # 'sector_rs',
+    # 'industry_rs',
+]
 
 
 def get_model_features(model_name: str = 'M01') -> List[str]:

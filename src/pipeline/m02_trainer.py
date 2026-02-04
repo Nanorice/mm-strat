@@ -43,21 +43,56 @@ DEFAULT_BARRIER_PARAMS = {
 
 class M02Trainer(BaseTrainer):
     """
-    M02: Ignition Classifier.
-    
-    Predicts probability of hitting profit target before stop-loss.
+    M02: Loser Detector (Inverted Ignition Classifier).
+
+    Predicts probability of hitting STOP-LOSS before profit target.
     Uses triple barrier labels from d3 dataset.
-    
-    Higher scores = higher probability of hitting TP first.
+
+    Higher scores = higher probability of hitting SL first (LOSER).
+
+    Rationale:
+        - TP rate is only 5.4%, making it nearly impossible to learn
+        - SL rate is 61.6%, providing much better signal-to-noise
+        - Filtering out losers is as valuable as finding winners
+
+    Usage:
+        # Train on inverted labels (y_loser = 1 if SL hit)
+        trainer = M02Trainer()
+        model, metrics = trainer.train(d3)
+
+        # In production, PENALIZE high P(loser):
+        # Final_Score = M01_Adj × (1 - P(loser))
     """
-    
+
     def __init__(
-        self, 
+        self,
         output_dir: str = 'models',
-        barrier_params: Optional[Dict] = None
+        barrier_params: Optional[Dict] = None,
+        feature_set: str = None,
+        model_name: str = None
     ):
         super().__init__(output_dir)
-        self.barrier_params = barrier_params or DEFAULT_BARRIER_PARAMS.copy()
+        self.barrier_params = barrier_params or self._load_barrier_params_from_d3()
+        self._feature_set = feature_set  # Custom feature set name (e.g., 'M01_FEATURES')
+        self._custom_model_name = model_name  # Custom model name for AB testing
+
+    def _load_barrier_params_from_d3(self) -> Dict:
+        """Load barrier params from d3_summary.json if available, else use defaults."""
+        import json
+        from pathlib import Path
+
+        summary_path = Path('data/ml/d3_summary.json')
+        if summary_path.exists():
+            try:
+                with open(summary_path) as f:
+                    summary = json.load(f)
+                if 'barrier_params' in summary:
+                    logger.info(f"   Loaded barrier params from {summary_path}")
+                    return summary['barrier_params']
+            except Exception as e:
+                logger.warning(f"   Failed to load barrier params from {summary_path}: {e}")
+
+        return DEFAULT_BARRIER_PARAMS.copy()
     
     @property
     def model_type(self) -> str:
@@ -65,17 +100,35 @@ class M02Trainer(BaseTrainer):
     
     @property
     def model_name(self) -> str:
-        return 'M02'
+        return self._custom_model_name or 'M02'
     
     def get_features(self) -> List[str]:
-        """Get M02 feature list from centralized config."""
+        """Get M02 feature list from centralized config.
+        
+        Uses custom feature_set if specified, otherwise M02_FEATURES.
+        """
         from src.feature_config import get_model_features
-        # M02 uses velocity-focused features
+        import src.feature_config as fc
+        
+        if self._feature_set:
+            # Try to load from feature_config registry first
+            try:
+                return get_model_features(self._feature_set)
+            except ValueError:
+                # Fall back to loading the attribute directly
+                if hasattr(fc, self._feature_set):
+                    features = getattr(fc, self._feature_set)
+                    logger.info(f"   Using custom feature set: {self._feature_set} ({len(features)} features)")
+                    return features
+                else:
+                    raise ValueError(f"Feature set '{self._feature_set}' not found in feature_config.py")
+        
+        # Default: M02 velocity-focused features
         return get_model_features('M02')
     
     def get_target_col(self) -> str:
-        """M02 predicts triple barrier label."""
-        return 'y_meta'
+        """M02 predicts LOSER label (inverted: 1 = SL hit)."""
+        return 'y_loser'
     
     def get_model_params(self, tuned_params: Optional[Dict] = None) -> Dict:
         """Get XGBoost classifier parameters."""
@@ -102,6 +155,33 @@ class M02Trainer(BaseTrainer):
         import xgboost as xgb
         return xgb.XGBClassifier(**params)
     
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare D3 data with inverted labels (y_loser).
+
+        Creates y_loser column:
+            1 = SL hit (loser) - we want to DETECT these
+            0 = TP or Time hit (not a loser)
+        """
+        df = data.copy()
+
+        if 'barrier_outcome' in df.columns:
+            # Use barrier_outcome for precise labeling
+            df['y_loser'] = (df['barrier_outcome'] == 'SL').astype(int)
+            logger.info(f"   Created y_loser from barrier_outcome")
+        elif 'y_meta' in df.columns:
+            # Fallback: invert y_meta (0 becomes potential loser)
+            # But this includes Time exits, so less precise
+            df['y_loser'] = (df['y_meta'] == 0).astype(int)
+            logger.info(f"   Created y_loser from inverted y_meta (includes Time exits)")
+        else:
+            raise ValueError("D3 must have 'barrier_outcome' or 'y_meta' column")
+
+        loser_rate = df['y_loser'].mean()
+        logger.info(f"   Loser rate (SL hits): {loser_rate:.1%}")
+
+        return df
+
     def train(
         self,
         data: pd.DataFrame,
@@ -111,20 +191,25 @@ class M02Trainer(BaseTrainer):
         test_years: int = 1
     ):
         """
-        Train M02 with automatic class weight handling.
-        
-        Overrides base train() to handle imbalanced classes.
+        Train M02 Loser Detector with automatic class weight handling.
+
+        Overrides base train() to:
+        1. Create y_loser target (inverted labels)
+        2. Handle class imbalance
         """
-        # Calculate scale_pos_weight for imbalanced classes
+        # Step 1: Prepare data with inverted labels
+        data = self.prepare_data(data)
+
+        # Step 2: Calculate scale_pos_weight for imbalanced classes
         target_col = self.get_target_col()
         if target_col in data.columns:
             pos_ratio = data[target_col].mean()
             if pos_ratio > 0 and pos_ratio < 1:
                 scale_pos_weight = (1 - pos_ratio) / pos_ratio
-                logger.info(f"   Class imbalance: {pos_ratio:.1%} positive")
+                logger.info(f"   Class imbalance: {pos_ratio:.1%} positive (losers)")
                 logger.info(f"   scale_pos_weight: {scale_pos_weight:.2f}")
                 self._scale_pos_weight = scale_pos_weight
-        
+
         return super().train(data, tune, tune_trials, train_years, test_years)
     
     def get_model_params(self, tuned_params: Optional[Dict] = None) -> Dict:
@@ -227,8 +312,9 @@ class M02Trainer(BaseTrainer):
         importance_df['gain_pct'] = (importance_df['gain'] / total_gain * 100).round(2)
         importance_df['cumulative_pct'] = importance_df['gain_pct'].cumsum().round(2)
         
-        # Save to CSV
-        csv_path = self.output_dir / 'feature_importance_m02.csv'
+        # Save to CSV (use model name for distinct files)
+        model_lower = self.model_name.lower()
+        csv_path = self.output_dir / f'feature_importance_{model_lower}.csv'
         importance_df.to_csv(csv_path, index=False)
         logger.info(f"   Saved feature importance to {csv_path}")
         
@@ -256,7 +342,12 @@ class M02Trainer(BaseTrainer):
         from datetime import datetime
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = self.output_dir / f"model_report_M02_{timestamp}.md"
+        model_lower = self.model_name.lower()
+        report_path = self.output_dir / f"model_report_{self.model_name}_{timestamp}.md"
+        
+        # Get feature set info for report
+        feature_set_name = self._feature_set or 'M02_FEATURES'
+        feature_count = len(self.get_features())
         
         # Get feature importance
         feature_cols = self._feature_cols if hasattr(self, '_feature_cols') else []
@@ -270,12 +361,13 @@ class M02Trainer(BaseTrainer):
         
         # Build report
         lines = []
-        lines.append("# Model Training Report - M02 (Ignition Classifier)")
+        lines.append(f"# Model Training Report - {self.model_name} (Loser Detector)")
         lines.append("")
         lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         if start_date and end_date:
             lines.append(f"**Training Period:** {start_date} to {end_date}")
         lines.append(f"**Model Type:** CLASSIFICATION")
+        lines.append(f"**Feature Set:** {feature_set_name} ({feature_count} features)")
         lines.append(f"**Barrier Type:** Hybrid (ATR-based)")
         lines.append("")
         lines.append("---")

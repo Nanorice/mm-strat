@@ -36,6 +36,18 @@
 - **Docs**: DO NOT generate module-level docstrings or verbose comments unless the logic is complex. Keep it terse.
 - **Error Handling**: Use specific exceptions, never bare `except:`.
 
+## Emoji Usage (CRITICAL)
+When using emojis in console output or strings, **only use these tested, working Unicode characters**:
+- Status: ✅ ❌ ⚠️
+- Progress: 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣
+- Actions: 📋 📅 📊 🔧 ⏱️
+
+**Rules:**
+1. Copy-paste emojis directly from this list - do NOT use escape sequences like `\U0001F4CB`
+2. Avoid exotic/uncommon emojis that may have encoding issues on Windows consoles
+3. Prefer simple status indicators (✅ ❌) over decorative emojis
+4. If unsure, use plain ASCII like `[OK]`, `[WARN]`, `[ERR]` instead
+
 ## Interaction Style
 - Be concise. Do not explain standard code.
 - When creating files, double-check the "File Structure Rules" above.

@@ -34,6 +34,7 @@ from src.features import FeatureEngineer
 from src.strategy import SEPAStrategy
 from src.trading_config import TradingConfig
 from src.feature_config import get_model_features, FEATURES_TO_LAG
+from src.feature_preprocessor import FeaturePreprocessor
 
 # Configure logging
 logging.basicConfig(
@@ -843,6 +844,19 @@ def train_model_walk_forward(data: pd.DataFrame,
 
     # Clean training data
     data = clean_training_data(data, available_cols)
+
+    # Fit/Transform preprocessing (fat-tail handling)
+    # Fit on full training data, save config for inference
+    preprocessor = FeaturePreprocessor()
+    preprocessor.fit(data, available_cols, target='return_pct')
+    data = preprocessor.transform(data)
+    
+    # Update feature list with transformed names (log_ prefix for log-transformed features)
+    available_cols = preprocessor.get_transformed_feature_names(available_cols)
+    
+    # Save preprocessing config for inference
+    preprocessor.save('models/preprocessing_config.json')
+    logger.info(f"   Saved preprocessing config (use at inference time)")
 
     years = sorted(data['year'].unique())
 

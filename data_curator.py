@@ -46,6 +46,7 @@ from src.data_engine import DataRepository
 from src.fundamental_engine import FundamentalEngine
 from src.company_profile_engine import CompanyProfileEngine
 from data_health_analyzer import DataHealthAnalyzer
+from src.macro_engine import MacroEngine
 
 # Configure logging
 logging.basicConfig(
@@ -261,9 +262,41 @@ def update_profiles(
     return results
 
 
+def update_macro_data(force: bool = False) -> dict:
+    """
+    Update macroeconomic data cache (FRED series + VIX).
+
+    Data includes:
+    - WALCL: Fed Total Assets
+    - WTREGEN: Treasury General Account
+    - RRPONTSYD: Reverse Repo
+    - BAMLH0A0HYM2: HY Credit Spread
+    - VIX: Volatility Index
+
+    Args:
+        force: Force re-download all data
+
+    Returns:
+        Dict mapping series_id to row count
+    """
+    print("\n[5/6] Updating Macroeconomic Data...")
+
+    macro_engine = MacroEngine()
+    results = macro_engine.update_macro_cache(force=force)
+
+    total_series = len(results)
+    total_rows = sum(results.values())
+    print(f"   [OK] Macro update complete: {total_series} series, {total_rows:,} total observations")
+
+    for series_id, count in results.items():
+        print(f"      {series_id}: {count:,} rows")
+
+    return results
+
+
 def run_health_check():
     """Run comprehensive data health analysis."""
-    print("\n5️⃣  Running Data Health Analysis...")
+    print("\n[6/6] Running Data Health Analysis...")
     analyzer = DataHealthAnalyzer()
     analyzer.run_full_analysis()
 
@@ -275,6 +308,7 @@ def run_curation(
     update_prices_flag: bool = False,
     update_fundamentals_flag: bool = False,
     update_profiles_flag: bool = False,
+    update_macro_flag: bool = False,
     force: bool = False,
     skip_market_check: bool = False,
     skip_health_check: bool = False,
@@ -295,6 +329,7 @@ def run_curation(
         update_prices_flag: Whether to update price data
         update_fundamentals_flag: Whether to update fundamental data
         update_profiles_flag: Whether to update company profiles
+        update_macro_flag: Whether to update macroeconomic data (FRED + VIX)
         force: Force re-download even if cache is fresh
         skip_market_check: Bypass market hours safety check
         skip_health_check: Skip data health analysis
@@ -315,7 +350,9 @@ def run_curation(
         updates.append("fundamentals")
     if update_profiles_flag:
         updates.append("profiles")
-    
+    if update_macro_flag:
+        updates.append("macro")
+
     update_desc = ", ".join(updates) if updates else "none (health check only)"
     
     logger.info(f"Starting Data Curation (Updates: {update_desc})")
@@ -359,7 +396,12 @@ def run_curation(
     if update_profiles_flag:
         update_profiles(tickers, force=force, max_workers=max_workers)
 
-    # 5. Data Health Check (unless skipped)
+    # 5. Update Macroeconomic Data (if requested)
+    # --------------------------------------------------------------------------
+    if update_macro_flag:
+        update_macro_data(force=force)
+
+    # 6. Data Health Check (unless skipped)
     # --------------------------------------------------------------------------
     if not skip_health_check:
         run_health_check()
@@ -419,8 +461,10 @@ Examples:
                               help="Update fundamental data cache")
     update_group.add_argument('--update-profiles', action='store_true',
                               help="Update company profile cache")
+    update_group.add_argument('--update-macro', action='store_true',
+                              help="Update macroeconomic data (FRED series + VIX for M03 regime)")
     update_group.add_argument('--update-all', action='store_true',
-                              help="Update all data types (prices, fundamentals, profiles)")
+                              help="Update all data types (prices, fundamentals, profiles, macro)")
     update_group.add_argument('--health-check', action='store_true',
                               help="Run only data health analysis (earnings staleness detection, coverage, quality)")
     
@@ -458,6 +502,7 @@ Examples:
     update_prices_flag = args.update_prices or args.update_all
     update_fundamentals_flag = args.update_fundamentals or args.update_all
     update_profiles_flag = args.update_profiles or args.update_all
+    update_macro_flag = args.update_macro or args.update_all
 
     run_curation(
         source=args.source,
@@ -466,6 +511,7 @@ Examples:
         update_prices_flag=update_prices_flag,
         update_fundamentals_flag=update_fundamentals_flag,
         update_profiles_flag=update_profiles_flag,
+        update_macro_flag=update_macro_flag,
         force=args.force,
         skip_market_check=args.skip_market_check,
         skip_health_check=args.skip_health_check,

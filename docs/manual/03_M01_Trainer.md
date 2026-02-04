@@ -4,12 +4,15 @@ type: component
 layer: model_runner
 status: stable
 created: 2026-01-27
+updated: 2026-01-29
 tags:
   - ml
   - regression
   - m01
   - xgboost
   - return-prediction
+  - evaluation
+  - feature-selection
 dependencies:
   - "[[02_Data_Pipeline]]"
   - "[[06_Feature_Config]]"
@@ -32,6 +35,7 @@ M01 predicts **expected return %** for SEPA trade candidates. It uses XGBoost re
 - Rank candidates: Higher score = higher expected return
 - Position sizing: Larger positions for higher scores
 - Portfolio construction: Top N predictions become watchlist
+- **Dual-model scoring:** Combined with [[04_M02_Trainer|M02 Loser Detector]] for risk-adjusted ranking
 
 ---
 
@@ -41,6 +45,7 @@ M01 predicts **expected return %** for SEPA trade candidates. It uses XGBoost re
 
 **Target Variables:**
 - `return_pct` (default) - Actual SEPA return %
+- `log_space` (recommended) - Log-compressed MFE target
 - `y_max` (survivor model) - Maximum Favorable Excursion (MFE)
 
 **Output:** Continuous return % prediction
@@ -401,10 +406,146 @@ print(top_10[['ticker', 'date', 'predicted_return']])
 
 ---
 
+## M01 Evaluation System
+
+The evaluation infrastructure provides comprehensive metrics beyond basic RMSE/MAE.
+
+**File:** [src/evaluation/](../../src/evaluation/)
+**Key Classes:** `M01Evaluator`, `FeatureScreener`
+
+### Core Metrics
+
+| Metric | Description | Target |
+|--------|-------------|--------|
+| **IC (Spearman)** | Rank correlation between predicted and actual returns | > 0.10 |
+| **Precision@K** | Top K% predictions that are actual winners | > baseline |
+| **Recall@K** | % of actual winners captured in top K% | > 30% |
+| **Volatility Correlation** | Correlation with ATR (checks if just predicting vol) | < 0.5 |
+
+### Ablation Study Results
+
+The evaluation system enables testing different target definitions:
+
+| Target | IC | Edge Sharpe | Winner? |
+|--------|-----|-------------|---------|
+| `return_pct` | 0.13 | 3.7 | ❌ |
+| `hybrid_floor` | 0.57 | 3.4 | ❌ |
+| `risk_adjusted` | 0.72 | 7.5 | ❌ |
+| **`log_space`** | **0.77** | **20.6** | ✅ |
+
+> [!tip] Log-Space Target Recommended
+> The `log_space` target uses MFE with log compression. High IC (0.77) indicates excellent ranking capability.
+
+### Running Ablation Studies
+
+```bash
+python scripts/run_m01_ablation_study.py --start 2018-01-01 --end 2023-12-31
+```
+
+---
+
+## Feature Selection Pipeline
+
+Automated feature screening using KS (Kolmogorov-Smirnov) test.
+
+**File:** [src/evaluation/feature_screener.py](../../src/evaluation/feature_screener.py)
+**Class:** `FeatureScreener`
+
+### How It Works
+
+1. Split returns into **Q1 (bottom 25%)** and **Q4 (top 25%)** quartiles
+2. For each feature, run KS test between Q1 and Q4 distributions
+3. Features with significant distribution shift pass the screening
+
+### KS Threshold Guidelines
+
+| Threshold | Strictness | Use Case |
+|-----------|------------|----------|
+| 0.15 | Industry standard | Conservative, only top features |
+| **0.10** | Recommended | Balance of coverage and quality |
+| 0.05 | Permissive | Exploratory analysis |
+
+### Feature Screening Example
+
+```python
+from src.evaluation import FeatureScreener
+from src.feature_config import M01_CANDIDATE_FEATURES
+
+screener = FeatureScreener()
+results = screener.screen(d2, M01_CANDIDATE_FEATURES, ks_threshold=0.10)
+
+# Results include:
+# - passed_features: List of features that passed KS test
+# - ks_stats: KS statistic for each feature
+# - p_values: Statistical significance
+```
+
+### EDA Report Generation
+
+```python
+screener.generate_eda_report(d2, M01_CANDIDATE_FEATURES, output_path='models/eda_report.md')
+```
+
+---
+
+## M01 Workflow (Factory)
+
+End-to-end pipeline for rapid iteration when testing new features.
+
+**File:** [src/pipeline/m01_workflow.py](../../src/pipeline/m01_workflow.py)
+**Class:** `M01Workflow`
+
+### Workflow Steps
+
+```mermaid
+graph LR
+    A[Load Data] --> B[EDA Screening]
+    B --> C[Feature Selection]
+    C --> D[Training]
+    D --> E[Report Generation]
+```
+
+### CLI Usage
+
+```bash
+# Full workflow with auto-selection
+python model_runner.py workflow --start 2018-01-01 --end 2023-12-31
+
+# EDA only (test new features)
+python model_runner.py workflow --steps load eda select --ks-threshold 0.10
+
+# With tuning
+python model_runner.py workflow --tune
+
+# Skip auto-selection (use existing M01_FEATURES)
+python model_runner.py workflow --no-auto-select
+```
+
+### Workflow Configuration
+
+```python
+from src.pipeline import M01Workflow, WorkflowConfig
+
+config = WorkflowConfig(
+    ks_threshold=0.10,
+    auto_select=True,
+    target='log_space',
+    tune=False
+)
+
+workflow = M01Workflow(config)
+workflow.run(start_date='2018-01-01', end_date='2023-12-31')
+```
+
+---
+
 ## Key Insights
 
 > [!tip] Selection Edge is Critical
 > RMSE and MAE measure prediction accuracy, but **selection edge** measures trading viability. A model with RMSE=15% but edge=+7% is better than RMSE=10% with edge=+2%.
+
+> [!tip] IC is the Best Comparison Metric
+> Information Coefficient (Spearman rank correlation) is dimensionless and allows fair comparison across different target definitions.
 
 > [!info] Survivor Model Use Case
 > Use survivor model when you want to:
@@ -412,9 +553,12 @@ print(top_10[['ticker', 'date', 'predicted_return']])
 > - Filter out early stop-outs before ranking
 > - Build position sizing based on maximum potential
 
+> [!info] Feature Screening Insight
+> Default KS threshold (0.15) is strict - top features like `Price_vs_SMA_200` (KS=0.145) barely miss. Using 0.10 threshold passed 6 features with IC=0.323.
+
 > [!warning] Overfitting Risk
 > If validation edge is high (+8%) but degrades over time, the model may be overfitting. Monitor edge consistency across folds.
 
 ---
 
-*Last updated: 2026-01-27*
+*Last updated: 2026-01-29*

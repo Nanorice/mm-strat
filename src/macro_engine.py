@@ -1,0 +1,366 @@
+"""
+Macro Engine - FRED API Data Fetcher
+Fetches and caches macroeconomic data for M03 regime scoring.
+"""
+
+import pandas as pd
+import numpy as np
+import requests
+import threading
+import time
+import logging
+from pathlib import Path
+from datetime import datetime, timedelta
+from typing import Dict, Optional, List
+
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+import config
+
+logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
+logger = logging.getLogger(__name__)
+
+
+class MacroEngine:
+    """
+    Fetches and caches macroeconomic data from FRED and FMP APIs.
+
+    Data sources:
+    - FRED: Fed balance sheet (WALCL), TGA (WTREGEN), RRP (RRPONTSYD), HY spread (BAMLH0A0HYM2)
+    - FMP: VIX (^VIX)
+
+    Caching:
+    - Per-series Parquet files in data/macro/
+    - Incremental updates (only fetches new data)
+    """
+
+    FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
+
+    def __init__(self, fred_api_key: str = None, fmp_api_key: str = None):
+        self.fred_api_key = fred_api_key or config.FRED_API_KEY
+        self.fmp_api_key = fmp_api_key or config.FMP_API_KEY
+        self.macro_dir = config.MACRO_DATA_DIR
+
+        # Rate limiting (FRED: 120/min, FMP: 300/min)
+        self._call_timestamps: Dict[str, List[float]] = {'fred': [], 'fmp': []}
+        self._rate_limit_lock = threading.Lock()
+        self._rate_limits = {'fred': 120, 'fmp': 300}
+
+        # Ensure directory exists
+        self.macro_dir.mkdir(parents=True, exist_ok=True)
+
+    def _rate_limit_check(self, api: str = 'fred') -> None:
+        """Thread-safe rate limiting for API calls."""
+        with self._rate_limit_lock:
+            now = time.time()
+            window_start = now - 60
+
+            # Clean old timestamps
+            self._call_timestamps[api] = [
+                t for t in self._call_timestamps[api] if t > window_start
+            ]
+
+            limit = self._rate_limits[api]
+            if len(self._call_timestamps[api]) >= limit:
+                sleep_time = self._call_timestamps[api][0] - window_start + 0.1
+                logger.info(f"Rate limit reached for {api}, sleeping {sleep_time:.1f}s")
+                time.sleep(sleep_time)
+
+            self._call_timestamps[api].append(now)
+
+    def fetch_fred_series(
+        self,
+        series_id: str,
+        start_date: str = '2003-01-01',
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """
+        Fetch a single FRED series.
+
+        Args:
+            series_id: FRED series ID (e.g., 'WALCL', 'WTREGEN')
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (defaults to today)
+
+        Returns:
+            DataFrame with 'date' index and value column.
+
+        Note:
+            Data is indexed by observation date. Publication lag (T+1 for most
+            FRED series) is handled at the consumption layer in M03RegimeCalculator.
+        """
+        if not self.fred_api_key:
+            raise ValueError("FRED_API_KEY not configured. Set it in .env file.")
+
+        self._rate_limit_check('fred')
+
+        end_date = end_date or datetime.now().strftime('%Y-%m-%d')
+
+        params = {
+            'series_id': series_id,
+            'api_key': self.fred_api_key,
+            'file_type': 'json',
+            'observation_start': start_date,
+            'observation_end': end_date,
+        }
+
+        try:
+            response = requests.get(self.FRED_BASE_URL, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            if 'observations' not in data:
+                logger.warning(f"No observations in FRED response for {series_id}")
+                return pd.DataFrame()
+
+            observations = data['observations']
+            if not observations:
+                logger.warning(f"Empty observations for {series_id}")
+                return pd.DataFrame()
+
+            df = pd.DataFrame(observations)
+            df['observation_date'] = pd.to_datetime(df['date'])
+            df['value'] = pd.to_numeric(df['value'], errors='coerce')
+
+            df = df[['observation_date', 'value']].dropna()
+            df = df.set_index('observation_date').sort_index()
+            df.columns = [series_id]
+            logger.info(f"Fetched {len(df)} observations for {series_id}")
+
+            return df
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"FRED API error for {series_id}: {e}")
+            return pd.DataFrame()
+
+    def fetch_vix(self, start_date: str = '2003-01-01') -> pd.DataFrame:
+        """
+        Fetch VIX data from FRED API (VIXCLS series).
+
+        Returns:
+            DataFrame with 'date' index and 'VIX' column
+        """
+        df = self.fetch_fred_series('VIXCLS', start_date)
+        if not df.empty:
+            df = df.rename(columns={'VIXCLS': 'VIX'})
+        return df
+
+    def _get_cache_path(self, series_id: str) -> Path:
+        """Get cache file path for a series."""
+        return self.macro_dir / f"{series_id}.parquet"
+
+    def _load_cache(self, series_id: str) -> Optional[pd.DataFrame]:
+        """Load cached data for a series."""
+        cache_path = self._get_cache_path(series_id)
+        if cache_path.exists():
+            try:
+                df = pd.read_parquet(cache_path)
+                return df
+            except Exception as e:
+                logger.warning(f"Failed to load cache for {series_id}: {e}")
+        return None
+
+    def _save_cache(self, series_id: str, df: pd.DataFrame) -> None:
+        """Save data to cache."""
+        if df.empty:
+            return
+        cache_path = self._get_cache_path(series_id)
+        df.to_parquet(cache_path)
+        logger.debug(f"Saved {len(df)} rows to {cache_path}")
+
+    def update_series(self, series_id: str, force: bool = False) -> pd.DataFrame:
+        """
+        Update a single series (FRED or VIX) with incremental fetching.
+
+        Args:
+            series_id: Series ID ('WALCL', 'WTREGEN', 'RRPONTSYD', 'BAMLH0A0HYM2', 'VIX')
+            force: If True, re-download all data
+
+        Returns:
+            Updated DataFrame
+        """
+        cached = self._load_cache(series_id)
+
+        if force or cached is None:
+            start_date = '2003-01-01'
+        else:
+            # Incremental: start from last cached date
+            last_date = cached.index.max()
+            start_date = (last_date - timedelta(days=7)).strftime('%Y-%m-%d')
+
+        # Fetch new data
+        if series_id == 'VIX':
+            new_data = self.fetch_vix(start_date)
+        else:
+            new_data = self.fetch_fred_series(series_id, start_date)
+
+        if new_data.empty:
+            return cached if cached is not None else pd.DataFrame()
+
+        # Merge with existing cache
+        if cached is not None and not force:
+            combined = pd.concat([cached, new_data])
+            combined = combined[~combined.index.duplicated(keep='last')]
+            combined = combined.sort_index()
+        else:
+            combined = new_data
+
+        self._save_cache(series_id, combined)
+        return combined
+
+    def update_macro_cache(self, force: bool = False) -> Dict[str, int]:
+        """
+        Update all macro series (FRED + VIX).
+
+        Args:
+            force: If True, re-download all data
+
+        Returns:
+            Dict mapping series_id to row count
+        """
+        results = {}
+
+        # Update FRED series
+        for series_id in config.FRED_SERIES.keys():
+            logger.info(f"Updating {series_id}...")
+            df = self.update_series(series_id, force=force)
+            results[series_id] = len(df)
+
+        # Update VIX
+        logger.info("Updating VIX...")
+        df = self.update_series('VIX', force=force)
+        results['VIX'] = len(df)
+
+        logger.info(f"Macro cache update complete: {results}")
+        return results
+
+    def get_series(self, series_id: str, use_cache: bool = True) -> pd.DataFrame:
+        """
+        Get a series (from cache or API).
+
+        Args:
+            series_id: Series ID
+            use_cache: If True, load from cache without updating
+
+        Returns:
+            DataFrame with series data
+        """
+        if use_cache:
+            cached = self._load_cache(series_id)
+            if cached is not None:
+                return cached
+
+        return self.update_series(series_id)
+
+    def get_net_liquidity(self, as_of_date: str = None) -> pd.DataFrame:
+        """
+        Calculate Fed Net Liquidity.
+
+        Formula: Net Liquidity = WALCL - WTREGEN - RRPONTSYD (all converted to billions)
+
+        Units from FRED:
+        - WALCL: Millions (e.g., 6,587,568 = $6.58 Trillion)
+        - WTREGEN: Millions (e.g., 923,042 = $923 Billion)
+        - RRPONTSYD: Billions (e.g., 2160 = $2.16 Trillion, or 9.6 = $9.6 Billion)
+
+        Args:
+            as_of_date: Calculate up to this date (default: latest available)
+
+        Returns:
+            DataFrame with 'net_liquidity' column (in Billions)
+
+        Note:
+            Data is indexed by observation date. Publication lag (T+1) is handled
+            at the consumption layer in M03RegimeCalculator.
+        """
+        # Load all required series
+        walcl = self.get_series('WALCL')
+        wtregen = self.get_series('WTREGEN')
+        rrp = self.get_series('RRPONTSYD')
+
+        if walcl.empty or wtregen.empty or rrp.empty:
+            logger.warning("Missing data for net liquidity calculation")
+            return pd.DataFrame()
+
+        # Combine into single DataFrame
+        df = pd.DataFrame({
+            'fed_assets': walcl['WALCL'],
+            'tga': wtregen['WTREGEN'],
+            'rrp': rrp['RRPONTSYD']
+        })
+
+        # Forward-fill weekly data to daily
+        df = df.ffill()
+
+        # Convert all to billions for consistency
+        # WALCL: millions -> billions (divide by 1000)
+        # WTREGEN: millions -> billions (divide by 1000)
+        # RRPONTSYD: already in billions
+        df['fed_assets_b'] = df['fed_assets'] / 1000
+        df['tga_b'] = df['tga'] / 1000
+        df['rrp_b'] = df['rrp']
+
+        # Calculate net liquidity (all in billions)
+        df['net_liquidity'] = df['fed_assets_b'] - df['tga_b'] - df['rrp_b']
+
+        # Filter to as_of_date if specified
+        if as_of_date:
+            as_of = pd.to_datetime(as_of_date)
+            df = df[df.index <= as_of]
+
+        return df[['net_liquidity', 'fed_assets_b', 'tga_b', 'rrp_b']].rename(
+            columns={'fed_assets_b': 'fed_assets', 'tga_b': 'tga', 'rrp_b': 'rrp'}
+        ).dropna()
+
+    def get_all_macro_data(self, as_of_date: str = None) -> pd.DataFrame:
+        """
+        Get all macro data combined into single DataFrame.
+
+        Returns DataFrame with columns:
+        - net_liquidity (Billions)
+        - fed_assets (Millions)
+        - tga (Billions)
+        - rrp (Billions)
+        - hy_spread (%)
+        - vix
+
+        Args:
+            as_of_date: Filter up to this date
+
+        Returns:
+            Combined DataFrame (daily frequency, forward-filled)
+
+        Note:
+            Data is indexed by observation date. Publication lag (T+1) is handled
+            at the consumption layer in M03RegimeCalculator.
+        """
+        # Get net liquidity components
+        net_liq = self.get_net_liquidity(as_of_date)
+
+        # Get HY spread
+        hy_spread = self.get_series('BAMLH0A0HYM2')
+        if not hy_spread.empty:
+            hy_spread = hy_spread.rename(columns={'BAMLH0A0HYM2': 'hy_spread'})
+
+        # Get VIX
+        vix = self.get_series('VIX')
+        if not vix.empty:
+            vix = vix.rename(columns={'VIX': 'vix'})
+
+        # Merge all
+        df = net_liq.copy()
+
+        if not hy_spread.empty:
+            df = df.join(hy_spread, how='outer')
+
+        if not vix.empty:
+            df = df.join(vix, how='outer')
+
+        # Forward-fill and filter
+        df = df.ffill()
+
+        if as_of_date:
+            as_of = pd.to_datetime(as_of_date)
+            df = df[df.index <= as_of]
+
+        return df.dropna()
