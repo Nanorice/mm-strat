@@ -38,9 +38,9 @@
 
 ## Emoji Usage (CRITICAL)
 When using emojis in console output or strings, **only use these tested, working Unicode characters**:
-- Status: ✅ ❌ ⚠️
-- Progress: 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣
-- Actions: 📋 📅 📊 🔧 ⏱️
+- Status: ✅ ❌ ⚠️ 🛑 🔒 🔓
+- Progress: 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ ⏳ ⌚ 🔄
+- Actions: 📋 📅 📊 🔧 ⏱️ 🚀 💾 📁 🔍 🧹 💡 ⚙️ 🔔 📝 📦 🔗 📈 📉
 
 **Rules:**
 1. Copy-paste emojis directly from this list - do NOT use escape sequences like `\U0001F4CB`

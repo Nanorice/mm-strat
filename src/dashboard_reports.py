@@ -503,23 +503,289 @@ def render_dual_model():
 
 
 # =============================================================================
-# PAGE 5: BACKTEST (Placeholder)
+# PAGE 5: BACKTEST (Interactive Analytics)
 # =============================================================================
 
+BACKTEST_RUNS_DIR = Path('data/backtest/runs')
+
+
+@st.cache_data(ttl=60)
+def discover_backtest_runs() -> list:
+    """Scan data/backtest/runs/ for available backtest runs."""
+    if not BACKTEST_RUNS_DIR.exists():
+        return []
+
+    runs = []
+    for run_dir in BACKTEST_RUNS_DIR.iterdir():
+        if run_dir.is_dir():
+            manifest_path = run_dir / 'manifest.json'
+            if manifest_path.exists():
+                runs.append(run_dir.name)
+
+    # Sort by name (newest first since names include date)
+    return sorted(runs, reverse=True)
+
+
+@st.cache_data(ttl=60)
+def load_backtest_manifest(run_id: str) -> dict:
+    """Load manifest.json for a backtest run."""
+    manifest_path = BACKTEST_RUNS_DIR / run_id / 'manifest.json'
+    if manifest_path.exists():
+        with open(manifest_path, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+@st.cache_data(ttl=60)
+def load_backtest_metrics(run_id: str) -> dict:
+    """Load metrics.json for a backtest run."""
+    metrics_path = BACKTEST_RUNS_DIR / run_id / 'metrics.json'
+    if metrics_path.exists():
+        with open(metrics_path, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+@st.cache_data(ttl=60)
+def load_backtest_equity(run_id: str):
+    """Load equity_curve.parquet for a backtest run."""
+    equity_path = BACKTEST_RUNS_DIR / run_id / 'equity_curve.parquet'
+    if equity_path.exists():
+        return pd.read_parquet(equity_path)
+    return None
+
+
+@st.cache_data(ttl=60)
+def load_backtest_trades(run_id: str):
+    """Load trades.parquet for a backtest run."""
+    trades_path = BACKTEST_RUNS_DIR / run_id / 'trades.parquet'
+    if trades_path.exists():
+        return pd.read_parquet(trades_path)
+    return None
+
+
+def format_run_label(run_id: str) -> str:
+    """Format run ID for dropdown display."""
+    manifest = load_backtest_manifest(run_id)
+    if not manifest:
+        return run_id
+
+    # Extract key info
+    created = manifest.get('created_at', '')[:10]
+    summary = manifest.get('summary_metrics', {})
+    ret = summary.get('total_return', 0)
+    sharpe = summary.get('sharpe_ratio', 0)
+    trades = summary.get('total_trades', 0)
+
+    return f"{created} | {ret:+.0f}% | Sharpe {sharpe:.2f} | {trades} trades"
+
+
 def render_backtest():
-    """Render Backtest page - placeholder for future implementation."""
+    """Render Backtest page with interactive charts from cached data."""
+    from src.viz_library import (
+        create_backtest_equity_curve,
+        create_backtest_drawdown,
+        create_backtest_monthly_heatmap,
+        create_backtest_trade_histogram,
+        create_backtest_regime_bars,
+        create_backtest_exit_pie,
+        create_backtest_holding_days_histogram,
+        create_backtest_cash_overlay,
+    )
+
     st.title("📊 Backtest Results")
-    st.warning("⚠️ Backtest module not yet implemented")
-    
-    st.markdown("""
-    ### Planned Features
-    - Equity curve
-    - Drawdown analysis
-    - Win rate & profit factor
-    - Monthly returns heatmap
-    
-    **To implement:**
-    1. Create `src/backtester.py`
-    2. Add `python model.py backtest` command
-    3. Generate report to `models/backtest_results.json`
-    """)
+
+    # Discover available runs
+    runs = discover_backtest_runs()
+
+    if not runs:
+        st.warning("No backtest runs found.")
+        st.markdown("""
+        **To generate:**
+        ```bash
+        python scripts/run_backtest.py --run
+        ```
+
+        This will run a backtest and save results to `data/backtest/runs/`.
+        """)
+        return
+
+    # Run selector dropdown
+    selected_run = st.selectbox(
+        "Select Backtest Run",
+        options=runs,
+        format_func=format_run_label,
+        help="Select a backtest run to view results"
+    )
+
+    # Load data
+    manifest = load_backtest_manifest(selected_run)
+    metrics = load_backtest_metrics(selected_run)
+    equity_df = load_backtest_equity(selected_run)
+    trade_df = load_backtest_trades(selected_run)
+
+    if not manifest:
+        st.error(f"Failed to load manifest for {selected_run}")
+        return
+
+    # Summary metrics cards
+    st.markdown("### Performance Summary")
+    summary = manifest.get('summary_metrics', {})
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Total Return", f"{summary.get('total_return', 0):+.1f}%")
+    with col2:
+        st.metric("Sharpe Ratio", f"{summary.get('sharpe_ratio', 0):.2f}")
+    with col3:
+        st.metric("Max Drawdown", f"{summary.get('max_drawdown', 0):.1f}%")
+    with col4:
+        st.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
+    with col5:
+        st.metric("Total Trades", summary.get('total_trades', 0))
+
+    # Parameters expander
+    with st.expander("📋 Backtest Parameters", expanded=False):
+        params = manifest.get('params', {})
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Date Range:**")
+            st.write(f"Start: {params.get('start_date', 'N/A')}")
+            st.write(f"End: {params.get('end_date', 'N/A')}")
+            st.write(f"Initial Cash: ${params.get('initial_cash', 0):,.0f}")
+        with col2:
+            st.markdown("**Strategy Parameters:**")
+            st.write(f"Min Score: {params.get('min_score', 'N/A')}")
+            st.write(f"Min Percentile: {params.get('min_percentile', 'N/A')}")
+            st.write(f"ATR Stop Mult: {params.get('atr_stop_mult', 'N/A')}")
+
+    st.markdown("---")
+
+    # Tabbed charts
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Equity Curve",
+        "Monthly Returns",
+        "Trade Analysis",
+        "Regime Analysis",
+        "Exit Analysis",
+        "Holding Period"
+    ])
+
+    with tab1:
+        st.markdown("### Equity Curve with Regime Overlay")
+        if equity_df is not None and len(equity_df) > 0:
+            try:
+                fig = create_backtest_equity_curve(equity_df)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Cash overlay option
+                if st.checkbox("Show Cash Overlay", value=False):
+                    fig_cash = create_backtest_cash_overlay(equity_df)
+                    st.plotly_chart(fig_cash, use_container_width=True)
+
+                # Drawdown
+                st.markdown("### Drawdown Analysis")
+                fig_dd = create_backtest_drawdown(equity_df)
+                st.plotly_chart(fig_dd, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error rendering equity curve: {e}")
+        else:
+            st.info("Equity curve data not available")
+
+    with tab2:
+        st.markdown("### Monthly Returns Heatmap")
+        monthly_returns = metrics.get('monthly_returns', [])
+        if monthly_returns:
+            try:
+                fig = create_backtest_monthly_heatmap(monthly_returns)
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error rendering heatmap: {e}")
+        else:
+            st.info("Monthly returns data not available")
+
+    with tab3:
+        st.markdown("### Trade PnL Distribution")
+        if trade_df is not None and len(trade_df) > 0:
+            try:
+                fig = create_backtest_trade_histogram(trade_df['pnl_percent'].tolist())
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Trade stats
+                st.markdown("### Trade Statistics")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Avg Return", f"{trade_df['pnl_percent'].mean():.2f}%")
+                with col2:
+                    st.metric("Median Return", f"{trade_df['pnl_percent'].median():.2f}%")
+                with col3:
+                    st.metric("Best Trade", f"{trade_df['pnl_percent'].max():.2f}%")
+                with col4:
+                    st.metric("Worst Trade", f"{trade_df['pnl_percent'].min():.2f}%")
+            except Exception as e:
+                st.error(f"Error rendering trade analysis: {e}")
+        else:
+            st.info("Trade data not available")
+
+    with tab4:
+        st.markdown("### Performance by Entry Regime")
+        regime_perf = metrics.get('regime_performance', [])
+        if regime_perf:
+            try:
+                fig = create_backtest_regime_bars(regime_perf)
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error rendering regime analysis: {e}")
+        else:
+            st.info("Regime performance data not available")
+
+    with tab5:
+        st.markdown("### Exit Reason Breakdown")
+        exit_reasons = metrics.get('exit_reasons', {})
+        if exit_reasons:
+            try:
+                fig = create_backtest_exit_pie(exit_reasons)
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error rendering exit analysis: {e}")
+        else:
+            st.info("Exit reasons data not available")
+
+    with tab6:
+        st.markdown("### Holding Period Distribution")
+        if trade_df is not None and 'holding_days' in trade_df.columns:
+            try:
+                fig = create_backtest_holding_days_histogram(trade_df['holding_days'].tolist())
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Avg Days", f"{trade_df['holding_days'].mean():.1f}")
+                with col2:
+                    st.metric("Median Days", f"{trade_df['holding_days'].median():.0f}")
+                with col3:
+                    st.metric("Max Days", f"{trade_df['holding_days'].max():.0f}")
+            except Exception as e:
+                st.error(f"Error rendering holding period: {e}")
+        else:
+            st.info("Holding period data not available")
+
+    # Legacy reports section
+    st.markdown("---")
+    with st.expander("📜 Legacy Markdown Reports", expanded=False):
+        legacy_dir = Path('data/backtest/reports')
+        if legacy_dir.exists():
+            legacy_files = sorted(legacy_dir.glob('*.md'), reverse=True)
+            if legacy_files:
+                selected_legacy = st.selectbox(
+                    "View legacy report",
+                    options=legacy_files,
+                    format_func=lambda x: x.name
+                )
+                if selected_legacy:
+                    st.markdown(selected_legacy.read_text(encoding='utf-8'))
+            else:
+                st.info("No legacy markdown reports found")
+        else:
+            st.info("Legacy reports directory not found")

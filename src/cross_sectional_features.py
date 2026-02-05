@@ -3,6 +3,10 @@ Cross-Sectional Features Module
 
 Calculates features that require data from all tickers on each date:
 - RS_Universe_Rank: Percentile rank of RS across all tickers per date
+- RS_Sector_Rank: Percentile rank of RS within sector per date
+- RS_Industry_Rank: Percentile rank of RS within industry per date
+- RS_vs_Sector: Z-score of RS vs sector mean
+- RS_vs_Industry: Z-score of RS vs industry mean
 - Sector_Momentum: Mean RS of all stocks in same sector per date
 - Industry_Momentum: Mean RS of all stocks in same industry per date
 
@@ -17,6 +21,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Minimum group size for meaningful within-group rankings
+MIN_GROUP_SIZE = 3
+
 
 def add_cross_sectional_features(
     dataset: pd.DataFrame,
@@ -24,117 +31,180 @@ def add_cross_sectional_features(
     rs_column: str = 'RS'
 ) -> pd.DataFrame:
     """
-    Add cross-sectional features to Dataset A.
+    Add cross-sectional features to dataset.
 
     This function is called AFTER concatenating all individual ticker DataFrames.
     It adds features that require comparing a ticker against all other tickers on each date.
 
     Args:
-        dataset: Concatenated Dataset A with columns ['ticker', 'Date', 'RS', ...]
-        company_profile_path: Path to company profiles parquet with sector/industry mapping
+        dataset: Concatenated dataset with columns ['ticker', 'date', 'RS', ...]
+                 May already have 'sector_id'/'industry_id' from add_company_features()
+        company_profile_path: Path to company profiles parquet (fallback if sector_id missing)
         rs_column: Name of Relative Strength column (default: 'RS')
 
     Returns:
-        Dataset with 3 new columns:
+        Dataset with cross-sectional features added:
         - RS_Universe_Rank: Percentile rank (0-1) of RS across all tickers per date
+        - RS_Sector_Rank: Percentile rank (0-1) of RS within sector per date
+        - RS_Industry_Rank: Percentile rank (0-1) of RS within industry per date
+        - RS_vs_Sector: Z-score of RS relative to sector mean
+        - RS_vs_Industry: Z-score of RS relative to industry mean
         - Sector_Momentum: Mean RS of sector on each date
         - Industry_Momentum: Mean RS of industry on each date
-
-    Example:
-        >>> dataset_a = pd.concat(individual_ticker_results)
-        >>> dataset_a = add_cross_sectional_features(dataset_a)
-        >>> print(dataset_a[['ticker', 'Date', 'RS', 'RS_Universe_Rank', 'Sector_Momentum']].head())
     """
     logger.info("Adding cross-sectional features...")
 
-    # Validate inputs
     if dataset.empty:
         logger.warning("Empty dataset provided, returning as-is")
         return dataset
 
-    # Handle both 'date' and 'Date' column names (build_dataset_a uses lowercase 'date')
+    # Handle both 'date' and 'Date' column names
     date_col = 'date' if 'date' in dataset.columns else 'Date'
     if date_col not in dataset.columns:
-        raise ValueError(f"Dataset missing required date column (expected 'date' or 'Date')")
+        raise ValueError("Dataset missing required date column (expected 'date' or 'Date')")
 
     required_cols = ['ticker', rs_column]
     missing_cols = [col for col in required_cols if col not in dataset.columns]
     if missing_cols:
         raise ValueError(f"Dataset missing required columns: {missing_cols}")
-    
-    # Load company profiles (sector/industry mapping)
-    logger.info(f"Loading company profiles from {company_profile_path}")
-    try:
-        company_profiles = pd.read_parquet(company_profile_path)
-        logger.info(f"Loaded {len(company_profiles)} company profiles")
-    except Exception as e:
-        logger.error(f"Failed to load company profiles: {e}")
-        raise
-    
-    # Verify company_profiles has required columns
-    required_profile_cols = ['sector_id', 'industry_id']
-    missing_profile_cols = [col for col in required_profile_cols if col not in company_profiles.columns]
-    if missing_profile_cols:
-        raise ValueError(f"Company profiles missing required columns: {missing_profile_cols}")
-    
-    # Merge sector/industry info into dataset
-    # company_profiles is indexed by ticker
-    logger.info("Merging sector/industry information...")
-    dataset = dataset.merge(
-        company_profiles[['sector_id', 'industry_id']],
-        left_on='ticker',
-        right_index=True,
-        how='left'
-    )
-    
-    # Check for tickers without sector/industry mapping
-    unmapped_count = dataset['sector_id'].isna().sum()
+
+    # Check if sector_id/industry_id already exist (from add_company_features)
+    has_sector_id = 'sector_id' in dataset.columns
+    has_industry_id = 'industry_id' in dataset.columns
+
+    if has_sector_id and has_industry_id:
+        logger.info("  Using existing sector_id/industry_id from dataset")
+    else:
+        # Load from company profiles as fallback
+        logger.info(f"  Loading sector/industry from {company_profile_path}")
+        try:
+            company_profiles = pd.read_parquet(company_profile_path)
+            logger.info(f"  Loaded {len(company_profiles)} company profiles")
+
+            # Merge only missing columns
+            cols_to_merge = []
+            if not has_sector_id:
+                cols_to_merge.append('sector_id')
+            if not has_industry_id:
+                cols_to_merge.append('industry_id')
+
+            dataset = dataset.merge(
+                company_profiles[cols_to_merge],
+                left_on='ticker',
+                right_index=True,
+                how='left'
+            )
+        except Exception as e:
+            logger.error(f"Failed to load company profiles: {e}")
+            # Fill with -1 to allow function to continue
+            if not has_sector_id:
+                dataset['sector_id'] = -1
+            if not has_industry_id:
+                dataset['industry_id'] = -1
+
+    # Check for unmapped tickers
+    unmapped_count = (dataset['sector_id'].isna() | (dataset['sector_id'] == -1)).sum()
     if unmapped_count > 0:
-        unmapped_tickers = dataset[dataset['sector_id'].isna()]['ticker'].unique()
+        unmapped_tickers = dataset[
+            dataset['sector_id'].isna() | (dataset['sector_id'] == -1)
+        ]['ticker'].unique()
         logger.warning(f"{unmapped_count} rows from {len(unmapped_tickers)} tickers lack sector mapping")
-        logger.debug(f"Unmapped tickers: {unmapped_tickers[:10]}")
-    
-    # Calculate cross-sectional features grouped by date
-    logger.info("Calculating cross-sectional features by date...")
+
+    # Fill NaN sector/industry with -1 for groupby operations
+    dataset['sector_id'] = dataset['sector_id'].fillna(-1).astype(int)
+    dataset['industry_id'] = dataset['industry_id'].fillna(-1).astype(int)
+
+    logger.info("  Calculating cross-sectional features by date...")
+
+    # =========================================================================
+    # UNIVERSE-LEVEL FEATURES
+    # =========================================================================
 
     # Feature 1: RS_Universe_Rank (percentile rank across all tickers per date)
-    logger.info("  - Calculating RS_Universe_Rank...")
     dataset['RS_Universe_Rank'] = dataset.groupby(date_col)[rs_column].rank(pct=True)
 
+    # =========================================================================
+    # SECTOR-LEVEL FEATURES
+    # =========================================================================
+
     # Feature 2: Sector_Momentum (mean RS per sector per date)
-    logger.info("  - Calculating Sector_Momentum...")
-    sector_momentum = dataset.groupby([date_col, 'sector_id'])[rs_column].transform('mean')
-    dataset['Sector_Momentum'] = sector_momentum
+    dataset['Sector_Momentum'] = dataset.groupby([date_col, 'sector_id'])[rs_column].transform('mean')
 
-    # Feature 3: Industry_Momentum (mean RS per industry per date)
-    logger.info("  - Calculating Industry_Momentum...")
-    industry_momentum = dataset.groupby([date_col, 'industry_id'])[rs_column].transform('mean')
-    dataset['Industry_Momentum'] = industry_momentum
+    # Feature 3: RS_Sector_Rank (percentile rank within sector per date)
+    # For small sectors (<MIN_GROUP_SIZE), use universe rank as fallback
+    sector_counts = dataset.groupby([date_col, 'sector_id'])['ticker'].transform('count')
 
-    # Handle NaN values for unmapped tickers
+    dataset['RS_Sector_Rank'] = np.where(
+        sector_counts >= MIN_GROUP_SIZE,
+        dataset.groupby([date_col, 'sector_id'])[rs_column].rank(pct=True),
+        dataset['RS_Universe_Rank']  # Fallback for small sectors
+    )
+
+    # Feature 4: RS_vs_Sector (Z-score relative to sector mean)
+    sector_std = dataset.groupby([date_col, 'sector_id'])[rs_column].transform('std')
+    sector_std = sector_std.replace(0, np.nan)  # Avoid division by zero
+
+    dataset['RS_vs_Sector'] = np.where(
+        (sector_counts >= MIN_GROUP_SIZE) & sector_std.notna(),
+        (dataset[rs_column] - dataset['Sector_Momentum']) / sector_std,
+        0.0  # Neutral for small/single-stock sectors
+    )
+
+    # =========================================================================
+    # INDUSTRY-LEVEL FEATURES
+    # =========================================================================
+
+    # Feature 5: Industry_Momentum (mean RS per industry per date)
+    dataset['Industry_Momentum'] = dataset.groupby([date_col, 'industry_id'])[rs_column].transform('mean')
+
+    # Feature 6: RS_Industry_Rank (percentile rank within industry per date)
+    industry_counts = dataset.groupby([date_col, 'industry_id'])['ticker'].transform('count')
+
+    dataset['RS_Industry_Rank'] = np.where(
+        industry_counts >= MIN_GROUP_SIZE,
+        dataset.groupby([date_col, 'industry_id'])[rs_column].rank(pct=True),
+        dataset['RS_Universe_Rank']  # Fallback for small industries
+    )
+
+    # Feature 7: RS_vs_Industry (Z-score relative to industry mean)
+    industry_std = dataset.groupby([date_col, 'industry_id'])[rs_column].transform('std')
+    industry_std = industry_std.replace(0, np.nan)
+
+    dataset['RS_vs_Industry'] = np.where(
+        (industry_counts >= MIN_GROUP_SIZE) & industry_std.notna(),
+        (dataset[rs_column] - dataset['Industry_Momentum']) / industry_std,
+        0.0  # Neutral for small/single-stock industries
+    )
+
+    # =========================================================================
+    # HANDLE UNMAPPED TICKERS (sector_id == -1)
+    # =========================================================================
+
     if unmapped_count > 0:
-        # Fill NaN sector/industry momentum with universe mean
         universe_mean = dataset.groupby(date_col)[rs_column].transform('mean')
-        dataset['Sector_Momentum'].fillna(universe_mean, inplace=True)
-        dataset['Industry_Momentum'].fillna(universe_mean, inplace=True)
-        logger.info(f"  - Filled NaN momentum values with universe mean for unmapped tickers")
-    
-    # Clean up: Drop temporary sector_id and industry_id columns
-    # (keep them if user wants them for analysis)
-    # dataset = dataset.drop(columns=['sector_id', 'industry_id'])
-    
+        mask = dataset['sector_id'] == -1
+
+        dataset.loc[mask, 'Sector_Momentum'] = universe_mean[mask]
+        dataset.loc[mask, 'Industry_Momentum'] = universe_mean[mask]
+        dataset.loc[mask, 'RS_vs_Sector'] = 0.0
+        dataset.loc[mask, 'RS_vs_Industry'] = 0.0
+
+        logger.info(f"  Filled {unmapped_count} unmapped rows with universe defaults")
+
+    # Clip extreme Z-scores to prevent outlier influence
+    dataset['RS_vs_Sector'] = dataset['RS_vs_Sector'].clip(-4, 4)
+    dataset['RS_vs_Industry'] = dataset['RS_vs_Industry'].clip(-4, 4)
+
     # Summary statistics
-    logger.info("\nCross-sectional features summary:")
-    logger.info(f"  RS_Universe_Rank: {dataset['RS_Universe_Rank'].notna().sum()}/{len(dataset)} valid")
-    logger.info(f"  Sector_Momentum: {dataset['Sector_Momentum'].notna().sum()}/{len(dataset)} valid")
-    logger.info(f"  Industry_Momentum: {dataset['Industry_Momentum'].notna().sum()}/{len(dataset)} valid")
-    
-    # Validation: Check for extreme NaN counts
-    for col in ['RS_Universe_Rank', 'Sector_Momentum', 'Industry_Momentum']:
-        nan_pct = dataset[col].isna().sum() / len(dataset) * 100
-        if nan_pct > 10:
-            logger.warning(f"{col} has {nan_pct:.1f}% NaN values")
-    
+    cross_sectional_cols = [
+        'RS_Universe_Rank', 'RS_Sector_Rank', 'RS_Industry_Rank',
+        'RS_vs_Sector', 'RS_vs_Industry', 'Sector_Momentum', 'Industry_Momentum'
+    ]
+    logger.info("  Cross-sectional features summary:")
+    for col in cross_sectional_cols:
+        valid_count = dataset[col].notna().sum()
+        logger.info(f"    {col}: {valid_count}/{len(dataset)} valid")
+
     logger.info("Cross-sectional features added successfully!")
     return dataset
 
@@ -155,23 +225,24 @@ def get_cross_sectional_summary(dataset: pd.DataFrame) -> dict:
     # Handle both 'date' and 'Date' column names
     date_col = 'date' if 'date' in dataset.columns else 'Date'
 
-    return {
+    summary = {
         'has_cross_sectional': True,
         'total_dates': dataset[date_col].nunique(),
         'total_tickers': dataset['ticker'].nunique(),
         'avg_tickers_per_date': len(dataset) / dataset[date_col].nunique(),
-        'rs_universe_rank_range': (
-            dataset['RS_Universe_Rank'].min(),
-            dataset['RS_Universe_Rank'].max()
-        ),
-        'sector_momentum_range': (
-            dataset['Sector_Momentum'].min(),
-            dataset['Sector_Momentum'].max()
-        ),
-        'industry_momentum_range': (
-            dataset['Industry_Momentum'].min(),
-            dataset['Industry_Momentum'].max()
-        ),
         'unique_sectors': dataset['sector_id'].nunique() if 'sector_id' in dataset.columns else None,
-        'unique_industries': dataset['industry_id'].nunique() if 'industry_id' in dataset.columns else None
+        'unique_industries': dataset['industry_id'].nunique() if 'industry_id' in dataset.columns else None,
     }
+
+    # Add range stats for each cross-sectional feature
+    cross_sectional_cols = [
+        'RS_Universe_Rank', 'RS_Sector_Rank', 'RS_Industry_Rank',
+        'RS_vs_Sector', 'RS_vs_Industry', 'Sector_Momentum', 'Industry_Momentum'
+    ]
+
+    for col in cross_sectional_cols:
+        if col in dataset.columns:
+            summary[f'{col}_range'] = (dataset[col].min(), dataset[col].max())
+            summary[f'{col}_mean'] = dataset[col].mean()
+
+    return summary

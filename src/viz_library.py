@@ -952,3 +952,461 @@ def create_trade_distribution_histogram(trade_returns: List[float]) -> go.Figure
     )
 
     return fig
+
+
+# =============================================================================
+# BACKTEST CHARTS (For Dashboard Backtest Page)
+# =============================================================================
+
+def create_backtest_equity_curve(equity_df: pd.DataFrame) -> go.Figure:
+    """
+    Interactive equity curve with regime background coloring.
+
+    Args:
+        equity_df: DataFrame with columns: value, cash, regime (index=date)
+
+    Returns:
+        Plotly Figure with equity line and regime-colored background
+    """
+    from plotly.subplots import make_subplots
+
+    df = equity_df.reset_index()
+    df['date'] = pd.to_datetime(df['date'])
+
+    # Regime colors
+    regime_colors = {
+        0: 'rgba(255, 204, 204, 0.3)',  # Strong Bear - light red
+        1: 'rgba(255, 230, 204, 0.3)',  # Bear - light orange
+        2: 'rgba(255, 255, 204, 0.3)',  # Neutral - light yellow
+        3: 'rgba(204, 255, 204, 0.3)',  # Bull - light green
+        4: 'rgba(204, 255, 221, 0.3)',  # Strong Bull - bright green
+    }
+
+    regime_names = {
+        0: 'Strong Bear',
+        1: 'Bear',
+        2: 'Neutral',
+        3: 'Bull',
+        4: 'Strong Bull'
+    }
+
+    fig = go.Figure()
+
+    # Add regime background rectangles
+    if 'regime' in df.columns:
+        df['regime_change'] = df['regime'] != df['regime'].shift()
+        df['regime_group'] = df['regime_change'].cumsum()
+
+        for _, group in df.groupby('regime_group'):
+            regime = group['regime'].iloc[0]
+            color = regime_colors.get(regime, 'rgba(200,200,200,0.2)')
+
+            fig.add_vrect(
+                x0=group['date'].min(),
+                x1=group['date'].max(),
+                fillcolor=color,
+                layer="below",
+                line_width=0,
+            )
+
+    # Equity line
+    fig.add_trace(go.Scatter(
+        x=df['date'],
+        y=df['value'],
+        mode='lines',
+        line=dict(color='#1E88E5', width=2),
+        name='Portfolio Value',
+        hovertemplate='Date: %{x}<br>Value: $%{y:,.0f}<extra></extra>'
+    ))
+
+    # Starting value reference line
+    starting_value = df['value'].iloc[0]
+    fig.add_hline(
+        y=starting_value,
+        line_dash="dash",
+        line_color="gray",
+        annotation_text=f"Start: ${starting_value:,.0f}",
+        annotation_position="right"
+    )
+
+    fig.update_layout(
+        title='Equity Curve with Regime Overlay',
+        xaxis_title='Date',
+        yaxis_title='Portfolio Value ($)',
+        template='plotly_white',
+        height=500,
+        hovermode='x unified',
+        yaxis_tickprefix='$',
+        yaxis_tickformat=',.0f'
+    )
+
+    # Remove weekend gaps
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+
+    return fig
+
+
+def create_backtest_drawdown(equity_df: pd.DataFrame) -> go.Figure:
+    """
+    Underwater (drawdown) plot from equity curve.
+
+    Args:
+        equity_df: DataFrame with 'value' column (index=date)
+
+    Returns:
+        Plotly Figure with drawdown fill
+    """
+    df = equity_df.reset_index()
+    df['date'] = pd.to_datetime(df['date'])
+
+    # Calculate drawdown
+    df['running_max'] = df['value'].cummax()
+    df['drawdown'] = (df['value'] - df['running_max']) / df['running_max'] * 100
+
+    fig = go.Figure()
+
+    # Drawdown fill
+    fig.add_trace(go.Scatter(
+        x=df['date'],
+        y=df['drawdown'],
+        mode='lines',
+        fill='tozeroy',
+        line=dict(color='#EF5350', width=1),
+        fillcolor='rgba(239, 83, 80, 0.3)',
+        name='Drawdown',
+        hovertemplate='Date: %{x}<br>Drawdown: %{y:.2f}%<extra></extra>'
+    ))
+
+    # Zero line
+    fig.add_hline(y=0, line_color='black', line_width=0.5)
+
+    # Annotate max drawdown
+    max_dd = df['drawdown'].min()
+    max_dd_idx = df['drawdown'].idxmin()
+    max_dd_date = df.loc[max_dd_idx, 'date']
+
+    fig.add_annotation(
+        x=max_dd_date,
+        y=max_dd,
+        text=f"Max DD: {max_dd:.1f}%",
+        showarrow=True,
+        arrowhead=2,
+        arrowcolor='red',
+        font=dict(color='red')
+    )
+
+    fig.update_layout(
+        title='Underwater Plot (Drawdown from Peak)',
+        xaxis_title='Date',
+        yaxis_title='Drawdown (%)',
+        template='plotly_white',
+        height=350,
+        hovermode='x unified'
+    )
+
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+
+    return fig
+
+
+def create_backtest_monthly_heatmap(monthly_data: List[Dict]) -> go.Figure:
+    """
+    Monthly returns heatmap (year x month).
+
+    Args:
+        monthly_data: List of dicts with keys: year, month, return
+
+    Returns:
+        Plotly Figure heatmap
+    """
+    df = pd.DataFrame(monthly_data)
+
+    # Pivot to heatmap format
+    pivot = df.pivot(index='year', columns='month', values='return')
+
+    # Month names
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    # Only use months present in data
+    month_labels = [month_names[m - 1] for m in sorted(pivot.columns)]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=month_labels,
+        y=pivot.index,
+        colorscale='RdYlGn',
+        zmid=0,
+        text=pivot.values.round(1),
+        texttemplate='%{text}%',
+        textfont={"size": 10},
+        colorbar=dict(title="Return %"),
+        hovertemplate='Year: %{y}<br>Month: %{x}<br>Return: %{z:.2f}%<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Monthly Returns Heatmap',
+        xaxis_title='Month',
+        yaxis_title='Year',
+        template='plotly_white',
+        height=400
+    )
+
+    return fig
+
+
+def create_backtest_trade_histogram(trade_returns: List[float]) -> go.Figure:
+    """
+    Trade PnL distribution histogram with stop-loss line.
+
+    Args:
+        trade_returns: List of trade return % values
+
+    Returns:
+        Plotly Figure
+    """
+    df = pd.Series(trade_returns)
+
+    mean_val = df.mean()
+    median_val = df.median()
+    win_rate = (df > 0).sum() / len(df) * 100
+
+    fig = go.Figure()
+
+    # Histogram with win/loss coloring
+    fig.add_trace(go.Histogram(
+        x=df,
+        nbinsx=40,
+        marker_color='steelblue',
+        opacity=0.7,
+        hovertemplate='Return: %{x:.2f}%<br>Count: %{y}<extra></extra>'
+    ))
+
+    # Stop loss line at -10%
+    fig.add_vline(
+        x=-10,
+        line_dash="dash",
+        line_color="red",
+        annotation_text="Stop -10%",
+        annotation_position="top"
+    )
+
+    # Zero line
+    fig.add_vline(x=0, line_color="black", line_width=0.5)
+
+    # Mean line
+    fig.add_vline(
+        x=mean_val,
+        line_dash="solid",
+        line_color="blue",
+        annotation_text=f"Mean: {mean_val:.2f}%",
+        annotation_position="top right"
+    )
+
+    fig.update_layout(
+        title=f'Trade PnL Distribution<br><sub>Win Rate: {win_rate:.1f}% | Mean: {mean_val:.2f}% | Median: {median_val:.2f}%</sub>',
+        xaxis_title='Return %',
+        yaxis_title='Count',
+        template='plotly_white',
+        height=400
+    )
+
+    return fig
+
+
+def create_backtest_regime_bars(regime_data: List[Dict]) -> go.Figure:
+    """
+    Bar chart of average PnL by entry regime.
+
+    Args:
+        regime_data: List of dicts with keys: regime_name, avg_pnl, count
+
+    Returns:
+        Plotly Figure
+    """
+    df = pd.DataFrame(regime_data)
+
+    # Regime colors
+    colors = {
+        'Strong Bear': '#EF5350',
+        'Bear': '#FFA726',
+        'Neutral': '#FFEE58',
+        'Bull': '#66BB6A',
+        'Strong Bull': '#26A69A'
+    }
+
+    bar_colors = [colors.get(name, '#9E9E9E') for name in df['regime_name']]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=df['regime_name'],
+        y=df['avg_pnl'],
+        marker_color=bar_colors,
+        text=[f"n={c}" for c in df['count']],
+        textposition='outside',
+        hovertemplate='Regime: %{x}<br>Avg PnL: %{y:.2f}%<br>Trades: %{text}<extra></extra>'
+    ))
+
+    fig.add_hline(y=0, line_color="black", line_width=0.5)
+
+    fig.update_layout(
+        title='Average PnL % by Entry Regime',
+        xaxis_title='Entry Regime',
+        yaxis_title='Avg PnL %',
+        template='plotly_white',
+        height=400
+    )
+
+    return fig
+
+
+def create_backtest_exit_pie(exit_reasons: Dict[str, int]) -> go.Figure:
+    """
+    Donut chart of exit reasons.
+
+    Args:
+        exit_reasons: Dict mapping exit reason to count
+
+    Returns:
+        Plotly Figure
+    """
+    labels = list(exit_reasons.keys())
+    values = list(exit_reasons.values())
+
+    # Color mapping
+    color_map = {
+        'stop': '#EF5350',
+        'target1': '#66BB6A',
+        'target2': '#26A69A',
+        'target3': '#00897B',
+        'trend': '#42A5F5',
+        'regime_liquidation': '#AB47BC',
+        'time_exit': '#78909C',
+    }
+
+    colors = [color_map.get(label, '#9E9E9E') for label in labels]
+
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values,
+        hole=0.4,
+        marker_colors=colors,
+        hovertemplate='%{label}<br>Count: %{value}<br>%{percent}<extra></extra>'
+    )])
+
+    fig.update_layout(
+        title='Exit Reason Breakdown',
+        template='plotly_white',
+        height=400
+    )
+
+    return fig
+
+
+def create_backtest_holding_days_histogram(holding_days: List[int]) -> go.Figure:
+    """
+    Histogram of trade holding periods.
+
+    Args:
+        holding_days: List of holding days per trade
+
+    Returns:
+        Plotly Figure
+    """
+    df = pd.Series(holding_days)
+
+    mean_val = df.mean()
+    median_val = df.median()
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Histogram(
+        x=df,
+        nbinsx=30,
+        marker_color='#7E57C2',
+        opacity=0.7,
+        hovertemplate='Days: %{x}<br>Count: %{y}<extra></extra>'
+    ))
+
+    # Median line
+    fig.add_vline(
+        x=median_val,
+        line_dash="dash",
+        line_color="green",
+        annotation_text=f"Median: {median_val:.0f} days",
+        annotation_position="top"
+    )
+
+    fig.update_layout(
+        title=f'Holding Period Distribution<br><sub>Mean: {mean_val:.1f} days | Median: {median_val:.0f} days</sub>',
+        xaxis_title='Holding Days',
+        yaxis_title='Count',
+        template='plotly_white',
+        height=400
+    )
+
+    return fig
+
+
+def create_backtest_cash_overlay(equity_df: pd.DataFrame) -> go.Figure:
+    """
+    Cash and exposure overlay on equity curve.
+
+    Args:
+        equity_df: DataFrame with columns: value, cash, position_count (index=date)
+
+    Returns:
+        Plotly Figure with dual y-axis
+    """
+    from plotly.subplots import make_subplots
+
+    df = equity_df.reset_index()
+    df['date'] = pd.to_datetime(df['date'])
+
+    # Calculate cash percentage
+    df['cash_pct'] = df['cash'] / df['value'] * 100
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Cash percentage (left axis)
+    fig.add_trace(
+        go.Scatter(
+            x=df['date'],
+            y=df['cash_pct'],
+            mode='lines',
+            fill='tozeroy',
+            line=dict(color='#42A5F5', width=1),
+            fillcolor='rgba(66, 165, 245, 0.3)',
+            name='Cash %',
+            hovertemplate='Date: %{x}<br>Cash: %{y:.1f}%<extra></extra>'
+        ),
+        secondary_y=False
+    )
+
+    # Position count (right axis)
+    if 'position_count' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df['position_count'],
+                mode='lines',
+                line=dict(color='#AB47BC', width=2),
+                name='Positions',
+                hovertemplate='Date: %{x}<br>Positions: %{y}<extra></extra>'
+            ),
+            secondary_y=True
+        )
+
+    fig.update_xaxes(title_text="Date", rangebreaks=[dict(bounds=["sat", "mon"])])
+    fig.update_yaxes(title_text="Cash %", secondary_y=False, range=[0, 100])
+    fig.update_yaxes(title_text="Position Count", secondary_y=True)
+
+    fig.update_layout(
+        title='Cash Usage & Position Count',
+        template='plotly_white',
+        height=350,
+        hovermode='x unified'
+    )
+
+    return fig

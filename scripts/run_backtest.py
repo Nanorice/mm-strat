@@ -84,6 +84,8 @@ def run_backtest(
     save_plot: str = None,
     save_report: bool = True,
     no_plot: bool = False,  # Explicit opt-out
+    save_run: bool = True,  # Save structured run for dashboard
+    run_note: str = "",  # Optional suffix for run name
 ):
     """Run the backtest."""
     from pathlib import Path
@@ -110,6 +112,12 @@ def run_backtest(
         print("\nGenerating report...")
         report_path = runner.save_report(metrics)
         print(f"Report saved: {report_path}")
+
+    # Save structured run for dashboard
+    if save_run:
+        print("\nSaving run data for dashboard...")
+        run_dir = runner.save_run(metrics, run_note=run_note)
+        print(f"Run saved: {run_dir}")
 
     # Plot handling: default is to save to data/backtest/
     if not no_plot:
@@ -214,6 +222,17 @@ def main():
         action='store_true',
         help='Skip generating markdown report'
     )
+    parser.add_argument(
+        '--note',
+        type=str,
+        default='',
+        help='Suffix for run name (e.g., "bull_test" -> backtest_260204_bull_test)'
+    )
+    parser.add_argument(
+        '--no-save-run',
+        action='store_true',
+        help='Skip saving structured run data for dashboard'
+    )
 
     args = parser.parse_args()
 
@@ -246,6 +265,8 @@ def main():
                 save_plot=args.save_plot,
                 save_report=not args.no_report,
                 no_plot=args.no_plot,
+                save_run=not args.no_save_run,
+                run_note=args.note,
             )
 
         elif args.prepare_data:
@@ -261,6 +282,8 @@ def main():
                 save_plot=args.save_plot,
                 save_report=not args.no_report,
                 no_plot=args.no_plot,
+                save_run=not args.no_save_run,
+                run_note=args.note,
             )
 
     except FileNotFoundError as e:

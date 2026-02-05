@@ -27,12 +27,15 @@
       "Bash(.venvScriptspython.exe check_fang_data.py)",
       "Bash(cd:*)",
       "Bash(.venvScriptspython.exe model_runner.py m03 --help)",
-      "Bash(.venv/Scripts/python:*)"
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(tar:*)",
+      "Bash(powershell -Command:*)"
     ],
     "deny": [],
     "ask": [],
     "additionalDirectories": [
-      "c:\\Users\\Hang\\PycharmProjects\\quantamental"
+      "c:\\Users\\Hang\\PycharmProjects\\quantamental",
+      "c:\\Users\\Hang\\PycharmProjects\\quantamental\\.claude\\skills\\module-passport"
     ]
   }
 }

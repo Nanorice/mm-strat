@@ -140,6 +140,36 @@ FUNDAMENTAL_FEATURES = [
 ]
 
 # =============================================================================
+# COMPANY PROFILE FEATURES (From Company Metadata)
+# =============================================================================
+# Added via add_company_features() in FeatureEngineer
+COMPANY_FEATURES = [
+    'sector_id',          # Encoded sector classification (0-10, -1 if missing)
+    'industry_id',        # Encoded industry classification (0-158, -1 if missing)
+    'mktCap_log',         # Log10 of market cap (scale normalization)
+    'beta',               # Stock volatility vs market
+]
+
+# =============================================================================
+# CROSS-SECTIONAL FEATURES (Relative Rankings)
+# =============================================================================
+# Added via add_cross_sectional_features() after multi-ticker concatenation
+CROSS_SECTIONAL_FEATURES = [
+    # Universe-level
+    'RS_Universe_Rank',   # Percentile rank (0-1) of RS across all tickers per date
+
+    # Sector-level
+    'RS_Sector_Rank',     # Percentile rank (0-1) of RS within sector per date
+    'RS_vs_Sector',       # Z-score of RS relative to sector mean
+    'Sector_Momentum',    # Mean RS of sector on each date
+
+    # Industry-level
+    'RS_Industry_Rank',   # Percentile rank (0-1) of RS within industry per date
+    'RS_vs_Industry',     # Z-score of RS relative to industry mean
+    'Industry_Momentum',  # Mean RS of industry on each date
+]
+
+# =============================================================================
 # LAGGED FEATURES
 # =============================================================================
 # Features for which we want T-1 values to separate "cause" (setup) from "effect" (trigger).
@@ -437,14 +467,17 @@ FEATURE_EXCLUSION_LIST = (
 # Add experimental features here to test in the automated workflow.
 # The workflow will screen these using KS test and select those that pass.
 M01_CANDIDATE_FEATURES = M01_FEATURES + [
-    # Add experimental features below (uncomment to include):
-    # --- Regime Features (Future) ---
-    # 'regime_vix',
-    # 'regime_momentum',
-    # 'regime_breadth',
-    # --- Sector Features (Future) ---
-    # 'sector_rs',
-    # 'industry_rs',
+    # --- Cross-Sectional Features (New) ---
+    'RS_Universe_Rank',
+    'RS_Sector_Rank',
+    'RS_Industry_Rank',
+    'RS_vs_Sector',
+    'RS_vs_Industry',
+    'Sector_Momentum',
+    'Industry_Momentum',
+    # --- Company Profile Features ---
+    'mktCap_log',
+    'beta',
 ]
 
 

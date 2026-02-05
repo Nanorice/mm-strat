@@ -83,8 +83,8 @@ class SEPAHybridV1(bt.Strategy):
         # - min_percentile: set to 0.0 for "Top N Competition" (no hard gate)
         # - rank_by: 'trailing' uses 10-day cohort percentile, 'daily' uses single-day
         # NOTE: Regime controls exposure; percentile is just a ranking metric now
-        ('min_score', 30.0),  # Safety floor (scaled 0-100) - very permissive
-        ('min_percentile', 0.0),  # 0.0 = no gate (Top N Competition mode)
+        ('min_score', 50.0),  # Safety floor (scaled 0-100) - very permissive
+        ('min_percentile', 0.9),  # 0.0 = no gate (Top N Competition mode)
         ('rank_by', 'trailing'),  # 'trailing' = 10-day cohort, 'daily' = single-day
         ('min_price', 1.0),
         ('min_dollar_volume', 0),
@@ -167,15 +167,41 @@ class SEPAHybridV1(bt.Strategy):
                 )
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            # Order failed - clean up pending flags
+            # Check if there was any partial execution before failure
+            if order.executed.size:
+                logger.warning(f"Order {order.status} but had partial execution: {order.executed.size}")
+                
+                if order.isbuy():
+                    # Confirm entry for the partial amount
+                    self.position_tracker.confirm_entry(
+                        order_ref=order.ref,
+                        executed_price=order.executed.price,
+                        executed_size=int(order.executed.size),
+                    )
+                else:
+                    # Record partial exit
+                    exit_info = self.pending_orders.get(order.ref, {})
+                    exit_reason = exit_info.get('reason', 'unknown')
+                    
+                    self.position_tracker.record_partial_exit(
+                        ticker=order.data._name,
+                        shares_sold=int(abs(order.executed.size)),
+                        exit_price=order.executed.price,
+                        exit_reason=exit_reason,
+                        exit_date=self.datetime.date(),
+                    )
+
+            # Clean up pending flags/intents
             ticker = order.data._name
             if order.isbuy():
-                self.position_tracker.pending_entries.pop(order.ref, None)
+                # Only pop if not already consumed by partial confirm_entry above
+                if order.ref in self.position_tracker.pending_entries:
+                    self.position_tracker.pending_entries.pop(order.ref, None)
             else:
                 exit_info = self.pending_orders.pop(order.ref, {})
                 exit_reason = exit_info.get('reason', 'unknown')
 
-                # Clear pending flags so we can retry
+                # Clear pending flags so we can retry (for the remaining portion)
                 pos = self.position_tracker.get_position(ticker)
                 if pos:
                     if exit_reason == 'target1':
@@ -379,6 +405,8 @@ class SEPAHybridV1(bt.Strategy):
 
             # Skip if already holding
             if self.position_tracker.has_position(ticker):
+                # NOTE: We currently do NOT support "topping up" partial fills. 
+                # If we bought 50/100, we stay with 50 until exit.
                 self.signal_rejections.append(SignalRejection(
                     date=current_date, ticker=ticker, score=score, reason='already_holding'
                 ))

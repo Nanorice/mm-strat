@@ -176,18 +176,24 @@ class DataPipeline:
             try:
                 feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
                 df_features = feature_engine.calculate_lightweight_features(df)
-                
+
                 try:
                     df_features = feature_engine.calculate_heavyweight_features(df_features, ticker)
                 except Exception:
                     pass
-                
+
                 try:
                     fund_merger = FundamentalMerger(force_cache_only=True)
                     df_features = fund_merger.merge_ticker_data(ticker, df_features)
                 except Exception:
                     pass
-                
+
+                # Add company profile features (sector_id, industry_id, mktCap_log, beta)
+                try:
+                    df_features = feature_engine.add_company_features(df_features, ticker)
+                except Exception:
+                    pass
+
                 return ticker, df_features, None
             except Exception as e:
                 return ticker, None, str(e)
@@ -246,7 +252,19 @@ class DataPipeline:
         d2 = pd.DataFrame(trade_rows)
         d1_keys = d1[['date', 'ticker', 'label', 'return_pct', 'days_held', 'exit_reason']]
         merged = pd.merge(d1_keys, d2, on=['date', 'ticker'], how='inner')
-        
+
+        # Phase 3.5: Add cross-sectional features (RS ranks, sector/industry momentum)
+        try:
+            from src.cross_sectional_features import add_cross_sectional_features
+
+            logger.info("   Phase 3.5: Adding cross-sectional features...")
+            n_cols_before = len(merged.columns)
+            merged = add_cross_sectional_features(merged)
+            n_new_cols = len(merged.columns) - n_cols_before
+            logger.info(f"   Added {n_new_cols} cross-sectional features")
+        except Exception as e:
+            logger.warning(f"   Failed to add cross-sectional features: {e}")
+
         # Phase 4: Add M03 regime features
         if include_m03:
             from src.pipeline.m03_regime import M03RegimeCalculator, verify_m03_features

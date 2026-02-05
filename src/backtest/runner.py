@@ -11,9 +11,10 @@ Handles:
 - Results extraction
 """
 
+import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 import backtrader as bt
 import pandas as pd
@@ -157,7 +158,13 @@ class SEPABacktestRunner:
             logger.warning("No tickers provided to add price feeds.")
             return
 
+        # Calculate the late-start cutoff: skip tickers that IPO'd well into the backtest
+        # This prevents BackTrader from aligning all feeds to late-starting tickers
+        # Allow tickers starting within first 60 days of backtest (SMA50 warmup + buffer)
+        late_start_cutoff = self.start_date + pd.Timedelta(days=60)
+
         loaded_count = 0
+        skipped_late = 0
         for ticker in tickers:
             try:
                 price_path = self.prices_dir / f'{ticker}.parquet'
@@ -166,6 +173,14 @@ class SEPABacktestRunner:
                     continue
 
                 df = pd.read_parquet(price_path)
+
+                # Skip tickers that started too late into the backtest period
+                # These would delay BackTrader's date alignment for all feeds
+                if df.index.min() > late_start_cutoff:
+                    skipped_late += 1
+                    logger.debug(f"Skipping {ticker}: starts {df.index.min().date()}, after cutoff {late_start_cutoff.date()}")
+                    continue
+
                 df = self._filter_date_range(df)
 
                 if len(df) < 50:  # Skip tickers with insufficient data
@@ -185,6 +200,8 @@ class SEPABacktestRunner:
                 logger.debug(f"Failed to load {ticker}: {e}")
                 continue
 
+        if skipped_late > 0:
+            logger.info(f"Skipped {skipped_late} late-starting tickers (IPO after {late_start_cutoff.date()})")
         logger.info(f"Added {loaded_count} stock feeds")
 
         # === CONFIGURE BROKER ===
@@ -444,6 +461,169 @@ class SEPABacktestRunner:
         )
 
         return str(report_path)
+
+    def save_run(self, metrics: Dict[str, Any], run_note: str = "") -> Path:
+        """
+        Save structured backtest run for dashboard visualization.
+
+        Creates a run directory with:
+        - manifest.json: Parameters, artifact links, summary metrics
+        - equity_curve.parquet: Daily portfolio state
+        - trades.parquet: All closed trades
+        - metrics.json: Pre-computed analytics for charts
+
+        Args:
+            metrics: Dict from run() with backtest metrics
+            run_note: Optional suffix for run name (e.g., "bull_test")
+
+        Returns:
+            Path to the run directory
+        """
+        runs_dir = BACKTEST_DATA_DIR / 'runs'
+        runs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate run_id: backtest_YYMMDD or backtest_YYMMDD_{note}
+        date_str = pd.Timestamp.now().strftime('%y%m%d')
+        base_name = f"backtest_{date_str}"
+        if run_note:
+            # Sanitize note: lowercase, replace spaces with underscores
+            note_slug = run_note.lower().replace(' ', '_').replace('-', '_')
+            note_slug = ''.join(c for c in note_slug if c.isalnum() or c == '_')[:30]
+            base_name = f"{base_name}_{note_slug}"
+
+        # Handle collisions: append _2, _3, etc.
+        run_id = base_name
+        counter = 2
+        while (runs_dir / run_id).exists():
+            run_id = f"{base_name}_{counter}"
+            counter += 1
+
+        run_dir = runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Saving backtest run to: {run_dir}")
+
+        # 1. Save equity curve
+        equity_df = self.get_equity_curve_dataframe()
+        if equity_df is not None:
+            equity_df.to_parquet(run_dir / 'equity_curve.parquet')
+            logger.info(f"  - equity_curve.parquet ({len(equity_df)} rows)")
+
+        # 2. Save trades
+        trade_df = self.get_trade_dataframe()
+        if trade_df is not None:
+            trade_df.to_parquet(run_dir / 'trades.parquet')
+            logger.info(f"  - trades.parquet ({len(trade_df)} rows)")
+
+        # 3. Build and save metrics.json with pre-computed analytics
+        metrics_extended = self._build_extended_metrics(metrics, equity_df, trade_df)
+        with open(run_dir / 'metrics.json', 'w') as f:
+            json.dump(metrics_extended, f, indent=2, default=str)
+        logger.info("  - metrics.json")
+
+        # 4. Build and save manifest.json
+        manifest = self._build_manifest(run_id, metrics)
+        with open(run_dir / 'manifest.json', 'w') as f:
+            json.dump(manifest, f, indent=2, default=str)
+        logger.info("  - manifest.json")
+
+        logger.info(f"Run saved: {run_id}")
+        return run_dir
+
+    def _build_extended_metrics(
+        self,
+        metrics: Dict[str, Any],
+        equity_df: Optional[pd.DataFrame],
+        trade_df: Optional[pd.DataFrame]
+    ) -> Dict[str, Any]:
+        """Build extended metrics dict with pre-computed analytics for dashboard."""
+        result = {**metrics}
+
+        # Monthly returns (for heatmap)
+        if equity_df is not None and len(equity_df) > 0:
+            monthly_returns = self._compute_monthly_returns(equity_df)
+            result['monthly_returns'] = monthly_returns
+
+        # Regime performance (for bar chart)
+        if trade_df is not None and len(trade_df) > 0:
+            regime_perf = self._compute_regime_performance(trade_df)
+            result['regime_performance'] = regime_perf
+
+            # Exit reasons (for pie chart)
+            exit_reasons = trade_df['exit_reason'].value_counts().to_dict()
+            result['exit_reasons'] = exit_reasons
+
+        return result
+
+    def _compute_monthly_returns(self, equity_df: pd.DataFrame) -> List[Dict]:
+        """Compute monthly returns from equity curve."""
+        df = equity_df.copy()
+        df['year'] = df.index.year
+        df['month'] = df.index.month
+
+        # Get first and last value per month
+        monthly = df.groupby(['year', 'month'])['value'].agg(['first', 'last'])
+        monthly['return'] = (monthly['last'] - monthly['first']) / monthly['first'] * 100
+
+        records = []
+        for (year, month), row in monthly.iterrows():
+            records.append({
+                'year': int(year),
+                'month': int(month),
+                'return': round(row['return'], 2)
+            })
+        return records
+
+    def _compute_regime_performance(self, trade_df: pd.DataFrame) -> List[Dict]:
+        """Compute average PnL by entry regime."""
+        regime_names = {0: 'Strong Bear', 1: 'Bear', 2: 'Neutral', 3: 'Bull', 4: 'Strong Bull'}
+
+        stats = trade_df.groupby('entry_regime')['pnl_percent'].agg(['mean', 'count'])
+
+        records = []
+        for regime, row in stats.iterrows():
+            records.append({
+                'regime': int(regime),
+                'regime_name': regime_names.get(regime, f'R{regime}'),
+                'avg_pnl': round(row['mean'], 2),
+                'count': int(row['count'])
+            })
+        return records
+
+    def _build_manifest(self, run_id: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """Build manifest with parameters, artifact links, and summary metrics."""
+        # Extract strategy params
+        strategy_params = {}
+        if self.strategy is not None:
+            strategy_params = {
+                'min_score': self.strategy.p.min_score,
+                'min_percentile': self.strategy.p.min_percentile,
+                'atr_stop_mult': self.strategy.p.atr_stop_mult,
+                'atr_target1_mult': self.strategy.p.atr_target1_mult,
+                'max_stop_pct': self.strategy.p.max_stop_pct,
+                'cooldown_days': self.strategy.p.cooldown_days,
+            }
+
+        return {
+            'run_id': run_id,
+            'created_at': pd.Timestamp.now().isoformat(),
+            'params': {
+                'start_date': str(self.start_date.date()),
+                'end_date': str(self.end_date.date()),
+                'initial_cash': self.initial_cash,
+                'commission': self.commission,
+                'slippage_pct': self.slippage_pct,
+                **strategy_params
+            },
+            'summary_metrics': {
+                'total_return': round(metrics.get('total_return', 0), 2),
+                'sharpe_ratio': round(metrics.get('sharpe_ratio') or 0, 2),
+                'max_drawdown': round(metrics.get('max_drawdown', 0), 2),
+                'total_trades': metrics.get('total_trades', 0),
+                'win_rate': round(metrics.get('win_rate', 0), 1),
+                'net_profit': round(metrics.get('net_profit', 0), 2),
+            }
+        }
 
     def print_results(self, metrics: Optional[Dict] = None):
         """Print formatted backtest results."""
