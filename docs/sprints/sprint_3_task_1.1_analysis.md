@@ -229,3 +229,93 @@ print(f'Query time: {time.time()-start:.3f}s, Rows: {len(df)}')
 - **Migration:** Tomorrow (4 hours)
 - **Validation:** Next week (background task)
 - **Production:** Week 2 of Sprint 3
+
+---
+
+## UPDATED IMPLEMENTATION PLAN (2026-02-11)
+
+After architectural review, the migration plan has been refined with production-grade patterns.
+
+### Key Design Decisions
+
+1. **Hybrid Schema for Fundamentals** (JSON + Typed Columns)
+   - Core metrics (revenue, EPS, net_income) as typed columns for fast filtering
+   - Raw earnings data stored as JSON blob for flexibility
+   - Avoids brittle schema evolution from vendor data changes
+
+2. **Price Table Sorting Strategy**
+   - Sort by `(date, ticker)` - optimizes for backtesting (most common use case)
+   - Leverages DuckDB's min/max zone maps for fast date filtering
+   - Single ticker queries still fast via secondary index
+
+3. **Single-Writer Gatekeeper Pattern**
+   - `migrate_to_duckdb.py` is the ONLY process that writes to DuckDB
+   - Uses staging tables → insert pattern to avoid lock contention
+   - Concurrent readers supported (multiple model runs, dashboards)
+
+4. **Feature Materialization**
+   - Pre-compute technical indicators (SMA, RS, ATR) in `daily_features` table
+   - SEPA filter implemented as SQL view (`v_sepa_candidates`)
+   - Avoids recomputing window functions on every query
+
+5. **Historical Buy List Logging**
+   - `buy_list_history` table stores all scanner runs (never overwrite)
+   - Enables "What was my buy list 6 months ago?" queries
+   - Supports scanner performance analysis
+
+### Delivered Artifacts
+
+- ✅ `docs/database_schema.md` - Complete DDL with 6 core tables + 2 views
+- ✅ `scripts/migrate_to_duckdb.py` - Migration script with staging pattern
+- ✅ `scripts/validate_migration.py` - Data integrity validator
+
+### Phase 1 Execution Plan
+
+**Goal:** Parallel operation (files = truth, DB = shadow)
+
+```bash
+# Step 1: Run initial migration
+python scripts/migrate_to_duckdb.py --mode initial
+
+# Step 2: Validate data integrity
+python scripts/validate_migration.py --test all --sample-size 20
+
+# Step 3: Daily incremental updates (parallel to file-based)
+python scripts/migrate_to_duckdb.py --mode daily --start-date 2026-02-10
+
+# Step 4: Re-validate after daily update
+python scripts/validate_migration.py --test price --sample-size 10
+```
+
+**Success Criteria:**
+- Validator passes 100% (file data == DB data)
+- Daily migration completes in <2 minutes
+- No memory spikes >2 GB
+
+### Excluded from Phase 1 (Defer to Phase 2)
+
+- Backtest results logging (keep as JSON/parquet)
+- Model training config versioning (YAML is fine)
+- Edit logs, audit trails (use text files for now)
+
+### Open Questions for Implementation
+
+1. **Fundamentals Format:** What is current structure of earnings data?
+   - JSON files per ticker?
+   - Single aggregated parquet?
+   - Need to review before implementing `migrate_fundamentals()`
+
+2. **RS Rating Calculation:** Current logic in `cross_sectional_features.py`?
+   - Should we replicate in SQL or keep in Python?
+   - Trade-off: SQL = faster, Python = more flexible
+
+3. **SEPA Criteria:** Exact filters from current `daily_scanner.py`?
+   - Placeholder in `v_sepa_candidates` uses generic rules
+   - Need actual thresholds (volume, RS cutoff, etc.)
+
+### Next Session Tasks
+
+1. Review current data sources (price, earnings, company profiles)
+2. Update migration script paths to match actual data locations
+3. Run POC migration on 1 year of data
+4. Implement RS rating calculation in SQL (if feasible)

@@ -148,8 +148,10 @@ class DataRepository:
                 price_files = list(self.price_dir.glob('*.parquet'))
                 if price_files:
                     tickers_from_files = [f.stem for f in price_files]
-                    # Filter out benchmark if present
-                    tickers_from_files = [t for t in tickers_from_files if t != self.benchmark_ticker]
+                    # Filter out benchmark and universe files if present
+                    tickers_from_files = [t for t in tickers_from_files 
+                                          if t != self.benchmark_ticker 
+                                          and not t.startswith('universe_')]
                     logger.info(f"Found {len(tickers_from_files)} tickers from price folder")
                     return tickers_from_files
                 else:
@@ -1394,6 +1396,9 @@ class DataRepository:
 
         # Extract ticker symbols from filenames (remove .parquet extension)
         tickers = [f.stem for f in parquet_files]
+        
+        # Filter out non-ticker files (like universe_*)
+        tickers = [t for t in tickers if not t.startswith('universe_')]
 
         # Sort alphabetically
         tickers.sort()
