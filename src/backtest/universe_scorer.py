@@ -78,8 +78,76 @@ class UniverseScorer:
         else:
             logger.warning(f"No calibration table at {self.calibration_path}")
 
-        self._m01_features = get_model_features('M01')
-        logger.info(f"M01 uses {len(self._m01_features)} features")
+        # Load features from model config (source of truth) instead of feature_config
+        # Support both flat layout (models/m01_config.json) and folder layout (models/m01_v2/config.json)
+        m01_config_path = self.m01_path.with_name('config.json')  # Folder layout
+        if not m01_config_path.exists():
+            m01_config_path = self.m01_path.with_name('m01_config.json')  # Flat layout
+
+        if m01_config_path.exists():
+            with open(m01_config_path) as f:
+                m01_config = json.load(f)
+            self._m01_features = m01_config.get('feature_columns', [])
+            logger.info(f"M01 uses {len(self._m01_features)} features (from config)")
+        else:
+            # Fallback to feature_config if no model config
+            self._m01_features = get_model_features('M01')
+            logger.info(f"M01 uses {len(self._m01_features)} features (from feature_config)")
+
+    def _merge_m03_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Merge M03 regime features from m03_feed.parquet if needed."""
+        m03_features_needed = [f for f in self._m01_features if f.startswith('m03_')]
+        if not m03_features_needed:
+            return df
+
+        # Check which features are already present
+        missing_m03 = [f for f in m03_features_needed if f not in df.columns]
+        if not missing_m03:
+            logger.info("All M03 features already present in data")
+            return df
+
+        # Load M03 feed
+        m03_path = BACKTEST_DATA_DIR / 'm03_feed.parquet'
+        if not m03_path.exists():
+            logger.warning(f"M03 feed not found at {m03_path}, cannot add regime features")
+            return df
+
+        logger.info(f"Loading M03 feed from {m03_path}")
+        m03_df = pd.read_parquet(m03_path)
+
+        # Map column names to expected M01 feature names
+        column_map = {
+            'composite_score': 'm03_score',
+            'risk_pillar': 'm03_pillar_risk',
+            'trend_pillar': 'm03_pillar_trend',
+            'liq_pillar': 'm03_pillar_liq',
+            'regime_cat': 'm03_regime_vol',  # Ordinal regime category
+        }
+        m03_df = m03_df.rename(columns=column_map)
+
+        # Compute delta features (change over N days)
+        m03_df = m03_df.sort_index()
+        m03_df['m03_delta_5d'] = m03_df['m03_score'].diff(5)
+        m03_df['m03_delta_20d'] = m03_df['m03_score'].diff(20)
+
+        # Reset index for merge (date becomes a column)
+        m03_df = m03_df.reset_index()
+
+        # Ensure date columns are compatible
+        df['date'] = pd.to_datetime(df['date'])
+        m03_df['date'] = pd.to_datetime(m03_df['date'])
+
+        # Merge on date (M03 is market-level, not ticker-level)
+        m03_cols = ['date'] + [c for c in m03_df.columns if c.startswith('m03_')]
+        df = df.merge(m03_df[m03_cols], on='date', how='left')
+
+        present = [f for f in m03_features_needed if f in df.columns]
+        still_missing = [f for f in m03_features_needed if f not in df.columns]
+        logger.info(f"Added {len(present)} M03 features: {present}")
+        if still_missing:
+            logger.warning(f"Still missing M03 features: {still_missing}")
+
+        return df
 
     def _compute_trailing_percentile(
         self,
@@ -178,7 +246,7 @@ class UniverseScorer:
         # We prefer using d2r_sepa.parquet if available as it provides DAILY M01 scores (hydrated)
         # rather than just sparse signals. This allows tracking score evolution.
         d2r_path = config.DATA_DIR / 'ml' / 'd2r_sepa.parquet'
-        
+
         if d2r_path.exists():
             logger.info(f"Loading d2r (hydrated) from {d2r_path}")
             df = pd.read_parquet(d2r_path)
@@ -187,8 +255,11 @@ class UniverseScorer:
         else:
             logger.warning(f"d2r not found, falling back to sparse d2 at {D2_PATH}")
             df = pd.read_parquet(D2_PATH)
-            
+
         logger.info(f"Loaded {len(df)} rows")
+
+        # Merge M03 regime features if needed
+        df = self._merge_m03_features(df)
         if not df.empty:
             logger.info(f"Date column dtype: {df['date'].dtype}")
             logger.info(f"Date range in file: {df['date'].min()} to {df['date'].max()}")
@@ -205,19 +276,33 @@ class UniverseScorer:
         # Prepare feature matrix
         missing_features = [f for f in self._m01_features if f not in df.columns]
         if missing_features:
-            # Try to generate missing features using FeaturePreprocessor
-            from src.feature_preprocessor import FeaturePreprocessor
-            preproc_path = Path('models/preprocessing_config.json')
-            
-            if preproc_path.exists():
-                logger.info(f"Applying feature preprocessing from {preproc_path}")
-                try:
-                    preprocessor = FeaturePreprocessor.load(str(preproc_path))
-                    df = preprocessor.transform(df)
-                    # re-check missing features
-                    missing_features = [f for f in self._m01_features if f not in df.columns]
-                except Exception as e:
-                    logger.error(f"Preprocessing failed: {e}")
+            # Try to generate missing log_* features inline
+            # Log transform: sign(x) * log(1 + |x|)
+            log_missing = [f for f in missing_features if f.startswith('log_')]
+            if log_missing:
+                logger.info(f"Generating {len(log_missing)} log-transformed features inline")
+                for log_feat in log_missing:
+                    base_feat = log_feat[4:]  # Remove 'log_' prefix
+                    if base_feat in df.columns:
+                        df[log_feat] = np.sign(df[base_feat]) * np.log1p(np.abs(df[base_feat]))
+                    else:
+                        logger.debug(f"Base feature {base_feat} not found for {log_feat}")
+                # Re-check missing
+                missing_features = [f for f in self._m01_features if f not in df.columns]
+
+            # Try preprocessor for remaining features
+            if missing_features:
+                from src.feature_preprocessor import FeaturePreprocessor
+                preproc_path = Path('models/preprocessing_config.json')
+
+                if preproc_path.exists():
+                    logger.info(f"Applying feature preprocessing from {preproc_path}")
+                    try:
+                        preprocessor = FeaturePreprocessor.load(str(preproc_path))
+                        df = preprocessor.transform(df)
+                        missing_features = [f for f in self._m01_features if f not in df.columns]
+                    except Exception as e:
+                        logger.error(f"Preprocessing failed: {e}")
 
         if missing_features:
             logger.warning(f"Missing features even after preprocessing: {missing_features}")
@@ -227,13 +312,21 @@ class UniverseScorer:
         X = df[self._m01_features].copy()
         logger.info(f"Feature matrix shape: {X.shape}")
 
+        # Convert categorical features to category dtype (required by XGBoost)
+        categorical_cols = ['industry_id', 'sector_id']
+        for col in categorical_cols:
+            if col in X.columns:
+                X[col] = X[col].fillna(-1).astype(int).astype('category')
+
         # Handle missing values - drop rows with too many NaNs
         nan_counts = X.isna().sum(axis=1)
         valid_mask = nan_counts < len(self._m01_features) * 0.2  # Allow up to 20% missing
         logger.info(f"Valid rows (<=20% missing): {valid_mask.sum()}/{len(df)}")
 
-        # Fill remaining NaNs with column median for prediction
-        X_filled = X.fillna(X.median())
+        # Fill remaining NaNs with column median for prediction (skip categoricals)
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        X_filled = X.copy()
+        X_filled[numeric_cols] = X_filled[numeric_cols].fillna(X[numeric_cols].median())
 
         # Vectorized prediction
         logger.info("Running M01 prediction (vectorized)...")

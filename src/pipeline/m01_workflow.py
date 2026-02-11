@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from src.feature_config import M01_FEATURES, get_model_features
+from src.feature_config import M01_FEATURES, get_model_features, FEATURE_AUTO_EXCLUDE, M03_FEATURES
 from src.evaluation.feature_screener import FeatureScreener
 from .data_pipeline import DataPipeline
 from .m01_trainer import M01Trainer
@@ -40,6 +40,9 @@ class WorkflowConfig:
     correlation_threshold: float = 0.7
     auto_select: bool = True
     fast_eda: bool = False  # If True, use KS-only pipeline instead of full 4-pillar
+    exclude_m03: bool = False  # If True, exclude M03 regime features from selection
+    enrich_mfe: bool = False  # If True, add MFE/MAE from D2R to D2 for EDA
+    eda_target: str = 'return_pct'  # Target for EDA: 'return_pct' or 'y_max'
 
     # Training parameters
     target_type: str = 'log_space'
@@ -169,8 +172,10 @@ class M01Workflow:
             f"   Date Range: {self.config.start_date} to {self.config.end_date}",
             f"   Target: {self.config.target_type}",
             f"   EDA Mode: {eda_mode}",
+            f"   EDA Target: {self.config.eda_target}",
             f"   KS Threshold: {self.config.ks_threshold}",
             f"   Candidates: {len(self.config.candidate_features) if self.config.candidate_features else 'all numeric'} features",
+            f"   MFE Enrichment: {'ENABLED (from D2R)' if self.config.enrich_mfe else 'disabled'}",
             f"   Tuning: {'ENABLED' if self.config.tune else 'disabled'}",
             "=" * 70,
         ]
@@ -204,7 +209,6 @@ class M01Workflow:
         try:
             d2 = self.pipeline.load_d2()
             logger.info(f"Loaded existing D2: {len(d2)} rows")
-            return d2
         except FileNotFoundError:
             logger.info("D2 not found, generating from scratch...")
             d1 = self.pipeline.scan(
@@ -213,19 +217,90 @@ class M01Workflow:
                 threshold=self.config.success_threshold
             )
             d2 = self.pipeline.features(d1, n_jobs=self.config.n_jobs)
-            return d2
+        
+        # Enrich with MFE from D2R if requested
+        if self.config.enrich_mfe:
+            d2 = self._enrich_with_mfe(d2)
+        
+        return d2
+    
+    def _enrich_with_mfe(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Enrich D2 with MFE/MAE from D2R.
+        
+        Adds columns: y_max (MFE), MAE, regret
+        """
+        from pathlib import Path
+        
+        # Find D2R file
+        d2r_paths = [
+            Path('data/pipeline/d2r_sepa.parquet'),
+            Path('data/ml/d2r_sepa.parquet'),
+            Path('data/pipeline/d2r_120d.parquet'),
+            Path('data/ml/d2r_120d.parquet'),
+        ]
+        
+        d2r_path = None
+        for path in d2r_paths:
+            if path.exists():
+                d2r_path = path
+                break
+        
+        if d2r_path is None:
+            logger.warning("D2R not found. Run 'python model_runner.py data --steps hydrate' first.")
+            logger.warning("Skipping MFE enrichment.")
+            return data
+        
+        logger.info(f"Enriching D2 with MFE from {d2r_path}...")
+        
+        # Use M01Trainer's method
+        data_enriched = self.trainer.enrich_with_survivor_labels(
+            data,
+            d2r_path=str(d2r_path),
+            stop_multiplier=2.0
+        )
+        
+        # Count how many got MFE
+        mfe_count = data_enriched['MFE'].notna().sum()
+        logger.info(f"   Added MFE to {mfe_count:,} / {len(data_enriched):,} trades")
+        
+        if 'MFE' in data_enriched.columns:
+            avg_mfe = data_enriched['MFE'].mean()
+            avg_mae = data_enriched['MAE'].mean() if 'MAE' in data_enriched.columns else 0
+            logger.info(f"   Avg MFE: {avg_mfe:+.1f}%, Avg MAE: {avg_mae:+.1f}%")
+        
+        return data_enriched
 
     def _run_eda(self) -> Dict:
         """Run feature discrimination screening (quant-standard by default)."""
         # Pass None if no explicit candidates -> FeatureScreener auto-discovers all numeric cols
         candidates = self.config.candidate_features if self.config.candidate_features else None
+        
+        # Determine EDA target column
+        eda_target = self.config.eda_target
+        if eda_target == 'y_max' and 'y_max' not in self.data.columns:
+            logger.warning("y_max not in dataset. Did you forget --enrich-mfe? Falling back to return_pct")
+            eda_target = 'return_pct'
+        
+        logger.info(f"Running EDA with target: {eda_target}")
+
+        # Apply automatic exclusions (benchmark RS, stale features)
+        exclusions = set(FEATURE_AUTO_EXCLUDE)
+        if self.config.exclude_m03:
+            exclusions.update(M03_FEATURES)
+            logger.info(f"Excluding M03 features: {M03_FEATURES}")
+
+        # Filter candidates if provided, otherwise FeatureScreener will filter during discovery
+        if candidates:
+            candidates = [c for c in candidates if c not in exclusions]
+            logger.info(f"After exclusions: {len(candidates)} candidate features")
 
         if self.config.fast_eda:
             # Fast mode: KS-only pipeline
             results = FeatureScreener.run_pipeline(
                 df=self.data,
                 candidate_features=candidates,
-                target_col='return_pct',
+                target_col=eda_target,
                 ks_threshold=self.config.ks_threshold,
                 correlation_threshold=self.config.correlation_threshold
             )
@@ -236,7 +311,7 @@ class M01Workflow:
             results = FeatureScreener.run_quant_pipeline(
                 df=self.data,
                 candidate_features=candidates,
-                target_col='return_pct',
+                target_col=eda_target,
                 date_col='entry_date',
                 ks_threshold=self.config.ks_threshold,
                 correlation_threshold=self.config.correlation_threshold
@@ -244,16 +319,16 @@ class M01Workflow:
             # Map to common format for downstream compatibility
             results['failed'] = results.get('failed_composite', [])
 
-        # Generate EDA report
+        # Generate EDA outputs (both markdown and JSON for dashboard)
         if self.config.generate_report:
-            report_path = Path(self.config.output_dir) / 'eda_report.md'
-            FeatureScreener.generate_eda_report(
+            output_paths = FeatureScreener.generate_all_outputs(
                 screening_results=results,
-                output_path=report_path,
-                target_col='return_pct',
+                output_dir=Path(self.config.output_dir),
+                target_col=eda_target,
                 ks_threshold=self.config.ks_threshold,
                 correlation_threshold=self.config.correlation_threshold
             )
+            logger.info(f"Generated EDA outputs: {output_paths}")
 
         return results
 

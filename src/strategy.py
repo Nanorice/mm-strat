@@ -171,37 +171,40 @@ class SEPAStrategy(AlphaModel):
     def extract_sepa_criteria(self, df: pd.DataFrame, date: pd.Timestamp) -> Dict[str, int]:
         """
         Extracts individual SEPA criteria for database storage.
-        
-        Returns 8 individual checks as integers (1=True, 0=False):
-        - price_above_ma50
-        - price_above_ma150  
-        - price_above_ma200
-        - ma50_above_ma150
-        - ma150_above_ma200
-        - ma200_trending_up
-        - price_above_52w_low_30pct
-        - price_within_25pct_of_52w_high
-        
+
+        Returns 9 individual trend checks as integers (1=True, 0=False):
+        C1. price_above_ma150
+        C2. price_above_ma200
+        C3. ma150_above_ma200
+        C4. ma200_trending_up
+        C5. ma50_above_ma150
+        C6. price_above_ma50
+        C7. price_above_52w_low_30pct
+        C8. price_within_15pct_of_52w_high
+        C9. rs_rating_positive (proxy for top 30% - cross-sectional rank computed elsewhere)
+
         Args:
             df: DataFrame with indicators
             date: Date to extract criteria for
-            
+
         Returns:
-            Dict with 8 criteria as integers (1/0)
+            Dict with 9 criteria as integers (1/0)
         """
+        empty_result = {
+            'price_above_ma150': 0,
+            'price_above_ma200': 0,
+            'ma150_above_ma200': 0,
+            'ma200_trending_up': 0,
+            'ma50_above_ma150': 0,
+            'price_above_ma50': 0,
+            'price_above_52w_low_30pct': 0,
+            'price_within_15pct_of_52w_high': 0,
+            'rs_rating_positive': 0
+        }
+
         if date not in df.index:
-            # Return all zeros if date not found
-            return {
-                'price_above_ma50': 0,
-                'price_above_ma150': 0,
-                'price_above_ma200': 0,
-                'ma50_above_ma150': 0,
-                'ma150_above_ma200': 0,
-                'ma200_trending_up': 0,
-                'price_above_52w_low_30pct': 0,
-                'price_within_25pct_of_52w_high': 0
-            }
-        
+            return empty_result
+
         try:
             row = df.loc[date]
             price = row['Close']
@@ -210,39 +213,31 @@ class SEPAStrategy(AlphaModel):
             ma200 = row.get('SMA_200', 0)
             high_52w = row.get('High_52W', 0)
             low_52w = row.get('Low_52W', 0)
-            
-            # Calculate 8 individual checks
+            rs_rating = row.get('rs_rating', None)
+
+            # Calculate 9 individual checks (C1-C9)
             criteria = {
-                'price_above_ma50': 1 if price > ma50 else 0,
                 'price_above_ma150': 1 if price > ma150 else 0,
                 'price_above_ma200': 1 if price > ma200 else 0,
-                'ma50_above_ma150': 1 if ma50 > ma150 else 0,
                 'ma150_above_ma200': 1 if ma150 > ma200 else 0,
                 'ma200_trending_up': 0,  # Calculate below
+                'ma50_above_ma150': 1 if ma50 > ma150 else 0,
+                'price_above_ma50': 1 if price > ma50 else 0,
                 'price_above_52w_low_30pct': 1 if price > low_52w * 1.30 else 0,
-                'price_within_25pct_of_52w_high': 1 if price > high_52w * 0.75 else 0
+                'price_within_15pct_of_52w_high': 1 if price > high_52w * 0.85 else 0,
+                'rs_rating_positive': 1 if (rs_rating is not None and pd.notna(rs_rating) and rs_rating > 0) else 0
             }
-            
+
             # MA200 trending up (current > 20 days ago)
             if len(df) > 20 and 'SMA_200' in df.columns:
                 ma200_prev = df['SMA_200'].shift(20).loc[date] if pd.notna(df['SMA_200'].shift(20).loc[date]) else ma200
                 criteria['ma200_trending_up'] = 1 if ma200 > ma200_prev else 0
-            
+
             return criteria
-            
+
         except Exception as e:
             logger.debug(f"Error extracting SEPA criteria: {e}")
-            # Return all zeros on error
-            return {
-                'price_above_ma50': 0,
-                'price_above_ma150': 0,
-                'price_above_ma200': 0,
-                'ma50_above_ma150': 0,
-                'ma150_above_ma200': 0,
-                'ma200_trending_up': 0,
-                'price_above_52w_low_30pct': 0,
-                'price_within_25pct_of_52w_high': 0
-            }
+            return empty_result
 
     def generate_signals(self, df: pd.DataFrame, date: pd.Timestamp) -> Dict:
         """

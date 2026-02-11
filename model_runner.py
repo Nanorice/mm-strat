@@ -9,6 +9,9 @@ Usage:
     # M01 (Regression - predicts expected return %)
     python model_runner.py m01 --start 2020-01-01 --end 2023-12-31
 
+    # M01 Ranker (Pairwise ranking - cross-sectional ordering by date)
+    python model_runner.py m01rank --start 2020-01-01 --end 2023-12-31
+
     # M02 (Classification - predicts ignition probability)
     python model_runner.py m02 --start 2020-01-01 --end 2023-12-31 --horizon 120
 
@@ -88,7 +91,83 @@ def run_m01_pipeline(args):
         )
         trainer.save(model, metrics)
         print(f"\n[OK] Model saved to models/{trainer.model_name.lower()}.json")
-        
+
+        # Calibrate if requested
+        if getattr(args, 'calibrate', False):
+            print("\n[CALIBRATION] Running isotonic calibration...")
+            cal_results = trainer.calibrate()
+            calibrator_path = trainer.save_calibrator()
+            print(f"[OK] Calibrator saved to {calibrator_path}")
+
+            # Save calibration JSON
+            import json
+            from datetime import datetime
+            cal_data = {
+                'generated_at': datetime.now().isoformat(),
+                'model_name': trainer.model_name,
+                'n_samples': int(cal_results['n_samples']),
+                'n_bins': cal_results['n_bins'],
+                'is_monotonic': cal_results['is_monotonic'],
+                'calibration_error': float(cal_results['calibration_error']),
+                'deciles': trainer._calibration_table.to_dict('records')
+            }
+            cal_json_path = trainer.get_model_dir() / 'calibration.json'
+            with open(cal_json_path, 'w') as f:
+                json.dump(cal_data, f, indent=2)
+            print(f"[OK] Calibration data saved to {cal_json_path}")
+
+        # Generate report if requested
+        if args.report:
+            report_path = trainer.generate_report(
+                model, metrics,
+                start_date=args.start,
+                end_date=args.end
+            )
+            print(f"[OK] Report saved to {report_path}")
+
+
+def run_m01_ranker_pipeline(args):
+    """Run M01 Ranker (pairwise ranking) training pipeline."""
+    from src.pipeline import DataPipeline, M01RankerTrainer
+
+    print("\n" + "=" * 70)
+    print(" M01 RANKER PIPELINE (Pairwise Cross-Sectional Ranking)")
+    print("=" * 70)
+    print(f"   Date Range: {args.start} to {args.end}")
+    print(f"   Steps: {args.steps}")
+    print(f"   Target: {args.target}")
+    print(f"   Objective: rank:pairwise (groups by date)")
+    print("=" * 70 + "\n")
+
+    pipeline = DataPipeline()
+
+    # Step 1: Scan (generate D1)
+    if 'scan' in args.steps:
+        d1 = pipeline.scan(args.start, args.end, threshold=args.threshold)
+    elif 'features' in args.steps or 'train' in args.steps:
+        d1 = pipeline.load_d1()
+
+    # Step 2: Features (generate D2)
+    if 'features' in args.steps:
+        d2 = pipeline.features(d1, n_jobs=args.jobs)
+    elif 'train' in args.steps:
+        d2 = pipeline.load_d2()
+
+    # Step 3: Train M01 Ranker
+    if 'train' in args.steps:
+        trainer = M01RankerTrainer(
+            feature_set=getattr(args, 'feature_set', None),
+            model_name=getattr(args, 'model_name', None)
+        )
+        model, metrics = trainer.train(
+            d2,
+            tune=args.tune,
+            target=args.target,
+            min_group_size=getattr(args, 'min_group_size', 5)
+        )
+        trainer.save(model, metrics)
+        print(f"\n[OK] Ranker saved to models/{trainer.model_name.lower()}/model.json")
+
         # Generate report if requested
         if args.report:
             report_path = trainer.generate_report(
@@ -116,6 +195,9 @@ def run_workflow(args):
         correlation_threshold=getattr(args, 'correlation_threshold', 0.7),
         auto_select=not args.no_auto_select,
         fast_eda=getattr(args, 'fast_eda', False),
+        exclude_m03=getattr(args, 'exclude_m03', False),
+        enrich_mfe=getattr(args, 'enrich_mfe', False),
+        eda_target=getattr(args, 'eda_target', 'return_pct'),
         target_type=args.target,
         tune=args.tune,
         n_jobs=args.jobs,
@@ -593,7 +675,7 @@ Examples:
                            help='Enable survivor model (filter crashed trades)')
     m01_parser.add_argument('--stop-mult', type=float, default=2.0, 
                            help='Survivor stop multiplier (default: 2.0)')
-    m01_parser.add_argument('--target', default='log_space',
+    m01_parser.add_argument('--target', default='log_hybrid',
                            choices=['return_pct', 'y_max', 'log_space', 'hybrid_floor',
                                     'risk_adjusted', 'log_hybrid'],
                            help='Target type (default: log_space)')
@@ -601,9 +683,34 @@ Examples:
                            help='Feature set name from feature_config.py (e.g., M01_V2_FEATURES)')
     m01_parser.add_argument('--model-name', default=None,
                            help='Custom model name for saving (e.g., m01_v2). Defaults to m01')
-    m01_parser.add_argument('--report', action='store_true', 
+    m01_parser.add_argument('--report', action='store_true',
                            help='Generate markdown training report')
-    
+    m01_parser.add_argument('--calibrate', action='store_true',
+                           help='Run isotonic calibration after training')
+
+    # M01 Ranker subcommand (pairwise ranking)
+    m01rank_parser = subparsers.add_parser('m01rank',
+        help='Train M01 Ranker (Pairwise cross-sectional ranking)')
+    m01rank_parser.add_argument('--start', default='2018-01-01', help='Start date')
+    m01rank_parser.add_argument('--end', default='2023-12-31', help='End date')
+    m01rank_parser.add_argument('--threshold', type=float, default=15.0, help='Success threshold %%')
+    m01rank_parser.add_argument('--steps', nargs='+', default=['scan', 'features', 'train'],
+                               choices=['scan', 'features', 'train'],
+                               help='Pipeline steps to run')
+    m01rank_parser.add_argument('--tune', action='store_true', help='Enable Optuna tuning')
+    m01rank_parser.add_argument('--jobs', type=int, default=-1, help='Parallel workers (-1=all)')
+    m01rank_parser.add_argument('--target', default='log_hybrid',
+                               choices=['return_pct', 'y_max', 'log_space', 'log_hybrid'],
+                               help='Target for ranking relevance (default: log_hybrid)')
+    m01rank_parser.add_argument('--feature-set', default=None,
+                               help='Feature set name from feature_config.py')
+    m01rank_parser.add_argument('--model-name', default=None,
+                               help='Custom model name (default: m01_rank)')
+    m01rank_parser.add_argument('--min-group-size', type=int, default=5,
+                               help='Minimum samples per date to include (default: 5)')
+    m01rank_parser.add_argument('--report', action='store_true',
+                               help='Generate markdown training report')
+
     # M02 subcommand
     m02_parser = subparsers.add_parser('m02', help='Train M02 (Ignition Classifier)')
     m02_parser.add_argument('--start', default='2018-01-01', help='Start date')
@@ -725,6 +832,13 @@ Examples:
                                  help='Disable auto feature selection (use all candidates)')
     workflow_parser.add_argument('--fast-eda', action='store_true',
                                  help='Use KS-only pipeline (skip full 4-pillar analysis)')
+    workflow_parser.add_argument('--exclude-m03', action='store_true',
+                                 help='Exclude M03 regime features from feature selection')
+    workflow_parser.add_argument('--enrich-mfe', action='store_true',
+                                 help='Enrich D2 with MFE/MAE from D2R (requires hydrate step)')
+    workflow_parser.add_argument('--eda-target', default='return_pct',
+                                 choices=['return_pct', 'y_max'],
+                                 help='Target column for EDA screening (default: return_pct, use y_max with --enrich-mfe)')
     workflow_parser.add_argument('--target', default='log_space',
                                  choices=['return_pct', 'log_space', 'hybrid_floor',
                                           'risk_adjusted', 'log_hybrid'],
@@ -743,6 +857,8 @@ Examples:
 
     if args.model == 'm01':
         run_m01_pipeline(args)
+    elif args.model == 'm01rank':
+        run_m01_ranker_pipeline(args)
     elif args.model == 'm02':
         run_m02_pipeline(args)
     elif args.model == 'm03':

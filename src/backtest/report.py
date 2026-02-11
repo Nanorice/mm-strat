@@ -260,6 +260,43 @@ def _generate_fee_section(metrics: Dict[str, Any], trade_df: pd.DataFrame) -> Li
     return lines
 
 
+def _load_model_info() -> Dict[str, Any]:
+    """Load M01 model config and feature importance."""
+    from pathlib import Path
+    import json
+
+    result = {
+        'feature_count': 0,
+        'features': [],
+        'top_features': [],
+        'created_at': None,
+    }
+
+    # Load config
+    config_path = Path('models/m01_config.json')
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+        result['features'] = config.get('feature_columns', [])
+        result['feature_count'] = len(result['features'])
+        result['created_at'] = config.get('created_at')
+
+    # Load model for feature importance
+    model_path = Path('models/m01.json')
+    if model_path.exists():
+        try:
+            import xgboost as xgb
+            model = xgb.XGBRegressor()
+            model.load_model(str(model_path))
+            importance = model.get_booster().get_score(importance_type='gain')
+            sorted_imp = sorted(importance.items(), key=lambda x: -x[1])[:10]
+            result['top_features'] = [(feat, round(score, 1)) for feat, score in sorted_imp]
+        except Exception:
+            pass
+
+    return result
+
+
 def generate_report(
     metrics: Dict[str, Any],
     trade_df: Optional[pd.DataFrame] = None,
@@ -426,18 +463,71 @@ def generate_report(
             else:
                 report.append(f"- {key}: {value}")
 
-    # === METHODOLOGY ===
-    report.append("\n## Methodology")
+    # === ENTRY CRITERIA ===
+    report.append("\n## Entry Criteria")
     report.append("")
-    report.append("### Strategy Components")
     min_score = strategy_params.get('min_score', 30)
-    min_pct = strategy_params.get('min_percentile', 0.95)
-    top_pct = int((1 - min_pct) * 100)  # 0.95 -> top 5%
-    report.append(f"- **M01 (Selection):** Normalized score >= {min_score} AND top {top_pct}% daily")
-    report.append("- **M03 (Regime):** Regime-based position sizing and gating")
-    report.append("- **Exit Logic:** 3-tranche scale-out with trailing stops")
+    min_pct = strategy_params.get('min_percentile', 0.0)
+    top_pct = int((1 - min_pct) * 100) if min_pct > 0 else 100
+    rank_by = strategy_params.get('rank_by', 'trailing')
+    min_price = strategy_params.get('min_price', 1.0)
+    cooldown = strategy_params.get('cooldown_days', 3)
+
+    report.append("| Criterion | Value |")
+    report.append("|-----------|-------|")
+    report.append(f"| Min Score (RS) | >= {min_score} |")
+    if min_pct > 0:
+        report.append(f"| Percentile Gate | Top {top_pct}% |")
+    else:
+        report.append("| Percentile Gate | None (Top N Competition) |")
+    report.append(f"| Ranking Method | {rank_by} (10-day cohort) |")
+    report.append(f"| Min Price | ${min_price:.2f} |")
+    report.append(f"| Cooldown After Stop | {cooldown} days |")
+
+    # === EXIT CRITERIA ===
+    report.append("\n## Exit Criteria")
     report.append("")
-    report.append("### Regime Sizing")
+    atr_stop = strategy_params.get('atr_stop_mult', 2.0)
+    max_stop = strategy_params.get('max_stop_pct', 0.10)
+    atr_t1 = strategy_params.get('atr_target1_mult', 3.0)
+    min_t1 = strategy_params.get('min_target1_pct', 0.15)
+    atr_t2_add = strategy_params.get('atr_target2_add', 2.0)
+    sma_period = strategy_params.get('sma_exit_period', 50)
+
+    report.append("### Stop Loss")
+    report.append(f"- **Initial Stop:** max({atr_stop}x ATR, {max_stop*100:.0f}% below entry)")
+    report.append("- **Trailing:** Follows high-water mark using ATR")
+    report.append("")
+    report.append("### Profit Targets (3-Tranche Scale-Out)")
+    report.append(f"- **Target 1 (1/3):** max({atr_t1}x ATR, {min_t1*100:.0f}% above entry)")
+    report.append(f"- **Target 2 (1/3):** Target 1 + {atr_t2_add}x ATR")
+    report.append(f"- **Target 3 (1/3):** Trend exit (Close < SMA{sma_period})")
+    report.append("")
+    report.append("### Regime Liquidation")
+    report.append("- All positions liquidated immediately on Strong Bear (regime 0)")
+
+    # === MODEL INFO ===
+    report.append("\n## M01 Model Info")
+    report.append("")
+    model_info = _load_model_info()
+    if model_info['feature_count'] > 0:
+        report.append(f"- **Total Features:** {model_info['feature_count']}")
+        if model_info['created_at']:
+            report.append(f"- **Model Created:** {model_info['created_at'][:10]}")
+        report.append("")
+        if model_info['top_features']:
+            report.append("### Top 10 Features (by Gain)")
+            report.append("")
+            report.append("| Rank | Feature | Importance |")
+            report.append("|------|---------|------------|")
+            for i, (feat, score) in enumerate(model_info['top_features'], 1):
+                report.append(f"| {i} | {feat} | {score} |")
+    else:
+        report.append("*Model info not available*")
+
+    # === REGIME SIZING ===
+    report.append("\n## Regime Sizing")
+    report.append("")
     report.append("| Regime | Position Size | Max Positions |")
     report.append("|--------|---------------|---------------|")
     report.append("| Strong Bear (0) | 0% (No entries) | 0 |")

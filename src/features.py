@@ -108,8 +108,24 @@ class FeatureEngineer:
         # Relative Strength vs. Benchmark
         if self.benchmark_data is not None:
             df = self.ta.add_relative_strength(df, self.benchmark_data, lookback=config.RS_LOOKBACK)
+            # rs_rating is now computed in add_relative_strength (Minervini-style)
         else:
             logger.warning("No benchmark data provided. RS indicators will be missing.")
+
+        # Momentum features (for universe ranking)
+        df['mom_21d'] = df['Close'].pct_change(21)    # 1-month
+        df['mom_63d'] = df['Close'].pct_change(63)    # 3-month
+        df['mom_126d'] = df['Close'].pct_change(126)  # 6-month
+        df['mom_189d'] = df['Close'].pct_change(189)  # 9-month
+        df['mom_252d'] = df['Close'].pct_change(252)  # 12-month
+
+        # Turnover (dollar volume) for liquidity filtering
+        df['turnover'] = df['Close'] * df['Volume']
+        df['turnover_ma20'] = df['turnover'].rolling(window=20).mean()
+
+        # Volume MAs for universe snapshot
+        df['vol_ma20'] = df['Volume'].rolling(window=20).mean()
+        df['vol_ma50'] = df['Volume'].rolling(window=50).mean()
         
         # NEW VCP-SPECIFIC FEATURES
         # Normalized ATR (price-relative volatility)
@@ -128,9 +144,9 @@ class FeatureEngineer:
         # RSI (Relative Strength Index) - momentum oscillator
         df['RSI_14'] = self.ta.calculate_rsi(df, period=14)
         
-        # RSI Regime - context-aware RSI interpretation (bull vs bear market)
-        is_bull_market = df['SMA_200'] > df['SMA_200'].shift(20)
-        df['RSI_Regime'] = ((df['RSI_14'] > 40) & is_bull_market).astype(int)
+        # RSI Regime - EXCLUDED: Constant column (no variance)
+        # is_bull_market = df['SMA_200'] > df['SMA_200'].shift(20)
+        # df['RSI_Regime'] = ((df['RSI_14'] > 40) & is_bull_market).astype(int)
         
         # Distance from 52-week high (Minervini's sweet spot: -5% to -15%)
         df['Dist_From_52W_High'] = (df['Close'] - df['High_52W']) / df['High_52W'] * 100
@@ -172,9 +188,7 @@ class FeatureEngineer:
         # These features measure ACCELERATION and URGENCY to identify igniters
         # (fast movers that hit targets quickly) vs drifters (slow capital wasters)
 
-        # 1. RS Velocity - How fast is Relative Strength accelerating?
-        # Formula: (RS[t] - RS[t-5]) / 5 (5-day slope)
-        # Igniters: Accelerating RS; Drifters: Flat or decelerating RS
+        # RS velocity - rate of change in momentum-based RS
         if 'RS' in df.columns:
             df['rs_velocity'] = (df['RS'] - df['RS'].shift(5)) / 5
         else:
@@ -325,8 +339,8 @@ class FeatureEngineer:
             'Price_vs_SMA_200',
 
             # --- RELATIVE STRENGTH ---
-            'RS',                   # Was it a leader leading INTO the breakout?
-            'RS_MA',
+            # 'RS',                 # DEPRECATED: Uses benchmark (Close/SPY)
+            # 'RS_MA',              # DEPRECATED: Uses benchmark (Close/SPY)
 
             # --- SUPPLY DYNAMICS ---
             'Dry_Up_Volume',        # Volume dry up YESTERDAY

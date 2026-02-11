@@ -105,7 +105,7 @@ M03_LONG_REDUCED_MIN = 50  # Reduced sizing if regime score < 50
 SMA_FAST = 50
 SMA_MEDIUM = 150
 SMA_SLOW = 200
-WEEKS_52_HIGH_THRESHOLD = 0.75  # Price must be within 25% of 52-week high
+WEEKS_52_HIGH_THRESHOLD = 0.85  # Price must be within 15% of 52-week high
 WEEKS_52_LOW_THRESHOLD = 1.30   # Price must be 30% above 52-week low
 
 # Volatility Contraction Pattern (VCP)

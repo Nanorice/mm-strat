@@ -26,6 +26,22 @@ Usage Examples:
 
     # Use FMP screener with custom criteria
     python data_curator.py --source fmp_screener --market-cap-min 5000000000 --price-min 10 --update-prices
+
+Universe Commands:
+    # Update universe (append new data if exists, build if not)
+    python data_curator.py --universe
+
+    # Force full rebuild (for data quality issues)
+    python data_curator.py --universe --force
+
+    # Full rebuild with custom date range
+    python data_curator.py --universe --force --universe-start-date 2020-01-01
+
+    # Show universe statistics
+    python data_curator.py --universe-stats
+
+    # Get snapshot for a specific date (top 10 by RS rating)
+    python data_curator.py --universe-snapshot 2024-01-15
 """
 
 import argparse
@@ -47,6 +63,7 @@ from src.fundamental_engine import FundamentalEngine
 from src.company_profile_engine import CompanyProfileEngine
 from data_health_analyzer import DataHealthAnalyzer
 from src.macro_engine import MacroEngine
+from src.universe_engine import UniverseEngine
 
 # Configure logging
 logging.basicConfig(
@@ -168,6 +185,12 @@ def update_prices(
     print(f"   ⏱️  FMP rate limit: 300 calls/min (~5 tickers/sec max)")
     
     data_repo = DataRepository()
+    
+    # Ensure benchmark (SPY) is included in price updates
+    # (It's often excluded from universe scans since it's an ETF/benchmark)
+    if data_repo.benchmark_ticker and data_repo.benchmark_ticker not in tickers:
+        tickers = list(tickers) + [data_repo.benchmark_ticker]
+
     results = data_repo.update_cache(
         tickers,
         force=force,
@@ -299,6 +322,174 @@ def run_health_check():
     print("\n[6/6] Running Data Health Analysis...")
     analyzer = DataHealthAnalyzer()
     analyzer.run_full_analysis()
+
+
+def update_universe(
+    start_date: str = '2021-01-01',
+    end_date: Optional[str] = None,
+    max_workers: int = 8,
+    force: bool = False
+) -> None:
+    """
+    Update universe.parquet - smart mode with incremental append.
+
+    Behavior:
+    - If universe doesn't exist OR --force: Full rebuild from start_date
+    - If universe exists: Append new data since last date in file
+
+    Args:
+        start_date: Start date for full rebuild (default: 2021-01-01)
+        end_date: End date (default: today)
+        max_workers: Parallel workers for loading (default: 8)
+        force: Force full rebuild even if file exists
+    """
+    engine = UniverseEngine()
+    stats = engine.get_universe_stats()
+    file_exists = stats.get('status') != 'empty'
+
+    if force or not file_exists:
+        # Full rebuild
+        mode = "REBUILD (--force)" if force else "BUILD (new file)"
+        print(f"\n[UNIVERSE] {mode}")
+        print(f"   Date range: {start_date} to {end_date or 'today'}")
+
+        # Show which segments will be affected
+        end_for_segments = end_date or datetime.now().strftime('%Y-%m-%d')
+        segments = engine._get_segments_for_range(start_date, end_for_segments)
+        print(f"   Segments to build: {', '.join(segments)}")
+
+        if file_exists:
+            print(f"   Existing: {stats['total_rows']:,} rows, {stats['unique_tickers']} tickers")
+            print(f"   [WARN] This will overwrite affected segments!")
+
+        start_time = time.time()
+        results = engine.build_universe(
+            start_date=start_date,
+            end_date=end_date,
+            max_workers=max_workers
+        )
+        elapsed = time.time() - start_time
+        stats = engine.get_universe_stats()
+
+        print(f"\n   [OK] Universe built successfully!")
+        print(f"   Total rows: {stats['total_rows']:,}")
+        print(f"   Tickers: {stats['unique_tickers']}")
+        print(f"   Date range: {stats['date_range']}")
+        print(f"   Total size: {stats['total_size_mb']:.1f} MB")
+        print(f"   Time: {elapsed/60:.1f} minutes")
+
+        # Show segment breakdown
+        print(f"\n   Segments built:")
+        for seg_name, row_count in sorted(results.items()):
+            print(f"      {seg_name}: {row_count:,} rows")
+
+    else:
+        # Incremental append
+        print(f"\n[UNIVERSE] APPEND (incremental update)")
+        print(f"   Existing: {stats['total_rows']:,} rows, {stats['unique_tickers']} tickers")
+        print(f"   Date range: {stats['date_range']}")
+
+        # Get last date in universe
+        last_date = pd.to_datetime(stats['date_range'].split(' to ')[1])
+        append_start = (last_date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+        append_end = end_date or datetime.now().strftime('%Y-%m-%d')
+
+        if append_start > append_end:
+            print(f"   [OK] Universe is already up to date!")
+            return
+
+        print(f"   Appending: {append_start} to {append_end}")
+
+        # Load new data and append
+        from src.data_engine import DataRepository, CacheMode
+        from src.features import FeatureEngineer
+
+        repo = DataRepository(enable_validation=False)
+        tickers = repo.update_universe(source='PRICE_FOLDER')
+        benchmark = repo.get_benchmark_data(mode=CacheMode.CACHE_ONLY)
+        feature_engine = FeatureEngineer(benchmark_data=benchmark)
+
+        start_time = time.time()
+        batch_data = repo.get_batch_data(tickers, max_workers=max_workers, mode=CacheMode.CACHE_ONLY)
+
+        # Process and collect new data
+        new_data = {}
+        for ticker, df in batch_data.items():
+            try:
+                df_slice = df.loc[append_start:append_end]
+                if len(df_slice) > 0:
+                    new_data[ticker] = df_slice
+            except Exception:
+                continue
+
+        if new_data:
+            engine.append_daily(new_data)
+            elapsed = time.time() - start_time
+            new_stats = engine.get_universe_stats()
+            rows_added = new_stats['total_rows'] - stats['total_rows']
+            print(f"\n   [OK] Appended {rows_added:,} rows in {elapsed:.1f}s")
+            print(f"   New total: {new_stats['total_rows']:,} rows")
+            print(f"   Date range: {new_stats['date_range']}")
+        else:
+            print(f"   [OK] No new data to append")
+
+
+def universe_stats() -> None:
+    """Display universe.parquet statistics."""
+    print("\n[UNIVERSE] Statistics...")
+
+    engine = UniverseEngine()
+    stats = engine.get_universe_stats()
+
+    if stats.get('status') == 'empty':
+        print("   [WARN] Universe is empty. Run --universe to create it.")
+        return
+
+    print(f"   Total rows: {stats['total_rows']:,}")
+    print(f"   Unique tickers: {stats['unique_tickers']}")
+    print(f"   Date range: {stats['date_range']}")
+    print(f"   Total size: {stats['total_size_mb']:.1f} MB")
+
+    # Show segment breakdown
+    if 'segments' in stats:
+        print(f"\n   Segments:")
+        for seg_name, seg_stats in sorted(stats['segments'].items()):
+            print(f"      {seg_name}: {seg_stats['rows']:,} rows, {seg_stats['size_mb']:.1f} MB ({seg_stats['date_range']})")
+
+
+def universe_snapshot(query_date: str) -> None:
+    """
+    Get universe snapshot for a specific date.
+
+    Args:
+        query_date: Date to query (YYYY-MM-DD)
+    """
+    print(f"\n[UNIVERSE] Snapshot for {query_date}...")
+
+    engine = UniverseEngine()
+    stats = engine.get_universe_stats()
+
+    if stats.get('status') == 'empty':
+        print("   [WARN] Universe is empty. Run --build-universe to create it.")
+        return
+
+    try:
+        snapshot = engine.get_snapshot(pd.to_datetime(query_date).date())
+
+        if len(snapshot) == 0:
+            print(f"   [WARN] No data for date {query_date}")
+            return
+
+        print(f"   Tickers: {len(snapshot)}")
+
+        # Show top 10 by rs_rating
+        if 'rs_rating' in snapshot.columns:
+            top_10 = snapshot.nlargest(10, 'rs_rating')[['rs_rating', 'mom_63d', 'turnover_ma20']]
+            print(f"\n   Top 10 by RS Rating:")
+            print(top_10.to_string())
+
+    except Exception as e:
+        print(f"   [ERR] Error: {e}")
 
 
 def run_curation(
@@ -467,6 +658,19 @@ Examples:
                               help="Update all data types (prices, fundamentals, profiles, macro)")
     update_group.add_argument('--health-check', action='store_true',
                               help="Run only data health analysis (earnings staleness detection, coverage, quality)")
+
+    # Universe commands
+    universe_group = parser.add_argument_group('Universe Commands')
+    universe_group.add_argument('--universe', action='store_true',
+                                help="Update universe.parquet (append if exists, build if not). Use --force to rebuild.")
+    universe_group.add_argument('--universe-stats', action='store_true',
+                                help="Show universe.parquet statistics")
+    universe_group.add_argument('--universe-snapshot', type=str, default=None, metavar='DATE',
+                                help="Get universe snapshot for a date (YYYY-MM-DD)")
+    universe_group.add_argument('--universe-start-date', type=str, default='2020-01-01',
+                                help="Start date for rebuild (default: 2020-01-01). Only affected segments are rebuilt.")
+    universe_group.add_argument('--universe-end-date', type=str, default=None,
+                                help="End date for universe (default: today)")
     
     # Behavior flags
     behavior_group = parser.add_argument_group('Behavior Options')
@@ -477,7 +681,7 @@ Examples:
     behavior_group.add_argument('--skip-health-check', action='store_true',
                                 help="Skip the data health analysis at the end")
     behavior_group.add_argument('--max-workers', type=int, default=5,
-                                help="Number of parallel workers for API calls (default: 10)")
+                                help="Number of parallel workers for API calls (default: 5)")
     behavior_group.add_argument('--from-date', type=str, default=None,
                                 help="Override start date for price fetching (YYYY-MM-DD). "
                                      "Bypasses incremental fetch logic. Use when tickers have insufficient history.")
@@ -495,6 +699,36 @@ Examples:
         run_health_check()
         print("\n" + "=" * 80)
         print("Health Check Complete")
+        print("=" * 80 + "\n")
+        sys.exit(0)
+
+    # Handle universe commands
+    if args.universe:
+        print("=" * 80)
+        print("DATA CURATOR - Universe Update")
+        print("=" * 80)
+        update_universe(
+            start_date=args.universe_start_date,
+            end_date=args.universe_end_date,
+            max_workers=args.max_workers,
+            force=args.force
+        )
+        print("=" * 80 + "\n")
+        sys.exit(0)
+
+    if args.universe_stats:
+        print("=" * 80)
+        print("DATA CURATOR - Universe Statistics")
+        print("=" * 80)
+        universe_stats()
+        print("=" * 80 + "\n")
+        sys.exit(0)
+
+    if args.universe_snapshot:
+        print("=" * 80)
+        print("DATA CURATOR - Universe Snapshot")
+        print("=" * 80)
+        universe_snapshot(args.universe_snapshot)
         print("=" * 80 + "\n")
         sys.exit(0)
 

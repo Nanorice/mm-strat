@@ -298,40 +298,42 @@ class FastTradeSimulator(TradeSimulator):
         
         # Process each ticker once (vectorized)
         for ticker, df in ticker_iterator:
-            # OPTIMIZATION: Calculate SEPA status for the FULL outcome window
-            # This allows vectorized exit detection later
-            df_outcome_window = df[(df.index >= self.start_date) & (df.index <= self.outcome_end)]
+            # FIX: Compute SEPA on FULL data to preserve rolling lookback for C10-C12
+            # Rolling windows need ~63 trading days of history for accurate breakout detection
+            # Previously this was computed on df_outcome_window which truncated the lookback
             
-            if df_outcome_window.empty:
+            if df.empty:
                 continue
             
-            # ENTRY DETECTION: Use FULL SEPA (trend + breakout) for finding entry signals
-            # This matches sequential behavior which requires all 11 criteria
-            trend_mask_full, breakout_mask_full = VectorizedSEPAScreener.screen_single_ticker_split(df_outcome_window)
+            # ENTRY DETECTION: Use FULL SEPA (trend + breakout) on complete ticker data
+            trend_mask_full, breakout_mask_full = VectorizedSEPAScreener.screen_single_ticker_split(df)
             full_sepa_mask = trend_mask_full & breakout_mask_full
             
             # EXIT DETECTION: Use ONLY trend criteria (Stage 2)
             # Add trend-only SEPA_Status column for vectorized exit detection
-            # This matches sequential exit behavior which only checks detect_stage2_uptrend()
-            df.loc[df_outcome_window.index, 'SEPA_Status'] = trend_mask_full  # Trend only for exits!
+            df['SEPA_Status'] = trend_mask_full  # Trend only for exits!
             
-            # Filter to entry period for signal detection
-            df_entry_period = df_outcome_window[(df_outcome_window.index <= self.end_date)]
-            full_sepa_entry = full_sepa_mask[df_outcome_window.index <= self.end_date]
+            # Now filter to outcome window for signal detection and trade simulation
+            df_outcome_window = df[(df.index >= self.start_date) & (df.index <= self.outcome_end)]
+            if df_outcome_window.empty:
+                continue
+            
+            # Filter SEPA masks to entry period only
+            full_sepa_entry = full_sepa_mask[(df.index >= self.start_date) & (df.index <= self.end_date)]
             
             # Find new triggers (FULL SEPA = True today, False yesterday)
             # Entry requires trend + breakout to match sequential
             sepa_prev = full_sepa_entry.shift(1, fill_value=False)
             new_triggers = full_sepa_entry & ~sepa_prev
             
-            # Extract trigger dates
-            trigger_dates = df_entry_period.index[new_triggers].tolist()
+            # Extract trigger dates (only those within entry period)
+            trigger_dates = [d for d in new_triggers[new_triggers].index if self.start_date <= d <= self.end_date]
             
             for date in trigger_dates:
                 all_signals.append({
                     'ticker': ticker,
                     'entry_date': date,
-                    'entry_price': df_entry_period.loc[date, 'Close']
+                    'entry_price': df.loc[date, 'Close']
                 })
         
         # Restore original logging level
@@ -374,7 +376,7 @@ class FastTradeSimulator(TradeSimulator):
                     'ticker': ticker,
                     'entry_date': date,
                     'entry_price': df_entry_period.loc[date, 'Close'],
-                    'rs': df_entry_period.loc[date, 'RS'] if 'RS' in df_entry_period.columns else np.nan,
+                    'rs': df_entry_period.loc[date, 'rs_rating'] if 'rs_rating' in df_entry_period.columns else np.nan,
                     'volume_ratio': df_entry_period.loc[date, 'Vol_Ratio'] if 'Vol_Ratio' in df_entry_period.columns else np.nan
                 })
 

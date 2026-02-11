@@ -99,8 +99,8 @@ class M01Trainer(BaseTrainer):
         return M01_FEATURES
     
     def get_target_col(self) -> str:
-        """M01 default target: log_space (log-compressed MFE)."""
-        return 'log_space'
+        """M01 default target: log_hybrid (Option E - The Golden Target)."""
+        return 'log_hybrid'
     
     def get_model_params(self, tuned_params: Optional[Dict] = None) -> Dict:
         """Get XGBoost regressor parameters."""
@@ -114,17 +114,22 @@ class M01Trainer(BaseTrainer):
             'reg_alpha': 5.0,   # L1 regularization
             'reg_lambda': 3.0,  # L2 regularization
             'random_state': 42,
-            'n_jobs': -1
+            'n_jobs': -1,
+            'enable_categorical': True  # Native categorical support for industry_id, sector_id
         }
-        
+
         if tuned_params:
             default_params.update(tuned_params)
-        
+
         return default_params
     
     def create_model(self, params: Dict):
-        """Create XGBoost regressor."""
+        """Create XGBoost regressor with categorical support."""
         import xgboost as xgb
+        # Enable categorical feature support (required for sector_id, industry_id)
+        # This does not affect models without categorical features
+        if 'enable_categorical' not in params:
+            params = {**params, 'enable_categorical': True}
         return xgb.XGBRegressor(**params)
     
     # =========================================================================
@@ -378,6 +383,62 @@ class M01Trainer(BaseTrainer):
         logger.info(f"   Log-space target: mean={stats['mean_target']:.2f}, std={stats['std_target']:.2f}")
         return data_with_target
 
+    def _compute_log_hybrid_target(
+        self,
+        data: pd.DataFrame,
+        d2r_path: str = 'data/ml/d2r_sepa.parquet',
+        hard_stop_pct: float = -10.0,
+        ma_column: str = 'SMA_50'
+    ) -> pd.DataFrame:
+        """
+        Compute log_hybrid target (Option E - The Golden Target).
+
+        Winners (survivors): y = sign(MFE) × log(1 + |MFE|)
+        Losers: y = sign(realized_loss) × log(1 + |realized_loss|)
+
+        Loss is determined by first stop trigger hit:
+        1. Structural Stop: Close < Entry × (1 + hard_stop_pct/100)
+        2. Technical Stop: Close < (SMA_50 - 1.0 × ATR)
+
+        Args:
+            data: D2 features DataFrame
+            d2r_path: Path to D2 rehydrated parquet file
+            hard_stop_pct: Hard stop loss percentage (default -10%)
+            ma_column: Moving average column for technical stop
+
+        Returns:
+            DataFrame with 'target' column added
+        """
+        from src.evaluation.targets import TargetEngineer
+
+        d2r_file = Path(d2r_path)
+        if not d2r_file.exists():
+            alt_path = Path('data/ml/d2_rehydrated.parquet')
+            if alt_path.exists():
+                d2r_file = alt_path
+            else:
+                logger.warning(f"D2R not found: {d2r_path}")
+                logger.warning("Falling back to log_space (MFE only)")
+                return self._compute_log_space_target(data, d2r_path)
+
+        logger.info(f"Computing log_hybrid target from {d2r_file}...")
+        logger.info(f"   Stop triggers: hard_stop={hard_stop_pct}%, MA={ma_column}")
+        d2r = pd.read_parquet(d2r_file)
+
+        # Use TargetEngineer for log_hybrid computation
+        data_with_target, stats = TargetEngineer.calculate_log_hybrid(
+            data, d2r,
+            stop_multiplier=2.0,
+            hard_stop_pct=hard_stop_pct,
+            ma_column=ma_column
+        )
+
+        logger.info(f"   Winners: {stats['winners']}, Losers: {stats['losers']} ({stats['loser_rate']:.1%})")
+        logger.info(f"   Mean loser loss: {stats['mean_loser_loss']:.2f}%")
+        logger.info(f"   Log-hybrid target: mean={stats['mean_target']:.2f}, std={stats['std_target']:.2f}")
+
+        return data_with_target
+
     # =========================================================================
     # OVERRIDE: Enhanced Train Method
     # =========================================================================
@@ -388,23 +449,29 @@ class M01Trainer(BaseTrainer):
         tune_trials: int = 50,
         train_years: int = 3,
         test_years: int = 1,
-        target: str = 'log_space',
+        target: str = 'log_hybrid',
         survivor_model: bool = False,
         stop_multiplier: float = 2.0
     ) -> Tuple:
         """
         Train model using walk-forward validation.
-        
-        Enhanced with survivor model and dual-target support.
-        
+
+        Default target: log_hybrid (Option E - The Golden Target)
+        - Winners: log(1 + MFE)
+        - Losers: log(1 + |realized_loss|) with negative sign
+
         Args:
             data: D2 features DataFrame
             tune: Enable Optuna hyperparameter tuning
             tune_trials: Number of Optuna trials
             train_years: Training window size
             test_years: Test window size
-            target: Target column ('return_pct' or 'y_max')
-            survivor_model: Enable survivor model filtering
+            target: Target type. Options:
+                - 'log_hybrid' (default): Option E - loser accountability + log compression
+                - 'log_space': Option D - MFE only, no loser penalty
+                - 'y_max': Raw MFE/MAE hybrid
+                - 'return_pct': Actual realized return
+            survivor_model: Enable survivor model filtering (filters crashed trades)
             stop_multiplier: Structural stop multiplier for survivor filtering
             
         Returns:
@@ -432,17 +499,26 @@ class M01Trainer(BaseTrainer):
         win_count = sum(1 for f in preprocessor.config.get('features', {}).values() if f.get('transform') == 'winsorize')
         logger.info(f"   Preprocessor: {log_count} log-transformed, {win_count} winsorized")
         
-        # Save preprocessing config for inference
-        preprocessor.save(self.output_dir / 'preprocessing_config.json')
+        # Save preprocessing config to model-specific folder
+        model_dir = self.get_model_dir()
+        preprocessor.save(model_dir / 'preprocessing_config.json')
         
         # Get features (now includes log_ prefixed names)
         feature_cols = self.get_features()
         available_cols = [c for c in feature_cols if c in data.columns]
         missing_cols = [c for c in feature_cols if c not in data.columns]
-        
+
         if missing_cols:
             logger.warning(f"   Missing {len(missing_cols)} features: {missing_cols[:5]}...")
         logger.info(f"   Using {len(available_cols)} features")
+
+        # Convert categorical features to 'category' dtype for XGBoost native support
+        from src.feature_config import CATEGORICAL_FEATURES
+        cat_features = [f for f in CATEGORICAL_FEATURES if f in available_cols]
+        if cat_features:
+            for col in cat_features:
+                data[col] = data[col].astype('category')
+            logger.info(f"   Categorical features: {cat_features}")
         
         # Prepare data
         data = data.copy()
@@ -456,18 +532,25 @@ class M01Trainer(BaseTrainer):
         data['year'] = data['date'].dt.year
         
         # Determine target column
-        if target == 'y_max':
+        if target == 'log_hybrid':
+            # Default: Option E - The Golden Target (loser accountability + log compression)
+            if 'target' not in data.columns:
+                logger.info("   Computing log_hybrid target (Option E)...")
+                data = self._compute_log_hybrid_target(data)
+            target_col = 'target'
+            logger.info("   Using log_hybrid target (Winners: MFE, Losers: realized loss)")
+        elif target == 'y_max':
             if 'y_max' not in data.columns:
                 logger.info("   y_max not in data, calculating from D2R...")
                 data = self.calculate_y_max(data)
             target_col = 'y_max'
         elif target == 'log_space':
-            # Default production target: log-compressed MFE
+            # Legacy: log-compressed MFE only (no loser penalty)
             if 'target' not in data.columns:
                 logger.info("   Computing log_space target from D2R...")
                 data = self._compute_log_space_target(data)
             target_col = 'target'
-            logger.info(f"   Using log_space target (IC=0.338 winner)")
+            logger.info("   Using log_space target (MFE only, no loser penalty)")
         elif target in data.columns:
             # Custom target column (e.g., from TargetEngineer)
             target_col = target
@@ -583,29 +666,88 @@ class M01Trainer(BaseTrainer):
         self._all_predictions = pd.concat(all_predictions, ignore_index=True) if all_predictions else pd.DataFrame()
 
         return final_model, metrics_df
-    
+
+    def save_d2_with_scores(
+        self,
+        model,
+        data: pd.DataFrame,
+        suffix: str = None
+    ) -> str:
+        """
+        Save D2 dataframe with M01 model scores for analysis.
+
+        Filename: data/ml/d2_{model_name}.parquet
+        Example: data/ml/d2_m01.parquet or data/ml/d2_m01_v2.parquet
+
+        Args:
+            model: Trained XGBoost model
+            data: D2 features DataFrame (full dataset or test predictions)
+            suffix: Optional suffix for the filename (e.g., 'test_only')
+
+        Returns:
+            Path to saved parquet file
+        """
+        # Save to model-specific folder: models/{model_name}/d2_scored.parquet
+        model_dir = self.get_model_dir()
+
+        if suffix:
+            filename = f'd2_scored_{suffix}.parquet'
+        else:
+            filename = 'd2_scored.parquet'
+
+        output_path = model_dir / filename
+
+        # Get features
+        feature_cols = self._feature_cols if hasattr(self, '_feature_cols') else self.get_features()
+        available_cols = [c for c in feature_cols if c in data.columns]
+
+        df = data.copy()
+
+        # Add predictions if not already present
+        if 'm01_score' not in df.columns:
+            X = df[available_cols]
+            df['m01_score'] = model.predict(X)
+
+        # Add calibrated score if calibrator available
+        if hasattr(self, '_calibrator'):
+            df['m01_score_calibrated'] = self._calibrator.predict(df['m01_score'])
+
+        # Add decile based on score
+        df['m01_decile'] = pd.qcut(
+            df['m01_score'], q=10, labels=False, duplicates='drop'
+        ) + 1
+
+        # Save
+        df.to_parquet(output_path, index=False)
+
+        logger.info(f"Saved D2 with {self.model_name} scores to {output_path}")
+        logger.info(f"   Rows: {len(df):,} | Score range: [{df['m01_score'].min():.2f}, {df['m01_score'].max():.2f}]")
+
+        return str(output_path)
+
     # =========================================================================
     # REPORT GENERATION
     # =========================================================================
     def save_feature_importance(self, model, feature_cols: List[str]) -> pd.DataFrame:
         """Extract and save feature importance from trained model."""
         importance = model.feature_importances_
-        
+
         importance_df = pd.DataFrame({
             'feature': feature_cols,
             'gain': importance
         }).sort_values('gain', ascending=False).reset_index(drop=True)
-        
+
         importance_df['rank'] = range(1, len(importance_df) + 1)
         total_gain = importance_df['gain'].sum()
         importance_df['gain_pct'] = (importance_df['gain'] / total_gain * 100).round(2)
         importance_df['cumulative_pct'] = importance_df['gain_pct'].cumsum().round(2)
-        
-        # Save to CSV
-        csv_path = self.output_dir / 'feature_importance_m01.csv'
+
+        # Save to model-specific folder
+        model_dir = self.get_model_dir()
+        csv_path = model_dir / 'feature_importance.csv'
         importance_df.to_csv(csv_path, index=False)
         logger.info(f"   Saved feature importance to {csv_path}")
-        
+
         return importance_df
     
     def generate_report(
@@ -627,9 +769,11 @@ class M01Trainer(BaseTrainer):
         Returns:
             Path to saved report
         """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = self.output_dir / f"model_report_M01_{timestamp}.md"
-        
+        # Use model-specific folder with readable filename: model_report_[name]_YYMMDD.md
+        model_dir = self.get_model_dir()
+        date_str = datetime.now().strftime("%y%m%d")
+        report_path = model_dir / f"model_report_{self.model_name.lower()}_{date_str}.md"
+
         # Get feature importance
         feature_cols = self._feature_cols if hasattr(self, '_feature_cols') else []
         importance_df = self.save_feature_importance(model, feature_cols) if feature_cols else None
@@ -787,9 +931,63 @@ class M01Trainer(BaseTrainer):
                     lines.append(f"| {decile} | {n} | {wr:.1f}% | {mean_r:+.2f}% | {med_r:+.2f}% | {min_r:+.1f}% | {max_r:+.1f}% |")
             
             lines.append("")
+
+            # -----------------------------------------------------------------
+            # Detailed Decile Analysis (Granular Percentiles)
+            # -----------------------------------------------------------------
+            lines.append("### Detailed Decile Statistics")
+            lines.append("")
+            lines.append("Return distribution percentiles by predicted decile:")
+            lines.append("")
+            lines.append("| Decile | N | Mean | Std | Min | P1 | P5 | P25 | P50 | P75 | P95 | P99 | Max |")
+            lines.append("|--------|---|------|-----|-----|----|----|-----|-----|-----|-----|-----|-----|")
+
+            for decile in range(1, 11):
+                decile_data = predictions[predictions['decile'] == decile]['return_pct']
+                if len(decile_data) > 0:
+                    n = len(decile_data)
+                    mean_r = decile_data.mean()
+                    std_r = decile_data.std()
+                    min_r = decile_data.min()
+                    p1 = decile_data.quantile(0.01)
+                    p5 = decile_data.quantile(0.05)
+                    p25 = decile_data.quantile(0.25)
+                    p50 = decile_data.quantile(0.50)
+                    p75 = decile_data.quantile(0.75)
+                    p95 = decile_data.quantile(0.95)
+                    p99 = decile_data.quantile(0.99)
+                    max_r = decile_data.max()
+                    lines.append(
+                        f"| {decile} | {n} | {mean_r:+.1f} | {std_r:.1f} | {min_r:+.0f} | "
+                        f"{p1:+.0f} | {p5:+.0f} | {p25:+.0f} | {p50:+.0f} | {p75:+.0f} | "
+                        f"{p95:+.0f} | {p99:+.0f} | {max_r:+.0f} |"
+                    )
+
+            # Add survivor rate per decile if available
+            if 'is_survivor' in predictions.columns:
+                lines.append("")
+                lines.append("### Survivor Rate by Decile")
+                lines.append("")
+                lines.append("| Decile | N | Survivor Rate | Crash Rate | Avg MFE | Avg MAE |")
+                lines.append("|--------|---|---------------|------------|---------|---------|")
+
+                for decile in range(1, 11):
+                    decile_data = predictions[predictions['decile'] == decile]
+                    if len(decile_data) > 0:
+                        n = len(decile_data)
+                        surv_rate = decile_data['is_survivor'].mean() * 100
+                        crash_rate = 100 - surv_rate
+                        avg_mfe = decile_data['MFE'].mean() if 'MFE' in decile_data.columns else 0
+                        avg_mae = decile_data['MAE'].mean() if 'MAE' in decile_data.columns else 0
+                        lines.append(
+                            f"| {decile} | {n} | {surv_rate:.1f}% | {crash_rate:.1f}% | "
+                            f"{avg_mfe:+.1f}% | {avg_mae:+.1f}% |"
+                        )
+
+            lines.append("")
             lines.append("---")
             lines.append("")
-            
+
             # -----------------------------------------------------------------
             # Super Stock Classification Metrics (P1)
             # -----------------------------------------------------------------
@@ -881,12 +1079,12 @@ class M01Trainer(BaseTrainer):
         return str(report_path)
 
     def _save_visualization_data_to_config(self):
-        """Save M01 visualization data to {model_name}_config.json."""
+        """Save M01 visualization data to model-specific config.json."""
         import json
 
-        # Use model_name for versioned config file (e.g., m01_v2_config.json)
-        config_filename = f'{self.model_name.lower()}_config.json'
-        config_path = self.output_dir / config_filename
+        # Use model-specific folder
+        model_dir = self.get_model_dir()
+        config_path = model_dir / 'config.json'
 
         # Load existing config
         config = {}
@@ -988,8 +1186,9 @@ class M01Trainer(BaseTrainer):
                     'e_ratio_gt_3_pct': float((metrics_df['E_Ratio'] > 3).mean() * 100)
                 })
         
-        # Save JSON
-        json_path = self.output_dir / 'd1_analysis.json'
+        # Save JSON to model-specific folder
+        model_dir = self.get_model_dir()
+        json_path = model_dir / 'd1_analysis.json'
         with open(json_path, 'w') as f:
             json.dump(d1_report, f, indent=2)
 
@@ -1062,8 +1261,9 @@ class M01Trainer(BaseTrainer):
             e_ratio_list.append(e_ratio)
             time_to_peak_list.append(int(peak_day))
 
-        # Load existing d1_analysis.json and add visualization data
-        json_path = self.output_dir / 'd1_analysis.json'
+        # Load existing d1_analysis.json from model-specific folder
+        model_dir = self.get_model_dir()
+        json_path = model_dir / 'd1_analysis.json'
         d1_report = {}
         if json_path.exists():
             with open(json_path, 'r') as f:
@@ -1362,7 +1562,7 @@ class M01Trainer(BaseTrainer):
         Save the fitted calibrator for production use.
 
         Args:
-            path: Output path. If None, uses models/m01_calibrator.pkl
+            path: Output path. If None, uses model-specific folder
 
         Returns:
             Path to saved calibrator
@@ -1373,7 +1573,8 @@ class M01Trainer(BaseTrainer):
             raise ValueError("No calibrator fitted. Run calibrate() first.")
 
         if path is None:
-            path = self.output_dir / 'm01_calibrator.pkl'
+            model_dir = self.get_model_dir()
+            path = model_dir / 'calibrator.pkl'
         else:
             path = Path(path)
 
@@ -1383,7 +1584,7 @@ class M01Trainer(BaseTrainer):
                 'calibration_table': self._calibration_table.to_dict('records')
             }, f)
 
-        logger.info(f"Saved M01 calibrator to {path}")
+        logger.info(f"Saved calibrator to {path}")
         return str(path)
 
     def load_calibrator(self, path: Optional[str] = None):
@@ -1391,7 +1592,7 @@ class M01Trainer(BaseTrainer):
         Load a previously saved calibrator.
 
         Args:
-            path: Path to calibrator file. If None, uses models/m01_calibrator.pkl
+            path: Path to calibrator file. If None, uses model-specific folder
 
         Returns:
             Fitted IsotonicRegression calibrator
@@ -1399,7 +1600,8 @@ class M01Trainer(BaseTrainer):
         import pickle
 
         if path is None:
-            path = self.output_dir / 'm01_calibrator.pkl'
+            model_dir = self.get_model_dir()
+            path = model_dir / 'calibrator.pkl'
         else:
             path = Path(path)
 

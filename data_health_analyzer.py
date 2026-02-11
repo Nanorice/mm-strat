@@ -6,7 +6,7 @@ This script analyzes data health across three key dimensions:
 2. Fundamental Data Coverage: Analyzes financial metrics completeness
 3. Company Profile Coverage: Verifies company information availability
 
-Helps understand why Dataset B filters certain tickers from the universe.
+Helps identify data gaps and quality issues across the ticker universe.
 """
 
 import pandas as pd
@@ -599,8 +599,9 @@ class DataHealthAnalyzer:
         without_profiles = []
         incomplete_profiles = []
         
-        # Key fields to check
-        key_fields = ['sector', 'industry', 'marketCap', 'exchange', 'country']
+        # Key fields to check (must match column names in company_profiles.parquet)
+        # Note: mktCap (not marketCap), exchange often empty so not required
+        key_fields = ['sector', 'industry', 'mktCap', 'country']
         field_availability = defaultdict(int)
         
         try:
@@ -923,14 +924,14 @@ class DataHealthAnalyzer:
         
         print(f"\n📊 Data Combination Analysis (for tickers passing 200-bar filter):")
         print(f"\n   ✅ Price + ✅ Fundamentals + ✅ Profile: {len(full_data)} tickers")
-        print(f"      → These are FULLY eligible for Dataset B")
+        print(f"      → Complete data stack available")
         
         print(f"\n   ✅ Price + ✅ Fundamentals + ❌ Profile: {len(price_fund_only)} tickers")
         print(f"   ✅ Price + ❌ Fundamentals + ✅ Profile: {len(price_profile_only)} tickers")
         print(f"   ✅ Price + ❌ Fundamentals + ❌ Profile: {len(price_only)} tickers")
         
         total_passed = len(passed_price)
-        print(f"\n📈 Dataset B Eligibility:")
+        print(f"\n📈 Data Coverage Summary:")
         print(f"   Total passed 200-bar filter: {total_passed}")
         print(f"   With complete data stack: {len(full_data)} ({len(full_data)/total_passed*100:.1f}%)")
         
@@ -972,12 +973,12 @@ class DataHealthAnalyzer:
             if earnings_summary['stale_fundamentals_count'] > 0:
                 print(f"   - ⚠️  STALE FUNDAMENTALS: {earnings_summary['stale_fundamentals_count']} tickers need update")
 
-            print(f"\n5. DATASET B ELIGIBILITY:")
-            print(f"   - Fully eligible (all data): {cross_ref['full_data']} tickers")
+            print(f"\n5. DATA COVERAGE:")
+            print(f"   - Complete data stack (all data): {cross_ref['full_data']} tickers")
             print(f"   - Percentage of passed price filter: {cross_ref['full_data']/price_summary['passed']*100:.1f}%")
         else:
-            print(f"\n4. DATASET B ELIGIBILITY:")
-            print(f"   - Fully eligible (all data): {cross_ref['full_data']} tickers")
+            print(f"\n4. DATA COVERAGE:")
+            print(f"   - Complete data stack (all data): {cross_ref['full_data']} tickers")
             print(f"   - Percentage of passed price filter: {cross_ref['full_data']/price_summary['passed']*100:.1f}%")
 
         print(f"\n💡 RECOMMENDATIONS:")

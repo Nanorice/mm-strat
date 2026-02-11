@@ -1308,6 +1308,338 @@ def run_date_range_scanner(start_date: str, end_date: str,
     print(f"{'='*80}\n")
 
 
+def run_fast_scanner(scan_date: Optional[str] = None,
+                     use_ml: bool = False,
+                     csv_output: bool = False):
+    """
+    Fast single-day scanner using cached universe parquet.
+
+    Zero network I/O - loads pre-computed universe snapshot from parquet.
+    Much faster than run_daily_scanner() for daily use.
+
+    Workflow:
+    1. Load latest snapshot from universe parquet (instant)
+    2. Apply SEPA screening (vectorized)
+    3. Optionally apply M01/M02 scoring
+    4. Update buy list database
+
+    Args:
+        scan_date: Date to scan (YYYY-MM-DD). Default: latest in universe
+        use_ml: Enable M01/M02 scoring
+        csv_output: Export results to CSV
+    """
+    from src.universe_engine import UniverseEngine
+    from src.vectorized_screening import VectorizedSEPAScreener
+
+    start_time = time.time()
+
+    print("=" * 80)
+    print(" FAST SCANNER (Universe Cache Mode)")
+    print("=" * 80)
+
+    # Initialize
+    engine = UniverseEngine()
+    db = DatabaseManager()
+
+    # Get universe stats to find latest date
+    stats = engine.get_universe_stats()
+    if stats.get('status') == 'empty':
+        print("\n[ERROR] Universe not built. Run: python data_curator.py --universe")
+        return
+
+    # Determine scan date
+    if scan_date:
+        scan_date_obj = pd.Timestamp(scan_date)
+    else:
+        # Parse latest date from stats
+        date_range = stats['date_range']
+        latest_str = date_range.split(' to ')[1]
+        scan_date_obj = pd.Timestamp(latest_str)
+
+    scan_date_str = scan_date_obj.strftime('%Y-%m-%d')
+    print(f"\n[1/4] Loading Universe Snapshot for {scan_date_str}...")
+    load_start = time.time()
+
+    # Load snapshot - this is the key speedup (no network I/O)
+    snapshot = engine.get_snapshot(scan_date_obj)
+    if len(snapshot) == 0:
+        print(f"[ERROR] No data for {scan_date_str}. Try an earlier date.")
+        return
+
+    load_time = time.time() - load_start
+    print(f"       Loaded {len(snapshot)} tickers in {load_time:.2f}s")
+
+    # Normalize column names (universe stores lowercase, SEPA expects mixed case)
+    col_map = {
+        'close': 'Close', 'high': 'High', 'low': 'Low',
+        'open': 'Open', 'volume': 'Volume',
+        # SEPA columns may be stored lowercase in parquet
+        'sma_50': 'SMA_50', 'sma_150': 'SMA_150', 'sma_200': 'SMA_200',
+        'high_52w': 'High_52W', 'low_52w': 'Low_52W',
+        'high_20d': 'High_20D', 'vol_ma': 'Vol_MA', 'vol_ratio': 'Vol_Ratio',
+        'rs_ma': 'RS_MA', 'atr': 'ATR',
+    }
+    snapshot = snapshot.rename(columns=col_map)
+
+    # Load M03 Regime
+    m03_result = load_m03_regime(scan_date_str)
+    m03_score = m03_result['score'] if m03_result else None
+    m03_category = m03_result['category'] if m03_result else None
+    m03_allow_longs = m03_result['allow_longs'] if m03_result else True
+
+    # ========================================================================
+    # STEP 2: SEPA Screening (Snapshot Mode)
+    # ========================================================================
+    print(f"\n[2/4] SEPA Screening...")
+    screen_start = time.time()
+
+    # Check required columns - SEPA needs these for C1-C12 screening
+    required_sepa = ['Close', 'SMA_50', 'SMA_150', 'SMA_200', 'High_52W', 'Low_52W', 'RS', 'rs_rating']
+    missing = [c for c in required_sepa if c not in snapshot.columns]
+    if missing:
+        print(f"\n[ERROR] Universe parquet missing SEPA columns: {missing}")
+        print("        Available columns:", list(snapshot.columns))
+        print("\n        To fix, rebuild the universe with SEPA columns:")
+        print("        python data_curator.py --universe --start-date 2020-01-01")
+        return
+
+    # Apply SEPA Trend Template (C1-C9) on snapshot
+    # C1-C8: Price/MA conditions
+    c1 = snapshot['Close'] > snapshot['SMA_150']
+    c2 = snapshot['Close'] > snapshot['SMA_200']
+    c3 = snapshot['SMA_150'] > snapshot['SMA_200']
+    # C4 requires historical data - skip in snapshot mode (assume True if SMA_200 is healthy)
+    c4 = pd.Series(True, index=snapshot.index)
+    c5 = snapshot['SMA_50'] > snapshot['SMA_150']
+    c6 = snapshot['Close'] > snapshot['SMA_50']
+    c7 = snapshot['Close'] > snapshot['Low_52W'] * 1.30
+    c8 = snapshot['Close'] > snapshot['High_52W'] * 0.85
+
+    # C9: RS rank top 30%
+    rs_threshold = snapshot['rs_rating'].quantile(0.70)
+    c9 = snapshot['rs_rating'] >= rs_threshold
+
+    trend_ok = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8 & c9
+
+    # Breakout conditions (C10-C12)
+    if 'High_20D' in snapshot.columns and 'Vol_Ratio' in snapshot.columns:
+        c10 = snapshot['Close'] > snapshot['High_20D']
+        c11 = snapshot['Vol_Ratio'] > 1.0
+        if 'RS_MA' in snapshot.columns:
+            c12 = snapshot['RS'] > snapshot['RS_MA']
+        else:
+            c12 = pd.Series(True, index=snapshot.index)
+        breakout_ok = c10 & c11 & c12
+    else:
+        breakout_ok = pd.Series(False, index=snapshot.index)
+
+    full_sepa = trend_ok & breakout_ok
+
+    trend_ok_tickers = snapshot[trend_ok].index.tolist()
+    sepa_qualified = snapshot[full_sepa].index.tolist()
+
+    screen_time = time.time() - screen_start
+    print(f"       Trend OK (C1-C9): {len(trend_ok_tickers)} tickers")
+    print(f"       Full SEPA (C1-C12): {len(sepa_qualified)} tickers")
+    print(f"       Screening time: {screen_time:.2f}s")
+
+    # ========================================================================
+    # STEP 3: ML Scoring (Optional)
+    # ========================================================================
+    ml_scores_df = None
+    ml_time = 0
+    if use_ml:
+        print(f"\n[3/4] M01 + M02 Scoring...")
+        ml_start = time.time()
+
+        production_scorer = load_production_scorer()
+        if production_scorer and len(sepa_qualified) > 0:
+            # Fast mode ML: Load full ticker data for candidates only
+            # This is slower than pure snapshot but still faster than full scan
+            print(f"       Loading heavyweight features for {len(sepa_qualified)} candidates...")
+
+            data_repo = DataRepository()
+            benchmark_data = data_repo.get_benchmark_data(
+                check_min_date=False,
+                force_cache_only=True
+            )
+            feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
+            fund_merger = FundamentalMerger()
+
+            # Load ticker data for SEPA candidates only
+            candidate_data = data_repo.get_batch_data(
+                tickers=sepa_qualified,
+                min_date=(scan_date_obj - pd.DateOffset(years=2)).strftime('%Y-%m-%d'),
+                check_min_date=False,
+                force_cache_only=True
+            )
+
+            # Calculate features for candidates
+            enriched = feature_engine.process_universe_batch(candidate_data)
+
+            # Prepare ML candidates
+            candidates_df = prepare_ml_candidates(
+                sepa_qualified, enriched, scan_date_obj, fund_merger
+            )
+
+            if len(candidates_df) > 0:
+                # Apply preprocessing
+                preprocess_config_path = Path('models/preprocessing_config.json')
+                if preprocess_config_path.exists():
+                    try:
+                        preprocessor = FeaturePreprocessor.load(str(preprocess_config_path))
+                        candidates_df = preprocessor.transform(candidates_df)
+                    except Exception as e:
+                        logger.warning(f"Preprocessing failed: {e}")
+
+                # Score
+                ml_scores_df = production_scorer.score(
+                    candidates_df,
+                    use_volatility_adjustment=True,
+                    use_m02=True
+                )
+
+                ml_time = time.time() - ml_start
+                valid_scores = ml_scores_df['final_score'].notna().sum() if 'final_score' in ml_scores_df.columns else 0
+                print(f"       Scored {valid_scores} candidates in {ml_time:.2f}s")
+            else:
+                print("       No candidates with sufficient data for ML")
+        else:
+            print("       No candidates to score or scorer unavailable")
+    else:
+        print(f"\n[3/4] ML Scoring: Skipped (use --use-ml to enable)")
+
+    # ========================================================================
+    # STEP 4: Update Buy List
+    # ========================================================================
+    print(f"\n[4/4] Updating Buy List...")
+
+    # Get current buy list
+    current_buy_list = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+    tickers_in_buy_list = set(current_buy_list['ticker'].tolist()) if not current_buy_list.empty else set()
+    trend_ok_set = set(trend_ok_tickers)
+    sepa_set = set(sepa_qualified)
+
+    # New triggers: SEPA qualified but not in buy list
+    # Note: In fast mode we can't detect 0->1 transitions without historical data
+    # So we treat all SEPA qualified + not in buy list as potential additions
+    new_triggers = sepa_set - tickers_in_buy_list
+
+    # M03 Regime gating
+    if not m03_allow_longs and new_triggers:
+        print(f"       [M03 GATE] Blocking {len(new_triggers)} signal(s) due to bearish regime")
+        new_triggers = set()
+
+    # Removals: in buy list but no longer trend_ok
+    tickers_to_remove = tickers_in_buy_list - trend_ok_set
+
+    # Execute additions
+    for ticker in new_triggers:
+        row = snapshot.loc[ticker]
+        signal_price = row['Close']
+
+        # Get ML scores if available
+        m01_expected_return = None
+        m02_loser_proba = None
+        final_score = None
+
+        if ml_scores_df is not None and len(ml_scores_df) > 0:
+            ticker_row = ml_scores_df[ml_scores_df['ticker'] == ticker]
+            if len(ticker_row) > 0:
+                row_data = ticker_row.iloc[0]
+                m01_expected_return = to_python_float(row_data.get('m01_score'))
+                m02_loser_proba = to_python_float(row_data.get('m02_loser_proba'))
+                final_score = to_python_float(row_data.get('final_score'))
+
+        # Get m02_survival for legacy ml_probability column
+        m02_survival = None
+        if ml_scores_df is not None and len(ml_scores_df) > 0:
+            ticker_row = ml_scores_df[ml_scores_df['ticker'] == ticker]
+            if len(ticker_row) > 0:
+                m02_survival = to_python_float(ticker_row.iloc[0].get('m02_survival'))
+
+        db.add_to_buy_list(
+            ticker=ticker,
+            signal_date=scan_date_str,
+            signal_price=float(signal_price),
+            current_price=float(signal_price),
+            rs=to_python_float(row.get('RS')),
+            vol_ratio=to_python_float(row.get('Vol_Ratio')),
+            ma50=to_python_float(row.get('SMA_50')),
+            ma150=to_python_float(row.get('SMA_150')),
+            ma200=to_python_float(row.get('SMA_200')),
+            high_52w=to_python_float(row.get('High_52W')),
+            low_52w=to_python_float(row.get('Low_52W')),
+            ml_probability=m02_survival,
+            ml_expected_return=m01_expected_return,
+            m01_expected_return=m01_expected_return
+        )
+
+        if m02_loser_proba is not None:
+            db.update_buy_list_column(ticker, 'm02_loser_proba', m02_loser_proba)
+        if final_score is not None:
+            db.update_buy_list_column(ticker, 'final_score', final_score)
+        if m03_score is not None:
+            db.update_buy_list_column(ticker, 'm03_regime_score', m03_score)
+        if m03_category is not None:
+            db.update_buy_list_column(ticker, 'm03_regime_category', m03_category)
+
+        db.log_buy_list_activity(
+            ticker=ticker,
+            action='ADDED',
+            action_date=scan_date_str,
+            reason='fast_scan_sepa'
+        )
+
+    # Execute removals
+    for ticker in tickers_to_remove:
+        db.remove_from_buy_list(ticker, reason='trend_broken')
+        db.log_buy_list_activity(
+            ticker=ticker,
+            action='REMOVED',
+            action_date=scan_date_str,
+            reason='trend_broken'
+        )
+
+    # Rank by final_score if ML was used
+    if use_ml and ml_scores_df is not None:
+        update_final_score_ranks(db, scan_date_str)
+
+    print(f"       +{len(new_triggers)} added, -{len(tickers_to_remove)} removed")
+
+    # ========================================================================
+    # Summary
+    # ========================================================================
+    total_time = time.time() - start_time
+
+    print(f"\n{'=' * 80}")
+    print(f" FAST SCAN COMPLETE | {scan_date_str}")
+    print("=" * 80)
+    print(f"Total time: {total_time:.2f}s")
+    print(f"  - Universe load: {load_time:.2f}s")
+    print(f"  - SEPA screening: {screen_time:.2f}s")
+    if use_ml and 'ml_time' in dir():
+        print(f"  - ML scoring: {ml_time:.2f}s")
+
+    # Display buy list
+    buy_list_df = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
+    print(f"\nActive Buy List: {len(buy_list_df)} tickers")
+
+    if not buy_list_df.empty and len(buy_list_df) <= 20:
+        display_cols = ['ticker', 'signal_date', 'signal_price', 'rs', 'final_score']
+        available = [c for c in display_cols if c in buy_list_df.columns]
+        print(buy_list_df[available].to_string(index=False))
+
+    if csv_output:
+        output_dir = Path(config.DATA_DIR) / 'scanner_output'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f'fast_scan_{scan_date_str}.csv'
+        buy_list_df.to_csv(path, index=False)
+        print(f"\n[FILE] Exported: {path}")
+
+    print("=" * 80 + "\n")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QSS Daily Scanner with Date Range Support")
     parser.add_argument('--scan-date', type=str, help='Scan date (YYYY-MM-DD). Default: latest trading day')
@@ -1319,6 +1651,8 @@ if __name__ == "__main__":
                        help=f'Path to ML model (default: {config.ML_PRODUCTION_MODEL})')
     parser.add_argument('--tickers', nargs='+', metavar='TICKER',
                        help='Specific tickers to scan (e.g., --tickers WMT NUE AAPL)')
+    parser.add_argument('--fast', action='store_true',
+                       help='Use fast scanner (cached universe, no network I/O)')
 
     args = parser.parse_args()
 
@@ -1331,8 +1665,15 @@ if __name__ == "__main__":
                 use_ml=args.use_ml,
                 model_path=args.model_path
             )
+        elif args.fast:
+            # Fast single-day mode (cached universe)
+            run_fast_scanner(
+                scan_date=args.scan_date,
+                use_ml=args.use_ml,
+                csv_output=args.csv_output
+            )
         else:
-            # Single day mode
+            # Standard single day mode
             run_daily_scanner(
                 scan_date=args.scan_date,
                 csv_output=args.csv_output,

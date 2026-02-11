@@ -100,7 +100,18 @@ class DatasetRehydrator:
         d2_rehydrated = pd.concat(results, ignore_index=True)
         self._validate_output(d2_rehydrated, d1_trades)
 
-        logger.info(f"Rehydration complete: {len(d2_rehydrated):,} rows")
+        # Phase 5: Add cross-sectional features (RS ranks per day across universe)
+        try:
+            from src.cross_sectional_features import add_cross_sectional_features
+            logger.info("Adding cross-sectional features (RS ranks)...")
+            n_cols_before = len(d2_rehydrated.columns)
+            d2_rehydrated = add_cross_sectional_features(d2_rehydrated)
+            n_new_cols = len(d2_rehydrated.columns) - n_cols_before
+            logger.info(f"Added {n_new_cols} cross-sectional features")
+        except Exception as e:
+            logger.warning(f"Failed to add cross-sectional features: {e}")
+
+        logger.info(f"Rehydration complete: {len(d2_rehydrated):,} rows, {len(d2_rehydrated.columns)} columns")
         return d2_rehydrated
 
     def _preload_price_data(self, tickers: list) -> dict:
@@ -153,6 +164,19 @@ class DatasetRehydrator:
                     df_enriched = fund_merger.merge_ticker_data(ticker, df_features)
                 except Exception as e:
                     df_enriched = df_features  # Fall back to technical-only
+
+                # Company features (sector_id, industry_id, mktCap_log, beta)
+                try:
+                    df_enriched = feature_engine.add_company_features(df_enriched, ticker)
+                except Exception as e:
+                    pass  # Silent fail for company features
+
+                # Ensure DatetimeIndex is preserved (required for .loc[date:date] slicing)
+                if not isinstance(df_enriched.index, pd.DatetimeIndex):
+                    if 'date' in df_enriched.columns:
+                        df_enriched = df_enriched.set_index('date')
+                    elif 'Date' in df_enriched.columns:
+                        df_enriched = df_enriched.set_index('Date')
 
                 return ticker, df_enriched, None
             except Exception as e:

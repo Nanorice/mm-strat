@@ -2,13 +2,13 @@
 Cross-Sectional Features Module
 
 Calculates features that require data from all tickers on each date:
-- RS_Universe_Rank: Percentile rank of RS across all tickers per date
-- RS_Sector_Rank: Percentile rank of RS within sector per date
-- RS_Industry_Rank: Percentile rank of RS within industry per date
-- RS_vs_Sector: Z-score of RS vs sector mean
-- RS_vs_Industry: Z-score of RS vs industry mean
-- Sector_Momentum: Mean RS of all stocks in same sector per date
-- Industry_Momentum: Mean RS of all stocks in same industry per date
+- RS_Universe_Rank: Percentile rank of rs_rating across all tickers per date
+- RS_Sector_Rank: Percentile rank of rs_rating within sector per date
+- RS_Industry_Rank: Percentile rank of rs_rating within industry per date
+- RS_vs_Sector: Z-score of rs_rating vs sector mean
+- RS_vs_Industry: Z-score of rs_rating vs industry mean
+- Sector_Momentum: Mean rs_rating of all stocks in same sector per date
+- Industry_Momentum: Mean rs_rating of all stocks in same industry per date
 
 These features are calculated AFTER individual ticker processing via post-processing.
 """
@@ -28,7 +28,7 @@ MIN_GROUP_SIZE = 3
 def add_cross_sectional_features(
     dataset: pd.DataFrame,
     company_profile_path: str = 'data/company_info/company_profiles.parquet',
-    rs_column: str = 'RS'
+    rs_column: str = 'rs_rating'
 ) -> pd.DataFrame:
     """
     Add cross-sectional features to dataset.
@@ -37,10 +37,10 @@ def add_cross_sectional_features(
     It adds features that require comparing a ticker against all other tickers on each date.
 
     Args:
-        dataset: Concatenated dataset with columns ['ticker', 'date', 'RS', ...]
+        dataset: Concatenated dataset with columns ['ticker', 'date', 'rs_rating', ...]
                  May already have 'sector_id'/'industry_id' from add_company_features()
         company_profile_path: Path to company profiles parquet (fallback if sector_id missing)
-        rs_column: Name of Relative Strength column (default: 'RS')
+        rs_column: Name of Relative Strength column (default: 'rs_rating')
 
     Returns:
         Dataset with cross-sectional features added:

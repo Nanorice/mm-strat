@@ -151,8 +151,10 @@ class M02Trainer(BaseTrainer):
         return default_params
     
     def create_model(self, params: Dict):
-        """Create XGBoost classifier with class weight handling."""
+        """Create XGBoost classifier with class weight handling and categorical support."""
         import xgboost as xgb
+        if 'enable_categorical' not in params:
+            params = {**params, 'enable_categorical': True}
         return xgb.XGBClassifier(**params)
     
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:

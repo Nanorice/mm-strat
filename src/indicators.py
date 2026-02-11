@@ -105,7 +105,7 @@ class TechnicalAnalysis:
             lookback: Period for RS moving average (default from config)
 
         Returns:
-            DataFrame with RS and RS_MA columns
+            DataFrame with RS, RS_MA, and rs_rating columns
         """
         if lookback is None:
             lookback = config.RS_LOOKBACK
@@ -115,10 +115,19 @@ class TechnicalAnalysis:
         # Align benchmark to stock dates
         benchmark_aligned = benchmark.reindex(df.index).ffill()
 
-        # RS Ratio = Stock / Benchmark
-        df['RS'] = df['Close'] / benchmark_aligned
+        # Minervini/IBD-Style RS Rating (weighted momentum performance)
+        # Formula: 0.4 * ROC(3m) + 0.2 * ROC(6m) + 0.2 * ROC(9m) + 0.2 * ROC(12m)
+        # This measures PERFORMANCE, not price level - suitable for ML ranking
+        df['rs_rating'] = (
+            0.4 * df['Close'].pct_change(63) +   # 3-month ROC
+            0.2 * df['Close'].pct_change(126) +  # 6-month ROC
+            0.2 * df['Close'].pct_change(189) +  # 9-month ROC
+            0.2 * df['Close'].pct_change(252)    # 12-month ROC
+        )
 
-        # RS Moving Average for trend detection
+        # RS now refers to momentum-based rating (not benchmark ratio)
+        # This maintains backward compatibility with existing feature names
+        df['RS'] = df['rs_rating']
         df['RS_MA'] = df['RS'].rolling(window=lookback).mean()
 
         return df
@@ -351,13 +360,20 @@ class TechnicalAnalysis:
         """
         Minervini's Stage 2 uptrend detection (Trend Template).
 
-        Criteria:
-        1. Price > 150 SMA > 200 SMA
-        2. 150 SMA > 200 SMA
-        3. 200 SMA trending up (current > 20 days ago)
-        4. Price > 50 SMA
-        5. Price > 30% above 52-week low
-        6. Price within 25% of 52-week high
+        Criteria (C1-C9):
+        C1. Price > 150 SMA
+        C2. Price > 200 SMA
+        C3. 150 SMA > 200 SMA
+        C4. 200 SMA trending up (current > 20 days ago)
+        C5. 50 SMA > 150 SMA
+        C6. Price > 50 SMA
+        C7. Price > 30% above 52-week low
+        C8. Price within 15% of 52-week high
+        C9. rs_rating > 0 (positive weighted momentum - proxy for top 30% in universe)
+
+        Note: C9 uses raw rs_rating as proxy. True cross-sectional rank (top 30%)
+        is computed in VectorizedSEPAScreener.batch_screen_universe() where
+        universe data is available.
 
         Returns:
             Boolean Series indicating Stage 2 status
@@ -375,16 +391,23 @@ class TechnicalAnalysis:
             c_trend = (df['Close'] > df['SMA_50']) & \
                      (df['Close'] > df['Close'].rolling(20).mean())
         else:
-            # Full Stage 2 template
-            c1 = (df['Close'] > df['SMA_150']) & (df['Close'] > df['SMA_200'])
-            c2 = df['SMA_150'] > df['SMA_200']
-            c3 = df['SMA_200'] > df['SMA_200'].shift(20)  # 200 SMA rising
-            c4 = df['Close'] > df['SMA_50']
-            c4b = df['SMA_50'] > df['SMA_150']  # MA50 > MA150
-            c5 = df['Close'] > df['Low_52W'] * config.WEEKS_52_LOW_THRESHOLD
-            c6 = df['Close'] > df['High_52W'] * config.WEEKS_52_HIGH_THRESHOLD
+            # Full Stage 2 template (C1-C8)
+            c1 = df['Close'] > df['SMA_150']
+            c2 = df['Close'] > df['SMA_200']
+            c3 = df['SMA_150'] > df['SMA_200']
+            c4 = df['SMA_200'] > df['SMA_200'].shift(20)  # 200 SMA rising
+            c5 = df['SMA_50'] > df['SMA_150']
+            c6 = df['Close'] > df['SMA_50']
+            c7 = df['Close'] > df['Low_52W'] * config.WEEKS_52_LOW_THRESHOLD
+            c8 = df['Close'] > df['High_52W'] * config.WEEKS_52_HIGH_THRESHOLD
 
-            c_trend = c1 & c2 & c3 & c4 & c4b & c5 & c6
+            # C9: rs_rating > 0 (positive momentum proxy)
+            if 'rs_rating' in df.columns:
+                c9 = df['rs_rating'] > 0
+            else:
+                c9 = pd.Series(True, index=df.index)  # Skip if not available
+
+            c_trend = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8 & c9
 
         return c_trend
 
@@ -410,13 +433,18 @@ class TechnicalAnalysis:
     @staticmethod
     def detect_relative_strength(df: pd.DataFrame) -> pd.Series:
         """
-        Checks if stock is outperforming benchmark (RS trending up).
+        Checks if stock has positive momentum (rs_rating trending up).
+
+        NOTE: Previously used benchmark-based RS/RS_MA which was deprecated.
+              Now uses momentum-based rs_rating which measures performance.
 
         Returns:
             Boolean Series indicating RS strength
         """
-        if 'RS' not in df.columns or 'RS_MA' not in df.columns:
-            raise ValueError("Missing RS indicators. Run add_relative_strength() first.")
+        if 'rs_rating' not in df.columns:
+            raise ValueError("Missing rs_rating indicator. Run add_relative_strength() first.")
 
-        rs_strong = df['RS'] > df['RS_MA']
+        # Use rs_rating > its 63-day MA as strength indicator
+        rs_ma = df['rs_rating'].rolling(63).mean()
+        rs_strong = df['rs_rating'] > rs_ma
         return rs_strong

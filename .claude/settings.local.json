@@ -29,7 +29,17 @@
       "Bash(.venvScriptspython.exe model_runner.py m03 --help)",
       "Bash(.venv/Scripts/python:*)",
       "Bash(tar:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(Get-ChildItem \"c:\\\\Users\\\\Hang\\\\PycharmProjects\\\\quantamental\\\\data\\\\backtest\\\\prices\\\\*.parquet\")",
+      "Bash(Measure-Object)",
+      "Bash(Select-Object -ExpandProperty Count)",
+      "Bash(.venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(Get-ChildItem -Path data -Filter \"*d1*.parquet\" -Recurse -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -First 5)",
+      "Bash(ForEach-Object { $_FullName })",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(C:UsersHangPycharmProjectsquantamental.venvScriptspython.exe debug_exposure.py)",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": [],

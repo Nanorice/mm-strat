@@ -1542,10 +1542,10 @@ def main():
         "Navigation",
         options=[
             "Signal Review",
-            "Manual Override", 
+            "Manual Override",
             "History/Analytics",
             "📊 M03 Regime",
-            "📊 D1 Analysis",
+            "📊 EDA Summary",
             "📊 M01 Report",
             "📊 M02 Report",
             "📊 Dual-Model",
@@ -1558,18 +1558,18 @@ def main():
     clean_page = page.replace("📊 ", "")
     
     # Route to selected page
-    if clean_page in ["D1 Analysis", "M01 Report", "M02 Report", "Dual-Model", "Backtest", "M03 Regime"]:
+    if clean_page in ["EDA Summary", "M01 Report", "M02 Report", "Dual-Model", "Backtest", "M03 Regime"]:
         # ML Report pages
         from src.dashboard_reports import (
-            render_d1_analysis,
+            render_eda_summary,
             render_m01_report,
             render_m02_report,
             render_dual_model,
             render_backtest
         )
-        
-        if clean_page == "D1 Analysis":
-            render_d1_analysis()
+
+        if clean_page == "EDA Summary":
+            render_eda_summary()
         elif clean_page == "M01 Report":
             render_m01_report()
         elif clean_page == "M02 Report":

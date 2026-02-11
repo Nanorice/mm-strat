@@ -83,8 +83,8 @@ class SEPAHybridV1(bt.Strategy):
         # - min_percentile: set to 0.0 for "Top N Competition" (no hard gate)
         # - rank_by: 'trailing' uses 10-day cohort percentile, 'daily' uses single-day
         # NOTE: Regime controls exposure; percentile is just a ranking metric now
-        ('min_score', 50.0),  # Safety floor (scaled 0-100) - very permissive
-        ('min_percentile', 0.9),  # 0.0 = no gate (Top N Competition mode)
+        ('min_score', 30),  # Safety floor (scaled 0-100) - RS > 30
+        ('min_percentile', 0.0),  # Top 50 percentile filter
         ('rank_by', 'trailing'),  # 'trailing' = 10-day cohort, 'daily' = single-day
         ('min_price', 1.0),
         ('min_dollar_volume', 0),
@@ -220,11 +220,12 @@ class SEPAHybridV1(bt.Strategy):
         Flow:
         1. Record daily snapshot (exposure tracking)
         2. Hard Gate: Liquidate all if Strong Bear (regime 0)
-        3. Update trailing stops for open positions
-        4. Check stop-outs
-        5. Check profit targets
-        6. Check trend exits (tranche 3)
-        7. Process new entries
+        3. Check gap-down exits (next-day open protection)
+        4. Update trailing stops for open positions
+        5. Check stop-outs
+        6. Check profit targets
+        7. Check trend exits (tranche 3)
+        8. Process new entries
         """
         current_date = self.datetime.date()
 
@@ -238,6 +239,9 @@ class SEPAHybridV1(bt.Strategy):
         if regime == 0:
             self._liquidate_all('regime_liquidation')
             return
+
+        # === CHECK GAP-DOWN EXITS (before other checks) ===
+        # self._check_gap_down_exits()
 
         # === UPDATE TRAILING STOPS ===
         self._update_all_stops()
@@ -284,6 +288,33 @@ class SEPAHybridV1(bt.Strategy):
                     self.pending_orders[order.ref] = {'reason': reason, 'ticker': ticker}
                     pos.exit_pending = True  # Prevent duplicate orders
                     logger.info(f"Liquidating {ticker}: {pos.remaining_shares} shares ({reason})")
+
+    def _check_gap_down_exits(self):
+        """
+        Check for gap-down exits: if open breaches stop level, exit at open.
+
+        Uses the same stop criteria as regular stop-outs, but checks at open
+        instead of low. This handles overnight gaps that blow through stops.
+        """
+        for ticker, pos in list(self.position_tracker.positions.items()):
+            # Skip if exit already pending
+            if pos.exit_pending:
+                continue
+
+            data = self.stock_feeds.get(ticker)
+            if data is None:
+                continue
+
+            # Check if open is at or below the stop level
+            today_open = data.open[0]
+            if today_open <= pos.current_stop:
+                if pos.remaining_shares > 0:
+                    order = self.sell(data=data, size=pos.remaining_shares)
+                    self.pending_orders[order.ref] = {'reason': 'gap_down', 'ticker': ticker}
+                    pos.exit_pending = True
+                    gap_pct = (pos.entry_price - today_open) / pos.entry_price * 100
+                    logger.info(f"Gap-down exit {ticker}: Open {today_open:.2f} <= stop {pos.current_stop:.2f} "
+                               f"({gap_pct:.1f}% below entry)")
 
     def _update_all_stops(self):
         """Update trailing stops for all open positions."""

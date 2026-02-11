@@ -25,25 +25,33 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 import logging
 
+import config
+
 logger = logging.getLogger(__name__)
 consolidation_period = 20
 
 class VectorizedSEPAScreener:
     """
     High-performance SEPA screening using vectorized operations.
-    
+
     Implements Mark Minervini's SEPA (Specific Entry Point Analysis) criteria
     using numpy/pandas vectorized operations for optimal performance.
-    
-    Minervini's Stage 2 Trend Template (all 8 must be True):
-    1. Price > 150 SMA
-    2. Price > 200 SMA
-    3. 150 SMA > 200 SMA
-    4. 200 SMA trending up (> 200 SMA from 20 days ago)
-    5. 50 SMA > 150 SMA
-    6. Price within 25% of 52-week high (> High_52W * 0.75)
-    7. Price > 50 SMA
-    8. Price > 30% above 52-week low (> Low_52W * 1.3)
+
+    Stage 2 Trend Template (C1-C9, all must be True):
+    C1. Price > 150 SMA
+    C2. Price > 200 SMA
+    C3. 150 SMA > 200 SMA
+    C4. 200 SMA trending up (> 200 SMA from 20 days ago)
+    C5. 50 SMA > 150 SMA
+    C6. Price > 50 SMA
+    C7. Price > 30% above 52-week low (> Low_52W * 1.3)
+    C8. Price within 15% of 52-week high (> High_52W * 0.85)
+    C9. rs_rating in top 30% of universe (or rs_rating > 0 for single-ticker)
+
+    Breakout Trigger (C10-C12):
+    C10. Close > 20-day high (breakout)
+    C11. Volume > 50-day average volume (volume spike)
+    C12. RS > 63-day RS MA (relative strength confirmation)
     """
     
     @staticmethod
@@ -59,8 +67,8 @@ class VectorizedSEPAScreener:
 
         Returns:
             Tuple of (trend_ok, breakout_ok) boolean Series
-            - trend_ok: C1-C8 (8 Stage 2 uptrend conditions)
-            - breakout_ok: C9-C11 (3 breakout/volume/RS conditions)
+            - trend_ok: C1-C9 (9 Stage 2 uptrend conditions including rs_rating)
+            - breakout_ok: C10-C12 (3 breakout/volume/RS conditions)
 
         Example:
             >>> trend_mask, breakout_mask = VectorizedSEPAScreener.screen_single_ticker_split(aapl_df)
@@ -74,24 +82,77 @@ class VectorizedSEPAScreener:
             logger.warning(f"Missing columns for SEPA screening: {missing_cols}")
             return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
-        # Trend conditions (C1-C8) - Stage 2 uptrend
+        # Trend conditions (C1-C9) - Stage 2 uptrend
         c1 = df['Close'] > df['SMA_150']
         c2 = df['Close'] > df['SMA_200']
         c3 = df['SMA_150'] > df['SMA_200']
         c4 = df['SMA_200'] > df['SMA_200'].shift(consolidation_period)
         c5 = df['SMA_50'] > df['SMA_150']
-        c6 = df['Close'] > df['High_52W'] * 0.75  # Within 25% of 52W high
-        c7 = df['Close'] > df['SMA_50']
-        c8 = df['Close'] > df['Low_52W'] * 1.3  # Above 52W low by 30% (Minervini Stage 2)
-        trend_ok = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8
+        c6 = df['Close'] > df['SMA_50']
+        c7 = df['Close'] > df['Low_52W'] * 1.3  # Above 52W low by 30%
+        c8 = df['Close'] > df['High_52W'] * 0.85  # Within 15% of 52W high
+        # C9: rs_rating > 0 (positive momentum proxy for single-ticker screening)
+        # True cross-sectional rank is computed in batch_screen_universe()
+        if 'rs_rating' in df.columns:
+            c9 = df['rs_rating'] > 0
+        else:
+            c9 = pd.Series(True, index=df.index)  # Skip if not available
+        trend_ok = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8 & c9
 
-        # Breakout conditions (C9-C11) - Breakout trigger
-        c9 = df['Close'] > df['High'].shift(1).rolling(consolidation_period).max()
-        c10 = df['Volume'] > df['Volume'].shift(1).rolling(50).mean()
-        c11 = df['RS'] > df['RS'].rolling(63).mean()
-        breakout_ok = c9 & c10 & c11
+        # Breakout conditions (C10-C12) - Breakout trigger
+        c10 = df['Close'] > df['High'].shift(1).rolling(consolidation_period).max()
+
+        # C11: Volume spike confirmation (must exceed 1.3x average)
+        vol_ma_50 = df['Volume'].shift(1).rolling(50).mean()
+        vol_ratio = df['Volume'] / vol_ma_50
+        c11 = vol_ratio > config.VOL_SPIKE_THRESHOLD
+
+        # C12: RS confirmation using rs_rating (momentum-based)
+        # Check if current rs_rating exceeds its 63-day moving average
+        if 'rs_rating' in df.columns:
+            c12 = df['rs_rating'] > df['rs_rating'].rolling(63).mean()
+        else:
+            c12 = pd.Series(True, index=df.index)  # Skip if not available
+
+        breakout_ok = c10 & c11 & c12
 
         return trend_ok, breakout_ok
+
+    @staticmethod
+    def screen_single_ticker_trend_only(df: pd.DataFrame) -> pd.Series:
+        """
+        Vectorized trend screening using ONLY C1-C8 (excludes C9 RS ranking).
+
+        This is used for EXIT detection where we only care about trend structure,
+        not relative strength ranking. RS ranking (C9) should only affect ENTRY.
+
+        Args:
+            df: DataFrame with OHLCV + indicators
+
+        Returns:
+            Boolean Series indicating trend qualification (C1-C8 only)
+        """
+        # Check required columns
+        required_cols = ['Close', 'SMA_150', 'SMA_200', 'SMA_50', 'High_52W', 'Low_52W']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            logger.warning(f"Missing columns for trend screening: {missing_cols}")
+            return pd.Series(False, index=df.index)
+
+        # Trend conditions (C1-C8) ONLY - excludes C9 RS ranking
+        c1 = df['Close'] > df['SMA_150']
+        c2 = df['Close'] > df['SMA_200']
+        c3 = df['SMA_150'] > df['SMA_200']
+        c4 = df['SMA_200'] > df['SMA_200'].shift(consolidation_period)
+        c5 = df['SMA_50'] > df['SMA_150']
+        c6 = df['Close'] > df['SMA_50']
+        c7 = df['Close'] > df['Low_52W'] * 1.3  # Above 52W low by 30%
+        c8 = df['Close'] > df['High_52W'] * 0.85  # Within 15% of 52W high
+
+        # NO C9 for exits - RS ranking should not trigger exits
+        trend_ok = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8
+
+        return trend_ok
 
     @staticmethod
     def screen_single_ticker(df: pd.DataFrame) -> pd.Series:
@@ -162,15 +223,17 @@ class VectorizedSEPAScreener:
         history, then extracts results for the scan_date. Returns 3 lists
         for different use cases.
 
+        Includes cross-sectional C9 check: rs_rating must be in top 30% of universe.
+
         Args:
             enriched_data: Dict mapping ticker -> DataFrame with indicators
             scan_date: Date to scan (will use nearest date before if not found)
 
         Returns:
             Tuple of (trend_ok_tickers, breakout_tickers, new_trigger_tickers)
-            - trend_ok_tickers: Pass C1-C8 (use for REMOVAL decisions)
-            - breakout_tickers: Pass C9-C11 (informational)
-            - new_trigger_tickers: Pass ALL C1-C11 + 0->1 transition (use for ADDITION)
+            - trend_ok_tickers: Pass C1-C9 (use for REMOVAL decisions)
+            - breakout_tickers: Pass C10-C12 (informational)
+            - new_trigger_tickers: Pass ALL C1-C12 + 0->1 transition (use for ADDITION)
 
         Example:
             >>> trend_ok, breakout, triggers = VectorizedSEPAScreener.batch_screen_universe(
@@ -179,13 +242,11 @@ class VectorizedSEPAScreener:
             >>> print(f"Trend OK: {len(trend_ok)}, Breakout: {len(breakout)}, New triggers: {len(triggers)}")
             Trend OK: 150, Breakout: 45, New triggers: 12
         """
-        trend_ok_tickers = []
-        breakout_tickers = []
-        new_trigger_tickers = []
-
+        # Phase 1: Collect rs_rating for all tickers at scan_date for cross-sectional ranking
+        rs_ratings = {}
+        ticker_dates = {}
         for ticker, df in enriched_data.items():
             try:
-                # Find the actual date to use (scan_date or nearest before)
                 if scan_date in df.index:
                     ticker_date = scan_date
                 else:
@@ -193,20 +254,53 @@ class VectorizedSEPAScreener:
                     if len(available) == 0:
                         continue
                     ticker_date = available[-1]
+                ticker_dates[ticker] = ticker_date
 
-                # Get split masks using new method
+                if 'rs_rating' in df.columns and ticker_date in df.index:
+                    rs_val = df.loc[ticker_date, 'rs_rating']
+                    if pd.notna(rs_val):
+                        rs_ratings[ticker] = rs_val
+            except Exception:
+                continue
+
+        # Compute top 30% threshold (70th percentile)
+        if rs_ratings:
+            rs_values = np.array(list(rs_ratings.values()))
+            rs_threshold = np.percentile(rs_values, 70)  # Top 30% = above 70th percentile
+            top_30_tickers = {t for t, v in rs_ratings.items() if v >= rs_threshold}
+            logger.debug(f"RS rank: {len(top_30_tickers)}/{len(rs_ratings)} tickers in top 30% (threshold: {rs_threshold:.4f})")
+        else:
+            top_30_tickers = set()
+            logger.warning("No rs_rating data available for cross-sectional ranking")
+
+        # Phase 2: Screen each ticker
+        trend_ok_tickers = []
+        breakout_tickers = []
+        new_trigger_tickers = []
+
+        for ticker, df in enriched_data.items():
+            try:
+                ticker_date = ticker_dates.get(ticker)
+                if ticker_date is None:
+                    continue
+
+                # Get split masks (C1-C8 trend, C10-C12 breakout)
                 trend_mask, breakout_mask = VectorizedSEPAScreener.screen_single_ticker_split(df)
-                full_sepa_mask = trend_mask & breakout_mask
 
-                # Check trend_ok at scan_date
-                if ticker_date in trend_mask.index and trend_mask.loc[ticker_date]:
+                # Apply cross-sectional C9 filter (top 30% rs_rating)
+                passes_c9 = ticker in top_30_tickers
+                trend_with_c9 = trend_mask & passes_c9 if passes_c9 else pd.Series(False, index=trend_mask.index)
+                full_sepa_mask = trend_with_c9 & breakout_mask
+
+                # Check trend_ok at scan_date (C1-C9)
+                if ticker_date in trend_with_c9.index and trend_with_c9.loc[ticker_date]:
                     trend_ok_tickers.append(ticker)
 
-                # Check breakout_ok at scan_date
+                # Check breakout_ok at scan_date (C10-C12)
                 if ticker_date in breakout_mask.index and breakout_mask.loc[ticker_date]:
                     breakout_tickers.append(ticker)
 
-                # Check if fully qualified (trend + breakout) for new trigger detection
+                # Check if fully qualified (C1-C12) for new trigger detection
                 if ticker_date in full_sepa_mask.index and full_sepa_mask.loc[ticker_date]:
                     # Check if this is a new trigger (0->1 transition)
                     if ticker_date in df.index:
@@ -230,8 +324,8 @@ class VectorizedSEPAScreener:
                 logger.debug(f"Error screening {ticker}: {e}")
                 continue
 
-        logger.info(f"Batch screen: {len(trend_ok_tickers)} trend OK, "
-                   f"{len(breakout_tickers)} breakout OK, "
+        logger.info(f"Batch screen: {len(trend_ok_tickers)} trend OK (C1-C9), "
+                   f"{len(breakout_tickers)} breakout OK (C10-C12), "
                    f"{len(new_trigger_tickers)} new triggers")
 
         return trend_ok_tickers, breakout_tickers, new_trigger_tickers
@@ -416,38 +510,54 @@ class VectorizedSEPAScreener:
             ...
         """
         # Check for required columns
-        required_cols = ['Close', 'SMA_150', 'SMA_200', 'SMA_50', 'High_52W', 'RS']
+        required_cols = ['Close', 'SMA_150', 'SMA_200', 'SMA_50', 'High_52W', 'Low_52W']
         missing_cols = [col for col in required_cols if col not in df_matrix.columns]
-        
+
         if missing_cols:
             logger.warning(f"Missing columns for SEPA screening: {missing_cols}")
             df_matrix['SEPA_Status'] = False
             return df_matrix
-        
-        # 8 SEPA conditions - vectorized across ENTIRE matrix at once!
+
+        # 9 SEPA trend conditions (C1-C9) - vectorized across ENTIRE matrix at once!
+        df_matrix = df_matrix.sort_values(['ticker', 'date'])
+
         c1 = df_matrix['Close'] > df_matrix['SMA_150']
         c2 = df_matrix['Close'] > df_matrix['SMA_200']
         c3 = df_matrix['SMA_150'] > df_matrix['SMA_200']
-        
-        # For c4, we need SMA_200 from 20 days ago per ticker
-        # Use groupby to shift within each ticker
-        df_matrix = df_matrix.sort_values(['ticker', 'date'])
+
+        # C4: SMA_200 trending up (> 20 days ago per ticker)
         df_matrix['SMA_200_20d_ago'] = df_matrix.groupby('ticker')['SMA_200'].shift(20)
         c4 = df_matrix['SMA_200'] > df_matrix['SMA_200_20d_ago']
-        
+
         c5 = df_matrix['SMA_50'] > df_matrix['SMA_150']
-        c6 = df_matrix['Close'] > df_matrix['High_52W'] * 0.75
-        c7 = df_matrix['Close'] > df_matrix['SMA_50']
-        c8 = df_matrix['RS'] > 0
-        
-        # Combine all conditions
-        df_matrix['SEPA_Status'] = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8
-        
+        c6 = df_matrix['Close'] > df_matrix['SMA_50']
+        c7 = df_matrix['Close'] > df_matrix['Low_52W'] * 1.3  # 30% above 52W low
+        c8 = df_matrix['Close'] > df_matrix['High_52W'] * 0.85  # Within 15% of 52W high
+
+        # C9: rs_rating in top 30% per date (cross-sectional) AND positive
+        if 'rs_rating' in df_matrix.columns:
+            # Compute 70th percentile per date
+            df_matrix['rs_pct70'] = df_matrix.groupby('date')['rs_rating'].transform(
+                lambda x: x.quantile(0.70)
+            )
+            # Require BOTH top 30% AND positive momentum
+            c9 = (df_matrix['rs_rating'] >= df_matrix['rs_pct70']) & (df_matrix['rs_rating'] > 0)
+            df_matrix = df_matrix.drop(columns=['rs_pct70'])
+        else:
+            c9 = pd.Series(True, index=df_matrix.index)
+
+        # Combine all conditions for ENTRY (includes C9)
+        df_matrix['SEPA_Status'] = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8 & c9
+
+        # Add Trend_Status for EXITS (C1-C8 only, excludes C9 RS ranking)
+        # RS ranking should not trigger exits - only trend structure matters
+        df_matrix['Trend_Status'] = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8
+
         # Clean up temporary column
         df_matrix = df_matrix.drop(columns=['SMA_200_20d_ago'])
-        
+
         logger.info(f"SEPA status computed for {len(df_matrix)} rows")
-        
+
         return df_matrix
     
     @staticmethod

@@ -3,23 +3,95 @@
 M01 Ablation Study: Compare Target Definitions
 ===============================================
 
-Trains 5 M01 models with different target definitions and compares results:
-- M01_A: Baseline survivor MFE (return_pct)
-- M01_B: Hybrid floor (capped loser penalty)
-- M01_C: Risk-adjusted (MFE / ATR)
-- M01_D: Log-space (tail smoothing)
-- M01_E: Log-hybrid (The Golden Target - loser accountability + log compression)
+Trains M01 models with different target definitions and compares results
+to determine which target produces the best ranking for actual trading outcomes.
 
-Usage:
+Target Definitions
+------------------
+
+M01_A: return_pct (Baseline)
+    Formula: y = realized_return_pct
+    Description: Uses the actual realized return as the target.
+    Pros: Simple, no data leakage, direct optimization of returns.
+    Cons: Doesn't account for unrealized potential (MFE) or path dependency.
+
+M01_B: hybrid_floor (Capped Loser Penalty)
+    Formula:
+        if is_survivor: y = MFE
+        else: y = max(max_penalty, -stop_multiplier * nATR)
+    Where:
+        - is_survivor: MAE > -stop_multiplier * nATR (didn't hit structural stop)
+        - max_penalty: -10% (default cap)
+        - MFE: Maximum Favorable Excursion = (highest_price - entry) / entry * 100
+    Description: Survivors get credited for upside potential (MFE), while losers
+                 get a capped penalty to prevent extreme losses from dominating.
+    Pros: Keeps all trades, limits impact of outlier losses.
+    Cons: Artificial cap may lose information about severity of losses.
+
+M01_C: risk_adjusted (MFE / ATR)
+    Formula: y = MFE / (nATR + 0.01)
+    Where:
+        - MFE: Maximum Favorable Excursion (%)
+        - nATR: Normalized ATR (%) at entry
+    Description: Normalizes returns by entry volatility. High-vol stocks need
+                 proportionally higher MFE to score well.
+    Pros: Prevents "volatility detector" trap where model just picks high-vol stocks.
+    Cons: May underweight genuinely good high-vol setups.
+
+M01_D: log_space (Tail Smoothing)
+    Formula: y = sign(MFE) * log(1 + |MFE|)
+    Description: Applies signed log transform to compress extreme tails.
+                 A 100% MFE becomes ~4.6, a 10% MFE becomes ~2.4.
+    Pros: Prevents outlier returns from dominating gradient updates.
+    Cons: Uses MFE only, doesn't penalize losers.
+
+M01_E: log_hybrid (The Golden Target)
+    Formula: y = sign(x) * log(1 + |x|)
+    Where x is determined by stop loss triggers:
+        - Winners (no stop triggered): x = MFE
+        - Losers (stop triggered): x = realized_loss_at_stop
+    Stop Loss Triggers (first one hit):
+        1. Structural: Close < Entry * (1 - 10%)
+        2. Technical: Close < (SMA_50 - 1.0 * ATR)
+    Description: Combines loser accountability with log compression.
+                 Winners get MFE, losers get their realistic stop-loss exit.
+    Pros: Best of both worlds - rewards upside, penalizes realistic losses.
+    Cons: Requires D2R data with SMA_50 and ATR columns.
+
+Key Metrics
+-----------
+- IC (Information Coefficient): Spearman correlation between predictions and return_pct
+- Selection Edge: Top decile mean return - overall mean return
+- Edge Sharpe: Selection Edge / std(Edge) across folds (measures consistency)
+
+Usage
+-----
     python scripts/run_m01_ablation_study.py --start 2020-01-01 --end 2023-12-31
-    
-Output:
-    - models/model_report_M01_A_*.md
-    - models/model_report_M01_B_*.md
-    - models/model_report_M01_C_*.md
-    - models/model_report_M01_D_*.md
-    - models/model_report_M01_E_*.md
-    - Comparison table printed to console
+
+Output
+------
+    models/ablation_study/
+    ├── ablation_summary.md              # Comparison summary with winner
+    ├── return_pct/
+    │   └── model_report_return_pct_YYMMDD.md
+    ├── hybrid_floor/
+    │   └── model_report_hybrid_floor_YYMMDD.md
+    ├── risk_adjusted/
+    │   └── model_report_risk_adjusted_YYMMDD.md
+    ├── log_space/
+    │   └── model_report_log_space_YYMMDD.md
+    └── log_hybrid/
+        └── model_report_log_hybrid_YYMMDD.md
+
+Dependencies
+------------
+- D2: Feature dataset from DataPipeline.load_d2()
+- D2R: Rehydrated OHLC data from DataPipeline.load_d2r() (required for MFE-based targets)
+
+See Also
+--------
+- src/evaluation/targets.py: TargetEngineer class with calculation details
+- src/pipeline/m01_trainer.py: M01Trainer with training logic
 """
 
 import argparse
@@ -34,7 +106,7 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.pipeline import M01Trainer
+from src.pipeline import DataPipeline, M01Trainer
 from src.evaluation import TargetEngineer, M01Evaluator
 
 logging.basicConfig(
@@ -45,38 +117,35 @@ logger = logging.getLogger("AblationStudy")
 
 
 def load_data(start_date: str, end_date: str):
-    """Load D2 and D2R datasets."""
-    d2_path = Path('data/ml/d2_features.parquet')
-    d2r_path = Path('data/ml/d2r_sepa.parquet')
-    
-    if not d2_path.exists():
-        raise FileNotFoundError(f"D2 features not found: {d2_path}")
-    
-    d2 = pd.read_parquet(d2_path)
+    """Load D2 and D2R datasets using DataPipeline (same as M01 training)."""
+    pipeline = DataPipeline()
+
+    # Load D2 (same method as M01 training workflow)
+    d2 = pipeline.load_d2()
     d2['date'] = pd.to_datetime(d2['date'])
-    
+
     # Filter by date range
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
     d2 = d2[(d2['date'] >= start) & (d2['date'] <= end)]
-    
+
     logger.info(f"Loaded D2: {len(d2)} trades from {start_date} to {end_date}")
-    
+
     # Load D2R if exists
     d2r = None
-    if d2r_path.exists():
-        d2r = pd.read_parquet(d2r_path)
+    try:
+        d2r = pipeline.load_d2r()
         logger.info(f"Loaded D2R: {len(d2r)} bars")
-    else:
-        logger.warning(f"D2R not found: {d2r_path}, using return_pct as fallback")
-    
+    except FileNotFoundError:
+        logger.warning("D2R not found, using return_pct as fallback")
+
     return d2, d2r
 
 
 def run_ablation_study(start_date: str, end_date: str, skip_training: bool = False):
     """
     Run ablation study comparing 5 target definitions.
-    
+
     Args:
         start_date: Training start date
         end_date: Training end date
@@ -85,7 +154,11 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
     logger.info("=" * 70)
     logger.info("M01 ABLATION STUDY")
     logger.info("=" * 70)
-    
+
+    # Create ablation study output directory
+    ablation_dir = Path('models/ablation_study')
+    ablation_dir.mkdir(parents=True, exist_ok=True)
+
     # Load data
     d2, d2r = load_data(start_date, end_date)
     
@@ -149,12 +222,20 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
             if skip_training:
                 logger.info(f"Skipping training for {config['name']} (--skip-training flag)")
                 continue
-            
-            # Create trainer with evaluator
-            trainer = M01Trainer()
+
+            # Create output directory for this target type: models/ablation_study/{target_type}/
+            target_output_dir = ablation_dir / config['type']
+            target_output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create trainer with model name matching target type
+            # output_dir=ablation_dir, model_name=config['type'] -> models/ablation_study/{type}/
+            trainer = M01Trainer(
+                output_dir=str(ablation_dir),
+                model_name=config['type']
+            )
             evaluator = M01Evaluator(
                 target_type=config['type'],
-                output_dir=Path('models')
+                output_dir=target_output_dir
             )
             
             # Train (using the standard train method for now)
@@ -242,25 +323,94 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
             import traceback
             traceback.print_exc()
     
-    # Print comparison
+    # Print and save comparison
     if results:
         print("\n" + "=" * 70)
         print("ABLATION STUDY RESULTS")
         print("=" * 70)
-        
+
         comparison_df = pd.DataFrame(results)
         print(comparison_df.to_string(index=False))
-        
+
         # Winner selection based on edge_sharpe
         winner = comparison_df.loc[comparison_df['edge_sharpe'].idxmax()]
         print(f"\n[WINNER] RECOMMENDED TARGET: {winner['model']}")
         print(f"   Target Type: {winner['target_type']}")
         print(f"   Selection Edge: {winner['avg_edge']:+.2f}%")
         print(f"   Edge Sharpe: {winner['edge_sharpe']:.2f}")
-        
+
+        # Save summary comparison report
+        summary_path = ablation_dir / 'ablation_summary.md'
+        _save_summary_report(comparison_df, winner, summary_path, start_date, end_date)
+        print(f"\n   Summary saved: {summary_path}")
+
         return comparison_df
-    
+
     return None
+
+
+def _save_summary_report(
+    comparison_df: pd.DataFrame,
+    winner: pd.Series,
+    output_path: Path,
+    start_date: str,
+    end_date: str
+):
+    """Save ablation study summary as markdown report."""
+    from datetime import datetime
+
+    lines = [
+        "# M01 Ablation Study Summary",
+        "",
+        f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"**Period:** {start_date} to {end_date}",
+        "",
+        "## Target Definitions Compared",
+        "",
+        "| Code | Target Type | Description |",
+        "|------|-------------|-------------|",
+        "| M01_A | return_pct | Baseline (realized return) |",
+        "| M01_B | hybrid_floor | Capped loser penalty |",
+        "| M01_C | risk_adjusted | MFE / ATR |",
+        "| M01_D | log_space | Log-compressed MFE |",
+        "| M01_E | log_hybrid | Log MFE + loser accountability |",
+        "",
+        "---",
+        "",
+        "## Results Comparison",
+        "",
+        "| Model | Target Type | IC | Edge | Edge Sharpe | RMSE |",
+        "|-------|-------------|----:|-----:|------------:|-----:|",
+    ]
+
+    for _, row in comparison_df.iterrows():
+        lines.append(
+            f"| {row['model']} | {row['target_type']} | "
+            f"{row['avg_ic']:.3f} | {row['avg_edge']:+.2f}% | "
+            f"{row['edge_sharpe']:.2f} | {row['avg_rmse']:.2f} |"
+        )
+
+    lines.extend([
+        "",
+        "---",
+        "",
+        "## Recommendation",
+        "",
+        f"**Winner: {winner['model']}** ({winner['target_type']})",
+        "",
+        f"- IC: {winner['avg_ic']:.3f}",
+        f"- Selection Edge: {winner['avg_edge']:+.2f}%",
+        f"- Edge Sharpe: {winner['edge_sharpe']:.2f}",
+        "",
+        "Edge Sharpe = Edge / std(Edge) across folds, measuring consistency.",
+        "",
+        "---",
+        "",
+        "*Generated by run_m01_ablation_study.py*"
+    ])
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
 
 
 def main():

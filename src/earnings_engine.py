@@ -68,23 +68,34 @@ class EarningsEngine:
         """
         Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
         Thread-safe for parallel execution.
+
+        CRITICAL: Lock is ONLY held when checking/updating timestamps, NOT during sleep.
+        This allows multiple workers to proceed in parallel while respecting the rate limit.
         """
+        # Phase 1: Check if we need to wait (acquire lock briefly)
         with self._rate_limit_lock:
             now = time.time()
 
             # Remove timestamps older than 60 seconds (sliding window)
             self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
 
-            # If at rate limit, wait until oldest call falls outside window
+            # Check if we're at capacity
             if len(self._call_timestamps) >= self.rate_limit:
                 oldest_call = self._call_timestamps[0]
                 sleep_time = 60.0 - (now - oldest_call) + 0.1  # Add 0.1s buffer
-                if sleep_time > 0:
-                    logger.debug(f"Rate limit reached, sleeping {sleep_time:.1f}s")
-                    time.sleep(sleep_time)
-                    now = time.time()
-                    self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
+            else:
+                sleep_time = 0
 
+        # Phase 2: Sleep OUTSIDE the lock (if needed) so other workers can proceed
+        if sleep_time > 0:
+            logger.debug(f"Rate limit reached, sleeping {sleep_time:.1f}s")
+            time.sleep(sleep_time)
+
+        # Phase 3: Record this call (acquire lock briefly again)
+        with self._rate_limit_lock:
+            now = time.time()
+            # Re-clean after potential sleep
+            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
             self._call_timestamps.append(now)
 
     def _fetch_ticker_earnings(self, ticker: str, limit: int = 1000, max_retries: int = 2) -> Optional[pd.DataFrame]:
@@ -543,8 +554,9 @@ class EarningsEngine:
         Optimized vectorized implementation using pandas for fast batch processing.
 
         Logic:
-        - If ticker has earnings release AFTER last fundamental cache update
-        - Then fundamental cache is stale and needs refresh
+        - Compare latest earnings date against the latest fiscal_date in fundamental cache
+        - If earnings occurred AFTER the latest fiscal period we have cached, update needed
+        - This is more reliable than file mtime (which changes on every write)
 
         Args:
             tickers: List of tickers to check
@@ -557,14 +569,31 @@ class EarningsEngine:
 
         needs_update = []
 
-        # Step 1: Build fundamental cache metadata (vectorized)
+        # Step 1: Build fundamental cache metadata
+        # Read filing_date from cache - this is when the company filed their earnings report
+        # We compare this against the earnings calendar to see if we're missing a newer filing
         fund_metadata = []
         for ticker in tickers:
             fund_cache = fundamentals_dir / f"{ticker}.parquet"
             if fund_cache.exists():
+                try:
+                    # Read filing_date column - this matches earnings announcement dates
+                    fund_df = pd.read_parquet(fund_cache, columns=['filing_date'])
+                    if not fund_df.empty and 'filing_date' in fund_df.columns:
+                        # Get the most recent filing date
+                        latest_filing = pd.to_datetime(fund_df['filing_date']).max()
+                        if pd.notna(latest_filing):
+                            fund_metadata.append({
+                                'ticker': ticker,
+                                'latest_filing_date': latest_filing
+                            })
+                            continue
+                except Exception as e:
+                    logger.debug(f"{ticker}: Could not read filing_date from cache: {e}")
+                # Fallback: file mtime
                 fund_metadata.append({
                     'ticker': ticker,
-                    'fund_mtime': datetime.fromtimestamp(fund_cache.stat().st_mtime)
+                    'latest_filing_date': pd.Timestamp(datetime.fromtimestamp(fund_cache.stat().st_mtime))
                 })
             else:
                 # No fundamental cache -> needs update
@@ -630,8 +659,9 @@ class EarningsEngine:
         # Merge fundamental and earnings metadata
         merged = fund_df.merge(earnings_df, on='ticker', how='inner')
 
-        # Vectorized comparison: latest_earnings_date > fund_mtime
-        stale_mask = merged['latest_earnings_date'] > merged['fund_mtime']
+        # Compare: If earnings calendar shows a date more recent than our latest filing_date,
+        # it means there's a new earnings report we don't have yet
+        stale_mask = merged['latest_earnings_date'] > merged['latest_filing_date']
         stale_tickers = merged.loc[stale_mask, 'ticker'].tolist()
 
         needs_update.extend(stale_tickers)

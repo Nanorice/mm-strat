@@ -48,6 +48,10 @@ EXPLOSIVE_FEATURES = [
     'Dist_From_52W_Low', 'Dist_From_52W_High',
     # Volatility and relative strength
     'nATR', 'RS', 'RS_line', 'relative_strength',
+    # Momentum features (high kurtosis, extreme outliers)
+    'breakout_momentum', 'price_momentum_curve',
+    # WorldQuant alphas (extreme outliers)
+    'alpha009',
 ]
 
 STANDARD_FEATURES = [
@@ -164,31 +168,35 @@ class FeaturePreprocessor:
         Returns:
             self (for method chaining)
         """
+        from src.feature_config import CATEGORICAL_FEATURES
+
         self.config = {
             'version': '1.0',
             'kurtosis_threshold': self.kurtosis_threshold,
             'tail_alpha_threshold': self.tail_alpha_threshold,
             'lower_percentile': self.lower_percentile,
             'upper_percentile': self.upper_percentile,
+            'requested_features': features,  # Store for validation
             'features': {}
         }
-        
+
         for feature in features:
             if feature not in df.columns:
                 continue
-                
+
+            # Skip categorical features (handled natively by XGBoost)
+            if feature in CATEGORICAL_FEATURES:
+                continue
+
             series = df[feature].dropna()
             if len(series) < 100:
                 continue
-                
-            # Check kurtosis
+
+            # Compute kurtosis for all features (used for diagnostics and unknown features)
             kurt = stats.kurtosis(series, fisher=True)
-            if abs(kurt) <= self.kurtosis_threshold:
-                continue  # Normal distribution, no transform needed
-            
             feature_config = {'original_kurtosis': float(kurt)}
-            
-            # Decision tree
+
+            # Decision tree - Manual curation overrides statistical heuristics
             if feature in BOUNDED_FEATURES:
                 # Always winsorize bounded features
                 lower = float(np.percentile(series, self.lower_percentile))
@@ -199,16 +207,16 @@ class FeaturePreprocessor:
                     'lower_bound': lower,
                     'upper_bound': upper
                 })
-                
+
             elif feature in EXPLOSIVE_FEATURES:
-                # Log transform for explosive features
+                # Always log transform explosive features (bypass kurtosis check)
                 feature_config.update({
                     'transform': 'log',
                     'category': 'explosive'
                 })
-                
+
             elif feature in STANDARD_FEATURES:
-                # Winsorize standard features
+                # Always winsorize standard features
                 lower = float(np.percentile(series, self.lower_percentile))
                 upper = float(np.percentile(series, self.upper_percentile))
                 feature_config.update({
@@ -217,12 +225,16 @@ class FeaturePreprocessor:
                     'lower_bound': lower,
                     'upper_bound': upper
                 })
-                
+
             else:
-                # Unknown feature - use TAR to decide
+                # Unknown feature - apply kurtosis check and TAR heuristic
+                if abs(kurt) <= self.kurtosis_threshold:
+                    # Normal distribution, skip preprocessing
+                    continue
+
                 tar = self.compute_tail_alpha_ratio(df, feature, target)
                 feature_config['tail_alpha_ratio'] = float(tar)
-                
+
                 if tar > self.tail_alpha_threshold:
                     feature_config.update({
                         'transform': 'log',
@@ -247,8 +259,65 @@ class FeaturePreprocessor:
         log_count = sum(1 for f in self.config['features'].values() if f['transform'] == 'log')
         win_count = sum(1 for f in self.config['features'].values() if f['transform'] == 'winsorize')
         logger.info(f"Fitted preprocessor: {log_count} log transforms, {win_count} winsorizations")
-        
+
+        # Validate that manually curated features were fitted correctly
+        self._validate_manual_curation()
+
         return self
+
+    def _validate_manual_curation(self) -> None:
+        """
+        Validate that manually curated features (EXPLOSIVE_FEATURES, BOUNDED_FEATURES, STANDARD_FEATURES)
+        that were REQUESTED for fitting have the expected transformations.
+
+        Only checks features that:
+        1. Are in the curation lists AND
+        2. Were requested in the fit() call (i.e., in requested_features)
+
+        Raises:
+            ValueError: If any requested curated feature has wrong transform
+        """
+        fitted_features = set(self.config['features'].keys())
+        requested_features = set(self.config.get('requested_features', []))
+        errors = []
+
+        # Check EXPLOSIVE_FEATURES (only those that were requested)
+        for feature in EXPLOSIVE_FEATURES:
+            if feature in requested_features:
+                if feature not in fitted_features:
+                    errors.append(f"[ERR] EXPLOSIVE feature '{feature}' not fitted (expected log transform)")
+                elif self.config['features'][feature]['transform'] != 'log':
+                    actual = self.config['features'][feature]['transform']
+                    errors.append(f"[ERR] EXPLOSIVE feature '{feature}' has '{actual}' transform (expected log)")
+
+        # Check BOUNDED_FEATURES (only those that were requested)
+        for feature in BOUNDED_FEATURES:
+            if feature in requested_features:
+                if feature not in fitted_features:
+                    errors.append(f"[ERR] BOUNDED feature '{feature}' not fitted (expected winsorize)")
+                elif self.config['features'][feature]['transform'] != 'winsorize':
+                    actual = self.config['features'][feature]['transform']
+                    errors.append(f"[ERR] BOUNDED feature '{feature}' has '{actual}' transform (expected winsorize)")
+
+        # Check STANDARD_FEATURES (only those that were requested)
+        for feature in STANDARD_FEATURES:
+            if feature in requested_features:
+                if feature not in fitted_features:
+                    errors.append(f"[ERR] STANDARD feature '{feature}' not fitted (expected winsorize)")
+                elif self.config['features'][feature]['transform'] != 'winsorize':
+                    actual = self.config['features'][feature]['transform']
+                    errors.append(f"[ERR] STANDARD feature '{feature}' has '{actual}' transform (expected winsorize)")
+
+        if errors:
+            error_msg = "Manual curation validation failed:\n" + "\n".join(errors)
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Count how many curated features were validated
+        explosive_count = len([f for f in EXPLOSIVE_FEATURES if f in requested_features])
+        bounded_count = len([f for f in BOUNDED_FEATURES if f in requested_features])
+        standard_count = len([f for f in STANDARD_FEATURES if f in requested_features])
+        logger.info(f"[OK] Validated {explosive_count} explosive, {bounded_count} bounded, {standard_count} standard features")
     
     def transform(self, df: pd.DataFrame, inplace: bool = False) -> pd.DataFrame:
         """
@@ -269,10 +338,18 @@ class FeaturePreprocessor:
         
         if not inplace:
             df = df.copy()
-        
+
+        # Remove existing log_ columns that will be recreated to prevent duplicates
+        log_cols_to_create = [f'log_{f}' for f, fc in self.config['features'].items()
+                             if fc['transform'] == 'log' and f in df.columns]
+        existing_log_cols = [c for c in log_cols_to_create if c in df.columns]
+        if existing_log_cols:
+            logger.debug(f"Removing {len(existing_log_cols)} existing log_ columns to prevent duplicates")
+            df = df.drop(columns=existing_log_cols)
+
         # Collect all log-transformed columns first, then concat to avoid fragmentation
         log_columns = {}
-        
+
         for feature, fconfig in self.config['features'].items():
             if feature not in df.columns:
                 continue
@@ -295,8 +372,15 @@ class FeaturePreprocessor:
         # Add all log columns at once using pd.concat to avoid fragmentation
         if log_columns:
             log_df = pd.DataFrame(log_columns, index=df.index)
+
+            # Double-check for any overlapping columns before concat
+            overlapping = set(log_df.columns) & set(df.columns)
+            if overlapping:
+                logger.warning(f"Found {len(overlapping)} overlapping columns before concat: {list(overlapping)[:5]}")
+                df = df.drop(columns=list(overlapping))
+
             df = pd.concat([df, log_df], axis=1)
-        
+
         return df
     
     def get_transformed_feature_names(self, original_features: List[str]) -> List[str]:

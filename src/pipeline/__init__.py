@@ -8,28 +8,36 @@ Classes:
     - DataPipeline: Orchestrates data generation (scan → features → hydrate → label)
     - BaseTrainer: Abstract base class for model trainers
     - M01Trainer: SEPA Return Regressor (predicts expected return %)
+    - M01RankerTrainer: SEPA Pairwise Ranker (cross-sectional ranking by date)
     - M02Trainer: Ignition Classifier (predicts barrier hit probability)
 
 Example Usage:
-    # Full M01 pipeline
+    # M01 Regressor (absolute return prediction)
     from src.pipeline import DataPipeline, M01Trainer
-    
+
     pipeline = DataPipeline()
-    d1 = pipeline.scan('2020-01-01', '2023-12-31')
-    d2 = pipeline.features(d1)
-    
+    d2 = pipeline.features(pipeline.scan('2020-01-01', '2023-12-31'))
+
     trainer = M01Trainer()
     model, metrics = trainer.train(d2)
     trainer.save(model, metrics)
 
-    # Full M02 pipeline
-    from src.pipeline import DataPipeline, M02Trainer
-    
+    # M01 Ranker (cross-sectional ranking)
+    from src.pipeline import DataPipeline, M01RankerTrainer
+
     pipeline = DataPipeline()
-    d1 = pipeline.scan('2020-01-01', '2023-12-31')
-    d2r = pipeline.hydrate(d1, horizon_days=120)
-    d3 = pipeline.label(d2r)
-    
+    d2 = pipeline.features(pipeline.scan('2020-01-01', '2023-12-31'))
+
+    ranker = M01RankerTrainer()
+    model, metrics = ranker.train(d2)  # Groups by date for pairwise ranking
+    ranker.save(model, metrics)
+
+    # M02 Classifier
+    from src.pipeline import DataPipeline, M02Trainer
+
+    pipeline = DataPipeline()
+    d3 = pipeline.label(pipeline.hydrate(pipeline.scan('2020-01-01', '2023-12-31')))
+
     trainer = M02Trainer()
     model, metrics = trainer.train(d3)
     trainer.save(model, metrics)
@@ -38,6 +46,7 @@ Example Usage:
 from .data_pipeline import DataPipeline
 from .base_trainer import BaseTrainer
 from .m01_trainer import M01Trainer
+from .m01_ranker_trainer import M01RankerTrainer
 from .m02_trainer import M02Trainer
 from .m03_regime import M03RegimeCalculator
 from .production_scorer import ProductionScorer
@@ -47,6 +56,7 @@ __all__ = [
     'DataPipeline',
     'BaseTrainer',
     'M01Trainer',
+    'M01RankerTrainer',
     'M02Trainer',
     'M03RegimeCalculator',
     'ProductionScorer',

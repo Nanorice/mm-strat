@@ -66,7 +66,11 @@ class DataRepository:
         # API call tracking for rate limiting (300 calls/minute like fundamentals)
         self._call_timestamps = []
         self._rate_limit_lock = threading.Lock()  # Thread-safe lock
-        self.rate_limit = 300  # FMP Starter tier rate limit
+        self.rate_limit = 250  # FMP Starter tier is 300, use 250 for safety margin
+
+        # Global cooldown for 429 errors - when set, all workers wait
+        self._global_cooldown_until = 0  # Timestamp when cooldown ends
+        self._cooldown_lock = threading.Lock()
 
         # Per-file locks for parallel safety (allows concurrent writes to different files)
         self._file_locks = {}  # Dict mapping file path -> lock
@@ -286,43 +290,50 @@ class DataRepository:
             logger.debug(f"Cache staleness check failed for {file_path.stem}: {e}")
             return True    
     
+    def _trigger_global_cooldown(self, duration_seconds: float = 5.0):
+        """
+        Trigger a brief cooldown if we hit 429 (shouldn't happen with fixed-rate throttling).
+        """
+        with self._cooldown_lock:
+            new_cooldown = time.time() + duration_seconds
+            if new_cooldown > self._global_cooldown_until:
+                self._global_cooldown_until = new_cooldown
+    
+    def _wait_for_cooldown(self):
+        """Wait if there's an active cooldown."""
+        with self._cooldown_lock:
+            cooldown_until = self._global_cooldown_until
+        
+        now = time.time()
+        if cooldown_until > now:
+            time.sleep(cooldown_until - now)
+    
     def _rate_limit_check(self):
         """
-        Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
-        Uses sliding window approach - pauses only when necessary.
-        Thread-safe for parallel execution.
+        Fixed-rate throttling for FMP API at 300 calls/minute.
         
-        CRITICAL: Lock is ONLY held when checking/updating timestamps, NOT during sleep.
-        This allows multiple workers to proceed in parallel while respecting the rate limit.
+        Simple approach: Each request waits 0.2 seconds (5 requests/second = 300/minute).
+        This is more predictable than reactive backoff and avoids 429 errors entirely.
         """
-        # Phase 1: Check if we need to wait (acquire lock briefly)
+        # Check for any active cooldown from 429 errors
+        self._wait_for_cooldown()
+        
+        # Fixed delay: 0.2 seconds = 5 requests/second = 300/minute
+        # Use lock to ensure consistent pacing across workers
         with self._rate_limit_lock:
             now = time.time()
+            if self._call_timestamps:
+                last_call = self._call_timestamps[-1]
+                elapsed = now - last_call
+                min_interval = 0.2  # 300 calls/minute = 5 calls/second
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
             
-            # Remove timestamps older than 60 seconds (sliding window)
-            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
-            
-            # Check if we're at capacity
-            if len(self._call_timestamps) >= self.rate_limit:
-                # Calculate sleep time
-                oldest_call = self._call_timestamps[0]
-                time_since_oldest = now - oldest_call
-                sleep_time = 60.0 - time_since_oldest + 0.1  # Add 0.1s buffer
-            else:
-                sleep_time = 0
-        
-        # Phase 2: Sleep OUTSIDE the lock (if needed) so other workers can proceed
-        if sleep_time > 0:
-            logger.debug(f"Rate limit reached, sleeping {sleep_time:.1f}s")
-            time.sleep(sleep_time)
-        
-        # Phase 3: Record this call (acquire lock briefly again)
-        with self._rate_limit_lock:
-            now = time.time()
-            # Re-clean after potential sleep
-            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
             # Record this call
-            self._call_timestamps.append(now)
+            self._call_timestamps.append(time.time())
+            # Keep only last 10 timestamps to avoid memory growth
+            if len(self._call_timestamps) > 10:
+                self._call_timestamps = self._call_timestamps[-10:]
 
     def _get_ipo_date(self, ticker: str) -> Optional[pd.Timestamp]:
         """
@@ -471,21 +482,23 @@ class DataRepository:
             logger.error(f"{ticker}: Failed to write parquet: {e}")
             return False
 
-    def _fetch_fmp_historical(self, ticker: str, from_date: str = None, max_retries: int = 3, force_from_date: bool = False) -> Optional[dict]:
+    def _fetch_fmp_historical(self, ticker: str, from_date: str = None, max_retries: int = 5, force_from_date: bool = False) -> Optional[dict]:
         """
-        Fetch historical OHLCV data from FMP API for a single ticker with retry logic.
+        Fetch historical OHLCV data from FMP API for a single ticker with smart retry logic.
         Implements INCREMENTAL fetching - only downloads data since last cached date.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
 
         Args:
             ticker: Single ticker symbol
             from_date: Start date for historical data (default: DEFAULT_HISTORICAL_START_DATE)
-            max_retries: Maximum number of retries for 429 errors (default: 3)
+            max_retries: Maximum number of retries for transient errors (default: 5)
             force_from_date: If True, use from_date directly without checking cache (for full historical fetch)
 
         Returns:
             JSON response dict with historical data, or None if failed
         """
+        import random
+        
         if not config.FMP_API_KEY:
             raise ValueError("FMP_API_KEY not set in environment")
 
@@ -515,6 +528,7 @@ class DataRepository:
             'apikey': config.FMP_API_KEY
         }
         
+        last_error = None
         for attempt in range(max_retries):
             # Rate limiting
             self._rate_limit_check()
@@ -522,17 +536,36 @@ class DataRepository:
             try:
                 response = requests.get(url, params=params, timeout=30)
                 
-                # Handle 429 rate limit errors with progressive backoff
+                # Handle 429 rate limit errors with exponential backoff + jitter
                 if response.status_code == 429:
+                    # Brief cooldown - shouldn't happen often with fixed-rate throttling
+                    self._trigger_global_cooldown(5.0)
+                    
                     if attempt < max_retries - 1:
-                        # Sleep intervals: 5s, 10s, 15s
-                        wait_time = 5 * (attempt + 1)
-                        logger.warning(f"{ticker}: Rate limit hit (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        # Short retry delay since fixed-rate throttling handles pacing
+                        wait_time = 3 * (attempt + 1) + random.uniform(0, 2)
+                        logger.warning(f"{ticker}: Rate limit (429), retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                         continue
                     else:
-                        logger.error(f"{ticker}: Rate limit hit (429), max retries exceeded")
+                        logger.error(f"{ticker}: Rate limit (429), max retries exceeded")
                         return None
+                
+                # Handle server errors (5xx) - retry with backoff
+                if 500 <= response.status_code < 600:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2 + random.uniform(0, 1)
+                        logger.warning(f"{ticker}: Server error ({response.status_code}), retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"{ticker}: Server error ({response.status_code}), max retries exceeded")
+                        return None
+                
+                # Handle client errors (4xx except 429) - don't retry, these are permanent
+                if 400 <= response.status_code < 500:
+                    logger.debug(f"{ticker}: Client error ({response.status_code}), not retrying")
+                    return None
                 
                 response.raise_for_status()
                 data = response.json()
@@ -553,18 +586,51 @@ class DataRepository:
                     logger.warning(f"Unexpected FMP response format for {ticker}: {type(data)}")
                     return None
                     
+            except requests.exceptions.Timeout as e:
+                # Timeout is transient - retry with backoff
+                last_error = f"Timeout: {e}"
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2 + random.uniform(0, 1)
+                    logger.warning(f"{ticker}: Timeout, retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"FMP API timeout for {ticker} after {max_retries} attempts")
+                return None
+                
+            except requests.exceptions.ConnectionError as e:
+                # Connection errors are transient - retry with backoff
+                last_error = f"Connection error: {e}"
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3 + random.uniform(0, 2)
+                    logger.warning(f"{ticker}: Connection error, retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"FMP API connection failed for {ticker} after {max_retries} attempts: {e}")
+                return None
+                
             except requests.exceptions.RequestException as e:
+                # Other request errors - check if 429-related
+                last_error = str(e)
                 if attempt < max_retries - 1 and "429" in str(e):
-                    wait_time = 5 * (attempt + 1)
-                    logger.warning(f"{ticker}: Request error (likely 429), retrying in {wait_time}s...")
+                    wait_time = (2 ** attempt) * 3 + random.uniform(0, 2)
+                    logger.warning(f"{ticker}: Request error (likely 429), retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                     continue
                 logger.error(f"FMP API request failed for {ticker}: {e}")
                 return None
+                
             except json.JSONDecodeError as e:
+                # JSON parse errors on valid response - might be transient
+                last_error = f"JSON decode error: {e}"
+                if attempt < max_retries - 1:
+                    wait_time = 1 + random.uniform(0, 1)
+                    logger.warning(f"{ticker}: JSON decode error, retrying... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
                 logger.error(f"Failed to parse FMP response for {ticker}: {e}")
                 return None
         
+        logger.error(f"{ticker}: All {max_retries} attempts failed. Last error: {last_error}")
         return None
 
     def _parse_fmp_response(self, response_data: dict, ticker: str) -> Optional[pd.DataFrame]:
@@ -973,11 +1039,17 @@ class DataRepository:
 
         return (ticker, False, "Max retries exceeded")
 
-    def _update_cache_fmp(self, tickers: List[str], max_workers: int = 10, show_progress: bool = True, from_date: str = None) -> Dict[str, bool]:
+    def _update_cache_fmp(self, tickers: List[str], max_workers: int = 5, show_progress: bool = True, from_date: str = None) -> Dict[str, bool]:
         """
-        Update cache using FMP API with parallel execution and retry logic.
+        Update cache using FMP API with parallel execution and automatic retry of failures.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
         Rate limited to 300 calls/minute.
+
+        Features:
+        - Parallel fetching with configurable workers
+        - Exponential backoff with jitter for transient errors
+        - Automatic retry pass for failed tickers (reduced parallelism)
+        - Detailed progress tracking
 
         Args:
             tickers: List of ticker symbols
@@ -1007,10 +1079,11 @@ class DataRepository:
             except ImportError:
                 logger.info("Install tqdm for progress bar: pip install tqdm")
 
+        # ========== FIRST PASS ==========
         # Use ThreadPoolExecutor for parallel fetching
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks with from_date
-            future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 3, from_date): ticker for ticker in tickers}
+            # Submit all tasks with from_date (use 5 retries per fetch)
+            future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 5, from_date): ticker for ticker in tickers}
 
             # Process completed tasks with progress tracking
             if use_tqdm:
@@ -1024,7 +1097,7 @@ class DataRepository:
                             fail_count += 1
                             failed_tickers.append((ticker, error_msg))
                         pbar.update(1)
-                        pbar.set_postfix({'✓': success_count, '✗': fail_count})
+                        pbar.set_postfix({'OK': success_count, 'FAIL': fail_count})
             else:
                 completed = 0
                 for future in concurrent.futures.as_completed(future_to_ticker):
@@ -1047,12 +1120,48 @@ class DataRepository:
 
                         logger.info(
                             f"Progress: {completed}/{total_tickers} ({pct_complete:.1f}%) | "
-                            f"✓ {success_count} ✗ {fail_count} | "
+                            f"OK {success_count} FAIL {fail_count} | "
                             f"Rate: {rate:.1f} tickers/sec | "
                             f"ETA: {eta_minutes:.1f} min"
                         )
 
-        # Final summary
+        # ========== AUTOMATIC RETRY PASS ==========
+        # If we have failed tickers, wait and retry them with reduced parallelism
+        if failed_tickers and len(failed_tickers) <= 100:  # Only auto-retry if failures are manageable
+            logger.info(f"\n{'='*80}")
+            logger.info(f"RETRY PASS: {len(failed_tickers)} failed tickers (after 10s cooldown)...")
+            logger.info(f"{'='*80}")
+            
+            # Cooldown to let rate limits reset
+            time.sleep(10)
+            
+            retry_tickers = [t for t, _ in failed_tickers]
+            retry_workers = min(3, max_workers)  # Reduced parallelism for retry
+            
+            retry_success = 0
+            retry_fail = 0
+            still_failed = []
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=retry_workers) as executor:
+                # Submit retry tasks with fresh attempts (5 retries each)
+                future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 5, from_date): ticker for ticker in retry_tickers}
+                
+                for future in concurrent.futures.as_completed(future_to_ticker):
+                    ticker, success, error_msg = future.result()
+                    results[ticker] = success  # Update result
+                    if success:
+                        retry_success += 1
+                        success_count += 1
+                        fail_count -= 1
+                        logger.info(f"  RECOVERED: {ticker}")
+                    else:
+                        retry_fail += 1
+                        still_failed.append((ticker, error_msg))
+            
+            logger.info(f"Retry complete: {retry_success} recovered, {retry_fail} still failed")
+            failed_tickers = still_failed  # Update for final summary
+
+        # ========== FINAL SUMMARY ==========
         elapsed_total = time.time() - start_time
         logger.info(f"\n{'='*80}")
         logger.info(f"FMP Cache Update Complete!")

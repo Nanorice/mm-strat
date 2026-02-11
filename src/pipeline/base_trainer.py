@@ -42,8 +42,24 @@ class BaseTrainer(ABC):
     """
     
     def __init__(self, output_dir: str = 'models'):
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._base_output_dir = Path(output_dir)
+        self._base_output_dir.mkdir(parents=True, exist_ok=True)
+        # output_dir will be set to model-specific folder after model_name is available
+        self.output_dir = self._base_output_dir
+
+    def get_model_dir(self) -> Path:
+        """
+        Get model-specific output directory.
+
+        Creates: models/{model_name}/
+        Example: models/m01/, models/m01_v2/
+
+        Returns:
+            Path to model-specific directory
+        """
+        model_dir = self._base_output_dir / self.model_name.lower()
+        model_dir.mkdir(parents=True, exist_ok=True)
+        return model_dir
     
     @abstractmethod
     def get_features(self) -> List[str]:
@@ -91,19 +107,60 @@ class BaseTrainer(ABC):
         NOTE: We do NOT clip values. XGBoost naturally handles outliers.
         """
         logger.info(f"   Cleaning data ({len(feature_cols)} features)")
-        
-        # Replace inf
-        inf_count = data[feature_cols].isin([np.inf, -np.inf]).sum().sum()
+
+        # Check for duplicate columns
+        if len(data.columns) != len(set(data.columns)):
+            duplicates = [col for col in data.columns if list(data.columns).count(col) > 1]
+            unique_duplicates = list(set(duplicates))
+            logger.error(f"   CRITICAL: Found {len(unique_duplicates)} duplicate columns: {unique_duplicates[:10]}")
+            # Remove duplicate columns, keeping first occurrence
+            data = data.loc[:, ~data.columns.duplicated()]
+            logger.info(f"   Removed duplicates, now have {len(data.columns)} unique columns")
+
+        # Separate numeric and categorical features
+        # Ensure feature_cols is flat and contains only strings
+        flat_feature_cols = []
+        for item in feature_cols:
+            if isinstance(item, (list, tuple)):
+                flat_feature_cols.extend(item)
+            elif isinstance(item, str):
+                flat_feature_cols.append(item)
+            else:
+                logger.warning(f"   Skipping non-string feature: {item} (type: {type(item)})")
+
+        # Filter to numeric columns only
+        numeric_cols = []
+        for c in flat_feature_cols:
+            if not isinstance(c, str):
+                continue
+            if c not in data.columns:
+                continue
+            try:
+                if data[c].dtype != 'category':
+                    numeric_cols.append(c)
+            except AttributeError as e:
+                logger.error(f"   Error checking dtype for column '{c}': {e}")
+                logger.error(f"   Type of data['{c}']: {type(data[c])}")
+                raise
+
+        # Deduplicate numeric_cols to prevent assignment errors
+        numeric_cols = list(dict.fromkeys(numeric_cols))
+
+        if not numeric_cols:
+            return data
+
+        # Replace inf (only for numeric columns)
+        inf_count = data[numeric_cols].isin([np.inf, -np.inf]).sum().sum()
         if inf_count > 0:
             logger.warning(f"   Found {inf_count} inf values, replacing with NaN")
-        data[feature_cols] = data[feature_cols].replace([np.inf, -np.inf], np.nan)
-        
-        # Fill NaN
-        nan_count = data[feature_cols].isna().sum().sum()
+        data[numeric_cols] = data[numeric_cols].replace([np.inf, -np.inf], np.nan)
+
+        # Fill NaN (only for numeric columns)
+        nan_count = data[numeric_cols].isna().sum().sum()
         if nan_count > 0:
             logger.info(f"   Filling {nan_count} NaN values with 0")
-        data[feature_cols] = data[feature_cols].fillna(0)
-        
+        data[numeric_cols] = data[numeric_cols].fillna(0)
+
         return data
     
     # =========================================================================
@@ -188,6 +245,7 @@ class BaseTrainer(ABC):
                 
                 if self.model_type == 'regression':
                     param['objective'] = 'reg:squarederror'
+                    param['enable_categorical'] = True  # Support categorical features
                     model = xgb.XGBRegressor(**param)
                     model.fit(X_train, y_train, verbose=False)
                     preds = model.predict(X_val)
@@ -195,6 +253,7 @@ class BaseTrainer(ABC):
                     scores.append(rmse)
                 else:
                     param['objective'] = 'binary:logistic'
+                    param['enable_categorical'] = True  # Support categorical features
                     model = xgb.XGBClassifier(**param)
                     model.fit(X_train, y_train, verbose=False)
                     probs = model.predict_proba(X_val)[:, 1]
@@ -350,21 +409,23 @@ class BaseTrainer(ABC):
     # =========================================================================
     def save(self, model, metrics_df: pd.DataFrame, config: Optional[Dict] = None):
         """
-        Save trained model and configuration.
-        
+        Save trained model and configuration to model-specific folder.
+
         Creates:
-            - models/{model_name}.json - XGBoost model
-            - models/{model_name}_config.json - Configuration
+            - models/{model_name}/model.json - XGBoost model
+            - models/{model_name}/config.json - Configuration
         """
         import json
-        
-        model_path = self.output_dir / f'{self.model_name.lower()}.json'
-        config_path = self.output_dir / f'{self.model_name.lower()}_config.json'
-        
+
+        model_dir = self.get_model_dir()
+
+        model_path = model_dir / 'model.json'
+        config_path = model_dir / 'config.json'
+
         # Save model
         model.save_model(str(model_path))
         logger.info(f"   Saved model to {model_path}")
-        
+
         # Save config
         save_config = {
             'model_name': self.model_name,
@@ -375,9 +436,9 @@ class BaseTrainer(ABC):
         }
         if config:
             save_config.update(config)
-        
+
         with open(config_path, 'w') as f:
             json.dump(save_config, f, indent=2)
         logger.info(f"   Saved config to {config_path}")
-        
+
         return model_path, config_path

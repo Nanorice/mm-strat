@@ -371,7 +371,7 @@ class BuyListManager:
                         daily_signals.append({
                             'ticker': ticker,
                             'Close': df.loc[date, 'Close'],
-                            'rs_rank': df.loc[date, 'RS'] if 'RS' in df.columns else 0.0,
+                            'rs_rank': df.loc[date, 'rs_rating'] if 'rs_rating' in df.columns else 0.0,
                             'volume_ratio': df.loc[date, 'Vol_Ratio'] if 'Vol_Ratio' in df.columns else 1.0,
                             'ATR': df.loc[date, 'ATR'] if 'ATR' in df.columns else 0.0,
                             'High_52w': df['High'].rolling(252).max().loc[date] if date in df.index else df.loc[date, 'Close']

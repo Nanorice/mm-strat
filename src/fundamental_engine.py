@@ -82,29 +82,36 @@ class FundamentalEngine:
         Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
         Uses sliding window approach - pauses only when necessary.
         Thread-safe for parallel execution.
+
+        CRITICAL: Lock is ONLY held when checking/updating timestamps, NOT during sleep.
+        This allows multiple workers to proceed in parallel while respecting the rate limit.
         """
+        # Phase 1: Check if we need to wait (acquire lock briefly)
         with self._rate_limit_lock:
             now = time.time()
 
             # Remove timestamps older than 60 seconds (sliding window)
             self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
 
-            # If at rate limit, wait until oldest call falls outside the window
+            # Check if we're at capacity
             if len(self._call_timestamps) >= self.rate_limit:
-                # Calculate how long to wait for the oldest call to age out
+                # Calculate sleep time
                 oldest_call = self._call_timestamps[0]
                 time_since_oldest = now - oldest_call
                 sleep_time = 60.0 - time_since_oldest + 0.1  # Add 0.1s buffer
+            else:
+                sleep_time = 0
 
-                if sleep_time > 0:
-                    logger.debug(f"Rate limit reached ({len(self._call_timestamps)}/{self.rate_limit}), "
-                                f"sleeping {sleep_time:.1f}s until oldest call expires")
-                    time.sleep(sleep_time)
+        # Phase 2: Sleep OUTSIDE the lock (if needed) so other workers can proceed
+        if sleep_time > 0:
+            logger.debug(f"Rate limit reached, sleeping {sleep_time:.1f}s")
+            time.sleep(sleep_time)
 
-                    # Re-clean timestamps after sleeping
-                    now = time.time()
-                    self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
-
+        # Phase 3: Record this call (acquire lock briefly again)
+        with self._rate_limit_lock:
+            now = time.time()
+            # Re-clean after potential sleep
+            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
             # Record this call
             self._call_timestamps.append(now)
 

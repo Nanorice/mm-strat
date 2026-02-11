@@ -49,7 +49,7 @@ class SEPABacktestRunner:
         start_date: str = '2020-01-01',
         end_date: str = '2025-01-01',
         initial_cash: float = 100_000,
-        commission: float = 0.005,  # $0.005 per share
+        commission: float = 0.001,  # 0.1% commission (NOT fixed per share - see BT bug)
         slippage_pct: float = 0.001,  # 0.1%
         regime_path: Optional[str] = None,
         prices_dir: Optional[str] = None,
@@ -146,10 +146,9 @@ class SEPABacktestRunner:
 
         # === CONFIGURE BROKER ===
         self.cerebro.broker.setcash(self.initial_cash)
-        self.cerebro.broker.setcommission(
-             commission=self.commission,
-             commtype=bt.CommInfoBase.COMM_FIXED,
-        )
+        # NOTE: MUST use percentage commission, not COMM_FIXED!
+        # BackTrader bug: COMM_FIXED doesn't deduct purchase price from cash correctly
+        self.cerebro.broker.setcommission(commission=self.commission)  # Percentage-based
         self.cerebro.broker.set_slippage_perc(perc=self.slippage_pct)
 
     def _add_price_feeds(self, tickers: List[str]):
@@ -204,26 +203,9 @@ class SEPABacktestRunner:
             logger.info(f"Skipped {skipped_late} late-starting tickers (IPO after {late_start_cutoff.date()})")
         logger.info(f"Added {loaded_count} stock feeds")
 
-        # === CONFIGURE BROKER ===
-        self.cerebro.broker.setcash(self.initial_cash)
-
-        # Commission: fixed per share
-        self.cerebro.broker.setcommission(
-            commission=self.commission,
-            commtype=bt.CommInfoBase.COMM_FIXED,
-        )
-
-        # Slippage: percentage-based
-        self.cerebro.broker.set_slippage_perc(
-            perc=self.slippage_pct,
-            slip_open=True,
-            slip_limit=True,
-            slip_match=True,
-            slip_out=False,
-        )
-
-        logger.info(f"Broker configured: cash=${self.initial_cash:,.0f}, "
-                   f"commission=${self.commission}/share, slippage={self.slippage_pct*100:.1f}%")
+        # NOTE: Broker is configured in setup(), not here - remove duplicate config
+        logger.info(f"Broker: cash=${self.initial_cash:,.0f}, "
+                   f"commission={self.commission*100:.2f}%, slippage={self.slippage_pct*100:.1f}%")
 
         # === ADD STRATEGY ===
         self.cerebro.addstrategy(
@@ -417,24 +399,22 @@ class SEPABacktestRunner:
 
         return pd.DataFrame(records)
 
-    def save_report(self, metrics: Dict[str, Any], output_dir: Optional[Path] = None) -> str:
+    def save_report(self, metrics: Dict[str, Any], run_dir: Path = None) -> str:
         """
         Generate and save markdown report.
 
         Args:
             metrics: Dict from run() with backtest metrics
-            output_dir: Directory to save report (default: data/backtest/reports/)
+            run_dir: Directory to save report (saves as report.md)
 
         Returns:
             Path to saved report
         """
-        if output_dir is None:
-            output_dir = BACKTEST_DATA_DIR / 'reports'
+        if run_dir is None:
+            run_dir = BACKTEST_DATA_DIR / 'reports'
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-        report_path = output_dir / f'backtest_report_{timestamp}.md'
+        run_dir.mkdir(parents=True, exist_ok=True)
+        report_path = run_dir / 'report.md'
 
         trade_df = self.get_trade_dataframe()
         equity_curve = self.get_equity_curve_dataframe()
@@ -445,8 +425,15 @@ class SEPABacktestRunner:
             strategy_params = {
                 'min_score': self.strategy.p.min_score,
                 'min_percentile': self.strategy.p.min_percentile,
+                'rank_by': self.strategy.p.rank_by,
+                'min_price': self.strategy.p.min_price,
+                'cooldown_days': self.strategy.p.cooldown_days,
                 'atr_stop_mult': self.strategy.p.atr_stop_mult,
+                'max_stop_pct': self.strategy.p.max_stop_pct,
                 'atr_target1_mult': self.strategy.p.atr_target1_mult,
+                'min_target1_pct': self.strategy.p.min_target1_pct,
+                'atr_target2_add': self.strategy.p.atr_target2_add,
+                'sma_exit_period': self.strategy.p.sma_exit_period,
             }
 
         generate_report(
@@ -462,7 +449,43 @@ class SEPABacktestRunner:
 
         return str(report_path)
 
-    def save_run(self, metrics: Dict[str, Any], run_note: str = "") -> Path:
+    @staticmethod
+    def _sanitize_run_name(run_note: str) -> str:
+        """Sanitize run note to valid folder name."""
+        folder_name = run_note.lower().replace(' ', '_').replace('-', '_')
+        return ''.join(c for c in folder_name if c.isalnum() or c == '_')[:50]
+
+    def get_run_dir_path(self, run_note: str) -> Path:
+        """Get the path for a run directory (may or may not exist)."""
+        if run_note:
+            folder_name = self._sanitize_run_name(run_note)
+        else:
+            folder_name = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        return BACKTEST_DATA_DIR / folder_name
+
+    def create_run_dir(self, run_note: str = "", overwrite: bool = False) -> Path:
+        """
+        Create a run directory for saving all backtest artifacts.
+
+        Args:
+            run_note: Name for the run folder (e.g., "baseline_v1")
+            overwrite: If True, clear existing directory contents
+
+        Returns:
+            Path to the created run directory
+        """
+        run_dir = self.get_run_dir_path(run_note)
+
+        if run_dir.exists() and overwrite:
+            import shutil
+            shutil.rmtree(run_dir)
+            logger.info(f"Cleared existing run directory: {run_dir}")
+
+        run_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created run directory: {run_dir}")
+        return run_dir
+
+    def save_run(self, metrics: Dict[str, Any], run_dir: Path = None, run_note: str = "") -> Path:
         """
         Save structured backtest run for dashboard visualization.
 
@@ -474,33 +497,18 @@ class SEPABacktestRunner:
 
         Args:
             metrics: Dict from run() with backtest metrics
-            run_note: Optional suffix for run name (e.g., "bull_test")
+            run_dir: Directory to save to (if None, creates one)
+            run_note: Optional name for run folder (used if run_dir is None)
 
         Returns:
             Path to the run directory
         """
-        runs_dir = BACKTEST_DATA_DIR / 'runs'
-        runs_dir.mkdir(parents=True, exist_ok=True)
+        if run_dir is None:
+            run_dir = self.create_run_dir(run_note)
+        else:
+            run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate run_id: backtest_YYMMDD or backtest_YYMMDD_{note}
-        date_str = pd.Timestamp.now().strftime('%y%m%d')
-        base_name = f"backtest_{date_str}"
-        if run_note:
-            # Sanitize note: lowercase, replace spaces with underscores
-            note_slug = run_note.lower().replace(' ', '_').replace('-', '_')
-            note_slug = ''.join(c for c in note_slug if c.isalnum() or c == '_')[:30]
-            base_name = f"{base_name}_{note_slug}"
-
-        # Handle collisions: append _2, _3, etc.
-        run_id = base_name
-        counter = 2
-        while (runs_dir / run_id).exists():
-            run_id = f"{base_name}_{counter}"
-            counter += 1
-
-        run_dir = runs_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-
+        run_id = run_dir.name
         logger.info(f"Saving backtest run to: {run_dir}")
 
         # 1. Save equity curve
@@ -890,6 +898,8 @@ def run_backtest(
     end_date: str = '2025-01-01',
     initial_cash: float = 100_000,
     max_tickers: Optional[int] = None,
+    save_results: bool = False,
+    run_note: str = "",
 ) -> Dict[str, Any]:
     """
     Convenience function to run a backtest.
@@ -899,6 +909,8 @@ def run_backtest(
         end_date: End date
         initial_cash: Starting capital
         max_tickers: Limit tickers (for testing)
+        save_results: Whether to save run artifacts to disk
+        run_note: Optional note to append to run ID
 
     Returns:
         Dict with backtest metrics
@@ -911,9 +923,13 @@ def run_backtest(
     runner.setup(max_tickers=max_tickers)
     metrics = runner.run()
     runner.print_results(metrics)
+
+    if save_results:
+        runner.save_run(metrics, run_note=run_note)
+
     return metrics
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    run_backtest()
+    run_backtest(save_results=True, run_note="cli_run")
