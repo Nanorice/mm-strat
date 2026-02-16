@@ -57,23 +57,23 @@ class VectorizedSEPAScreener:
     @staticmethod
     def screen_single_ticker_split(df: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
         """
-        Vectorized SEPA screening with separate trend and breakout masks.
+        Vectorized SEPA screening with separate trend and trigger masks.
 
         This method processes the entire time series at once using vectorized
-        operations, returning BOTH trend and breakout signals separately.
+        operations, returning BOTH trend and trigger signals separately.
 
         Args:
-            df: DataFrame with OHLCV + indicators
+            df: DataFrame with OHLCV + indicators (must include price_vs_spy, price_vs_spy_ma63)
 
         Returns:
-            Tuple of (trend_ok, breakout_ok) boolean Series
-            - trend_ok: C1-C9 (9 Stage 2 uptrend conditions including rs_rating)
-            - breakout_ok: C10-C12 (3 breakout/volume/RS conditions)
+            Tuple of (trend_ok, trigger_ok) boolean Series
+            - trend_ok: C1-C9 (trend + RS filter using price_vs_spy > price_vs_spy_ma63)
+            - trigger_ok: C10-C11 (breakout + volume, C12 dropped)
 
         Example:
-            >>> trend_mask, breakout_mask = VectorizedSEPAScreener.screen_single_ticker_split(aapl_df)
-            >>> trend_mask.loc['2024-01-03']    # True if uptrend
-            >>> breakout_mask.loc['2024-01-03'] # True if breaking out
+            >>> trend_mask, trigger_mask = VectorizedSEPAScreener.screen_single_ticker_split(aapl_df)
+            >>> trend_mask.loc['2024-01-03']    # True if trend qualified
+            >>> trigger_mask.loc['2024-01-03'] # True if breakout trigger
         """
         # Check required columns
         required_cols = ['Close', 'SMA_150', 'SMA_200', 'SMA_50', 'High_52W', 'Low_52W', 'High', 'Volume']
@@ -82,7 +82,9 @@ class VectorizedSEPAScreener:
             logger.warning(f"Missing columns for SEPA screening: {missing_cols}")
             return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
-        # Trend conditions (C1-C9) - Stage 2 uptrend
+        # ========================================
+        # PARTITION 1: TREND (C1-C8)
+        # ========================================
         c1 = df['Close'] > df['SMA_150']
         c2 = df['Close'] > df['SMA_200']
         c3 = df['SMA_150'] > df['SMA_200']
@@ -91,15 +93,27 @@ class VectorizedSEPAScreener:
         c6 = df['Close'] > df['SMA_50']
         c7 = df['Close'] > df['Low_52W'] * 1.3  # Above 52W low by 30%
         c8 = df['Close'] > df['High_52W'] * 0.85  # Within 15% of 52W high
-        # C9: rs_rating > 0 (positive momentum proxy for single-ticker screening)
-        # True cross-sectional rank is computed in batch_screen_universe()
-        if 'rs_rating' in df.columns:
-            c9 = df['rs_rating'] > 0
+
+        # ========================================
+        # PARTITION 2: RS FILTER (C9)
+        # ========================================
+        # C9: RS Line must be in uptrend (price vs benchmark)
+        # Uses price_vs_spy (Close/SPY) > price_vs_spy_ma63 instead of momentum rs_rating
+        if 'price_vs_spy' in df.columns and 'price_vs_spy_ma63' in df.columns:
+            c9 = df['price_vs_spy'] > df['price_vs_spy_ma63']
+        elif 'rs_line_uptrend' in df.columns:
+            c9 = df['rs_line_uptrend']  # Use boolean flag if available
         else:
-            c9 = pd.Series(True, index=df.index)  # Skip if not available
+            # Fallback: use momentum rs_rating for backward compatibility
+            c9 = df['rs_rating'] > 0 if 'rs_rating' in df.columns else pd.Series(True, index=df.index)
+
+        # Combine C1-C9 (trend + RS filter)
         trend_ok = c1 & c2 & c3 & c4 & c5 & c6 & c7 & c8 & c9
 
-        # Breakout conditions (C10-C12) - Breakout trigger
+        # ========================================
+        # PARTITION 3: TRIGGER (C10-C11)
+        # ========================================
+        # C10: Breakout (close > 20-day high)
         c10 = df['Close'] > df['High'].shift(1).rolling(consolidation_period).max()
 
         # C11: Volume spike confirmation (must exceed 1.3x average)
@@ -107,16 +121,15 @@ class VectorizedSEPAScreener:
         vol_ratio = df['Volume'] / vol_ma_50
         c11 = vol_ratio > config.VOL_SPIKE_THRESHOLD
 
-        # C12: RS confirmation using rs_rating (momentum-based)
-        # Check if current rs_rating exceeds its 63-day moving average
-        if 'rs_rating' in df.columns:
-            c12 = df['rs_rating'] > df['rs_rating'].rolling(63).mean()
-        else:
-            c12 = pd.Series(True, index=df.index)  # Skip if not available
+        # C12 DROPPED (was redundant with C9 - RS momentum check no longer needed)
+        trigger_ok = c10 & c11
 
-        breakout_ok = c10 & c11 & c12
-
-        return trend_ok, breakout_ok
+        # ========================================
+        # RETURN: (trend_ok, trigger_ok)
+        # ========================================
+        # trend_ok = C1-C9 (trend + RS filter)
+        # trigger_ok = C10-C11 (breakout + volume, C12 dropped)
+        return trend_ok, trigger_ok
 
     @staticmethod
     def screen_single_ticker_trend_only(df: pd.DataFrame) -> pd.Series:

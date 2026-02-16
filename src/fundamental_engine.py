@@ -461,22 +461,54 @@ class FundamentalEngine:
                 from src.earnings_engine import EarningsEngine
                 earnings_engine = EarningsEngine()
 
-                # Step 1: Update earnings cache for all tickers
-                logger.info("Updating earnings cache...")
-                earnings_results = earnings_engine.update_earnings_cache(
-                    tickers,
-                    force=False,
-                    max_workers=max_workers
-                )
+                # Quick pre-check: Which tickers are missing fundamentals?
+                missing_tickers = []
+                for ticker in tickers:
+                    cache_file = self.fundamentals_dir / f"{ticker}.parquet"
+                    if not cache_file.exists():
+                        missing_tickers.append(ticker)
 
-                earnings_success = sum(earnings_results.values())
-                logger.info(f"Earnings cache updated: {earnings_success}/{len(tickers)} tickers")
+                # Check if we should skip earnings-based staleness check
+                # (all tickers have fundamentals AND recent cache files)
+                skip_earnings_check = True
+                cache_threshold_days = 30  # Skip earnings check if cache <30 days old
 
-                # Step 2: Get tickers needing fundamental update based on earnings
-                to_fetch = earnings_engine.get_tickers_needing_fundamental_update(
-                    tickers,
-                    self.fundamentals_dir
-                )
+                if missing_tickers:
+                    # Have missing tickers - must update earnings
+                    skip_earnings_check = False
+                    logger.info(f"Updating earnings cache for {len(missing_tickers)} missing tickers...")
+                    earnings_results = earnings_engine.update_earnings_cache(
+                        missing_tickers,
+                        force=False,
+                        max_workers=max_workers
+                    )
+                    earnings_success = sum(earnings_results.values())
+                    logger.info(f"Earnings cache updated: {earnings_success}/{len(missing_tickers)} tickers")
+                else:
+                    # All tickers have fundamentals - check if any are stale
+                    from datetime import datetime, timedelta
+                    threshold = datetime.now() - timedelta(days=cache_threshold_days)
+
+                    for ticker in tickers:
+                        cache_file = self.fundamentals_dir / f"{ticker}.parquet"
+                        if cache_file.exists():
+                            file_mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+                            if file_mtime < threshold:
+                                skip_earnings_check = False
+                                break
+
+                    if skip_earnings_check:
+                        logger.info(f"All fundamentals cached and fresh (<{cache_threshold_days}d old), skipping earnings check")
+                        to_fetch = []
+                    else:
+                        logger.info("Some fundamentals are stale, checking earnings for updates...")
+
+                # Step 2: Get tickers needing fundamental update based on earnings (if needed)
+                if not skip_earnings_check:
+                    to_fetch = earnings_engine.get_tickers_needing_fundamental_update(
+                        tickers,
+                        self.fundamentals_dir
+                    )
 
                 # Mark cached tickers as success
                 cached = set(tickers) - set(to_fetch)

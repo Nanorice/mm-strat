@@ -33,8 +33,9 @@
 ## Coding Standards
 - **Naming**: `snake_case` for variables/functions, `PascalCase` for classes.
 - **Typing**: Python type hints are required for all function signatures.
-- **Docs**: DO NOT generate module-level docstrings or verbose comments unless the logic is complex. Keep it terse.
+- **Docs**: DO NOT generate module-level docstrings or verbose comments unless the logic is complex. Keep it terse. DO NOT generate any documentation before checking with user.
 - **Error Handling**: Use specific exceptions, never bare `except:`.
+- **Debug**: Delete debug files at the end of session if not needed anymore.
 
 ## Emoji Usage (CRITICAL)
 When using emojis in console output or strings, **only use these tested, working Unicode characters**:

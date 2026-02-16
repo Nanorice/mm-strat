@@ -1,7 +1,7 @@
 # Feature Evaluation Report (Quant-Standard)
 
-**Generated:** 2026-02-09 00:09:52
-**Target Variable:** `return_pct`
+**Generated:** 2026-02-14 18:09:52
+**Target Variable:** `y_max`
 **Composite Weights:** 40% IC + 30% Stability + 30% KS
 **Correlation Threshold:** 0.7
 
@@ -9,143 +9,168 @@
 
 ## Section 0: Dataset Overview
 
-### Target Variable Distribution (`return_pct`)
+### Target Variable Distribution (`y_max`)
 
 | Statistic | Value |
 |-----------|-------|
-| Count | 20,556 |
-| Mean | +1.49% |
-| Std Dev | 15.99% |
-| Min | -95.31% |
-| Max | +516.56% |
-| Median | -2.11% |
-| Q1 (25%) | -5.89% |
-| Q3 (75%) | +4.36% |
-| Skewness | +6.48 |
-| Kurtosis | 108.4 |
+| Count | 12,301 |
+| Mean | +3.92% |
+| Std Dev | 22.18% |
+| Min | -96.32% |
+| Max | +492.45% |
+| Median | +0.58% |
+| Q1 (25%) | -8.11% |
+| Q3 (75%) | +9.45% |
+| Skewness | +4.71 |
+| Kurtosis | 55.6 |
 
 | Outcome | Count | % |
 |---------|-------|---|
-| Positive (> 0%) | 7,658 | 37.3% |
-| > +10% | 3,225 | 15.7% |
-| > +20% | 1,547 | 7.5% |
-| Negative (< 0%) | 12,871 | 62.6% |
-| < -10% | 1,813 | 8.8% |
+| Positive (> 0%) | 6,413 | 52.1% |
+| > +10% | 2,971 | 24.2% |
+| > +20% | 1,638 | 13.3% |
+| Negative (< 0%) | 5,880 | 47.8% |
+| < -10% | 2,087 | 17.0% |
 
 ### Return Distribution (5% Buckets)
 
 | Bucket | Count | % | Bar |
 |--------|-------|---|-----|
-| < -50% | 4 | 0.0% |  |
-| [-50, -45)% | 3 | 0.0% |  |
-| [-45, -40)% | 4 | 0.0% |  |
-| [-40, -35)% | 3 | 0.0% |  |
-| [-35, -30)% | 15 | 0.1% |  |
-| [-30, -25)% | 29 | 0.1% |  |
-| [-25, -20)% | 78 | 0.4% |  |
-| [-20, -15)% | 460 | 2.2% | █ |
-| [-15, -10)% | 1,217 | 5.9% | ███ |
-| [-10, -5)% | 4,422 | 21.5% | █████████████ |
-| [-5, 0)% | 6,637 | 32.3% | ████████████████████ |
-| [0, 5)% | 2,842 | 13.8% | ████████ |
-| [5, 10)% | 1,617 | 7.9% | ████ |
-| [10, 15)% | 1,036 | 5.0% | ███ |
-| [15, 20)% | 641 | 3.1% | █ |
-| [20, 25)% | 395 | 1.9% | █ |
-| [25, 30)% | 310 | 1.5% |  |
-| [30, 35)% | 188 | 0.9% |  |
-| [35, 40)% | 153 | 0.7% |  |
-| [40, 45)% | 117 | 0.6% |  |
-| [45, 50)% | 85 | 0.4% |  |
-| >= 50% | 300 | 1.5% |  |
+| < -50% | 9 | 0.1% |  |
+| [-50, -45)% | 4 | 0.0% |  |
+| [-45, -40)% | 7 | 0.1% |  |
+| [-40, -35)% | 10 | 0.1% |  |
+| [-35, -30)% | 24 | 0.2% |  |
+| [-30, -25)% | 52 | 0.4% |  |
+| [-25, -20)% | 160 | 1.3% | █ |
+| [-20, -15)% | 501 | 4.1% | ███ |
+| [-15, -10)% | 1,320 | 10.7% | ████████ |
+| [-10, -5)% | 3,027 | 24.6% | ████████████████████ |
+| [-5, 0)% | 766 | 6.2% | █████ |
+| [0, 5)% | 2,261 | 18.4% | ██████████████ |
+| [5, 10)% | 1,189 | 9.7% | ███████ |
+| [10, 15)% | 786 | 6.4% | █████ |
+| [15, 20)% | 547 | 4.4% | ███ |
+| [20, 25)% | 382 | 3.1% | ██ |
+| [25, 30)% | 280 | 2.3% | █ |
+| [30, 35)% | 188 | 1.5% | █ |
+| [35, 40)% | 158 | 1.3% | █ |
+| [40, 45)% | 129 | 1.0% |  |
+| [45, 50)% | 88 | 0.7% |  |
+| >= 50% | 413 | 3.4% | ██ |
 
 ### Holding Period (`days_held`)
 
 | Statistic | Value |
 |-----------|-------|
-| Mean | 46.5 days |
-| Std Dev | 40.6 days |
+| Mean | 36.3 days |
+| Std Dev | 34.7 days |
 | Min | 1 days |
 | Max | 403 days |
-| Median | 37.0 days |
+| Median | 26.0 days |
 
 ### Temporal Coverage
 
-- **Date Range:** 2010-01-04 to 2025-12-31
-- **Unique Entry Dates:** 3,487
+- **Date Range:** 2018-01-02 to 2025-12-29
+- **Unique Entry Dates:** 1,788
 
 | Year | Samples | % |
 |------|---------|---|
-| 2010 | 1,318 | 6.4% |
-| 2011 | 1,012 | 4.9% |
-| 2012 | 990 | 4.8% |
-| 2013 | 1,866 | 9.1% |
-| 2014 | 1,091 | 5.3% |
-| 2015 | 966 | 4.7% |
-| 2016 | 1,214 | 5.9% |
-| 2017 | 1,450 | 7.1% |
-| 2018 | 1,161 | 5.6% |
-| 2019 | 1,136 | 5.5% |
-| 2020 | 1,121 | 5.5% |
-| 2021 | 2,026 | 9.9% |
-| 2022 | 598 | 2.9% |
-| 2023 | 1,390 | 6.8% |
-| 2024 | 1,969 | 9.6% |
-| 2025 | 1,248 | 6.1% |
+| 2018 | 1,471 | 12.0% |
+| 2019 | 1,239 | 10.1% |
+| 2020 | 1,270 | 10.3% |
+| 2021 | 2,453 | 19.9% |
+| 2022 | 713 | 5.8% |
+| 2023 | 1,553 | 12.6% |
+| 2024 | 2,243 | 18.2% |
+| 2025 | 1,359 | 11.0% |
 
 ### Ticker Distribution
 
-- **Unique Tickers:** 1,702
-- **Top 10 Concentration:** 1.4% of samples
+- **Unique Tickers:** 1,712
+- **Top 10 Concentration:** 1.5% of samples
 
 | Ticker | Samples |
 |--------|---------|
-| DECK | 30 |
-| MPWR | 29 |
-| NFLX | 29 |
-| LRCX | 29 |
-| ULTA | 28 |
-| TDG | 28 |
-| ZBRA | 28 |
-| FISV | 27 |
-| FICO | 27 |
-| WAB | 27 |
+| HUBS | 19 |
+| FIVN | 18 |
+| LLY | 18 |
+| AVGO | 18 |
+| MCK | 18 |
+| TKO | 18 |
+| KKR | 18 |
+| NVDA | 18 |
+| CBZ | 17 |
+| RMBS | 17 |
 
 ### Sector Distribution
 
 | Sector | Samples | % |
 |--------|---------|---|
-| Industrials | 3,672 | 17.9% |
-| Technology | 3,506 | 17.1% |
-| Financial Services | 3,166 | 15.4% |
-| Healthcare | 2,829 | 13.8% |
-| Consumer Cyclical | 2,478 | 12.1% |
-| Energy | 1,013 | 4.9% |
-| Real Estate | 961 | 4.7% |
-| Consumer Defensive | 934 | 4.5% |
-| Basic Materials | 859 | 4.2% |
-| Communication Services | 615 | 3.0% |
-| Utilities | 523 | 2.5% |
+| Technology | 2,222 | 18.1% |
+| Industrials | 2,109 | 17.1% |
+| Financial Services | 1,903 | 15.5% |
+| Healthcare | 1,809 | 14.7% |
+| Consumer Cyclical | 1,350 | 11.0% |
+| Energy | 730 | 5.9% |
+| Consumer Defensive | 547 | 4.4% |
+| Real Estate | 492 | 4.0% |
+| Basic Materials | 469 | 3.8% |
+| Communication Services | 385 | 3.1% |
+| Utilities | 285 | 2.3% |
 
 ### Top 15 Industries
 
 | Industry | Samples | % |
 |----------|---------|---|
-| Banks - Regional | 1,167 | 5.7% |
-| Biotechnology | 841 | 4.1% |
-| Semiconductors | 803 | 3.9% |
-| Software - Application | 749 | 3.6% |
-| Industrial - Machinery | 660 | 3.2% |
-| Software - Infrastructure | 543 | 2.6% |
-| Hardware, Equipment & Parts | 483 | 2.3% |
-| Aerospace & Defense | 471 | 2.3% |
-| Chemicals - Specialty | 417 | 2.0% |
-| Asset Management | 414 | 2.0% |
-| Medical - Devices | 411 | 2.0% |
-| Engineering & Construction | 343 | 1.7% |
-| Medical - Instruments & Supplies | 341 | 1.7% |
-| Financial - Capital Markets | 324 | 1.6% |
-| Specialty Retail | 310 | 1.5% |
+| Biotechnology | 679 | 5.5% |
+| Banks - Regional | 596 | 4.8% |
+| Software - Application | 554 | 4.5% |
+| Semiconductors | 445 | 3.6% |
+| Software - Infrastructure | 402 | 3.3% |
+| Industrial - Machinery | 365 | 3.0% |
+| Aerospace & Defense | 292 | 2.4% |
+| Asset Management | 272 | 2.2% |
+| Hardware, Equipment & Parts | 259 | 2.1% |
+| Medical - Devices | 250 | 2.0% |
+| Engineering & Construction | 242 | 2.0% |
+| Financial - Capital Markets | 241 | 2.0% |
+| Oil & Gas Exploration & Production | 220 | 1.8% |
+| Chemicals - Specialty | 204 | 1.7% |
+| Specialty Retail | 187 | 1.5% |
+
+### MFE Analysis (Maximum Favorable Excursion)
+
+*Peak return % during trade (best possible exit)*
+
+| Statistic | Value |
+|-----------|-------|
+| Count | 12,273 |
+| Mean | +13.1% |
+| Std Dev | 25.0% |
+| Min | +0.0% |
+| Max | +1438.2% |
+| Median | +6.0% |
+| > 20% | 18.3% of trades |
+| > 50% | 4.7% of trades |
+
+### MAE Analysis (Maximum Adverse Excursion)
+
+*Largest drawdown % during trade*
+
+| Statistic | Value |
+|-----------|-------|
+| Mean | -6.9% |
+| Median | -5.6% |
+| Min (worst DD) | -78.7% |
+| Max (best case) | +0.0% |
+
+### Regret Analysis (MFE - Actual Return)
+
+*How much return was left on the table*
+
+- **Mean Regret:** +12.0%
+- **Median Regret:** +9.7%
 
 ## Section 1: SEPA Audit (Entry Criteria Validation)
 
@@ -157,95 +182,95 @@
 
 | Decile | Count | Mean | Median | Min | Max | Std | Win% |
 |--------|-------|------|--------|-----|-----|-----|------|
-| D1 | 2,056 | +0.8% | -1.3% | -21.3% | +75.6% | 8.4% | 35% |
-| D2 | 2,056 | +0.8% | -1.6% | -25.9% | +94.3% | 9.2% | 34% |
-| D3 | 2,055 | +1.0% | -1.7% | -23.0% | +302.2% | 11.8% | 35% |
-| D4 | 2,056 | +0.7% | -2.2% | -37.6% | +82.8% | 9.9% | 36% |
-| D5 | 2,055 | +0.9% | -2.4% | -23.5% | +141.3% | 11.7% | 37% |
-| D6 | 2,056 | +1.4% | -2.5% | -31.0% | +293.4% | 15.6% | 38% |
-| D7 | 2,055 | +1.5% | -2.8% | -34.4% | +141.2% | 14.8% | 38% |
-| D8 | 2,056 | +2.0% | -2.9% | -43.5% | +165.3% | 16.2% | 40% |
-| D9 | 2,055 | +1.7% | -3.5% | -62.1% | +279.8% | 18.7% | 38% |
-| D10 | 2,056 | +4.0% | -4.7% | -95.3% | +516.6% | 30.7% | 40% |
+| D1 | 1,230 | +2.6% | +1.5% | -28.0% | +67.5% | 9.9% | 69% |
+| D2 | 1,230 | +2.8% | +1.1% | -25.1% | +302.2% | 14.7% | 60% |
+| D3 | 1,230 | +2.3% | +0.7% | -39.5% | +101.3% | 12.7% | 55% |
+| D4 | 1,230 | +2.2% | +0.3% | -25.6% | +133.6% | 14.9% | 51% |
+| D5 | 1,230 | +2.9% | -2.9% | -34.2% | +104.1% | 15.4% | 50% |
+| D6 | 1,229 | +2.8% | -4.5% | -28.5% | +165.1% | 17.8% | 47% |
+| D7 | 1,230 | +3.6% | -4.8% | -44.2% | +191.7% | 20.1% | 47% |
+| D8 | 1,230 | +5.3% | -5.3% | -34.0% | +196.7% | 24.4% | 48% |
+| D9 | 1,230 | +5.5% | -6.5% | -66.0% | +348.9% | 29.1% | 45% |
+| D10 | 1,230 | +9.1% | -8.7% | -96.3% | +492.4% | 42.2% | 48% |
 
-> **Weak monotonicity:** D10 vs D1 spread of +3.2%
+> **Strong monotonicity:** D10 outperforms D1 by +6.4% (Win%: -21pp)
 
 ### RS_Universe_Rank
 *C9 - RS Percentile (cross-sectional)*
 
 | Decile | Count | Mean | Median | Min | Max | Std | Win% |
 |--------|-------|------|--------|-----|-----|-----|------|
-| D1 | 2,056 | +1.0% | -1.5% | -20.5% | +302.2% | 11.7% | 35% |
-| D2 | 2,232 | +1.2% | -1.5% | -34.4% | +143.0% | 10.6% | 37% |
-| D3 | 1,896 | +0.7% | -1.9% | -25.0% | +121.9% | 10.2% | 35% |
-| D4 | 3,158 | +1.5% | -1.9% | -30.3% | +293.4% | 13.7% | 36% |
-| D5 | 960 | +1.2% | -2.3% | -20.4% | +214.0% | 14.2% | 38% |
-| D6 | 2,113 | +1.1% | -2.4% | -44.1% | +139.5% | 13.8% | 37% |
-| D7 | 2,394 | +1.3% | -3.0% | -62.0% | +165.3% | 15.2% | 38% |
-| D8 | 1,711 | +2.0% | -2.9% | -48.2% | +273.6% | 18.9% | 39% |
-| D9 | 4,036 | +2.4% | -3.0% | -95.3% | +516.6% | 23.2% | 39% |
+| D1 | 1,333 | +3.2% | +1.3% | -25.2% | +302.2% | 14.7% | 64% |
+| D2 | 1,130 | +3.9% | +1.6% | -25.1% | +191.7% | 15.2% | 62% |
+| D3 | 1,346 | +3.5% | +1.0% | -22.2% | +165.1% | 14.8% | 58% |
+| D4 | 1,860 | +3.1% | +0.6% | -39.5% | +148.0% | 17.0% | 53% |
+| D5 | 563 | +3.1% | -4.0% | -34.0% | +196.7% | 18.2% | 48% |
+| D6 | 1,333 | +3.2% | -3.0% | -47.0% | +147.9% | 18.2% | 50% |
+| D7 | 1,128 | +3.3% | -5.4% | -62.6% | +188.9% | 21.4% | 44% |
+| D8 | 1,149 | +3.8% | -5.3% | -75.8% | +242.4% | 23.7% | 46% |
+| D9 | 2,457 | +6.1% | -5.8% | -96.3% | +492.4% | 34.2% | 46% |
 
-> **Weak monotonicity:** D10 vs D1 spread of +1.4%
+> **Weak monotonicity:** D10 vs D1 spread of +2.9%
 
 ### Price_vs_SMA_200
 *C1-C6 - Trend Structure*
 
 | Decile | Count | Mean | Median | Min | Max | Std | Win% |
 |--------|-------|------|--------|-----|-----|-----|------|
-| D1 | 2,056 | +0.5% | -1.2% | -15.2% | +80.1% | 7.2% | 36% |
-| D2 | 2,056 | +0.8% | -1.5% | -18.2% | +94.3% | 8.9% | 35% |
-| D3 | 2,055 | +1.0% | -1.8% | -24.5% | +302.2% | 11.6% | 34% |
-| D4 | 2,056 | +0.7% | -2.2% | -27.5% | +141.3% | 10.7% | 35% |
-| D5 | 2,055 | +0.9% | -2.6% | -37.6% | +121.4% | 11.7% | 36% |
-| D6 | 2,056 | +1.3% | -2.3% | -25.9% | +95.6% | 12.4% | 40% |
-| D7 | 2,055 | +1.6% | -2.6% | -41.6% | +197.0% | 14.4% | 40% |
-| D8 | 2,056 | +1.6% | -3.4% | -27.6% | +293.4% | 18.4% | 37% |
-| D9 | 2,055 | +2.5% | -3.4% | -62.1% | +229.1% | 20.0% | 40% |
-| D10 | 2,056 | +4.0% | -4.6% | -95.3% | +516.6% | 30.5% | 40% |
+| D1 | 1,231 | +2.9% | +1.5% | -24.6% | +101.3% | 9.6% | 71% |
+| D2 | 1,230 | +3.3% | +1.5% | -19.8% | +302.2% | 14.1% | 65% |
+| D3 | 1,230 | +2.3% | +0.9% | -28.5% | +78.5% | 11.8% | 57% |
+| D4 | 1,230 | +2.3% | +0.3% | -39.5% | +125.4% | 14.7% | 51% |
+| D5 | 1,230 | +2.4% | -4.0% | -28.0% | +108.7% | 14.8% | 48% |
+| D6 | 1,230 | +3.6% | -3.9% | -34.0% | +100.1% | 17.6% | 49% |
+| D7 | 1,230 | +3.3% | -5.5% | -28.0% | +348.9% | 22.6% | 45% |
+| D8 | 1,230 | +4.2% | -5.9% | -62.6% | +182.6% | 23.0% | 45% |
+| D9 | 1,230 | +5.9% | -7.4% | -66.0% | +492.4% | 31.0% | 44% |
+| D10 | 1,230 | +9.1% | -9.7% | -96.3% | +457.7% | 41.3% | 46% |
 
-> **Weak monotonicity:** D10 vs D1 spread of +3.5%
+> **Strong monotonicity:** D10 outperforms D1 by +6.2% (Win%: -25pp)
 
 ### Dist_From_52W_Low
 *C7 - Distance from 52W Low*
 
 | Decile | Count | Mean | Median | Min | Max | Std | Win% |
 |--------|-------|------|--------|-----|-----|-----|------|
-| D1 | 2,056 | +0.4% | -1.3% | -10.7% | +69.8% | 6.3% | 26% |
-| D2 | 2,056 | +0.8% | -1.9% | -16.6% | +68.7% | 8.4% | 38% |
-| D3 | 2,055 | +0.6% | -2.1% | -24.5% | +121.9% | 10.2% | 37% |
-| D4 | 2,056 | +0.1% | -2.5% | -31.0% | +70.9% | 9.5% | 36% |
-| D5 | 2,055 | +1.1% | -2.4% | -37.6% | +214.0% | 13.2% | 38% |
-| D6 | 2,056 | +1.2% | -2.6% | -27.1% | +139.5% | 12.9% | 38% |
-| D7 | 2,055 | +1.9% | -2.8% | -27.7% | +197.0% | 16.1% | 39% |
-| D8 | 2,056 | +2.2% | -2.9% | -62.0% | +302.2% | 18.8% | 39% |
-| D9 | 2,055 | +2.6% | -2.9% | -43.5% | +279.8% | 20.1% | 41% |
-| D10 | 2,056 | +3.9% | -4.2% | -95.3% | +516.6% | 29.8% | 41% |
+| D1 | 1,231 | +2.2% | +1.2% | -19.5% | +65.9% | 8.1% | 69% |
+| D2 | 1,230 | +1.3% | +0.7% | -24.6% | +78.5% | 10.4% | 54% |
+| D3 | 1,230 | +1.2% | -2.5% | -34.2% | +125.4% | 13.1% | 50% |
+| D4 | 1,230 | +1.7% | -3.0% | -39.5% | +107.7% | 14.1% | 49% |
+| D5 | 1,230 | +2.0% | -3.8% | -25.9% | +191.7% | 15.4% | 49% |
+| D6 | 1,230 | +4.5% | +0.7% | -27.7% | +189.5% | 20.0% | 52% |
+| D7 | 1,230 | +3.7% | -4.3% | -62.6% | +302.2% | 20.7% | 49% |
+| D8 | 1,230 | +5.1% | -4.8% | -49.4% | +196.7% | 25.0% | 49% |
+| D9 | 1,230 | +7.6% | +0.7% | -66.0% | +348.9% | 30.5% | 51% |
+| D10 | 1,230 | +9.9% | +1.8% | -96.3% | +492.4% | 41.0% | 51% |
 
-> **Weak monotonicity:** D10 vs D1 spread of +3.5%
+> **Strong monotonicity:** D10 outperforms D1 by +7.7% (Win%: -17pp)
 
 ### Vol_Ratio
 *C11 - Volume Confirmation*
 
 | Decile | Count | Mean | Median | Min | Max | Std | Win% |
 |--------|-------|------|--------|-----|-----|-----|------|
-| D1 | 2,056 | +0.7% | -2.3% | -34.2% | +165.3% | 12.1% | 35% |
-| D2 | 2,056 | +1.1% | -2.0% | -41.6% | +197.0% | 13.5% | 36% |
-| D3 | 2,055 | +1.0% | -2.0% | -28.0% | +214.0% | 13.5% | 35% |
-| D4 | 2,056 | +1.5% | -2.1% | -32.6% | +315.3% | 15.6% | 36% |
-| D5 | 2,055 | +1.0% | -2.2% | -31.0% | +150.4% | 13.3% | 35% |
-| D6 | 2,056 | +1.4% | -2.1% | -62.1% | +140.5% | 14.7% | 37% |
-| D7 | 2,055 | +1.4% | -2.3% | -34.4% | +165.6% | 15.3% | 38% |
-| D8 | 2,056 | +2.3% | -2.1% | -36.0% | +334.3% | 21.0% | 38% |
-| D9 | 2,055 | +1.4% | -2.2% | -62.0% | +143.0% | 14.7% | 38% |
-| D10 | 2,056 | +3.1% | -1.6% | -95.3% | +516.6% | 22.7% | 44% |
+| D1 | 1,231 | +5.3% | +1.9% | -45.0% | +169.6% | 18.5% | 60% |
+| D2 | 1,230 | +4.5% | +1.0% | -29.6% | +492.4% | 22.5% | 58% |
+| D3 | 1,230 | +4.8% | +1.4% | -43.4% | +188.9% | 19.4% | 60% |
+| D4 | 1,230 | +5.9% | +1.3% | -34.6% | +236.1% | 22.7% | 57% |
+| D5 | 1,230 | +3.8% | +0.5% | -38.0% | +165.1% | 18.8% | 52% |
+| D6 | 1,230 | +3.6% | +0.6% | -96.3% | +182.6% | 19.6% | 52% |
+| D7 | 1,230 | +4.8% | +0.7% | -32.9% | +242.4% | 23.9% | 52% |
+| D8 | 1,230 | +4.5% | +0.2% | -44.2% | +457.7% | 27.5% | 50% |
+| D9 | 1,230 | +1.2% | -5.8% | -62.6% | +211.8% | 21.0% | 41% |
+| D10 | 1,230 | +1.0% | -7.4% | -95.3% | +244.0% | 25.7% | 39% |
 
-> **Weak monotonicity:** D10 vs D1 spread of +2.4%
+> **⚠️ Inverted:** D1 outperforms D10 by +4.3%
 
 ## Executive Summary
 
-- **Total candidates:** 207
-- **Final passed:** 70
-- **Regime-conditional features:** 162 (flagged for monitoring)
+- **Total candidates:** 245
+- **Final passed:** 71
+- **Regime-conditional features:** 139 (flagged for monitoring)
 
 ## Section 2: Feature Leaderboard
 
@@ -253,331 +278,330 @@
 
 | Rank | Feature | Composite | IC (Norm) | Stability | KS | Signal Type |
 |------|---------|-----------|-----------|-----------|-----|-------------|
-| 1 | `alpha011` | 0.837 | 0.759 | 1.000 | 0.778 | linear_pos |
-| 2 | `rs_rating` | 0.806 | 0.977 | 0.607 | 0.778 | linear_pos |
-| 3 | `Price_vs_SMA_200` | 0.798 | 1.000 | 0.550 | 0.778 | linear_pos |
-| 4 | `log_nATR_Lag1` | 0.726 | 0.925 | 0.409 | 0.778 | linear_pos |
-| 5 | `alpha013` | 0.702 | 0.729 | 0.701 | 0.667 | linear_pos |
-| 6 | `mom_63d` | 0.566 | 0.664 | 0.447 | 0.556 | kinked |
-| 7 | `RS_Universe_Rank` | 0.525 | 0.733 | 0.774 | 0.000 | unknown |
-| 8 | `m03_pillar_risk` | 0.471 | 0.353 | 0.433 | 0.667 | linear_neg |
-| 9 | `log_Price_vs_SMA_50_Lag1` | 0.462 | 0.513 | 0.299 | 0.556 | kinked |
-| 10 | `operating_margin` | 0.447 | 0.400 | 0.402 | 0.556 | kinked |
-| 11 | `alpha060` | 0.435 | 0.398 | 0.364 | 0.556 | kinked |
-| 12 | `alpha012` | 0.424 | 0.352 | 0.276 | 0.667 | linear_pos |
-| 13 | `m03_pillar_trend` | 0.423 | 0.375 | 0.243 | 0.667 | linear_pos |
-| 14 | `eps_stability_score` | 0.421 | 0.392 | 0.323 | 0.556 | kinked |
-| 15 | `current_ratio` | 0.420 | 0.353 | 0.376 | 0.556 | kinked |
-| 16 | `Highest_High_20D_Delta` | 0.410 | 0.436 | 0.231 | 0.556 | kinked |
-| 17 | `debt_to_equity` | 0.393 | 0.268 | 0.397 | 0.556 | kinked |
-| 18 | `roa` | 0.391 | 0.266 | 0.283 | 0.667 | linear_neg |
-| 19 | `nATR_Delta` | 0.388 | 0.302 | 0.223 | 0.667 | linear_neg |
-| 20 | `alpha001` | 0.381 | 0.283 | 0.336 | 0.556 | kinked |
-| 21 | `fcf_margin` | 0.378 | 0.257 | 0.361 | 0.556 | kinked |
-| 22 | `roe` | 0.372 | 0.270 | 0.323 | 0.556 | kinked |
-| 23 | `alpha101` | 0.372 | 0.245 | 0.357 | 0.556 | kinked |
-| 24 | `days_since_report` | 0.369 | 0.227 | 0.151 | 0.778 | linear_neg |
-| 25 | `alpha054` | 0.367 | 0.211 | 0.164 | 0.778 | linear_pos |
-| 26 | `ps_ratio` | 0.367 | 0.236 | 0.242 | 0.667 | linear_neg |
-| 27 | `m03_pillar_liq` | 0.337 | 0.272 | 0.095 | 0.667 | linear_pos |
-| 28 | `price_momentum_curve` | 0.332 | 0.203 | 0.171 | 0.667 | linear_neg |
-| 29 | `earnings_quality_score` | 0.331 | 0.159 | 0.223 | 0.667 | linear_pos |
-| 30 | `pb_ratio` | 0.326 | 0.185 | 0.174 | 0.667 | linear_neg |
+| 1 | `breakout_momentum` | 0.879 | 1.000 | 0.818 | 0.778 | linear_neg |
+| 2 | `VCP_Ratio_Delta` | 0.838 | 0.913 | 0.798 | 0.778 | linear_neg |
+| 3 | `price_momentum_curve` | 0.709 | 0.622 | 0.756 | 0.778 | linear_neg |
+| 4 | `rs_line_delta` | 0.705 | 0.907 | 0.584 | 0.556 | kinked |
+| 5 | `Dist_From_20D_Low_Delta` | 0.611 | 0.746 | 0.374 | 0.667 | linear_neg |
+| 6 | `Dry_Up_Volume_Delta` | 0.609 | 0.674 | 0.465 | 0.667 | linear_neg |
+| 7 | `alpha013` | 0.602 | 0.571 | 0.466 | 0.778 | linear_pos |
+| 8 | `Price_vs_SMA_50` | 0.595 | 0.894 | 0.234 | 0.556 | kinked |
+| 9 | `RS_Delta` | 0.588 | 0.692 | 0.369 | 0.667 | linear_neg |
+| 10 | `Dist_From_52W_High_Delta` | 0.573 | 0.683 | 1.000 | 0.000 | unknown |
+| 11 | `alpha101` | 0.563 | 0.684 | 0.407 | 0.556 | kinked |
+| 12 | `alpha060` | 0.555 | 0.637 | 0.446 | 0.556 | kinked |
+| 13 | `Price_vs_SMA_200_Delta` | 0.549 | 0.661 | 0.280 | 0.667 | linear_neg |
+| 14 | `log_volume_velocity` | 0.545 | 0.589 | 0.365 | 0.667 | linear_neg |
+| 15 | `Price_vs_SMA_150` | 0.526 | 0.738 | 0.212 | 0.556 | kinked |
+| 16 | `Price_vs_SMA_150_Delta` | 0.502 | 0.576 | 0.239 | 0.667 | linear_neg |
+| 17 | `RSI_14` | 0.483 | 0.503 | 0.384 | 0.556 | kinked |
+| 18 | `mom_63d` | 0.470 | 0.589 | 0.228 | 0.556 | kinked |
+| 19 | `alpha009` | 0.470 | 0.358 | 0.312 | 0.778 | linear_pos |
+| 20 | `rs_velocity` | 0.470 | 0.590 | 0.223 | 0.556 | kinked |
+| 21 | `industry_id_encoded` | 0.437 | 0.228 | 0.151 | 1.000 | linear_pos |
+| 22 | `Dist_From_20D_High_Delta` | 0.437 | 0.347 | 0.215 | 0.778 | linear_pos |
+| 23 | `VCP_Ratio` | 0.433 | 0.431 | 0.202 | 0.667 | linear_neg |
+| 24 | `price_vs_spy_ma63` | 0.396 | 0.210 | 0.151 | 0.889 | linear_neg |
+| 25 | `Dry_Up_Volume` | 0.380 | 0.294 | 0.208 | 0.667 | linear_neg |
+| 26 | `alpha011` | 0.380 | 0.192 | 0.120 | 0.889 | linear_pos |
+| 27 | `m03_pillar_risk` | 0.373 | 0.308 | 0.054 | 0.778 | linear_neg |
+| 28 | `RS_Universe_Rank` | 0.371 | 0.578 | 0.465 | 0.000 | unknown |
+| 29 | `alpha054` | 0.355 | 0.261 | 0.169 | 0.667 | linear_pos |
+| 30 | `operating_margin` | 0.354 | 0.246 | 0.186 | 0.667 | linear_neg |
 
 ## Section 3: Monotonicity Deep Dive
 
-### alpha041
-- **Signal Type:** linear_neg
-- **D1 Mean Return:** +5.46%
-- **D10 Mean Return:** +0.14%
-- **Decile Returns:**
-  ```
-  D 1:  +5.46% |++++++++++++++++++++
-  D 2:  +2.33% |++++++++
-  D 3:  +1.62% |+++++
-  D 4:  +1.18% |++++
-  D 5:  +1.49% |+++++
-  D 6:  +0.71% |++
-  D 7:  +0.88% |+++
-  D 8:  +0.80% |++
-  D 9:  +0.32% |+
-  D10:  +0.14% |
-  ```
-
-### alpha054
-- **Signal Type:** linear_pos
-- **D1 Mean Return:** +0.36%
-- **D10 Mean Return:** +2.84%
-- **Decile Returns:**
-  ```
-  D 1:  +0.36% |++
-  D 2:  +0.78% |+++++
-  D 3:  +0.74% |+++++
-  D 4:  +1.74% |++++++++++++
-  D 5:  +1.22% |++++++++
-  D 6:  +1.41% |+++++++++
-  D 7:  +1.74% |++++++++++++
-  D 8:  +2.00% |++++++++++++++
-  D 9:  +2.11% |++++++++++++++
-  D10:  +2.84% |++++++++++++++++++++
-  ```
-
-### Price_vs_SMA_200
-- **Signal Type:** linear_pos
-- **D1 Mean Return:** +0.51%
-- **D10 Mean Return:** +4.03%
-- **Decile Returns:**
-  ```
-  D 1:  +0.51% |++
-  D 2:  +0.83% |++++
-  D 3:  +1.00% |++++
-  D 4:  +0.67% |+++
-  D 5:  +0.87% |++++
-  D 6:  +1.32% |++++++
-  D 7:  +1.63% |++++++++
-  D 8:  +1.59% |+++++++
-  D 9:  +2.48% |++++++++++++
-  D10:  +4.03% |++++++++++++++++++++
-  ```
-
-### rs_rating
-- **Signal Type:** linear_pos
-- **D1 Mean Return:** +0.83%
-- **D10 Mean Return:** +4.03%
-- **Decile Returns:**
-  ```
-  D 1:  +0.83% |++++
-  D 2:  +0.84% |++++
-  D 3:  +1.03% |+++++
-  D 4:  +0.68% |+++
-  D 5:  +0.86% |++++
-  D 6:  +1.42% |+++++++
-  D 7:  +1.54% |+++++++
-  D 8:  +2.04% |++++++++++
-  D 9:  +1.67% |++++++++
-  D10:  +4.03% |++++++++++++++++++++
-  ```
-
-### m03_delta_20d
-- **Signal Type:** linear_neg
-- **D1 Mean Return:** +1.41%
-- **D10 Mean Return:** +1.28%
-- **Decile Returns:**
-  ```
-  D 1:  +1.41% |++++++++
-  D 2:  +1.31% |++++++++
-  D 3:  +0.86% |+++++
-  D 4:  +3.18% |++++++++++++++++++++
-  D 5:  +1.97% |++++++++++++
-  D 6:  +1.72% |++++++++++
-  D 7:  +1.46% |+++++++++
-  D 8:  +1.26% |+++++++
-  D 9:  +1.47% |+++++++++
-  D10:  +1.28% |++++++++
-  ```
-
-### log_nATR_Lag1
-- **Signal Type:** linear_pos
-- **D1 Mean Return:** +0.43%
-- **D10 Mean Return:** +3.90%
-- **Decile Returns:**
-  ```
-  D 1:  +0.43% |++
-  D 2:  +0.15% |
-  D 3:  +1.00% |+++++
-  D 4:  +1.16% |+++++
-  D 5:  +0.67% |+++
-  D 6:  +1.04% |+++++
-  D 7:  +1.67% |++++++++
-  D 8:  +2.10% |++++++++++
-  D 9:  +2.82% |++++++++++++++
-  D10:  +3.90% |++++++++++++++++++++
-  ```
-
-### pe_ratio
-- **Signal Type:** linear_neg
-- **D1 Mean Return:** +2.90%
-- **D10 Mean Return:** +0.76%
-- **Decile Returns:**
-  ```
-  D 1:  +2.90% |+++++++++++++++++
-  D 2:  +3.31% |++++++++++++++++++++
-  D 3:  +2.13% |++++++++++++
-  D 4:  +1.23% |+++++++
-  D 5:  +1.12% |++++++
-  D 6:  +1.04% |++++++
-  D 7:  +0.97% |+++++
-  D 8:  +0.89% |+++++
-  D 9:  +0.61% |+++
-  D10:  +0.76% |++++
-  ```
-
 ### alpha011
 - **Signal Type:** linear_pos
-- **D1 Mean Return:** -2.02%
-- **D10 Mean Return:** +5.35%
+- **D1 Mean Return:** -1.00%
+- **D10 Mean Return:** +10.21%
 - **Decile Returns:**
   ```
-  D 1:  -2.02% |-------
-  D 2:  +0.36% |+
-  D 3:  +0.69% |++
-  D 4:  +1.14% |++++
-  D 5:  +1.54% |+++++
-  D 6:  +1.06% |+++
-  D 7:  +1.90% |+++++++
-  D 8:  +1.69% |++++++
-  D 9:  +3.22% |++++++++++++
-  D10:  +5.35% |++++++++++++++++++++
+  D 1:  -1.00% |-
+  D 2:  +2.66% |+++++
+  D 3:  +2.90% |+++++
+  D 4:  +3.42% |++++++
+  D 5:  +3.97% |+++++++
+  D 6:  +3.43% |++++++
+  D 7:  +4.27% |++++++++
+  D 8:  +4.66% |+++++++++
+  D 9:  +4.71% |+++++++++
+  D10: +10.21% |++++++++++++++++++++
   ```
-  > **M02 Warning:** D1 has negative avg return (-2.02%)
 
-### days_since_report
+### price_vs_spy_ma63
 - **Signal Type:** linear_neg
-- **D1 Mean Return:** +2.22%
-- **D10 Mean Return:** +0.95%
+- **D1 Mean Return:** +8.10%
+- **D10 Mean Return:** +2.33%
 - **Decile Returns:**
   ```
-  D 1:  +2.22% |++++++++++++++++++
-  D 2:  +2.12% |+++++++++++++++++
-  D 3:  +1.24% |++++++++++
-  D 4:  +2.36% |++++++++++++++++++++
-  D 5:  +1.41% |+++++++++++
-  D 6:  +1.13% |+++++++++
-  D 7:  +1.41% |+++++++++++
-  D 8:  +1.03% |++++++++
-  D 9:  +0.96% |++++++++
-  D10:  +0.95% |++++++++
+  D 1:  +8.10% |++++++++++++++++++++
+  D 2:  +4.71% |+++++++++++
+  D 3:  +4.68% |+++++++++++
+  D 4:  +4.67% |+++++++++++
+  D 5:  +3.64% |++++++++
+  D 6:  +3.46% |++++++++
+  D 7:  +3.17% |+++++++
+  D 8:  +2.10% |+++++
+  D 9:  +2.35% |+++++
+  D10:  +2.33% |+++++
   ```
 
-### Price_vs_SMA_200_Delta
-- **Signal Type:** linear_pos
-- **D1 Mean Return:** +1.57%
-- **D10 Mean Return:** +2.53%
+### roa
+- **Signal Type:** linear_neg
+- **D1 Mean Return:** +7.54%
+- **D10 Mean Return:** +3.93%
 - **Decile Returns:**
   ```
-  D 1:  +1.57% |++++++++++++
-  D 2:  +1.30% |++++++++++
-  D 3:  +0.97% |+++++++
-  D 4:  +1.07% |++++++++
-  D 5:  +1.26% |+++++++++
-  D 6:  +0.60% |++++
-  D 7:  +1.63% |++++++++++++
-  D 8:  +1.96% |+++++++++++++++
-  D 9:  +2.07% |++++++++++++++++
-  D10:  +2.53% |++++++++++++++++++++
+  D 1:  +7.54% |++++++++++++++++++++
+  D 2:  +5.98% |+++++++++++++++
+  D 3:  +3.46% |+++++++++
+  D 4:  +3.05% |++++++++
+  D 5:  +2.55% |++++++
+  D 6:  +3.37% |++++++++
+  D 7:  +3.31% |++++++++
+  D 8:  +3.02% |++++++++
+  D 9:  +2.91% |+++++++
+  D10:  +3.93% |++++++++++
+  ```
+
+### alpha013
+- **Signal Type:** linear_pos
+- **D1 Mean Return:** +0.30%
+- **D10 Mean Return:** +7.30%
+- **Decile Returns:**
+  ```
+  D 1:  +0.30% |
+  D 2:  +1.37% |+++
+  D 3:  +2.97% |++++++++
+  D 4:  +3.96% |++++++++++
+  D 5:  +3.44% |+++++++++
+  D 6:  +4.36% |+++++++++++
+  D 7:  +4.69% |++++++++++++
+  D 8:  +4.33% |+++++++++++
+  D 9:  +6.51% |+++++++++++++++++
+  D10:  +7.30% |++++++++++++++++++++
+  ```
+
+### m03_pillar_risk
+- **Signal Type:** linear_neg
+- **D1 Mean Return:** +7.42%
+- **D10 Mean Return:** +1.06%
+- **Decile Returns:**
+  ```
+  D 1:  +7.42% |++++++++++++++++++++
+  D 2:  +6.32% |+++++++++++++++++
+  D 3:  +5.93% |+++++++++++++++
+  D 4:  +4.43% |+++++++++++
+  D 5:  +2.92% |+++++++
+  D 6:  +2.87% |+++++++
+  D 7:  +3.19% |++++++++
+  D 8:  +3.38% |+++++++++
+  D 9:  +2.46% |++++++
+  D10:  +1.06% |++
+  ```
+
+### log_Price_vs_SMA_50_Lag1
+- **Signal Type:** linear_pos
+- **D1 Mean Return:** +2.11%
+- **D10 Mean Return:** +10.52%
+- **Decile Returns:**
+  ```
+  D 1:  +2.11% |++++
+  D 2:  +3.04% |+++++
+  D 3:  +2.08% |+++
+  D 4:  +2.24% |++++
+  D 5:  +3.61% |++++++
+  D 6:  +3.88% |+++++++
+  D 7:  +3.52% |++++++
+  D 8:  +3.90% |+++++++
+  D 9:  +4.33% |++++++++
+  D10: +10.52% |++++++++++++++++++++
+  ```
+
+### gross_margin
+- **Signal Type:** linear_neg
+- **D1 Mean Return:** +4.76%
+- **D10 Mean Return:** +2.73%
+- **Decile Returns:**
+  ```
+  D 1:  +4.76% |++++++++++++++++++++
+  D 2:  +3.65% |+++++++++++++++
+  D 3:  +3.17% |+++++++++++++
+  D 4:  +4.24% |+++++++++++++++++
+  D 5:  +3.77% |+++++++++++++++
+  D 6:  +3.72% |+++++++++++++++
+  D 7:  +3.53% |++++++++++++++
+  D 8:  +3.53% |++++++++++++++
+  D 9:  +4.58% |+++++++++++++++++++
+  D10:  +2.73% |+++++++++++
+  ```
+
+### Dist_From_20D_High_Delta
+- **Signal Type:** linear_pos
+- **D1 Mean Return:** +1.82%
+- **D10 Mean Return:** +5.81%
+- **Decile Returns:**
+  ```
+  D 1:  +1.82% |++++++
+  D 2:  +2.41% |++++++++
+  D 3:  +3.41% |+++++++++++
+  D 4:  +3.49% |++++++++++++
+  D 5:  +3.40% |+++++++++++
+  D 6:  +5.12% |+++++++++++++++++
+  D 7:  +3.51% |++++++++++++
+  D 8:  +4.52% |+++++++++++++++
+  D 9:  +5.57% |+++++++++++++++++++
+  D10:  +5.81% |++++++++++++++++++++
+  ```
+
+### breakout_momentum
+- **Signal Type:** linear_neg
+- **D1 Mean Return:** +6.71%
+- **D10 Mean Return:** -3.82%
+- **Decile Returns:**
+  ```
+  D 1:  +6.71% |++++++++++++++++++++
+  D 2:  +5.08% |+++++++++++++++
+  D 3:  +5.74% |+++++++++++++++++
+  D 4:  +5.42% |++++++++++++++++
+  D 5:  +5.09% |+++++++++++++++
+  D 6:  +5.31% |+++++++++++++++
+  D 7:  +4.28% |++++++++++++
+  D 8:  +4.11% |++++++++++++
+  D 9:  +1.31% |+++
+  D10:  -3.82% |-----------
+  ```
+
+### price_momentum_curve
+- **Signal Type:** linear_neg
+- **D1 Mean Return:** +6.01%
+- **D10 Mean Return:** +0.19%
+- **Decile Returns:**
+  ```
+  D 1:  +6.01% |+++++++++++++++++++
+  D 2:  +6.29% |++++++++++++++++++++
+  D 3:  +5.49% |+++++++++++++++++
+  D 4:  +5.10% |++++++++++++++++
+  D 5:  +5.09% |++++++++++++++++
+  D 6:  +3.91% |++++++++++++
+  D 7:  +3.22% |++++++++++
+  D 8:  +1.68% |+++++
+  D 9:  +2.24% |+++++++
+  D10:  +0.19% |
   ```
 
 ## Section 4: Stability Analysis (Per-Year IC)
 
-| Feature | IC_2010 | IC_2011 | IC_2012 | IC_2013 | IC_2014 | IC_2015 | IC_2016 | IC_2017 | IC_2018 | IC_2019 | IC_2020 | IC_2021 | IC_2022 | IC_2023 | IC_2024 | IC_2025 | Stability | Regime? |
-|---------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
-| `alpha011` | 0.108 | 0.063 | 0.010 | 0.092 | 0.013 | 0.088 | 0.091 | 0.110 | 0.049 | 0.100 | 0.112 | 0.104 | 0.058 | 0.047 | 0.118 | 0.073 | 2.33 | No |
-| `alpha013` | 0.132 | 0.094 | 0.136 | 0.155 | 0.107 | 0.097 | -0.063 | 0.193 | 0.066 | 0.088 | 0.077 | 0.003 | 0.092 | 0.114 | 0.100 | 0.088 | 1.63 | Yes |
-| `operating_margin` | 0.005 | 0.058 | 0.063 | 0.006 | 0.090 | 0.068 | 0.119 | 0.039 | 0.061 | 0.089 | -0.063 | 0.135 | -0.044 | 0.061 | 0.036 | 0.041 | 0.94 | Yes |
-| `debt_to_equity` | 0.001 | 0.038 | 0.092 | -0.010 | 0.032 | 0.029 | 0.032 | 0.039 | -0.021 | 0.042 | -0.038 | 0.024 | 0.056 | 0.048 | 0.071 | 0.093 | 0.92 | Yes |
-| `alpha060` | 0.030 | 0.071 | -0.036 | 0.014 | 0.089 | 0.059 | 0.010 | 0.011 | 0.071 | -0.034 | -0.006 | 0.034 | 0.171 | 0.068 | 0.050 | 0.074 | 0.85 | Yes |
-| `fcf_margin` | 0.044 | 0.031 | 0.057 | 0.016 | 0.020 | 0.056 | 0.053 | 0.074 | 0.040 | 0.060 | -0.020 | 0.095 | -0.034 | 0.045 | 0.045 | -0.058 | 0.84 | Yes |
-| `roe` | 0.077 | 0.005 | 0.024 | 0.001 | 0.101 | 0.030 | 0.020 | 0.078 | 0.071 | 0.041 | -0.084 | 0.089 | 0.016 | 0.037 | 0.069 | -0.020 | 0.75 | Yes |
-| `alpha015` | 0.029 | 0.025 | 0.030 | 0.047 | -0.003 | 0.016 | -0.042 | 0.042 | 0.048 | -0.001 | -0.004 | -0.022 | 0.054 | 0.030 | -0.001 | 0.056 | 0.68 | Yes |
-| `roa` | 0.069 | 0.052 | 0.030 | -0.008 | 0.136 | 0.026 | -0.058 | 0.094 | 0.086 | 0.038 | -0.053 | 0.075 | -0.016 | 0.071 | 0.058 | -0.031 | 0.66 | Yes |
-| `alpha012` | 0.099 | 0.040 | 0.037 | 0.004 | 0.042 | 0.034 | -0.046 | 0.040 | 0.003 | -0.026 | -0.004 | 0.072 | 0.116 | -0.045 | 0.044 | 0.051 | 0.64 | Yes |
-| `earnings_quality_score` | -0.024 | 0.020 | 0.014 | -0.015 | 0.047 | 0.043 | 0.018 | -0.013 | 0.025 | 0.041 | -0.036 | 0.044 | -0.010 | 0.050 | 0.029 | -0.006 | 0.52 | Yes |
-| `nATR_Delta` | -0.018 | 0.039 | 0.033 | 0.055 | -0.017 | 0.051 | 0.178 | 0.007 | 0.099 | -0.011 | -0.110 | 0.030 | 0.083 | 0.087 | -0.002 | 0.010 | 0.52 | Yes |
-| `log_Dry_Up_Volume_Lag1` | 0.016 | 0.046 | 0.022 | 0.095 | 0.058 | 0.103 | -0.024 | 0.003 | 0.044 | -0.016 | -0.027 | -0.006 | 0.078 | -0.007 | 0.001 | -0.044 | 0.49 | Yes |
-| `peg_adjusted` | -0.001 | 0.095 | 0.010 | 0.020 | 0.011 | 0.018 | 0.040 | -0.015 | 0.003 | 0.109 | -0.094 | 0.072 | 0.021 | 0.082 | 0.012 | -0.017 | 0.48 | Yes |
-| `Dist_From_20D_High_Delta` | 0.028 | 0.035 | -0.009 | 0.037 | 0.044 | -0.032 | 0.015 | -0.022 | 0.003 | -0.020 | -0.001 | 0.010 | -0.006 | -0.018 | 0.043 | 0.056 | 0.39 | Yes |
+| Feature | IC_2018 | IC_2019 | IC_2020 | IC_2021 | IC_2022 | IC_2023 | IC_2024 | IC_2025 | Stability | Regime? |
+|---------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
+| `Dist_From_52W_High_Delta` | 0.167 | 0.144 | 0.154 | 0.123 | 0.133 | 0.118 | 0.130 | 0.164 | 8.10 | No |
+| `alpha013` | 0.135 | 0.135 | 0.124 | 0.107 | 0.044 | 0.155 | 0.147 | 0.132 | 3.78 | No |
+| `alpha060` | 0.158 | 0.069 | 0.141 | 0.084 | 0.153 | 0.089 | 0.147 | 0.152 | 3.61 | No |
+| `alpha009` | 0.125 | 0.076 | 0.057 | 0.084 | 0.047 | 0.032 | 0.056 | 0.061 | 2.53 | No |
+| `alpha046` | 0.058 | 0.053 | 0.031 | 0.066 | 0.055 | 0.024 | 0.025 | 0.088 | 2.40 | No |
+| `log_turnover_ma20` | 0.038 | 0.073 | 0.014 | 0.028 | 0.094 | 0.090 | 0.103 | 0.051 | 1.96 | Yes |
+| `turnover_ma20` | 0.037 | 0.073 | 0.014 | 0.028 | 0.094 | 0.090 | 0.103 | 0.051 | 1.96 | Yes |
+| `Dist_From_20D_High_Delta` | 0.071 | 0.029 | 0.111 | 0.018 | 0.022 | 0.053 | 0.115 | 0.089 | 1.74 | Yes |
+| `alpha015` | 0.040 | -0.004 | 0.035 | 0.039 | 0.040 | 0.017 | 0.012 | 0.047 | 1.71 | Yes |
+| `operating_margin` | 0.089 | 0.082 | -0.016 | 0.058 | 0.040 | 0.039 | 0.027 | 0.080 | 1.51 | Yes |
+| `alpha006` | 0.020 | -0.004 | 0.015 | 0.045 | 0.065 | 0.051 | 0.106 | 0.041 | 1.35 | Yes |
+| `industry_id_encoded` | 0.010 | 0.035 | 0.130 | 0.062 | 0.059 | -0.002 | 0.049 | 0.029 | 1.23 | Yes |
+| `price_vs_spy_ma63` | 0.034 | 0.018 | -0.015 | 0.005 | 0.058 | 0.047 | 0.072 | 0.067 | 1.22 | Yes |
+| `roa` | 0.054 | 0.013 | -0.020 | 0.036 | 0.039 | 0.028 | 0.034 | 0.014 | 1.17 | Yes |
+| `fcf_margin` | 0.048 | 0.026 | 0.000 | 0.060 | 0.022 | -0.008 | 0.032 | 0.004 | 1.04 | Yes |
 
 ### Regime-Conditional Features (High IC Variance)
 
 These features have inconsistent IC across years. Monitor closely:
 
-- `alpha013`
-- `operating_margin`
-- `debt_to_equity`
-- `alpha060`
-- `fcf_margin`
-- `roe`
+- `log_turnover_ma20`
+- `turnover_ma20`
+- `Dist_From_20D_High_Delta`
 - `alpha015`
+- `operating_margin`
+- `alpha006`
+- `industry_id_encoded`
+- `price_vs_spy_ma63`
 - `roa`
-- `alpha012`
-- `earnings_quality_score`
+- `fcf_margin`
 
 ## Section 5: Correlation Clusters
 
-### Cluster 45
-- **Members:** `Price_vs_SMA_50`, `mom_21d`, `nATR`, `Consolidation_Width`, `Dist_From_20D_Low`, `log_Price_vs_SMA_50`, `log_nATR`, `log_Consolidation_Width`, `log_Dist_From_20D_Low`, `log_nATR_Lag1`, `log_Consolidation_Width_Lag1`, `log_Dist_From_20D_Low_Lag1`
-- **Keep:** `log_nATR_Lag1` (highest weighted score (IC=0.090, Stab=0.95))
-- **Drop:** `log_Consolidation_Width_Lag1`, `nATR`, `log_nATR`, `Dist_From_20D_Low`, `log_Dist_From_20D_Low`, `log_Dist_From_20D_Low_Lag1`, `Consolidation_Width`, `log_Consolidation_Width`, `Price_vs_SMA_50`, `log_Price_vs_SMA_50`, `mom_21d`
+### Cluster 67
+- **Members:** `Price_vs_SMA_50`, `mom_21d`, `nATR`, `Consolidation_Width`, `Dist_From_20D_Low`, `log_Price_vs_SMA_50`, `log_mom_21d`, `log_nATR`, `log_Consolidation_Width`, `log_Dist_From_20D_Low`, `log_nATR_Lag1`, `log_Consolidation_Width_Lag1`, `log_Dist_From_20D_Low_Lag1`, `structural_stop`
+- **Keep:** `Price_vs_SMA_50` (highest weighted score (IC=0.180, Stab=1.90))
+- **Drop:** `log_Price_vs_SMA_50`, `mom_21d`, `log_mom_21d`, `Dist_From_20D_Low`, `log_Dist_From_20D_Low`, `Consolidation_Width`, `log_Consolidation_Width`, `nATR`, `log_nATR`, `structural_stop`, `log_Consolidation_Width_Lag1`, `log_nATR_Lag1`, `log_Dist_From_20D_Low_Lag1`
 
-### Cluster 46
-- **Members:** `Price_vs_SMA_150`, `Price_vs_SMA_200`, `mom_126d`, `log_Price_vs_SMA_150`, `log_Price_vs_SMA_200`, `log_Price_vs_SMA_150_Lag1`, `log_Price_vs_SMA_200_Lag1`
-- **Keep:** `Price_vs_SMA_200` (highest weighted score (IC=0.116, Stab=1.28))
-- **Drop:** `log_Price_vs_SMA_200`, `log_Price_vs_SMA_200_Lag1`, `Price_vs_SMA_150`, `log_Price_vs_SMA_150`, `mom_126d`, `log_Price_vs_SMA_150_Lag1`
+### Cluster 68
+- **Members:** `Price_vs_SMA_150`, `Price_vs_SMA_200`, `rs_rating`, `RS`, `mom_126d`, `mom_189d`, `mom_252d`, `Dist_From_52W_Low`, `Sector_Momentum`, `Industry_Momentum`, `log_Price_vs_SMA_150`, `log_Price_vs_SMA_200`, `log_rs_rating`, `log_RS`, `log_RS_MA`, `log_mom_126d`, `log_mom_189d`, `log_mom_252d`, `log_Dist_From_52W_Low`, `log_Price_vs_SMA_150_Lag1`, `log_Price_vs_SMA_200_Lag1`, `log_RS_Lag1`, `log_RS_MA_Lag1`, `log_Dist_From_52W_Low_Lag1`, `log_Sector_Momentum`, `log_Industry_Momentum`
+- **Keep:** `Price_vs_SMA_150` (highest weighted score (IC=0.155, Stab=1.72))
+- **Drop:** `log_Price_vs_SMA_150`, `Price_vs_SMA_200`, `log_Price_vs_SMA_200`, `rs_rating`, `RS`, `log_rs_rating`, `log_RS`, `mom_189d`, `log_mom_189d`, `Industry_Momentum`, `log_Industry_Momentum`, `mom_126d`, `log_mom_126d`, `log_Dist_From_52W_Low`, `Dist_From_52W_Low`, `Sector_Momentum`, `log_Sector_Momentum`, `log_Price_vs_SMA_200_Lag1`, `log_Price_vs_SMA_150_Lag1`, `mom_252d`, `log_mom_252d`, `log_RS_Lag1`, `log_Dist_From_52W_Low_Lag1`, `log_RS_MA`, `log_RS_MA_Lag1`
 
-### Cluster 69
+### Cluster 41
 - **Members:** `Vol_Ratio`, `Dry_Up_Volume_Delta`, `log_Vol_Ratio`, `log_Dry_Up_Volume_Delta`
-- **Keep:** `Dry_Up_Volume_Delta` (highest weighted score (IC=0.008, Stab=0.20))
+- **Keep:** `Dry_Up_Volume_Delta` (highest weighted score (IC=0.130, Stab=3.77))
 - **Drop:** `log_Dry_Up_Volume_Delta`, `Vol_Ratio`, `log_Vol_Ratio`
 
-### Cluster 47
-- **Members:** `rs_rating`, `mom_189d`, `mom_252d`, `Dist_From_52W_Low`, `Sector_Momentum`, `Industry_Momentum`, `log_Dist_From_52W_Low`, `log_Dist_From_52W_Low_Lag1`
-- **Keep:** `rs_rating` (highest weighted score (IC=0.116, Stab=1.42))
-- **Drop:** `log_Dist_From_52W_Low_Lag1`, `log_Dist_From_52W_Low`, `Dist_From_52W_Low`, `Industry_Momentum`, `mom_189d`, `Sector_Momentum`, `mom_252d`
+### Cluster 49
+- **Members:** `price_vs_spy`, `price_vs_spy_ma63`, `rs_line_log`, `alpha041`
+- **Keep:** `price_vs_spy_ma63` (highest weighted score (IC=0.036, Stab=1.22))
+- **Drop:** `alpha041`, `rs_line_log`, `price_vs_spy`
 
-### Cluster 44
-- **Members:** `mom_63d`, `SMA_50_Slope`
-- **Keep:** `mom_63d` (highest weighted score (IC=0.068, Stab=1.04))
-- **Drop:** `SMA_50_Slope`
+### Cluster 42
+- **Members:** `rs_line_delta`, `High_52W_Delta`, `Highest_High_20D_Delta`, `Dist_From_52W_Low_Delta`, `log_High_52W_Delta`, `log_Highest_High_20D_Delta`, `log_Dist_From_52W_Low_Delta`
+- **Keep:** `rs_line_delta` (highest weighted score (IC=0.174, Stab=4.73))
+- **Drop:** `High_52W_Delta`, `log_High_52W_Delta`, `Dist_From_52W_Low_Delta`, `log_Dist_From_52W_Low_Delta`, `Highest_High_20D_Delta`, `log_Highest_High_20D_Delta`
 
-### Cluster 20
-- **Members:** `turnover`, `vol_ma20`, `vol_ma50`, `log_Volume`, `log_Vol_MA`
-- **Keep:** `turnover` (highest weighted score (IC=0.017, Stab=0.35))
-- **Drop:** `vol_ma20`, `log_Volume`, `vol_ma50`, `log_Vol_MA`
+### Cluster 66
+- **Members:** `mom_63d`, `SMA_50_Slope`, `log_mom_63d`
+- **Keep:** `mom_63d` (highest weighted score (IC=0.118, Stab=1.85))
+- **Drop:** `log_mom_63d`, `SMA_50_Slope`
 
-### Cluster 60
+### Cluster 11
+- **Members:** `turnover`, `turnover_ma20`
+- **Keep:** `turnover_ma20` (highest weighted score (IC=0.061, Stab=1.96))
+- **Drop:** `turnover`
+
+### Cluster 12
+- **Members:** `vol_ma20`, `vol_ma50`, `log_Volume`, `log_Vol_MA`, `log_turnover_ma20`, `log_vol_ma20`, `log_vol_ma50`
+- **Keep:** `log_turnover_ma20` (highest weighted score (IC=0.061, Stab=1.96))
+- **Drop:** `vol_ma20`, `log_vol_ma20`, `vol_ma50`, `log_Vol_MA`, `log_vol_ma50`, `log_Volume`
+
+### Cluster 38
 - **Members:** `VCP_Ratio`, `log_VCP_Ratio_Lag1`
-- **Keep:** `log_VCP_Ratio_Lag1` (highest weighted score (IC=0.016, Stab=0.28))
-- **Drop:** `VCP_Ratio`
+- **Keep:** `VCP_Ratio` (highest weighted score (IC=0.076, Stab=1.63))
+- **Drop:** `log_VCP_Ratio_Lag1`
 
-### Cluster 61
+### Cluster 39
 - **Members:** `Dry_Up_Volume`, `log_Dry_Up_Volume`, `log_Dry_Up_Volume_Lag1`
-- **Keep:** `log_Dry_Up_Volume_Lag1` (highest weighted score (IC=0.021, Stab=0.49))
-- **Drop:** `Dry_Up_Volume`, `log_Dry_Up_Volume`
-
-### Cluster 55
-- **Members:** `Dist_From_52W_High`, `Dist_From_52W_High_Delta`
-- **Keep:** `Dist_From_52W_High_Delta` (highest weighted score (IC=0.009, Stab=0.19))
-- **Drop:** `Dist_From_52W_High`
-
-### Cluster 36
-- **Members:** `Dist_From_20D_High`, `alpha054`
-- **Keep:** `alpha054` (highest weighted score (IC=0.018, Stab=0.38))
-- **Drop:** `Dist_From_20D_High`
+- **Keep:** `Dry_Up_Volume` (highest weighted score (IC=0.052, Stab=1.68))
+- **Drop:** `log_Dry_Up_Volume`, `log_Dry_Up_Volume_Lag1`
 
 ## Section 6: Distributional Warnings
 
 | Feature | Issue | Action |
 |---------|-------|--------|
-| `rs_rating` | Kurtosis=61.2 | Consider winsorizing at 1/99% |
-| `mom_63d` | Kurtosis=63.5 | Consider winsorizing at 1/99% |
-| `turnover_ma20` | Kurtosis=19.5 | Consider winsorizing at 1/99% |
-| `Is_Green_Day` | Kurtosis=11.5 | Consider winsorizing at 1/99% |
-| `nATR_Delta` | Kurtosis=200.6 | Consider winsorizing at 1/99% |
-| `Price_vs_SMA_50_Delta` | Kurtosis=14.8 | Consider winsorizing at 1/99% |
-| `Price_vs_SMA_150_Delta` | Kurtosis=16.8 | Consider winsorizing at 1/99% |
-| `Price_vs_SMA_200_Delta` | Kurtosis=65.3 | Consider winsorizing at 1/99% |
-| `Dry_Up_Volume_Delta` | Kurtosis=24.5 | Consider winsorizing at 1/99% |
-| `Highest_High_20D_Delta` | Kurtosis=511.4 | Consider winsorizing at 1/99% |
-| `RSI_14_Delta` | Kurtosis=10.8 | Consider winsorizing at 1/99% |
-| `Dist_From_52W_Low_Delta` | Kurtosis=600.0 | Consider winsorizing at 1/99% |
+| `rs_line_delta` | Kurtosis=335.7 | Consider winsorizing at 1/99% |
+| `rs_line_lag_delta` | Kurtosis=82.1 | Consider winsorizing at 1/99% |
+| `mom_63d` | Kurtosis=54.2 | Consider winsorizing at 1/99% |
+| `turnover_ma20` | Kurtosis=24.4 | Consider winsorizing at 1/99% |
+| `rs_velocity` | Kurtosis=1539.1 | Consider winsorizing at 1/99% |
+| `price_momentum_curve` | Kurtosis=12.3 | Consider winsorizing at 1/99% |
+| `price_accel_10d` | Kurtosis=10.3 | Consider winsorizing at 1/99% |
+| `VCP_Ratio_Delta` | Kurtosis=58.4 | Consider winsorizing at 1/99% |
+| `Price_vs_SMA_50_Delta` | Kurtosis=14.0 | Consider winsorizing at 1/99% |
+| `Price_vs_SMA_150_Delta` | Kurtosis=14.8 | Consider winsorizing at 1/99% |
+| `Price_vs_SMA_200_Delta` | Kurtosis=81.2 | Consider winsorizing at 1/99% |
+| `RS_Delta` | Kurtosis=83.6 | Consider winsorizing at 1/99% |
+| `RS_MA_Delta` | Kurtosis=683.8 | Consider winsorizing at 1/99% |
+| `Dry_Up_Volume_Delta` | Kurtosis=20.3 | Consider winsorizing at 1/99% |
+| `Dist_From_20D_Low_Delta` | Kurtosis=23.5 | Consider winsorizing at 1/99% |
 | `Dist_From_20D_High_Delta` | Kurtosis=16.1 | Consider winsorizing at 1/99% |
-| `alpha001` | Kurtosis=164.7 | Consider winsorizing at 1/99% |
-| `alpha012` | Kurtosis=11.5 | Consider winsorizing at 1/99% |
-| `alpha041` | Kurtosis=10.4 | Consider winsorizing at 1/99% |
-| `alpha060` | Kurtosis=18.9 | Consider winsorizing at 1/99% |
-| `net_income_growth_yoy` | Kurtosis=16.0 | Consider winsorizing at 1/99% |
-| `eps_stability_score` | Kurtosis=25.2 | Consider winsorizing at 1/99% |
-| `debt_to_equity` | Kurtosis=14.5 | Consider winsorizing at 1/99% |
+| `alpha001` | Kurtosis=162.3 | Consider winsorizing at 1/99% |
+| `alpha004` | Kurtosis=11.7 | Consider winsorizing at 1/99% |
+| `alpha060` | Kurtosis=16.9 | Consider winsorizing at 1/99% |
+| `eps_stability_score` | Kurtosis=19.7 | Consider winsorizing at 1/99% |
 
 ## Section 7: Transformation Summary
 
@@ -591,101 +615,117 @@ These features have inconsistent IC across years. Monitor closely:
 | `Price_vs_SMA_150` | Log | Explosive | - |
 | `Price_vs_SMA_200` | Log | Explosive | - |
 | `Vol_Ratio` | Log | Explosive | - |
-| `rs_rating` | Log | TAR-based | 2.87 |
-| `mom_21d` | Log | TAR-based | 3.10 |
-| `mom_63d` | Log | TAR-based | 3.23 |
-| `mom_126d` | Log | TAR-based | 3.09 |
-| `mom_189d` | Log | TAR-based | 2.79 |
-| `mom_252d` | Log | TAR-based | 2.82 |
-| `turnover` | Log | TAR-based | 1.57 |
-| `vol_ma20` | Log | TAR-based | 1.87 |
-| `vol_ma50` | Log | TAR-based | 1.95 |
+| `rs_rating` | Log | TAR-based | 3.52 |
+| `RS` | Log | Explosive | - |
+| `rs_line_delta` | Log | TAR-based | 3.77 |
+| `rs_line_lag_delta` | Log | TAR-based | 2.28 |
+| `mom_21d` | Log | TAR-based | 3.43 |
+| `mom_63d` | Log | TAR-based | 3.07 |
+| `mom_126d` | Log | TAR-based | 3.32 |
+| `mom_189d` | Log | TAR-based | 3.39 |
+| `mom_252d` | Log | TAR-based | 3.16 |
+| `vol_ma20` | Log | TAR-based | 2.23 |
+| `vol_ma50` | Log | TAR-based | 2.34 |
 | `nATR` | Log | Explosive | - |
-| `Consolidation_Width` | Log | TAR-based | 3.16 |
+| `Consolidation_Width` | Log | TAR-based | 4.03 |
 | `Dry_Up_Volume` | Log | Explosive | - |
-| `Dist_From_52W_High` | Log | Explosive | - |
-| `Dist_From_20D_Low` | Log | TAR-based | 3.14 |
+| `Dist_From_20D_Low` | Log | TAR-based | 3.78 |
 | `Dist_From_52W_Low` | Log | Explosive | - |
+| `rs_velocity` | Log | TAR-based | 3.96 |
 | `volume_acceleration` | Log | Explosive | - |
-| `breakout_momentum` | Log | TAR-based | 1.58 |
-| `consolidation_duration` | Log | TAR-based | 1.59 |
-| `price_momentum_curve` | Log | TAR-based | 1.22 |
-| `immediate_thrust` | Log | TAR-based | 1.22 |
-| `log_volume_velocity` | Log | TAR-based | 2.00 |
-| `nATR_Delta` | Log | TAR-based | 1.26 |
-| `ATR_Delta` | Log | TAR-based | 1.87 |
-| `VCP_Ratio_Delta` | Log | TAR-based | 2.02 |
-| `Consolidation_Width_Delta` | Log | TAR-based | 1.37 |
-| `Price_vs_SMA_200_Delta` | Log | TAR-based | 1.59 |
-| `Dry_Up_Volume_Delta` | Log | TAR-based | 2.35 |
-| `High_52W_Delta` | Log | TAR-based | 2.66 |
-| `Low_52W_Delta` | Log | TAR-based | 1.23 |
-| `Lowest_Low_20D_Delta` | Log | TAR-based | 1.61 |
-| `Highest_High_20D_Delta` | Log | TAR-based | 2.93 |
-| `RSI_14_Delta` | Log | TAR-based | 1.38 |
-| `Dist_From_52W_Low_Delta` | Log | TAR-based | 2.19 |
-| `Dist_From_20D_Low_Delta` | Log | TAR-based | 1.32 |
-| `alpha001` | Log | TAR-based | 2.53 |
-| `alpha009` | Log | TAR-based | 1.21 |
-| `alpha060` | Log | TAR-based | 1.98 |
+| `log_volume_velocity` | Log | TAR-based | 2.24 |
+| `nATR_Delta` | Log | TAR-based | 1.33 |
+| `ATR_Delta` | Log | TAR-based | 2.18 |
+| `VCP_Ratio_Delta` | Log | TAR-based | 2.53 |
+| `Consolidation_Width_Delta` | Log | TAR-based | 1.65 |
+| `Price_vs_SMA_200_Delta` | Log | TAR-based | 1.83 |
+| `RS_Delta` | Log | TAR-based | 1.89 |
+| `RS_MA_Delta` | Log | TAR-based | 1.53 |
+| `Dry_Up_Volume_Delta` | Log | TAR-based | 2.84 |
+| `High_52W_Delta` | Log | TAR-based | 3.23 |
+| `Lowest_Low_20D_Delta` | Log | TAR-based | 1.55 |
+| `Highest_High_20D_Delta` | Log | TAR-based | 3.44 |
+| `RSI_14_Delta` | Log | TAR-based | 1.33 |
+| `Dist_From_52W_Low_Delta` | Log | TAR-based | 2.76 |
+| `Dist_From_20D_Low_Delta` | Log | TAR-based | 1.39 |
+| `alpha001` | Log | TAR-based | 2.97 |
+| `alpha060` | Log | TAR-based | 2.01 |
 | `revenue_growth_yoy` | Log | Explosive | - |
+| `net_income_growth_yoy` | Log | TAR-based | 1.26 |
 | `eps_growth_yoy` | Log | Explosive | - |
 | `eps_accel` | Log | Explosive | - |
 | `revenue_accel` | Log | Explosive | - |
-| `revenue_cagr_3y` | Log | TAR-based | 1.89 |
-| `debt_to_equity` | Log | TAR-based | 1.39 |
-| `fcf_margin` | Log | TAR-based | 1.27 |
-| `gross_margin_trend` | Log | TAR-based | 1.64 |
-| `days_since_report` | Log | TAR-based | 1.33 |
-| `days_since_earnings` | Log | TAR-based | 1.33 |
+| `revenue_cagr_3y` | Log | TAR-based | 2.07 |
+| `debt_to_equity` | Log | TAR-based | 1.69 |
+| `current_ratio` | Log | TAR-based | 1.40 |
+| `quick_ratio` | Log | TAR-based | 1.43 |
+| `fcf_margin` | Log | TAR-based | 1.39 |
+| `gross_margin_trend` | Log | TAR-based | 2.03 |
+| `days_since_report` | Log | TAR-based | 1.36 |
+| `days_since_earnings` | Log | TAR-based | 1.36 |
 | `pb_ratio` | Log | Explosive | - |
-| `Sector_Momentum` | Log | TAR-based | 2.39 |
-| `Industry_Momentum` | Log | TAR-based | 2.45 |
-| `RS_vs_Industry` | Log | TAR-based | 1.31 |
-| `log_Dist_From_20D_Low` | Log | TAR-based | 3.14 |
-| `log_Dist_From_52W_Low` | Log | TAR-based | 2.74 |
-| `log_Dist_From_52W_Low_Lag1` | Log | TAR-based | 2.65 |
+| `Sector_Momentum` | Log | TAR-based | 2.48 |
+| `Industry_Momentum` | Log | TAR-based | 2.82 |
+| `RS_vs_Industry` | Log | TAR-based | 1.29 |
+| `log_rs_rating` | Log | TAR-based | 3.52 |
+| `log_RS` | Log | TAR-based | 3.52 |
+| `log_RS_MA` | Log | TAR-based | 2.62 |
+| `log_mom_21d` | Log | TAR-based | 3.43 |
+| `log_mom_63d` | Log | TAR-based | 3.07 |
+| `log_mom_126d` | Log | TAR-based | 3.32 |
+| `log_mom_189d` | Log | TAR-based | 3.39 |
+| `log_mom_252d` | Log | TAR-based | 3.16 |
+| `log_Dist_From_20D_Low` | Log | TAR-based | 3.78 |
+| `log_Dist_From_52W_Low` | Log | TAR-based | 3.31 |
+| `log_rs_velocity` | Log | TAR-based | 3.96 |
+| `log_RS_Lag1` | Log | TAR-based | 2.66 |
+| `log_RS_MA_Lag1` | Log | TAR-based | 2.62 |
+| `log_Dist_From_52W_Low_Lag1` | Log | TAR-based | 2.79 |
 | `log_Dist_From_20D_Low_Lag1` | Log | TAR-based | 2.78 |
-| `log_nATR_Delta` | Log | TAR-based | 1.26 |
-| `log_ATR_Delta` | Log | TAR-based | 1.87 |
-| `log_VCP_Ratio_Delta` | Log | TAR-based | 2.02 |
-| `log_Price_vs_SMA_200_Delta` | Log | TAR-based | 1.59 |
-| `log_Dry_Up_Volume_Delta` | Log | TAR-based | 2.35 |
-| `log_High_52W_Delta` | Log | TAR-based | 2.66 |
-| `log_Low_52W_Delta` | Log | TAR-based | 1.23 |
-| `log_Lowest_Low_20D_Delta` | Log | TAR-based | 1.61 |
-| `log_Highest_High_20D_Delta` | Log | TAR-based | 2.93 |
-| `log_RSI_14_Delta` | Log | TAR-based | 1.38 |
-| `log_Dist_From_52W_Low_Delta` | Log | TAR-based | 2.19 |
-| `log_Dist_From_20D_Low_Delta` | Log | TAR-based | 1.32 |
-| `log_alpha001` | Log | TAR-based | 2.53 |
-| `log_alpha060` | Log | TAR-based | 1.98 |
-| `log_debt_to_equity` | Log | TAR-based | 1.39 |
-| `turnover_ma20` | Winsorize | TAR-based | 1.19 |
-| `Is_Green_Day` | Winsorize | TAR-based | 1.00 |
-| `price_accel_10d` | Winsorize | TAR-based | 1.12 |
-| `Price_vs_SMA_50_Delta` | Winsorize | TAR-based | 1.04 |
-| `Price_vs_SMA_150_Delta` | Winsorize | TAR-based | 1.12 |
-| `Dist_From_20D_High_Delta` | Winsorize | TAR-based | 1.01 |
-| `alpha012` | Winsorize | TAR-based | 1.00 |
-| `alpha041` | Winsorize | TAR-based | 0.93 |
-| `alpha004` | Winsorize | TAR-based | 1.01 |
-| `alpha049` | Winsorize | TAR-based | 0.97 |
-| `alpha051` | Winsorize | TAR-based | 0.94 |
-| `net_income_growth_yoy` | Winsorize | TAR-based | 1.17 |
-| `eps_stability_score` | Winsorize | TAR-based | 1.14 |
-| `current_ratio` | Winsorize | TAR-based | 1.12 |
-| `quick_ratio` | Winsorize | TAR-based | 1.13 |
+| `log_nATR_Delta` | Log | TAR-based | 1.33 |
+| `log_ATR_Delta` | Log | TAR-based | 2.18 |
+| `log_VCP_Ratio_Delta` | Log | TAR-based | 2.53 |
+| `log_Price_vs_SMA_200_Delta` | Log | TAR-based | 1.83 |
+| `log_RS_Delta` | Log | TAR-based | 1.89 |
+| `log_RS_MA_Delta` | Log | TAR-based | 1.53 |
+| `log_Dry_Up_Volume_Delta` | Log | TAR-based | 2.84 |
+| `log_High_52W_Delta` | Log | TAR-based | 3.23 |
+| `log_Lowest_Low_20D_Delta` | Log | TAR-based | 1.55 |
+| `log_Highest_High_20D_Delta` | Log | TAR-based | 3.44 |
+| `log_Dist_From_52W_Low_Delta` | Log | TAR-based | 2.76 |
+| `log_Dist_From_20D_Low_Delta` | Log | TAR-based | 1.39 |
+| `log_alpha001` | Log | TAR-based | 2.97 |
+| `log_alpha060` | Log | TAR-based | 2.01 |
+| `log_debt_to_equity` | Log | TAR-based | 1.69 |
+| `log_current_ratio` | Log | TAR-based | 1.40 |
+| `log_quick_ratio` | Log | TAR-based | 1.43 |
+| `log_Sector_Momentum` | Log | TAR-based | 2.48 |
+| `log_Industry_Momentum` | Log | TAR-based | 2.82 |
+| `log_RS_vs_Industry` | Log | TAR-based | 1.29 |
+| `price_vs_spy` | Winsorize | TAR-based | 0.73 |
+| `price_vs_spy_ma63` | Winsorize | TAR-based | 0.71 |
+| `turnover` | Winsorize | TAR-based | 1.16 |
+| `turnover_ma20` | Winsorize | TAR-based | 1.20 |
+| `consolidation_duration` | Winsorize | TAR-based | 1.17 |
+| `price_momentum_curve` | Winsorize | TAR-based | 1.16 |
+| `immediate_thrust` | Winsorize | TAR-based | 1.16 |
+| `price_accel_10d` | Winsorize | TAR-based | 1.00 |
+| `Price_vs_SMA_50_Delta` | Winsorize | TAR-based | 0.98 |
+| `Price_vs_SMA_150_Delta` | Winsorize | TAR-based | 1.02 |
+| `Low_52W_Delta` | Winsorize | TAR-based | 0.96 |
+| `Dist_From_20D_High_Delta` | Winsorize | TAR-based | 1.03 |
+| `alpha009` | Winsorize | TAR-based | 1.09 |
+| `alpha004` | Winsorize | TAR-based | 0.87 |
+| `eps_stability_score` | Winsorize | TAR-based | 1.11 |
 | `operating_margin` | Winsorize | Standard | - |
 | `roe` | Winsorize | Standard | - |
 | `net_margin` | Winsorize | Standard | - |
-| `inventory_growth_yoy` | Winsorize | TAR-based | 1.14 |
-| `inventory_vs_sales_spread` | Winsorize | TAR-based | 1.13 |
+| `inventory_growth_yoy` | Winsorize | TAR-based | 0.97 |
+| `inventory_vs_sales_spread` | Winsorize | TAR-based | 0.98 |
 | `earnings_quality_score` | Winsorize | Bounded | - |
-| `log_current_ratio` | Winsorize | TAR-based | 1.12 |
-| `log_quick_ratio` | Winsorize | TAR-based | 1.13 |
+| `log_Low_52W_Delta` | Winsorize | TAR-based | 0.96 |
 
-**Total:** 74 log-transformed, 23 winsorized
+**Total:** 91 log-transformed, 22 winsorized
 
 > **TAR (Tail Alpha Ratio):** Ratio of mean |return| in 99-100th percentile vs 10-90th percentile.
 > TAR > 1.2 suggests tail values are predictive (log transform); TAR <= 1.2 suggests noise (winsorize).
@@ -699,75 +739,76 @@ Copy this to `src/feature_config.py` → `M01_FEATURES` after review:
 
 ```python
 M01_FEATURES = [
-    'alpha011',
-    'log_rs_rating',  # log-transformed
-    'log_Price_vs_SMA_200',  # log-transformed
-    'log_nATR_Lag1',
-    'alpha013',
-    'log_mom_63d',  # log-transformed
-    'RS_Universe_Rank',
-    'm03_pillar_risk',
-    'log_Price_vs_SMA_50_Lag1',
-    'operating_margin',
-    'log_alpha060',  # log-transformed
-    'alpha012',
-    'm03_pillar_trend',
-    'eps_stability_score',
-    'current_ratio',
-    'log_Highest_High_20D_Delta',  # log-transformed
-    'log_debt_to_equity',  # log-transformed
-    'roa',
-    'log_nATR_Delta',  # log-transformed
-    'log_alpha001',  # log-transformed
-    'log_fcf_margin',  # log-transformed
-    'roe',
-    'alpha101',
-    'log_days_since_report',  # log-transformed
-    'alpha054',
-    'ps_ratio',
-    'm03_pillar_liq',
-    'log_price_momentum_curve',  # log-transformed
-    'earnings_quality_score',
-    'log_pb_ratio',  # log-transformed
-    'industry_id_encoded',
-    'alpha015',
-    'log_volume_velocity',  # already log-transformed
-    'log_alpha009',  # log-transformed
-    'm03_score',
-    'log_Dist_From_52W_Low_Delta',  # log-transformed
-    'RS_vs_Sector',
-    'net_income_growth_yoy',
-    'alpha041',
-    'log_VCP_Ratio_Lag1',
-    'log_revenue_accel',  # log-transformed
-    'log_Dry_Up_Volume_Lag1',
-    'log_eps_accel',  # log-transformed
-    'm03_delta_20d',
-    'Dist_From_20D_High_Delta',
-    'log_revenue_growth_yoy',  # log-transformed
-    'm03_regime_vol',
-    'log_volume_acceleration',  # log-transformed
-    'alpha006',
-    'turnover_ma20',
-    'log_breakout_momentum',  # log-transformed
-    'pe_ratio',
-    'Price_vs_SMA_50_Delta',
-    'RSI_14',
-    'log_Price_vs_SMA_200_Delta',  # log-transformed
+    'breakout_momentum',
+    'log_VCP_Ratio_Delta',  # log-transformed
+    'price_momentum_curve',
+    'log_rs_line_delta',  # log-transformed
+    'log_Dist_From_20D_Low_Delta',  # log-transformed
     'log_Dry_Up_Volume_Delta',  # log-transformed
+    'alpha013',
+    'log_Price_vs_SMA_50',  # log-transformed
+    'log_RS_Delta',  # log-transformed
+    'Dist_From_52W_High_Delta',
+    'alpha101',
+    'log_alpha060',  # log-transformed
+    'log_Price_vs_SMA_200_Delta',  # log-transformed
+    'log_volume_velocity',  # already log-transformed
+    'log_Price_vs_SMA_150',  # log-transformed
     'Price_vs_SMA_150_Delta',
-    'log_turnover',  # log-transformed
-    'inventory_vs_sales_spread',
-    'log_RSI_14_Delta',  # log-transformed
-    'sector_id_encoded',
-    'gross_margin',
+    'RSI_14',
+    'log_mom_63d',  # log-transformed
+    'alpha009',
+    'log_rs_velocity',  # log-transformed
+    'industry_id_encoded',
+    'Dist_From_20D_High_Delta',
+    'VCP_Ratio',
+    'price_vs_spy_ma63',
+    'log_Dry_Up_Volume',  # log-transformed
+    'alpha011',
+    'm03_pillar_risk',
+    'RS_Universe_Rank',
+    'alpha054',
+    'operating_margin',
+    'Price_vs_SMA_50_Delta',
+    'alpha006',
+    'log_turnover_ma20',
+    'turnover_ma20',
+    'log_volume_acceleration',  # log-transformed
+    'roa',
     'alpha002',
-    'm03_delta_5d',
-    'log_revenue_cagr_3y',  # log-transformed
+    'alpha015',
+    'm03_regime_vol',
+    'log_Price_vs_SMA_50_Lag1',
+    'price_accel_10d',
+    'log_alpha001',  # log-transformed
+    'log_current_ratio',  # log-transformed
+    'log_RS_MA_Delta',  # log-transformed
+    'log_fcf_margin',  # log-transformed
     'log_gross_margin_trend',  # log-transformed
-    'peg_adjusted',
-    'Is_Green_Day',
-    'is_declining_earnings',
+    'log_eps_growth_yoy',  # log-transformed
+    'log_days_since_report',  # log-transformed
+    'log_pe_ratio',
+    'm03_delta_20d',
+    'roe',
+    'alpha004',
+    'gross_margin',
+    'log_debt_to_equity',  # log-transformed
+    'm03_pillar_liq',
+    'log_eps_accel',  # log-transformed
+    'log_rs_line_lag_delta',  # log-transformed
+    'eps_stability_score',
+    'log_revenue_accel',  # log-transformed
+    'RS_vs_Sector',
+    'log_pb_ratio',  # log-transformed
+    'earnings_quality_score',
+    'inventory_growth_yoy',
+    'm03_pillar_trend',
+    'alpha046',
+    'log_revenue_growth_yoy',  # log-transformed
+    'm03_score',
+    'log_revenue_cagr_3y',  # log-transformed
+    'ps_ratio',
+    'm03_delta_5d',
     'log_RS_vs_Industry',  # log-transformed
 ]
 ```

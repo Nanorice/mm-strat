@@ -1,0 +1,1143 @@
+{
+  "version": "1.0",
+  "kurtosis_threshold": 10.0,
+  "tail_alpha_threshold": 1.2,
+  "lower_percentile": 1.0,
+  "upper_percentile": 99.0,
+  "requested_features": [
+    "Open",
+    "High",
+    "Low",
+    "Close",
+    "Volume",
+    "SMA_50",
+    "Price_vs_SMA_50",
+    "SMA_150",
+    "Price_vs_SMA_150",
+    "SMA_200",
+    "Price_vs_SMA_200",
+    "ATR",
+    "High_52W",
+    "Low_52W",
+    "Vol_MA",
+    "Vol_Ratio",
+    "High_20D",
+    "rs_rating",
+    "RS",
+    "RS_MA",
+    "price_vs_spy",
+    "price_vs_spy_ma63",
+    "rs_line_log",
+    "rs_line_delta",
+    "rs_line_lag_delta",
+    "mom_21d",
+    "mom_63d",
+    "mom_126d",
+    "mom_189d",
+    "mom_252d",
+    "turnover",
+    "turnover_ma20",
+    "vol_ma20",
+    "vol_ma50",
+    "nATR",
+    "VCP_Ratio",
+    "Consolidation_Width",
+    "Dry_Up_Volume",
+    "RSI_14",
+    "Dist_From_52W_High",
+    "Is_Green_Day",
+    "Green_Days_Ratio_20D",
+    "SMA_50_Slope",
+    "Lowest_Low_20D",
+    "Dist_From_20D_Low",
+    "Highest_High_20D",
+    "Dist_From_20D_High",
+    "Dist_From_52W_Low",
+    "rs_velocity",
+    "volume_acceleration",
+    "breakout_momentum",
+    "consolidation_duration",
+    "price_momentum_curve",
+    "immediate_thrust",
+    "log_volume_velocity",
+    "price_accel_10d",
+    "nATR_Lag1",
+    "ATR_Lag1",
+    "VCP_Ratio_Lag1",
+    "Consolidation_Width_Lag1",
+    "Price_vs_SMA_50_Lag1",
+    "Price_vs_SMA_150_Lag1",
+    "Price_vs_SMA_200_Lag1",
+    "RS_Lag1",
+    "RS_MA_Lag1",
+    "Dry_Up_Volume_Lag1",
+    "High_52W_Lag1",
+    "Low_52W_Lag1",
+    "Lowest_Low_20D_Lag1",
+    "Highest_High_20D_Lag1",
+    "RSI_14_Lag1",
+    "Dist_From_52W_High_Lag1",
+    "Dist_From_52W_Low_Lag1",
+    "Dist_From_20D_Low_Lag1",
+    "Dist_From_20D_High_Lag1",
+    "nATR_Delta",
+    "ATR_Delta",
+    "VCP_Ratio_Delta",
+    "Consolidation_Width_Delta",
+    "Price_vs_SMA_50_Delta",
+    "Price_vs_SMA_150_Delta",
+    "Price_vs_SMA_200_Delta",
+    "RS_Delta",
+    "RS_MA_Delta",
+    "Dry_Up_Volume_Delta",
+    "High_52W_Delta",
+    "Low_52W_Delta",
+    "Lowest_Low_20D_Delta",
+    "Highest_High_20D_Delta",
+    "RSI_14_Delta",
+    "Dist_From_52W_High_Delta",
+    "Dist_From_52W_Low_Delta",
+    "Dist_From_20D_Low_Delta",
+    "Dist_From_20D_High_Delta",
+    "alpha001",
+    "alpha006",
+    "alpha009",
+    "alpha012",
+    "alpha041",
+    "alpha101",
+    "alpha002",
+    "alpha004",
+    "alpha011",
+    "alpha013",
+    "alpha015",
+    "alpha054",
+    "alpha060",
+    "alpha046",
+    "alpha049",
+    "alpha051",
+    "revenue_growth_yoy",
+    "net_income_growth_yoy",
+    "eps_growth_yoy",
+    "eps_accel",
+    "revenue_accel",
+    "revenue_cagr_3y",
+    "eps_stability_score",
+    "revenue",
+    "netIncome",
+    "operatingCashFlow",
+    "freeCashFlow",
+    "debt_to_equity",
+    "current_ratio",
+    "quick_ratio",
+    "gross_margin",
+    "operating_margin",
+    "roe",
+    "roa",
+    "net_margin",
+    "inventory_growth_yoy",
+    "inventory_vs_sales_spread",
+    "earnings_quality_score",
+    "fcf_margin",
+    "gross_margin_trend",
+    "days_since_report",
+    "days_since_earnings",
+    "pe_ratio",
+    "ps_ratio",
+    "pb_ratio",
+    "peg_adjusted",
+    "is_declining_earnings",
+    "sector_id",
+    "industry_id",
+    "mktCap_log",
+    "beta",
+    "RS_Universe_Rank",
+    "Sector_Momentum",
+    "RS_Sector_Rank",
+    "RS_vs_Sector",
+    "Industry_Momentum",
+    "RS_Industry_Rank",
+    "RS_vs_Industry",
+    "m03_score",
+    "m03_regime_cat",
+    "m03_delta_5d",
+    "m03_delta_20d",
+    "m03_regime_vol",
+    "m03_pillar_trend",
+    "m03_pillar_liq",
+    "m03_pillar_risk",
+    "log_Volume",
+    "log_Price_vs_SMA_50",
+    "log_Price_vs_SMA_150",
+    "log_Price_vs_SMA_200",
+    "log_Vol_MA",
+    "log_Vol_Ratio",
+    "log_rs_rating",
+    "log_RS",
+    "log_RS_MA",
+    "log_mom_21d",
+    "log_mom_63d",
+    "log_mom_126d",
+    "log_mom_189d",
+    "log_mom_252d",
+    "log_turnover_ma20",
+    "log_vol_ma20",
+    "log_vol_ma50",
+    "log_nATR",
+    "log_Consolidation_Width",
+    "log_Dry_Up_Volume",
+    "log_Dist_From_52W_High",
+    "log_Dist_From_20D_Low",
+    "log_Dist_From_52W_Low",
+    "log_rs_velocity",
+    "log_volume_acceleration",
+    "log_breakout_momentum",
+    "log_price_momentum_curve",
+    "log_log_volume_velocity",
+    "log_nATR_Lag1",
+    "log_VCP_Ratio_Lag1",
+    "log_Consolidation_Width_Lag1",
+    "log_Price_vs_SMA_50_Lag1",
+    "log_Price_vs_SMA_150_Lag1",
+    "log_Price_vs_SMA_200_Lag1",
+    "log_RS_Lag1",
+    "log_RS_MA_Lag1",
+    "log_Dry_Up_Volume_Lag1",
+    "log_Dist_From_52W_Low_Lag1",
+    "log_Dist_From_20D_Low_Lag1",
+    "log_nATR_Delta",
+    "log_ATR_Delta",
+    "log_VCP_Ratio_Delta",
+    "log_Consolidation_Width_Delta",
+    "log_Price_vs_SMA_200_Delta",
+    "log_RS_Delta",
+    "log_RS_MA_Delta",
+    "log_Dry_Up_Volume_Delta",
+    "log_High_52W_Delta",
+    "log_Low_52W_Delta",
+    "log_Lowest_Low_20D_Delta",
+    "log_Highest_High_20D_Delta",
+    "log_Dist_From_52W_Low_Delta",
+    "log_Dist_From_20D_Low_Delta",
+    "log_alpha001",
+    "log_alpha009",
+    "log_alpha060",
+    "log_revenue_growth_yoy",
+    "log_eps_growth_yoy",
+    "log_eps_accel",
+    "log_revenue_accel",
+    "log_revenue_cagr_3y",
+    "log_debt_to_equity",
+    "log_current_ratio",
+    "log_quick_ratio",
+    "log_fcf_margin",
+    "log_gross_margin_trend",
+    "log_days_since_report",
+    "log_days_since_earnings",
+    "log_pe_ratio",
+    "log_ps_ratio",
+    "log_pb_ratio",
+    "log_beta",
+    "log_Sector_Momentum",
+    "log_Industry_Momentum",
+    "log_RS_vs_Industry"
+  ],
+  "features": {
+    "Volume": {
+      "original_kurtosis": 398.8574007072116,
+      "tail_alpha_ratio": 2.3246189739074925,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_50": {
+      "original_kurtosis": 1550.499358375123,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "Price_vs_SMA_150": {
+      "original_kurtosis": 654.122975875203,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "Price_vs_SMA_200": {
+      "original_kurtosis": 572.2822962346852,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "Vol_MA": {
+      "original_kurtosis": 552.4996985604705,
+      "tail_alpha_ratio": 2.344399641179018,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Vol_Ratio": {
+      "original_kurtosis": 135.0751485205766,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "rs_rating": {
+      "original_kurtosis": 12188.947049415205,
+      "tail_alpha_ratio": 3.52085485211057,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS": {
+      "original_kurtosis": 12188.947049415205,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "RS_MA": {
+      "original_kurtosis": 12081.332824221308,
+      "tail_alpha_ratio": 2.61574753202024,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "price_vs_spy": {
+      "original_kurtosis": 139.57708197922844,
+      "tail_alpha_ratio": 0.7314898965966744,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.010645092612305727,
+      "upper_bound": 1.4494165190936747
+    },
+    "price_vs_spy_ma63": {
+      "original_kurtosis": 140.4754388596489,
+      "tail_alpha_ratio": 0.7119163386698925,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.008106991182702167,
+      "upper_bound": 1.3008978584464084
+    },
+    "rs_line_delta": {
+      "original_kurtosis": 8243.290489565463,
+      "tail_alpha_ratio": 3.774793173008337,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "rs_line_lag_delta": {
+      "original_kurtosis": 230.64044679860626,
+      "tail_alpha_ratio": 2.27504718614114,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "mom_21d": {
+      "original_kurtosis": 2035.4143447219274,
+      "tail_alpha_ratio": 3.4263984248305936,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "mom_63d": {
+      "original_kurtosis": 10421.186730785139,
+      "tail_alpha_ratio": 3.071592682391833,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "mom_126d": {
+      "original_kurtosis": 2427.8587590575808,
+      "tail_alpha_ratio": 3.3239345202780717,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "mom_189d": {
+      "original_kurtosis": 11941.626146353132,
+      "tail_alpha_ratio": 3.3923993166634143,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "mom_252d": {
+      "original_kurtosis": 12264.165013781505,
+      "tail_alpha_ratio": 3.1594573849010064,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "turnover": {
+      "original_kurtosis": 24.269682027546697,
+      "tail_alpha_ratio": 1.1555461659562096,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 2046578.31,
+      "upper_bound": 6228111755.964481
+    },
+    "turnover_ma20": {
+      "original_kurtosis": 490.13805487292404,
+      "tail_alpha_ratio": 1.1999994451869733,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 750643.72,
+      "upper_bound": 2729420910.54
+    },
+    "vol_ma20": {
+      "original_kurtosis": 450.8583869620947,
+      "tail_alpha_ratio": 2.2326971777186637,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "vol_ma50": {
+      "original_kurtosis": 552.4996985604705,
+      "tail_alpha_ratio": 2.344399641179018,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "nATR": {
+      "original_kurtosis": 11.663119403473774,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "VCP_Ratio": {
+      "original_kurtosis": 1.1690845035649238,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": 0.7169014084507033,
+      "upper_bound": 1.9130347459329184
+    },
+    "Consolidation_Width": {
+      "original_kurtosis": 19.23593054171078,
+      "tail_alpha_ratio": 4.027079290572203,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dry_Up_Volume": {
+      "original_kurtosis": 54.675217046944724,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "RSI_14": {
+      "original_kurtosis": -0.5157788292893395,
+      "transform": "winsorize",
+      "category": "bounded",
+      "lower_bound": 54.53765276853253,
+      "upper_bound": 94.31818181818187
+    },
+    "Dist_From_52W_High": {
+      "original_kurtosis": 6.449889960955295,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "SMA_50_Slope": {
+      "original_kurtosis": 6.301311684065894,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -0.1913886879359226,
+      "upper_bound": 1.5037822597735264
+    },
+    "Dist_From_20D_Low": {
+      "original_kurtosis": 2210.526665644295,
+      "tail_alpha_ratio": 3.7791727769117123,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_52W_Low": {
+      "original_kurtosis": 10797.789786548912,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "rs_velocity": {
+      "original_kurtosis": 11347.189136604658,
+      "tail_alpha_ratio": 3.955560809108199,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "volume_acceleration": {
+      "original_kurtosis": 830.7839579371744,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "breakout_momentum": {
+      "original_kurtosis": 9.12513061844848,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "consolidation_duration": {
+      "original_kurtosis": 20.188689261225946,
+      "tail_alpha_ratio": 1.1681298701826577,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 5.0
+    },
+    "price_momentum_curve": {
+      "original_kurtosis": 293.0239871016937,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "immediate_thrust": {
+      "original_kurtosis": 12.410953817949213,
+      "tail_alpha_ratio": 1.1567675500212824,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -5.319999999999993,
+      "upper_bound": 37.72999999999996
+    },
+    "log_volume_velocity": {
+      "original_kurtosis": 34.0699839213915,
+      "tail_alpha_ratio": 2.238464641700639,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "price_accel_10d": {
+      "original_kurtosis": 10.328220665508878,
+      "tail_alpha_ratio": 0.9993303997815528,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -0.9259999999999993,
+      "upper_bound": 6.876999999999998
+    },
+    "nATR_Lag1": {
+      "original_kurtosis": 19.03415802979459,
+      "tail_alpha_ratio": 3.15946505694798,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "VCP_Ratio_Lag1": {
+      "original_kurtosis": 28.745660973305643,
+      "tail_alpha_ratio": 2.1417833032095626,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Consolidation_Width_Lag1": {
+      "original_kurtosis": 21.3903269568075,
+      "tail_alpha_ratio": 3.5300089291816494,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_50_Lag1": {
+      "original_kurtosis": 209.11828760234712,
+      "tail_alpha_ratio": 2.9224369240603556,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_150_Lag1": {
+      "original_kurtosis": 282.19226303559816,
+      "tail_alpha_ratio": 3.166506700408235,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_200_Lag1": {
+      "original_kurtosis": 278.4434596790405,
+      "tail_alpha_ratio": 3.3613756394856704,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_Lag1": {
+      "original_kurtosis": 12207.371809781314,
+      "tail_alpha_ratio": 2.660588044263189,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_MA_Lag1": {
+      "original_kurtosis": 12077.976098259947,
+      "tail_alpha_ratio": 2.6203107618700194,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dry_Up_Volume_Lag1": {
+      "original_kurtosis": 73.80634202932545,
+      "tail_alpha_ratio": 1.7415989961055316,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_52W_Low_Lag1": {
+      "original_kurtosis": 11935.26641216268,
+      "tail_alpha_ratio": 2.78608049241703,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_Low_Lag1": {
+      "original_kurtosis": 4255.492180967472,
+      "tail_alpha_ratio": 2.779388653400178,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "nATR_Delta": {
+      "original_kurtosis": 11111.656990573169,
+      "tail_alpha_ratio": 1.3261836791332733,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "ATR_Delta": {
+      "original_kurtosis": 12287.752085981894,
+      "tail_alpha_ratio": 2.1847310736693917,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "VCP_Ratio_Delta": {
+      "original_kurtosis": 7893.620632109473,
+      "tail_alpha_ratio": 2.5329545591823805,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Consolidation_Width_Delta": {
+      "original_kurtosis": 805.7256195327423,
+      "tail_alpha_ratio": 1.6527512246006701,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Price_vs_SMA_50_Delta": {
+      "original_kurtosis": 14.043872313972855,
+      "tail_alpha_ratio": 0.9821155591517566,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -23.779792418488302,
+      "upper_bound": 23.047870948163506
+    },
+    "Price_vs_SMA_150_Delta": {
+      "original_kurtosis": 14.801979575328492,
+      "tail_alpha_ratio": 1.0208756168900577,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3.057678490777052,
+      "upper_bound": 5.550372394361589
+    },
+    "Price_vs_SMA_200_Delta": {
+      "original_kurtosis": 8083.713518724994,
+      "tail_alpha_ratio": 1.8345755106133113,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_Delta": {
+      "original_kurtosis": 6879.075387775685,
+      "tail_alpha_ratio": 1.8856010629525184,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_MA_Delta": {
+      "original_kurtosis": 7629.846901304115,
+      "tail_alpha_ratio": 1.5273818278503803,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dry_Up_Volume_Delta": {
+      "original_kurtosis": 640.0139086477393,
+      "tail_alpha_ratio": 2.839757522926957,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "High_52W_Delta": {
+      "original_kurtosis": 9348.150411999348,
+      "tail_alpha_ratio": 3.227581622224326,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Low_52W_Delta": {
+      "original_kurtosis": 2528.6692283368284,
+      "tail_alpha_ratio": 0.9569687442859518,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 0.043406582906476934
+    },
+    "Lowest_Low_20D_Delta": {
+      "original_kurtosis": 210.93105103545776,
+      "tail_alpha_ratio": 1.5455519674852445,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Highest_High_20D_Delta": {
+      "original_kurtosis": 8351.18868850609,
+      "tail_alpha_ratio": 3.4401123215841136,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RSI_14_Delta": {
+      "original_kurtosis": 131.55632742355024,
+      "tail_alpha_ratio": 1.3308182450020363,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_52W_Low_Delta": {
+      "original_kurtosis": 12286.321601807946,
+      "tail_alpha_ratio": 2.7600598348152294,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_Low_Delta": {
+      "original_kurtosis": 11571.520895678903,
+      "tail_alpha_ratio": 1.388750837745739,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Dist_From_20D_High_Delta": {
+      "original_kurtosis": 16.118320823630647,
+      "tail_alpha_ratio": 1.0341238664110497,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -1.0,
+      "upper_bound": 17.280047413793156
+    },
+    "alpha001": {
+      "original_kurtosis": 141.18882486879505,
+      "tail_alpha_ratio": 2.9653584631090326,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "alpha009": {
+      "original_kurtosis": 299.3032332185469,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "alpha004": {
+      "original_kurtosis": 11.719944539966122,
+      "tail_alpha_ratio": 0.8729474250667564,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -9.0,
+      "upper_bound": -3.0
+    },
+    "alpha011": {
+      "original_kurtosis": 0.6648660727016118,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": 0.002202716498734964,
+      "upper_bound": 1.5828493044170773
+    },
+    "alpha013": {
+      "original_kurtosis": 2.897361126524511,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -0.9989973525742866,
+      "upper_bound": -0.17587849278244894
+    },
+    "alpha054": {
+      "original_kurtosis": 0.4907533271480662,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -0.9280418182707697,
+      "upper_bound": -0.08994655317794567
+    },
+    "alpha060": {
+      "original_kurtosis": 16.978337992654904,
+      "tail_alpha_ratio": 2.0060260500093245,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "revenue_growth_yoy": {
+      "original_kurtosis": 4778.483004025228,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "net_income_growth_yoy": {
+      "original_kurtosis": 16.76747293164878,
+      "tail_alpha_ratio": 1.2631539298422436,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "eps_growth_yoy": {
+      "original_kurtosis": 4089.0369723260387,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "eps_accel": {
+      "original_kurtosis": 5914.287884425039,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "revenue_accel": {
+      "original_kurtosis": 2410.0663221157793,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "revenue_cagr_3y": {
+      "original_kurtosis": 358.2565551430222,
+      "tail_alpha_ratio": 2.0651165587917872,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "eps_stability_score": {
+      "original_kurtosis": 19.709101123563627,
+      "tail_alpha_ratio": 1.112845577745173,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 9.520051320501917,
+      "upper_bound": 6810.509393909049
+    },
+    "revenue": {
+      "original_kurtosis": 25.19880676973773,
+      "tail_alpha_ratio": 0.6078634964092241,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 47105000000.0
+    },
+    "netIncome": {
+      "original_kurtosis": 23.522939961385852,
+      "tail_alpha_ratio": 0.7291666064568503,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -422600000.0,
+      "upper_bound": 5020056700.0
+    },
+    "operatingCashFlow": {
+      "original_kurtosis": 25.45725829611809,
+      "tail_alpha_ratio": 0.7453952013770064,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -719235719.9999999,
+      "upper_bound": 7904898254.879995
+    },
+    "freeCashFlow": {
+      "original_kurtosis": 21.19293216388807,
+      "tail_alpha_ratio": 0.7710709246967209,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -1196000000.0,
+      "upper_bound": 5789993287.999982
+    },
+    "debt_to_equity": {
+      "original_kurtosis": 2950.709706591092,
+      "tail_alpha_ratio": 1.6895176115026995,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "current_ratio": {
+      "original_kurtosis": 3500.353396929581,
+      "tail_alpha_ratio": 1.4033352870287883,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "quick_ratio": {
+      "original_kurtosis": 3468.0140759930014,
+      "tail_alpha_ratio": 1.4284154536389058,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "gross_margin": {
+      "original_kurtosis": -0.014963171490339988,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -39.07250154921287,
+      "upper_bound": 100.0
+    },
+    "operating_margin": {
+      "original_kurtosis": 41.39011116458193,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -712.8222804356818,
+      "upper_bound": 75.79377569077911
+    },
+    "roe": {
+      "original_kurtosis": 11.661422866708488,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -79.88478528790817,
+      "upper_bound": 80.20700379459473
+    },
+    "roa": {
+      "original_kurtosis": 7.420423320033649,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -18.11013359980059,
+      "upper_bound": 11.461903002348095
+    },
+    "net_margin": {
+      "original_kurtosis": 41.732498847036936,
+      "transform": "winsorize",
+      "category": "standard",
+      "lower_bound": -710.1876593574706,
+      "upper_bound": 83.36377303166971
+    },
+    "inventory_growth_yoy": {
+      "original_kurtosis": 13.43117618747393,
+      "tail_alpha_ratio": 0.9711710779501583,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3100.0015798857144,
+      "upper_bound": 2541.9371561290322
+    },
+    "inventory_vs_sales_spread": {
+      "original_kurtosis": 13.493684925049347,
+      "tail_alpha_ratio": 0.9789432583657051,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": -3194.1084162270377,
+      "upper_bound": 2359.017363113023
+    },
+    "earnings_quality_score": {
+      "original_kurtosis": 14.019152591795795,
+      "transform": "winsorize",
+      "category": "bounded",
+      "lower_bound": -19.992757872103915,
+      "upper_bound": 26.373879444637115
+    },
+    "fcf_margin": {
+      "original_kurtosis": 3518.3311396676127,
+      "tail_alpha_ratio": 1.3914650720332722,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "gross_margin_trend": {
+      "original_kurtosis": 5010.658427839131,
+      "tail_alpha_ratio": 2.028872097739358,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "days_since_report": {
+      "original_kurtosis": 618.0579017744836,
+      "tail_alpha_ratio": 1.3646337138960662,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "days_since_earnings": {
+      "original_kurtosis": 618.0579017744836,
+      "tail_alpha_ratio": 1.3646337138960662,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "pe_ratio": {
+      "original_kurtosis": 7.149391295538969,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "ps_ratio": {
+      "original_kurtosis": 3.7604505628323794,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "pb_ratio": {
+      "original_kurtosis": 16.47889653961879,
+      "transform": "log",
+      "category": "explosive"
+    },
+    "beta": {
+      "original_kurtosis": 29.984115130520713,
+      "tail_alpha_ratio": 2.9256074233514537,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Sector_Momentum": {
+      "original_kurtosis": 12224.343218828037,
+      "tail_alpha_ratio": 2.481717274946583,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "Industry_Momentum": {
+      "original_kurtosis": 12209.241264769791,
+      "tail_alpha_ratio": 2.822045328841097,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RS_vs_Industry": {
+      "original_kurtosis": 17.365591968060958,
+      "tail_alpha_ratio": 1.290938922437223,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_rs_rating": {
+      "original_kurtosis": 54.174513692324304,
+      "tail_alpha_ratio": 3.52085485211057,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS": {
+      "original_kurtosis": 54.174513692324304,
+      "tail_alpha_ratio": 3.52085485211057,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS_MA": {
+      "original_kurtosis": 77.46580391868913,
+      "tail_alpha_ratio": 2.61574753202024,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_mom_21d": {
+      "original_kurtosis": 84.3818715978818,
+      "tail_alpha_ratio": 3.4263984248305936,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_mom_63d": {
+      "original_kurtosis": 54.197781838737356,
+      "tail_alpha_ratio": 3.071592682391833,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_mom_126d": {
+      "original_kurtosis": 20.27798821676739,
+      "tail_alpha_ratio": 3.3239345202780717,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_mom_189d": {
+      "original_kurtosis": 28.022679666661247,
+      "tail_alpha_ratio": 3.3923993166634143,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_mom_252d": {
+      "original_kurtosis": 28.053974913866213,
+      "tail_alpha_ratio": 3.1594573849010064,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dist_From_20D_Low": {
+      "original_kurtosis": 91.74111659424369,
+      "tail_alpha_ratio": 3.7791727769117123,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dist_From_52W_Low": {
+      "original_kurtosis": 19.013061536149348,
+      "tail_alpha_ratio": 3.3144149474596176,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_rs_velocity": {
+      "original_kurtosis": 1539.1466548974308,
+      "tail_alpha_ratio": 3.955560809108199,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS_Lag1": {
+      "original_kurtosis": 73.32362548570245,
+      "tail_alpha_ratio": 2.660588044263189,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS_MA_Lag1": {
+      "original_kurtosis": 77.08367592603622,
+      "tail_alpha_ratio": 2.6203107618700194,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dist_From_52W_Low_Lag1": {
+      "original_kurtosis": 25.172827760993176,
+      "tail_alpha_ratio": 2.78608049241703,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dist_From_20D_Low_Lag1": {
+      "original_kurtosis": 119.24774530328467,
+      "tail_alpha_ratio": 2.779388653400178,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_nATR_Delta": {
+      "original_kurtosis": 292.7623854017528,
+      "tail_alpha_ratio": 1.3261836791332733,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_ATR_Delta": {
+      "original_kurtosis": 605.062856866831,
+      "tail_alpha_ratio": 2.1847310736693917,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_VCP_Ratio_Delta": {
+      "original_kurtosis": 58.422449404100064,
+      "tail_alpha_ratio": 2.5329545591823805,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Price_vs_SMA_200_Delta": {
+      "original_kurtosis": 81.20788750691331,
+      "tail_alpha_ratio": 1.8345755106133113,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS_Delta": {
+      "original_kurtosis": 83.63155196399573,
+      "tail_alpha_ratio": 1.8856010629525184,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS_MA_Delta": {
+      "original_kurtosis": 683.84102120068,
+      "tail_alpha_ratio": 1.5273818278503803,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dry_Up_Volume_Delta": {
+      "original_kurtosis": 20.3181482515616,
+      "tail_alpha_ratio": 2.839757522926957,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_High_52W_Delta": {
+      "original_kurtosis": 821.3122180117197,
+      "tail_alpha_ratio": 3.227581622224326,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Low_52W_Delta": {
+      "original_kurtosis": 1191.7319240794059,
+      "tail_alpha_ratio": 0.9569687442859518,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 0.04249092054202104
+    },
+    "log_Lowest_Low_20D_Delta": {
+      "original_kurtosis": 157.4563967722956,
+      "tail_alpha_ratio": 1.5455519674852445,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Highest_High_20D_Delta": {
+      "original_kurtosis": 466.49979096913034,
+      "tail_alpha_ratio": 3.4401123215841136,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dist_From_52W_Low_Delta": {
+      "original_kurtosis": 627.659960624672,
+      "tail_alpha_ratio": 2.7600598348152294,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Dist_From_20D_Low_Delta": {
+      "original_kurtosis": 23.51530411542251,
+      "tail_alpha_ratio": 1.388750837745739,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_alpha001": {
+      "original_kurtosis": 162.26316845133738,
+      "tail_alpha_ratio": 2.9653584631090326,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_alpha060": {
+      "original_kurtosis": 16.886997041711954,
+      "tail_alpha_ratio": 2.0060260500093245,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_debt_to_equity": {
+      "original_kurtosis": 11.756533444429893,
+      "tail_alpha_ratio": 1.6895176115026995,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_current_ratio": {
+      "original_kurtosis": 20.322011267409824,
+      "tail_alpha_ratio": 1.4033352870287883,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_quick_ratio": {
+      "original_kurtosis": 20.671886656633074,
+      "tail_alpha_ratio": 1.4284154536389058,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Sector_Momentum": {
+      "original_kurtosis": 74.29308878835127,
+      "tail_alpha_ratio": 2.481717274946583,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_Industry_Momentum": {
+      "original_kurtosis": 56.005714683533526,
+      "tail_alpha_ratio": 2.822045328841097,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "log_RS_vs_Industry": {
+      "original_kurtosis": 11.474787141781654,
+      "tail_alpha_ratio": 1.290938922437223,
+      "transform": "log",
+      "category": "tar_based"
+    }
+  },
+  "created_at": "2026-02-14T18:16:48.405771"
+}

@@ -8,7 +8,7 @@ description: Generates a structured handover document to preserve context for th
 When the user says "Wrap up", "End session", or "Generate handover":
 
 1.  **Analyze** the current session history and file modifications.
-2.  **Create/Update** a file named `docs/session_logs/YYYY-MM-DD.md` (use today's date). If a file with same name exists, check first if content overlap with this session, if so rename the existing file docs `YYYY-MM-DD-Session-n.md`, where n is the index of handover note for the day. Unless user specifies which file to update.
+2.  **Create/Update** a file named `docs/session_logs/YYYY-MM-DD.md` (use today's date). When there's an existin file, update if content is built on this one, and create a new one with suffix of session id if content in the new session is very different.
 3.  **Format** the content exactly like this template:
 
     # Session Handover: [Date]

@@ -25,6 +25,11 @@
     "rs_rating",
     "RS",
     "RS_MA",
+    "price_vs_spy",
+    "price_vs_spy_ma63",
+    "rs_line_log",
+    "rs_line_delta",
+    "rs_line_lag_delta",
     "mom_21d",
     "mom_63d",
     "mom_126d",
@@ -237,1064 +242,902 @@
     "log_RS_vs_Industry"
   ],
   "features": {
-    "Open": {
-      "original_kurtosis": 266.51429629063836,
-      "tail_alpha_ratio": 0.7960922167696229,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.0858,
-      "upper_bound": 612.2840000000003
-    },
-    "High": {
-      "original_kurtosis": 255.05737119291888,
-      "tail_alpha_ratio": 0.7893669620822926,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.6458,
-      "upper_bound": 634.0308000000001
-    },
-    "Low": {
-      "original_kurtosis": 272.6562041808723,
-      "tail_alpha_ratio": 0.7899141219635546,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.0174,
-      "upper_bound": 609.0575
-    },
-    "Close": {
-      "original_kurtosis": 263.4937691117625,
-      "tail_alpha_ratio": 0.7902775154120881,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.5716,
-      "upper_bound": 624.3202
-    },
     "Volume": {
-      "original_kurtosis": 372.73464832027736,
-      "tail_alpha_ratio": 2.2410477600567322,
+      "original_kurtosis": 398.8574007072116,
+      "tail_alpha_ratio": 2.3246189739074925,
       "transform": "log",
       "category": "tar_based"
     },
-    "SMA_50": {
-      "original_kurtosis": 271.9270401849137,
-      "tail_alpha_ratio": 0.8006276167008806,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 3.379336,
-      "upper_bound": 573.8983120000003
-    },
     "Price_vs_SMA_50": {
-      "original_kurtosis": 1476.77867927049,
+      "original_kurtosis": 1550.499358375123,
       "transform": "log",
       "category": "explosive"
-    },
-    "SMA_150": {
-      "original_kurtosis": 284.4452182290938,
-      "tail_alpha_ratio": 0.7814392830036025,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 2.8016973333333333,
-      "upper_bound": 516.5491946666668
     },
     "Price_vs_SMA_150": {
-      "original_kurtosis": 609.772810802621,
+      "original_kurtosis": 654.122975875203,
       "transform": "log",
       "category": "explosive"
-    },
-    "SMA_200": {
-      "original_kurtosis": 286.89504763965914,
-      "tail_alpha_ratio": 0.7720245787557176,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 2.6037800000000004,
-      "upper_bound": 497.0895710000002
     },
     "Price_vs_SMA_200": {
-      "original_kurtosis": 535.9758375933322,
+      "original_kurtosis": 572.2822962346852,
       "transform": "log",
       "category": "explosive"
     },
-    "ATR": {
-      "original_kurtosis": 485.27999447783804,
-      "tail_alpha_ratio": 0.9640224280124577,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 0.19785714285714295,
-      "upper_bound": 18.43942857142858
-    },
-    "High_52W": {
-      "original_kurtosis": 259.4674553300006,
-      "tail_alpha_ratio": 0.7990280626527565,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.7337,
-      "upper_bound": 631.7054000000004
-    },
-    "Low_52W": {
-      "original_kurtosis": 284.334770946237,
-      "tail_alpha_ratio": 0.7137248017383605,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 1.0558,
-      "upper_bound": 380.45460000000014
-    },
     "Vol_MA": {
-      "original_kurtosis": 580.0069834996071,
-      "tail_alpha_ratio": 2.297960023687337,
+      "original_kurtosis": 552.4996985604705,
+      "tail_alpha_ratio": 2.344399641179018,
       "transform": "log",
       "category": "tar_based"
     },
     "Vol_Ratio": {
-      "original_kurtosis": 129.94508567058307,
+      "original_kurtosis": 135.0751485205766,
       "transform": "log",
       "category": "explosive"
     },
-    "High_20D": {
-      "original_kurtosis": 274.389173903087,
-      "tail_alpha_ratio": 0.7978303038255976,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.1158,
-      "upper_bound": 609.2324000000001
-    },
     "rs_rating": {
-      "original_kurtosis": 10666.634609837236,
-      "tail_alpha_ratio": 3.176885728825127,
+      "original_kurtosis": 12188.947049415205,
+      "tail_alpha_ratio": 3.52085485211057,
       "transform": "log",
       "category": "tar_based"
     },
     "RS": {
-      "original_kurtosis": 10666.634609837236,
+      "original_kurtosis": 12188.947049415205,
       "transform": "log",
       "category": "explosive"
     },
     "RS_MA": {
-      "original_kurtosis": 10708.162459077466,
-      "tail_alpha_ratio": 2.4483254368851997,
+      "original_kurtosis": 12081.332824221308,
+      "tail_alpha_ratio": 2.61574753202024,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "price_vs_spy": {
+      "original_kurtosis": 139.57708197922844,
+      "tail_alpha_ratio": 0.7314898965966744,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.010645092612305727,
+      "upper_bound": 1.4494165190936747
+    },
+    "price_vs_spy_ma63": {
+      "original_kurtosis": 140.4754388596489,
+      "tail_alpha_ratio": 0.7119163386698925,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.008106991182702167,
+      "upper_bound": 1.3008978584464084
+    },
+    "rs_line_delta": {
+      "original_kurtosis": 8243.290489565463,
+      "tail_alpha_ratio": 3.774793173008337,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "rs_line_lag_delta": {
+      "original_kurtosis": 230.64044679860626,
+      "tail_alpha_ratio": 2.27504718614114,
       "transform": "log",
       "category": "tar_based"
     },
     "mom_21d": {
-      "original_kurtosis": 1859.3462216328517,
-      "tail_alpha_ratio": 3.1321408937204933,
+      "original_kurtosis": 2035.4143447219274,
+      "tail_alpha_ratio": 3.4263984248305936,
       "transform": "log",
       "category": "tar_based"
     },
     "mom_63d": {
-      "original_kurtosis": 9158.540298929636,
-      "tail_alpha_ratio": 2.829096743462339,
+      "original_kurtosis": 10421.186730785139,
+      "tail_alpha_ratio": 3.071592682391833,
       "transform": "log",
       "category": "tar_based"
     },
     "mom_126d": {
-      "original_kurtosis": 2317.9411876903328,
-      "tail_alpha_ratio": 3.03457356497397,
+      "original_kurtosis": 2427.8587590575808,
+      "tail_alpha_ratio": 3.3239345202780717,
       "transform": "log",
       "category": "tar_based"
     },
     "mom_189d": {
-      "original_kurtosis": 10435.580884449817,
-      "tail_alpha_ratio": 3.0712633977581763,
+      "original_kurtosis": 11941.626146353132,
+      "tail_alpha_ratio": 3.3923993166634143,
       "transform": "log",
       "category": "tar_based"
     },
     "mom_252d": {
-      "original_kurtosis": 10730.284899648661,
-      "tail_alpha_ratio": 2.7483686549081545,
+      "original_kurtosis": 12264.165013781505,
+      "tail_alpha_ratio": 3.1594573849010064,
       "transform": "log",
       "category": "tar_based"
     },
     "turnover": {
-      "original_kurtosis": 24.512664310420476,
-      "tail_alpha_ratio": 1.1606895195420477,
+      "original_kurtosis": 24.269682027546697,
+      "tail_alpha_ratio": 1.1555461659562096,
       "transform": "winsorize",
       "category": "tar_based",
-      "lower_bound": 1979521.9027922014,
+      "lower_bound": 2046578.31,
       "upper_bound": 6228111755.964481
     },
     "turnover_ma20": {
-      "original_kurtosis": 612.6284541147364,
-      "tail_alpha_ratio": 1.2825217830646678,
-      "transform": "log",
-      "category": "tar_based"
+      "original_kurtosis": 490.13805487292404,
+      "tail_alpha_ratio": 1.1999994451869733,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 750643.72,
+      "upper_bound": 2729420910.54
     },
     "vol_ma20": {
-      "original_kurtosis": 451.90296162591693,
-      "tail_alpha_ratio": 2.151117085938458,
+      "original_kurtosis": 450.8583869620947,
+      "tail_alpha_ratio": 2.2326971777186637,
       "transform": "log",
       "category": "tar_based"
     },
     "vol_ma50": {
-      "original_kurtosis": 580.0069834996071,
-      "tail_alpha_ratio": 2.297960023687337,
+      "original_kurtosis": 552.4996985604705,
+      "tail_alpha_ratio": 2.344399641179018,
       "transform": "log",
       "category": "tar_based"
     },
     "nATR": {
-      "original_kurtosis": 8.74910325374591,
+      "original_kurtosis": 11.663119403473774,
       "transform": "log",
       "category": "explosive"
     },
     "VCP_Ratio": {
-      "original_kurtosis": 1.0581970110561034,
+      "original_kurtosis": 1.1690845035649238,
       "transform": "winsorize",
       "category": "standard",
-      "lower_bound": 0.7166510574881001,
-      "upper_bound": 1.9398467116465397
+      "lower_bound": 0.7169014084507033,
+      "upper_bound": 1.9130347459329184
     },
     "Consolidation_Width": {
-      "original_kurtosis": 18.170624776263523,
-      "tail_alpha_ratio": 3.6964135663318394,
+      "original_kurtosis": 19.23593054171078,
+      "tail_alpha_ratio": 4.027079290572203,
       "transform": "log",
       "category": "tar_based"
     },
     "Dry_Up_Volume": {
-      "original_kurtosis": 50.835600795026295,
+      "original_kurtosis": 54.675217046944724,
       "transform": "log",
       "category": "explosive"
     },
     "RSI_14": {
-      "original_kurtosis": -0.5883222814319682,
+      "original_kurtosis": -0.5157788292893395,
       "transform": "winsorize",
       "category": "bounded",
       "lower_bound": 54.53765276853253,
-      "upper_bound": 94.72349584996017
+      "upper_bound": 94.31818181818187
     },
     "Dist_From_52W_High": {
-      "original_kurtosis": 8.785018291979863,
+      "original_kurtosis": 6.449889960955295,
       "transform": "log",
       "category": "explosive"
     },
-    "Is_Green_Day": {
-      "original_kurtosis": 10.160735092627217,
-      "tail_alpha_ratio": 1.0,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 0.0,
-      "upper_bound": 1.0
-    },
     "SMA_50_Slope": {
-      "original_kurtosis": 5.98526208663279,
+      "original_kurtosis": 6.301311684065894,
       "transform": "winsorize",
       "category": "standard",
       "lower_bound": -0.1913886879359226,
-      "upper_bound": 1.538501570495093
-    },
-    "Lowest_Low_20D": {
-      "original_kurtosis": 295.812652005102,
-      "tail_alpha_ratio": 0.8160009464565493,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 2.91,
-      "upper_bound": 542.1880000000002
+      "upper_bound": 1.5037822597735264
     },
     "Dist_From_20D_Low": {
-      "original_kurtosis": 2076.7379293681565,
-      "tail_alpha_ratio": 3.369577306508762,
+      "original_kurtosis": 2210.526665644295,
+      "tail_alpha_ratio": 3.7791727769117123,
       "transform": "log",
       "category": "tar_based"
     },
-    "Highest_High_20D": {
-      "original_kurtosis": 255.05737119291888,
-      "tail_alpha_ratio": 0.7893669620822926,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.6458,
-      "upper_bound": 634.0308000000001
-    },
-    "Dist_From_20D_High": {
-      "original_kurtosis": 88.04462783318357,
-      "tail_alpha_ratio": 1.1006302693413963,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -0.0856572666505701,
-      "upper_bound": 0.0
-    },
     "Dist_From_52W_Low": {
-      "original_kurtosis": 10574.187289839909,
+      "original_kurtosis": 10797.789786548912,
       "transform": "log",
       "category": "explosive"
     },
     "rs_velocity": {
-      "original_kurtosis": 10058.744660793525,
-      "tail_alpha_ratio": 3.488203826953641,
+      "original_kurtosis": 11347.189136604658,
+      "tail_alpha_ratio": 3.955560809108199,
       "transform": "log",
       "category": "tar_based"
     },
     "volume_acceleration": {
-      "original_kurtosis": 781.448541559014,
+      "original_kurtosis": 830.7839579371744,
       "transform": "log",
       "category": "explosive"
     },
     "breakout_momentum": {
-      "original_kurtosis": 8.299647488139327,
+      "original_kurtosis": 9.12513061844848,
       "transform": "log",
       "category": "explosive"
     },
+    "consolidation_duration": {
+      "original_kurtosis": 20.188689261225946,
+      "tail_alpha_ratio": 1.1681298701826577,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 5.0
+    },
     "price_momentum_curve": {
-      "original_kurtosis": 293.04911205011786,
+      "original_kurtosis": 293.0239871016937,
       "transform": "log",
       "category": "explosive"
     },
     "immediate_thrust": {
-      "original_kurtosis": 12.091990273652753,
-      "tail_alpha_ratio": 1.0813396473937757,
+      "original_kurtosis": 12.410953817949213,
+      "tail_alpha_ratio": 1.1567675500212824,
       "transform": "winsorize",
       "category": "tar_based",
-      "lower_bound": -5.600000000000016,
-      "upper_bound": 38.064449040000035
+      "lower_bound": -5.319999999999993,
+      "upper_bound": 37.72999999999996
     },
     "log_volume_velocity": {
-      "original_kurtosis": 35.468393868713356,
-      "tail_alpha_ratio": 1.9930264554440904,
+      "original_kurtosis": 34.0699839213915,
+      "tail_alpha_ratio": 2.238464641700639,
       "transform": "log",
       "category": "tar_based"
     },
     "price_accel_10d": {
-      "original_kurtosis": 10.41210677771436,
-      "tail_alpha_ratio": 1.0096317808657922,
+      "original_kurtosis": 10.328220665508878,
+      "tail_alpha_ratio": 0.9993303997815528,
       "transform": "winsorize",
       "category": "tar_based",
-      "lower_bound": -0.9814445279999978,
-      "upper_bound": 6.884186536000002
+      "lower_bound": -0.9259999999999993,
+      "upper_bound": 6.876999999999998
     },
     "nATR_Lag1": {
-      "original_kurtosis": 16.98143887092922,
-      "tail_alpha_ratio": 2.341988142685826,
+      "original_kurtosis": 19.03415802979459,
+      "tail_alpha_ratio": 3.15946505694798,
       "transform": "log",
       "category": "tar_based"
     },
-    "ATR_Lag1": {
-      "original_kurtosis": 297.01271379406137,
-      "tail_alpha_ratio": 1.0280831530704893,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 0.18285714285714277,
-      "upper_bound": 16.773400000000013
-    },
     "VCP_Ratio_Lag1": {
-      "original_kurtosis": 27.10439634368416,
-      "tail_alpha_ratio": 1.873984856569357,
+      "original_kurtosis": 28.745660973305643,
+      "tail_alpha_ratio": 2.1417833032095626,
       "transform": "log",
       "category": "tar_based"
     },
     "Consolidation_Width_Lag1": {
-      "original_kurtosis": 20.36827034308958,
-      "tail_alpha_ratio": 3.1496900122318903,
+      "original_kurtosis": 21.3903269568075,
+      "tail_alpha_ratio": 3.5300089291816494,
       "transform": "log",
       "category": "tar_based"
     },
     "Price_vs_SMA_50_Lag1": {
-      "original_kurtosis": 198.52528828538104,
-      "tail_alpha_ratio": 2.6566035201738494,
+      "original_kurtosis": 209.11828760234712,
+      "tail_alpha_ratio": 2.9224369240603556,
       "transform": "log",
       "category": "tar_based"
     },
     "Price_vs_SMA_150_Lag1": {
-      "original_kurtosis": 265.088574230412,
-      "tail_alpha_ratio": 2.972855483374411,
+      "original_kurtosis": 282.19226303559816,
+      "tail_alpha_ratio": 3.166506700408235,
       "transform": "log",
       "category": "tar_based"
     },
     "Price_vs_SMA_200_Lag1": {
-      "original_kurtosis": 264.05715732277764,
-      "tail_alpha_ratio": 2.977178069945115,
+      "original_kurtosis": 278.4434596790405,
+      "tail_alpha_ratio": 3.3613756394856704,
       "transform": "log",
       "category": "tar_based"
     },
     "RS_Lag1": {
-      "original_kurtosis": 10694.398152459764,
-      "tail_alpha_ratio": 2.351582284885848,
+      "original_kurtosis": 12207.371809781314,
+      "tail_alpha_ratio": 2.660588044263189,
       "transform": "log",
       "category": "tar_based"
     },
     "RS_MA_Lag1": {
-      "original_kurtosis": 10704.98088754175,
-      "tail_alpha_ratio": 2.452071512170452,
+      "original_kurtosis": 12077.976098259947,
+      "tail_alpha_ratio": 2.6203107618700194,
       "transform": "log",
       "category": "tar_based"
     },
     "Dry_Up_Volume_Lag1": {
-      "original_kurtosis": 58.65922900438227,
-      "tail_alpha_ratio": 1.6581632202623988,
+      "original_kurtosis": 73.80634202932545,
+      "tail_alpha_ratio": 1.7415989961055316,
       "transform": "log",
       "category": "tar_based"
     },
-    "High_52W_Lag1": {
-      "original_kurtosis": 264.0945217124784,
-      "tail_alpha_ratio": 0.8211642501017669,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.4058,
-      "upper_bound": 613.6582000000001
-    },
-    "Low_52W_Lag1": {
-      "original_kurtosis": 285.3088849102553,
-      "tail_alpha_ratio": 0.7114285229504326,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 1.05,
-      "upper_bound": 380.45460000000014
-    },
-    "Lowest_Low_20D_Lag1": {
-      "original_kurtosis": 297.0241979756199,
-      "tail_alpha_ratio": 0.8169828789465929,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 2.9058,
-      "upper_bound": 539.1407000000004
-    },
-    "Highest_High_20D_Lag1": {
-      "original_kurtosis": 271.57204335148094,
-      "tail_alpha_ratio": 0.7967633256823152,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.1916,
-      "upper_bound": 611.0740000000001
-    },
     "Dist_From_52W_Low_Lag1": {
-      "original_kurtosis": 10717.009660987918,
-      "tail_alpha_ratio": 2.472551089359433,
+      "original_kurtosis": 11935.26641216268,
+      "tail_alpha_ratio": 2.78608049241703,
       "transform": "log",
       "category": "tar_based"
     },
     "Dist_From_20D_Low_Lag1": {
-      "original_kurtosis": 1822.072282225508,
-      "tail_alpha_ratio": 2.420987138112841,
+      "original_kurtosis": 4255.492180967472,
+      "tail_alpha_ratio": 2.779388653400178,
       "transform": "log",
       "category": "tar_based"
     },
-    "Dist_From_20D_High_Lag1": {
-      "original_kurtosis": 24.79079929254251,
-      "tail_alpha_ratio": 1.057747896789575,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -0.13676452987029897,
-      "upper_bound": -0.00011674003817257132
-    },
     "nATR_Delta": {
-      "original_kurtosis": 9835.800859940606,
-      "tail_alpha_ratio": 1.244801498331026,
+      "original_kurtosis": 11111.656990573169,
+      "tail_alpha_ratio": 1.3261836791332733,
       "transform": "log",
       "category": "tar_based"
     },
     "ATR_Delta": {
-      "original_kurtosis": 10747.60120152085,
-      "tail_alpha_ratio": 2.0168736195020474,
+      "original_kurtosis": 12287.752085981894,
+      "tail_alpha_ratio": 2.1847310736693917,
       "transform": "log",
       "category": "tar_based"
     },
     "VCP_Ratio_Delta": {
-      "original_kurtosis": 7157.736491850953,
-      "tail_alpha_ratio": 2.2869341444477334,
+      "original_kurtosis": 7893.620632109473,
+      "tail_alpha_ratio": 2.5329545591823805,
       "transform": "log",
       "category": "tar_based"
     },
     "Consolidation_Width_Delta": {
-      "original_kurtosis": 815.261186311872,
-      "tail_alpha_ratio": 1.565827477840857,
+      "original_kurtosis": 805.7256195327423,
+      "tail_alpha_ratio": 1.6527512246006701,
       "transform": "log",
       "category": "tar_based"
     },
     "Price_vs_SMA_50_Delta": {
-      "original_kurtosis": 15.581259453502042,
-      "tail_alpha_ratio": 1.0185922372229574,
+      "original_kurtosis": 14.043872313972855,
+      "tail_alpha_ratio": 0.9821155591517566,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -23.779792418488302,
       "upper_bound": 23.047870948163506
     },
     "Price_vs_SMA_150_Delta": {
-      "original_kurtosis": 15.398735492529273,
-      "tail_alpha_ratio": 0.9973073339738435,
+      "original_kurtosis": 14.801979575328492,
+      "tail_alpha_ratio": 1.0208756168900577,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -3.057678490777052,
       "upper_bound": 5.550372394361589
     },
     "Price_vs_SMA_200_Delta": {
-      "original_kurtosis": 10580.088591171489,
-      "tail_alpha_ratio": 1.5901523083176814,
+      "original_kurtosis": 8083.713518724994,
+      "tail_alpha_ratio": 1.8345755106133113,
       "transform": "log",
       "category": "tar_based"
     },
     "RS_Delta": {
-      "original_kurtosis": 5947.177951705879,
-      "tail_alpha_ratio": 1.895094415939676,
+      "original_kurtosis": 6879.075387775685,
+      "tail_alpha_ratio": 1.8856010629525184,
       "transform": "log",
       "category": "tar_based"
     },
     "RS_MA_Delta": {
-      "original_kurtosis": 6750.066158829257,
-      "tail_alpha_ratio": 1.4403278014148324,
+      "original_kurtosis": 7629.846901304115,
+      "tail_alpha_ratio": 1.5273818278503803,
       "transform": "log",
       "category": "tar_based"
     },
     "Dry_Up_Volume_Delta": {
-      "original_kurtosis": 836.1316082538273,
-      "tail_alpha_ratio": 2.574497481726331,
+      "original_kurtosis": 640.0139086477393,
+      "tail_alpha_ratio": 2.839757522926957,
       "transform": "log",
       "category": "tar_based"
     },
     "High_52W_Delta": {
-      "original_kurtosis": 8586.406365495539,
-      "tail_alpha_ratio": 3.0144881573070834,
+      "original_kurtosis": 9348.150411999348,
+      "tail_alpha_ratio": 3.227581622224326,
       "transform": "log",
       "category": "tar_based"
     },
     "Low_52W_Delta": {
-      "original_kurtosis": 2645.371992381484,
-      "tail_alpha_ratio": 1.2432825689290896,
-      "transform": "log",
-      "category": "tar_based"
+      "original_kurtosis": 2528.6692283368284,
+      "tail_alpha_ratio": 0.9569687442859518,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 0.043406582906476934
     },
     "Lowest_Low_20D_Delta": {
-      "original_kurtosis": 196.7864834184714,
-      "tail_alpha_ratio": 1.508580579891242,
+      "original_kurtosis": 210.93105103545776,
+      "tail_alpha_ratio": 1.5455519674852445,
       "transform": "log",
       "category": "tar_based"
     },
     "Highest_High_20D_Delta": {
-      "original_kurtosis": 7722.024721577037,
-      "tail_alpha_ratio": 3.226515511099443,
+      "original_kurtosis": 8351.18868850609,
+      "tail_alpha_ratio": 3.4401123215841136,
+      "transform": "log",
+      "category": "tar_based"
+    },
+    "RSI_14_Delta": {
+      "original_kurtosis": 131.55632742355024,
+      "tail_alpha_ratio": 1.3308182450020363,
       "transform": "log",
       "category": "tar_based"
     },
     "Dist_From_52W_Low_Delta": {
-      "original_kurtosis": 10748.059623756142,
-      "tail_alpha_ratio": 2.5403719154126105,
+      "original_kurtosis": 12286.321601807946,
+      "tail_alpha_ratio": 2.7600598348152294,
       "transform": "log",
       "category": "tar_based"
     },
     "Dist_From_20D_Low_Delta": {
-      "original_kurtosis": 10319.061725303485,
-      "tail_alpha_ratio": 1.2569559094385139,
+      "original_kurtosis": 11571.520895678903,
+      "tail_alpha_ratio": 1.388750837745739,
       "transform": "log",
       "category": "tar_based"
     },
     "Dist_From_20D_High_Delta": {
-      "original_kurtosis": 15.182000029827286,
-      "tail_alpha_ratio": 1.0350126317500787,
+      "original_kurtosis": 16.118320823630647,
+      "tail_alpha_ratio": 1.0341238664110497,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -1.0,
       "upper_bound": 17.280047413793156
     },
     "alpha001": {
-      "original_kurtosis": 129.41463639180756,
-      "tail_alpha_ratio": 2.8012123057686726,
+      "original_kurtosis": 141.18882486879505,
+      "tail_alpha_ratio": 2.9653584631090326,
       "transform": "log",
       "category": "tar_based"
     },
     "alpha009": {
-      "original_kurtosis": 297.8631430231122,
+      "original_kurtosis": 299.3032332185469,
       "transform": "log",
       "category": "explosive"
     },
-    "alpha012": {
-      "original_kurtosis": 327.8539887253818,
-      "tail_alpha_ratio": 0.8490057283563676,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -31.69839999999998,
-      "upper_bound": 6.282600000000013
-    },
-    "alpha041": {
-      "original_kurtosis": 263.03627010274926,
-      "tail_alpha_ratio": 0.8031654325711162,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": 4.323923288080213,
-      "upper_bound": 613.3218735654143
-    },
     "alpha004": {
-      "original_kurtosis": 12.812542707749044,
-      "tail_alpha_ratio": 1.0750699628379097,
+      "original_kurtosis": 11.719944539966122,
+      "tail_alpha_ratio": 0.8729474250667564,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -9.0,
       "upper_bound": -3.0
     },
     "alpha011": {
-      "original_kurtosis": 0.7311995516015712,
+      "original_kurtosis": 0.6648660727016118,
       "transform": "winsorize",
       "category": "standard",
-      "lower_bound": 0.0020593556532564855,
+      "lower_bound": 0.002202716498734964,
       "upper_bound": 1.5828493044170773
     },
     "alpha013": {
-      "original_kurtosis": 2.7661421962613115,
+      "original_kurtosis": 2.897361126524511,
       "transform": "winsorize",
       "category": "standard",
       "lower_bound": -0.9989973525742866,
       "upper_bound": -0.17587849278244894
     },
     "alpha054": {
-      "original_kurtosis": 0.44122427058194535,
+      "original_kurtosis": 0.4907533271480662,
       "transform": "winsorize",
       "category": "standard",
-      "lower_bound": -0.9284632314934054,
+      "lower_bound": -0.9280418182707697,
       "upper_bound": -0.08994655317794567
     },
     "alpha060": {
-      "original_kurtosis": 11.149778962157008,
-      "tail_alpha_ratio": 1.9476270291457227,
+      "original_kurtosis": 16.978337992654904,
+      "tail_alpha_ratio": 2.0060260500093245,
       "transform": "log",
       "category": "tar_based"
     },
-    "alpha046": {
-      "original_kurtosis": 13.988794162890574,
-      "tail_alpha_ratio": 0.9924039869334699,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -3.924199999999992,
-      "upper_bound": 1.0
-    },
-    "alpha049": {
-      "original_kurtosis": 415.99879369588996,
-      "tail_alpha_ratio": 0.9835357652295358,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -29.392599999999995,
-      "upper_bound": 1.0
-    },
-    "alpha051": {
-      "original_kurtosis": 412.4797667962618,
-      "tail_alpha_ratio": 0.9539426476332193,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -29.392599999999995,
-      "upper_bound": 1.0
-    },
     "revenue_growth_yoy": {
-      "original_kurtosis": 4427.264291294336,
+      "original_kurtosis": 4778.483004025228,
       "transform": "log",
       "category": "explosive"
     },
     "net_income_growth_yoy": {
-      "original_kurtosis": 17.44079267501865,
-      "tail_alpha_ratio": 1.1772829084550274,
-      "transform": "winsorize",
-      "category": "tar_based",
-      "lower_bound": -1984.7618421028956,
-      "upper_bound": 2226.503986470162
+      "original_kurtosis": 16.76747293164878,
+      "tail_alpha_ratio": 1.2631539298422436,
+      "transform": "log",
+      "category": "tar_based"
     },
     "eps_growth_yoy": {
-      "original_kurtosis": 3843.183108077456,
+      "original_kurtosis": 4089.0369723260387,
       "transform": "log",
       "category": "explosive"
     },
     "eps_accel": {
-      "original_kurtosis": 5063.275011654627,
+      "original_kurtosis": 5914.287884425039,
       "transform": "log",
       "category": "explosive"
     },
     "revenue_accel": {
-      "original_kurtosis": 2214.7485961438583,
+      "original_kurtosis": 2410.0663221157793,
       "transform": "log",
       "category": "explosive"
     },
     "revenue_cagr_3y": {
-      "original_kurtosis": 363.89969155961035,
-      "tail_alpha_ratio": 2.0463757334503168,
+      "original_kurtosis": 358.2565551430222,
+      "tail_alpha_ratio": 2.0651165587917872,
       "transform": "log",
       "category": "tar_based"
     },
     "eps_stability_score": {
-      "original_kurtosis": 20.54624435836042,
-      "tail_alpha_ratio": 1.0353749819069207,
+      "original_kurtosis": 19.709101123563627,
+      "tail_alpha_ratio": 1.112845577745173,
       "transform": "winsorize",
       "category": "tar_based",
-      "lower_bound": 9.413507062409966,
+      "lower_bound": 9.520051320501917,
       "upper_bound": 6810.509393909049
     },
     "revenue": {
-      "original_kurtosis": 25.63415125136863,
-      "tail_alpha_ratio": 0.6801114775826854,
+      "original_kurtosis": 25.19880676973773,
+      "tail_alpha_ratio": 0.6078634964092241,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": 0.0,
       "upper_bound": 47105000000.0
     },
     "netIncome": {
-      "original_kurtosis": 24.308749918695646,
-      "tail_alpha_ratio": 0.8129772497516026,
+      "original_kurtosis": 23.522939961385852,
+      "tail_alpha_ratio": 0.7291666064568503,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -422600000.0,
       "upper_bound": 5020056700.0
     },
     "operatingCashFlow": {
-      "original_kurtosis": 25.53517958884488,
-      "tail_alpha_ratio": 0.8430633611031252,
+      "original_kurtosis": 25.45725829611809,
+      "tail_alpha_ratio": 0.7453952013770064,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -719235719.9999999,
       "upper_bound": 7904898254.879995
     },
     "freeCashFlow": {
-      "original_kurtosis": 21.589421972946706,
-      "tail_alpha_ratio": 0.82046195966319,
+      "original_kurtosis": 21.19293216388807,
+      "tail_alpha_ratio": 0.7710709246967209,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -1196000000.0,
       "upper_bound": 5789993287.999982
     },
     "debt_to_equity": {
-      "original_kurtosis": 3135.196341175593,
-      "tail_alpha_ratio": 1.6802235698060928,
+      "original_kurtosis": 2950.709706591092,
+      "tail_alpha_ratio": 1.6895176115026995,
       "transform": "log",
       "category": "tar_based"
     },
     "current_ratio": {
-      "original_kurtosis": 4319.814493614469,
-      "tail_alpha_ratio": 1.3878367380899295,
+      "original_kurtosis": 3500.353396929581,
+      "tail_alpha_ratio": 1.4033352870287883,
       "transform": "log",
       "category": "tar_based"
     },
     "quick_ratio": {
-      "original_kurtosis": 4262.927089504288,
-      "tail_alpha_ratio": 1.4123435561310334,
+      "original_kurtosis": 3468.0140759930014,
+      "tail_alpha_ratio": 1.4284154536389058,
       "transform": "log",
       "category": "tar_based"
     },
     "gross_margin": {
-      "original_kurtosis": -0.01849455656020993,
+      "original_kurtosis": -0.014963171490339988,
       "transform": "winsorize",
       "category": "standard",
       "lower_bound": -39.07250154921287,
       "upper_bound": 100.0
     },
     "operating_margin": {
-      "original_kurtosis": 42.293209058963,
+      "original_kurtosis": 41.39011116458193,
       "transform": "winsorize",
       "category": "standard",
       "lower_bound": -712.8222804356818,
       "upper_bound": 75.79377569077911
     },
     "roe": {
-      "original_kurtosis": 11.821002792525343,
+      "original_kurtosis": 11.661422866708488,
       "transform": "winsorize",
       "category": "standard",
       "lower_bound": -79.88478528790817,
       "upper_bound": 80.20700379459473
     },
     "roa": {
-      "original_kurtosis": 7.50493914746284,
+      "original_kurtosis": 7.420423320033649,
       "transform": "winsorize",
       "category": "standard",
-      "lower_bound": -18.45755311327818,
+      "lower_bound": -18.11013359980059,
       "upper_bound": 11.461903002348095
     },
     "net_margin": {
-      "original_kurtosis": 43.14378556957953,
+      "original_kurtosis": 41.732498847036936,
       "transform": "winsorize",
       "category": "standard",
       "lower_bound": -710.1876593574706,
       "upper_bound": 83.36377303166971
     },
     "inventory_growth_yoy": {
-      "original_kurtosis": 13.784849341451071,
-      "tail_alpha_ratio": 0.9252599227510677,
+      "original_kurtosis": 13.43117618747393,
+      "tail_alpha_ratio": 0.9711710779501583,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -3100.0015798857144,
       "upper_bound": 2541.9371561290322
     },
     "inventory_vs_sales_spread": {
-      "original_kurtosis": 13.623920991027397,
-      "tail_alpha_ratio": 0.9469213115687133,
+      "original_kurtosis": 13.493684925049347,
+      "tail_alpha_ratio": 0.9789432583657051,
       "transform": "winsorize",
       "category": "tar_based",
       "lower_bound": -3194.1084162270377,
       "upper_bound": 2359.017363113023
     },
     "earnings_quality_score": {
-      "original_kurtosis": 13.912316262820216,
+      "original_kurtosis": 14.019152591795795,
       "transform": "winsorize",
       "category": "bounded",
       "lower_bound": -19.992757872103915,
       "upper_bound": 26.373879444637115
     },
     "fcf_margin": {
-      "original_kurtosis": 3225.687265867901,
-      "tail_alpha_ratio": 1.4203256347440187,
+      "original_kurtosis": 3518.3311396676127,
+      "tail_alpha_ratio": 1.3914650720332722,
       "transform": "log",
       "category": "tar_based"
     },
     "gross_margin_trend": {
-      "original_kurtosis": 7443.931669315954,
-      "tail_alpha_ratio": 1.9245706548870816,
+      "original_kurtosis": 5010.658427839131,
+      "tail_alpha_ratio": 2.028872097739358,
       "transform": "log",
       "category": "tar_based"
     },
     "days_since_report": {
-      "original_kurtosis": 703.746456310641,
-      "tail_alpha_ratio": 1.2499185337031404,
+      "original_kurtosis": 618.0579017744836,
+      "tail_alpha_ratio": 1.3646337138960662,
       "transform": "log",
       "category": "tar_based"
     },
     "days_since_earnings": {
-      "original_kurtosis": 703.746456310641,
-      "tail_alpha_ratio": 1.2499185337031404,
+      "original_kurtosis": 618.0579017744836,
+      "tail_alpha_ratio": 1.3646337138960662,
       "transform": "log",
       "category": "tar_based"
     },
     "pe_ratio": {
-      "original_kurtosis": 7.193505513957932,
+      "original_kurtosis": 7.149391295538969,
       "transform": "log",
       "category": "explosive"
     },
     "ps_ratio": {
-      "original_kurtosis": 3.8960055851415536,
+      "original_kurtosis": 3.7604505628323794,
       "transform": "log",
       "category": "explosive"
     },
     "pb_ratio": {
-      "original_kurtosis": 17.074881185707827,
+      "original_kurtosis": 16.47889653961879,
       "transform": "log",
       "category": "explosive"
     },
     "beta": {
-      "original_kurtosis": 28.42202200951117,
-      "tail_alpha_ratio": 2.556343525715918,
+      "original_kurtosis": 29.984115130520713,
+      "tail_alpha_ratio": 2.9256074233514537,
       "transform": "log",
       "category": "tar_based"
     },
     "Sector_Momentum": {
-      "original_kurtosis": 10693.92453716114,
-      "tail_alpha_ratio": 2.1590593314533946,
+      "original_kurtosis": 12224.343218828037,
+      "tail_alpha_ratio": 2.481717274946583,
       "transform": "log",
       "category": "tar_based"
     },
     "Industry_Momentum": {
-      "original_kurtosis": 10681.643865167724,
-      "tail_alpha_ratio": 2.5995300685285083,
+      "original_kurtosis": 12209.241264769791,
+      "tail_alpha_ratio": 2.822045328841097,
       "transform": "log",
       "category": "tar_based"
     },
     "RS_vs_Industry": {
-      "original_kurtosis": 18.35708263968246,
-      "tail_alpha_ratio": 1.246224066243428,
+      "original_kurtosis": 17.365591968060958,
+      "tail_alpha_ratio": 1.290938922437223,
       "transform": "log",
       "category": "tar_based"
     },
     "log_rs_rating": {
-      "original_kurtosis": 54.80536100509456,
-      "tail_alpha_ratio": 3.176885728825127,
+      "original_kurtosis": 54.174513692324304,
+      "tail_alpha_ratio": 3.52085485211057,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS": {
-      "original_kurtosis": 54.80536100509456,
-      "tail_alpha_ratio": 3.176885728825127,
+      "original_kurtosis": 54.174513692324304,
+      "tail_alpha_ratio": 3.52085485211057,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS_MA": {
-      "original_kurtosis": 94.86656097044097,
-      "tail_alpha_ratio": 2.4483254368851997,
+      "original_kurtosis": 77.46580391868913,
+      "tail_alpha_ratio": 2.61574753202024,
       "transform": "log",
       "category": "tar_based"
     },
     "log_mom_21d": {
-      "original_kurtosis": 80.28476636074113,
-      "tail_alpha_ratio": 3.1321408937204933,
+      "original_kurtosis": 84.3818715978818,
+      "tail_alpha_ratio": 3.4263984248305936,
       "transform": "log",
       "category": "tar_based"
     },
     "log_mom_63d": {
-      "original_kurtosis": 54.81807975235063,
-      "tail_alpha_ratio": 2.829096743462339,
+      "original_kurtosis": 54.197781838737356,
+      "tail_alpha_ratio": 3.071592682391833,
       "transform": "log",
       "category": "tar_based"
     },
     "log_mom_126d": {
-      "original_kurtosis": 19.623103485875475,
-      "tail_alpha_ratio": 3.03457356497397,
+      "original_kurtosis": 20.27798821676739,
+      "tail_alpha_ratio": 3.3239345202780717,
       "transform": "log",
       "category": "tar_based"
     },
     "log_mom_189d": {
-      "original_kurtosis": 29.163986264944803,
-      "tail_alpha_ratio": 3.0712633977581763,
+      "original_kurtosis": 28.022679666661247,
+      "tail_alpha_ratio": 3.3923993166634143,
       "transform": "log",
       "category": "tar_based"
     },
     "log_mom_252d": {
-      "original_kurtosis": 30.013267166015098,
-      "tail_alpha_ratio": 2.7483686549081545,
+      "original_kurtosis": 28.053974913866213,
+      "tail_alpha_ratio": 3.1594573849010064,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dist_From_20D_Low": {
-      "original_kurtosis": 70.86051559296764,
-      "tail_alpha_ratio": 3.369577306508762,
+      "original_kurtosis": 91.74111659424369,
+      "tail_alpha_ratio": 3.7791727769117123,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dist_From_52W_Low": {
-      "original_kurtosis": 17.2052064713708,
-      "tail_alpha_ratio": 3.026843391033821,
+      "original_kurtosis": 19.013061536149348,
+      "tail_alpha_ratio": 3.3144149474596176,
       "transform": "log",
       "category": "tar_based"
     },
     "log_rs_velocity": {
-      "original_kurtosis": 1542.1890918780828,
-      "tail_alpha_ratio": 3.488203826953641,
+      "original_kurtosis": 1539.1466548974308,
+      "tail_alpha_ratio": 3.955560809108199,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS_Lag1": {
-      "original_kurtosis": 75.58791412415378,
-      "tail_alpha_ratio": 2.351582284885848,
+      "original_kurtosis": 73.32362548570245,
+      "tail_alpha_ratio": 2.660588044263189,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS_MA_Lag1": {
-      "original_kurtosis": 95.0252715728371,
-      "tail_alpha_ratio": 2.452071512170452,
+      "original_kurtosis": 77.08367592603622,
+      "tail_alpha_ratio": 2.6203107618700194,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dist_From_52W_Low_Lag1": {
-      "original_kurtosis": 23.787015531771495,
-      "tail_alpha_ratio": 2.472551089359433,
+      "original_kurtosis": 25.172827760993176,
+      "tail_alpha_ratio": 2.78608049241703,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dist_From_20D_Low_Lag1": {
-      "original_kurtosis": 64.15009274441493,
-      "tail_alpha_ratio": 2.420987138112841,
+      "original_kurtosis": 119.24774530328467,
+      "tail_alpha_ratio": 2.779388653400178,
       "transform": "log",
       "category": "tar_based"
     },
     "log_nATR_Delta": {
-      "original_kurtosis": 315.47100915008355,
-      "tail_alpha_ratio": 1.244801498331026,
+      "original_kurtosis": 292.7623854017528,
+      "tail_alpha_ratio": 1.3261836791332733,
       "transform": "log",
       "category": "tar_based"
     },
     "log_ATR_Delta": {
-      "original_kurtosis": 624.8983671419677,
-      "tail_alpha_ratio": 2.0168736195020474,
+      "original_kurtosis": 605.062856866831,
+      "tail_alpha_ratio": 2.1847310736693917,
       "transform": "log",
       "category": "tar_based"
     },
     "log_VCP_Ratio_Delta": {
-      "original_kurtosis": 61.16190078834599,
-      "tail_alpha_ratio": 2.2869341444477334,
+      "original_kurtosis": 58.422449404100064,
+      "tail_alpha_ratio": 2.5329545591823805,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Price_vs_SMA_200_Delta": {
-      "original_kurtosis": 65.65578726598108,
-      "tail_alpha_ratio": 1.5901523083176814,
+      "original_kurtosis": 81.20788750691331,
+      "tail_alpha_ratio": 1.8345755106133113,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS_Delta": {
-      "original_kurtosis": 84.12687563247565,
-      "tail_alpha_ratio": 1.895094415939676,
+      "original_kurtosis": 83.63155196399573,
+      "tail_alpha_ratio": 1.8856010629525184,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS_MA_Delta": {
-      "original_kurtosis": 605.5157329171336,
-      "tail_alpha_ratio": 1.4403278014148324,
+      "original_kurtosis": 683.84102120068,
+      "tail_alpha_ratio": 1.5273818278503803,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dry_Up_Volume_Delta": {
-      "original_kurtosis": 23.866560179540357,
-      "tail_alpha_ratio": 2.574497481726331,
+      "original_kurtosis": 20.3181482515616,
+      "tail_alpha_ratio": 2.839757522926957,
       "transform": "log",
       "category": "tar_based"
     },
     "log_High_52W_Delta": {
-      "original_kurtosis": 815.7254701310263,
-      "tail_alpha_ratio": 3.0144881573070834,
+      "original_kurtosis": 821.3122180117197,
+      "tail_alpha_ratio": 3.227581622224326,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Low_52W_Delta": {
-      "original_kurtosis": 1311.7518237352967,
-      "tail_alpha_ratio": 1.2432825689290896,
-      "transform": "log",
-      "category": "tar_based"
+      "original_kurtosis": 1191.7319240794059,
+      "tail_alpha_ratio": 0.9569687442859518,
+      "transform": "winsorize",
+      "category": "tar_based",
+      "lower_bound": 0.0,
+      "upper_bound": 0.04249092054202104
     },
     "log_Lowest_Low_20D_Delta": {
-      "original_kurtosis": 146.97296831268966,
-      "tail_alpha_ratio": 1.508580579891242,
+      "original_kurtosis": 157.4563967722956,
+      "tail_alpha_ratio": 1.5455519674852445,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Highest_High_20D_Delta": {
-      "original_kurtosis": 466.75770525486854,
-      "tail_alpha_ratio": 3.226515511099443,
+      "original_kurtosis": 466.49979096913034,
+      "tail_alpha_ratio": 3.4401123215841136,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dist_From_52W_Low_Delta": {
-      "original_kurtosis": 631.3276600224739,
-      "tail_alpha_ratio": 2.5403719154126105,
+      "original_kurtosis": 627.659960624672,
+      "tail_alpha_ratio": 2.7600598348152294,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Dist_From_20D_Low_Delta": {
-      "original_kurtosis": 22.653704682438605,
-      "tail_alpha_ratio": 1.2569559094385139,
+      "original_kurtosis": 23.51530411542251,
+      "tail_alpha_ratio": 1.388750837745739,
       "transform": "log",
       "category": "tar_based"
     },
     "log_alpha001": {
-      "original_kurtosis": 148.60848428483038,
-      "tail_alpha_ratio": 2.8012123057686726,
+      "original_kurtosis": 162.26316845133738,
+      "tail_alpha_ratio": 2.9653584631090326,
       "transform": "log",
       "category": "tar_based"
     },
     "log_alpha060": {
-      "original_kurtosis": 11.096950939715247,
-      "tail_alpha_ratio": 1.9476270291457227,
+      "original_kurtosis": 16.886997041711954,
+      "tail_alpha_ratio": 2.0060260500093245,
       "transform": "log",
       "category": "tar_based"
     },
     "log_debt_to_equity": {
-      "original_kurtosis": 11.464874790638648,
-      "tail_alpha_ratio": 1.6802235698060928,
+      "original_kurtosis": 11.756533444429893,
+      "tail_alpha_ratio": 1.6895176115026995,
       "transform": "log",
       "category": "tar_based"
     },
     "log_current_ratio": {
-      "original_kurtosis": 19.061515921205128,
-      "tail_alpha_ratio": 1.3878367380899295,
+      "original_kurtosis": 20.322011267409824,
+      "tail_alpha_ratio": 1.4033352870287883,
       "transform": "log",
       "category": "tar_based"
     },
     "log_quick_ratio": {
-      "original_kurtosis": 19.588491478871624,
-      "tail_alpha_ratio": 1.4123435561310334,
+      "original_kurtosis": 20.671886656633074,
+      "tail_alpha_ratio": 1.4284154536389058,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Sector_Momentum": {
-      "original_kurtosis": 71.70259017606895,
-      "tail_alpha_ratio": 2.1590593314533946,
+      "original_kurtosis": 74.29308878835127,
+      "tail_alpha_ratio": 2.481717274946583,
       "transform": "log",
       "category": "tar_based"
     },
     "log_Industry_Momentum": {
-      "original_kurtosis": 55.762316420450574,
-      "tail_alpha_ratio": 2.5995300685285083,
+      "original_kurtosis": 56.005714683533526,
+      "tail_alpha_ratio": 2.822045328841097,
       "transform": "log",
       "category": "tar_based"
     },
     "log_RS_vs_Industry": {
-      "original_kurtosis": 12.301623467607884,
-      "tail_alpha_ratio": 1.246224066243428,
+      "original_kurtosis": 11.474787141781654,
+      "tail_alpha_ratio": 1.290938922437223,
       "transform": "log",
       "category": "tar_based"
     }
   },
-  "created_at": "2026-02-10T22:06:07.907521"
+  "created_at": "2026-02-14T17:35:29.748678"
 }

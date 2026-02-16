@@ -55,7 +55,13 @@ class FeatureEngineer:
             'ATR', 'nATR',                        # Volatility (absolute + normalized)
             'VCP_Ratio',                          # Volatility contraction
             'Consolidation_Width',                # Base tightness
-            'RS', 'RS_MA',                        # Relative strength
+            'RS', 'RS_MA',                        # Momentum RS (for ranking)
+            'price_vs_spy',                       # Price/benchmark ratio (SEPA C9)
+            'price_vs_spy_ma63',                  # RS Line MA (SEPA C9)
+            'rs_line_uptrend',                    # Boolean flag for RS uptrend
+            'rs_line_log',                        # Log-transformed RS Line (ML normalization)
+            'rs_line_delta',                      # 1-day RS Line momentum
+            'rs_line_lag_delta',                  # Lagged RS Line momentum (acceleration)
             'Vol_MA', 'Vol_Ratio',                # Volume metrics
             'Dry_Up_Volume',                      # Seller exhaustion
             'High_52W', 'Low_52W',                # 52-week range

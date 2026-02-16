@@ -617,23 +617,48 @@ class DuckDBMigrator:
                 ticker,
                 date,
                 -- Moving averages
+                AVG(close) OVER w20 as sma_20,
                 AVG(close) OVER w50 as sma_50,
                 AVG(close) OVER w200 as sma_200,
+                CASE WHEN close > AVG(close) OVER w200 THEN TRUE ELSE FALSE END as close_above_sma200,
+
                 NULL as ema_21,  -- TODO: Implement EMA
+                
                 -- Volatility
                 NULL as atr_14,  -- TODO: Implement ATR
+                AVG(volume) OVER w20 as vol_avg_20,
                 AVG(volume) OVER w50 as vol_avg_50,
+
+                -- Relative Strength (RS Line vs SPY)
+                price_vs_spy,
+                AVG(price_vs_spy) OVER w20 as price_vs_spy_ma20,
+                AVG(price_vs_spy) OVER w50 as price_vs_spy_ma50,
+                AVG(price_vs_spy) OVER w200 as price_vs_spy_ma200,
+                CASE WHEN price_vs_spy > AVG(price_vs_spy) OVER w20 THEN TRUE ELSE FALSE END as rs_line_uptrend,
+                LN(price_vs_spy) as rs_line_log,
+                (price_vs_spy / LAG(price_vs_spy, 1) OVER ticker_date - 1) as rs_line_delta,
+                LAG((price_vs_spy / LAG(price_vs_spy, 1) OVER ticker_date - 1), 1) OVER ticker_date as rs_line_lag_delta,
+
                 -- 52-week metrics
-                NULL as rs_rating,  -- TODO: Implement RS rating
-                NULL as rs_vs_spy,
                 MAX(high) OVER w252 as high_52w,
                 MIN(low) OVER w252 as low_52w,
                 (close - MAX(high) OVER w252) / NULLIF(MAX(high) OVER w252, 0) as pct_from_high_52w,
+                (close - MIN(low) OVER w252) / NULLIF(MIN(low) OVER w252, 0) as pct_above_low_52w,
+
                 -- Volume ratio
                 volume / NULLIF(AVG(volume) OVER w50, 0) as vol_ratio_50,
+                AVG(volume) OVER w20 * close as dollar_volume_avg_20,
+
+                -- Returns
+                return_1d,
+                return_5d,
+                return_20d,
+                return_60d,
+                volatility_20d,
+
                 -- Metadata
-                'v1.0' as feature_version
-            FROM price_data
+                'v2.0_phase1' as feature_version
+            FROM price_features
             {where_clause}
             WINDOW
                 w50 AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 49 PRECEDING AND CURRENT ROW),

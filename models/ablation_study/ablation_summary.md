@@ -1,6 +1,6 @@
 # M01 Ablation Study Summary
 
-**Generated:** 2026-02-09 18:16:56
+**Generated:** 2026-02-14 17:33:19
 **Period:** 2020-01-01 to 2023-12-31
 
 ## Target Definitions Compared
@@ -19,11 +19,11 @@
 
 | Model | Target Type | IC | Edge | Edge Sharpe | RMSE |
 |-------|-------------|----:|-----:|------------:|-----:|
-| M01_A | return_pct | 0.036 | +1.72% | 0.00 | 18.80 |
-| M01_B | hybrid_floor | -0.036 | +0.99% | 0.00 | 22.80 |
-| M01_C | risk_adjusted | 0.028 | +3.37% | 0.00 | 4.96 |
-| M01_D | log_space | -0.060 | +3.63% | 0.00 | 0.98 |
-| M01_E | log_hybrid | 0.051 | +4.05% | 0.00 | 2.01 |
+| M01_A | return_pct | 0.013 | +1.64% | 0.00 | 18.21 |
+| M01_B | hybrid_floor | -0.033 | +2.89% | 0.00 | 23.03 |
+| M01_C | risk_adjusted | -0.059 | +1.30% | 0.00 | 4.52 |
+| M01_D | log_space | -0.094 | +0.79% | 0.00 | 0.97 |
+| M01_E | log_hybrid | 0.036 | +2.87% | 0.00 | 1.82 |
 
 ---
 
@@ -31,8 +31,8 @@
 
 **Winner: M01_A** (return_pct)
 
-- IC: 0.036
-- Selection Edge: +1.72%
+- IC: 0.013
+- Selection Edge: +1.64%
 - Edge Sharpe: 0.00
 
 Edge Sharpe = Edge / std(Edge) across folds, measuring consistency.

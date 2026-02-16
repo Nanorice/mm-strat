@@ -115,6 +115,9 @@ class TechnicalAnalysis:
         # Align benchmark to stock dates
         benchmark_aligned = benchmark.reindex(df.index).ffill()
 
+        # ========================================
+        # METRIC 1: RS Rating (Momentum - for RANKING)
+        # ========================================
         # Minervini/IBD-Style RS Rating (weighted momentum performance)
         # Formula: 0.4 * ROC(3m) + 0.2 * ROC(6m) + 0.2 * ROC(9m) + 0.2 * ROC(12m)
         # This measures PERFORMANCE, not price level - suitable for ML ranking
@@ -129,6 +132,30 @@ class TechnicalAnalysis:
         # This maintains backward compatibility with existing feature names
         df['RS'] = df['rs_rating']
         df['RS_MA'] = df['RS'].rolling(window=lookback).mean()
+
+        # ========================================
+        # METRIC 2: Price vs Benchmark (for SEPA C9 FILTER)
+        # ========================================
+        # RS Line = Stock / SPY (Minervini's visual confirmation metric)
+        df['price_vs_spy'] = df['Close'] / benchmark_aligned
+
+        # MA for trend detection (C9: price_vs_spy > price_vs_spy_ma63)
+        df['price_vs_spy_ma63'] = df['price_vs_spy'].rolling(window=63).mean()
+
+        # Boolean flag for convenience
+        df['rs_line_uptrend'] = df['price_vs_spy'] > df['price_vs_spy_ma63']
+
+        # ========================================
+        # DERIVED FEATURES (for ML models)
+        # ========================================
+        # Log transformation (for normalization)
+        df['rs_line_log'] = df['price_vs_spy'].apply(lambda x: np.log(x) if x > 0 else np.nan)
+
+        # 1-day momentum (percentage change in RS Line)
+        df['rs_line_delta'] = df['price_vs_spy'].pct_change(1)
+
+        # Lagged momentum (for acceleration detection)
+        df['rs_line_lag_delta'] = df['rs_line_delta'].shift(1)
 
         return df
 

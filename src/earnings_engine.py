@@ -605,6 +605,16 @@ class EarningsEngine:
             logger.info("No fundamental metadata to analyze")
             return needs_update
 
+        # Early return: If no earnings cache exists for ANY ticker with fundamentals,
+        # skip the earnings comparison (avoids reading all earnings files)
+        has_any_earnings_cache = any(
+            (self.earnings_dir / f"{row['ticker']}.parquet").exists()
+            for row in fund_metadata
+        )
+        if not has_any_earnings_cache:
+            logger.info("No earnings cache available, skipping earnings-based staleness check")
+            return needs_update
+
         # Step 2: Build earnings metadata (parallel batch read for speed)
         fund_df = pd.DataFrame(fund_metadata)
 

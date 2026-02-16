@@ -274,6 +274,81 @@ M01_Bench_FEATURES = [
     'eps_accel', 
 ]
 
+M01_V3_FEATURES = [
+    'breakout_momentum',
+    'log_VCP_Ratio_Delta',  # log-transformed
+    'price_momentum_curve',
+    'log_rs_line_delta',  # log-transformed
+    'log_Dist_From_20D_Low_Delta',  # log-transformed
+    'log_Dry_Up_Volume_Delta',  # log-transformed
+    'alpha013',
+    'log_Price_vs_SMA_50',  # log-transformed
+    'log_RS_Delta',  # log-transformed
+    'Dist_From_52W_High_Delta',
+    'alpha101',
+    'log_alpha060',  # log-transformed
+    'log_Price_vs_SMA_200_Delta',  # log-transformed
+    'log_volume_velocity',  # already log-transformed
+    'log_Price_vs_SMA_150',  # log-transformed
+    'Price_vs_SMA_150_Delta',
+    'RSI_14',
+    'log_mom_63d',  # log-transformed
+    'alpha009',
+    'log_rs_velocity',  # log-transformed
+    'industry_id_encoded',
+    'Dist_From_20D_High_Delta',
+    'VCP_Ratio',
+    # 'price_vs_spy_ma63',
+    'log_Dry_Up_Volume',  # log-transformed
+    'alpha011',
+    'm03_pillar_risk',
+    'RS_Universe_Rank',
+    'alpha054',
+    'operating_margin',
+    'Price_vs_SMA_50_Delta',
+    'alpha006',
+    'log_turnover_ma20',
+    'turnover_ma20',
+    'log_volume_acceleration',  # log-transformed
+    'roa',
+    'alpha002',
+    'alpha015',
+    'm03_regime_vol',
+    'log_Price_vs_SMA_50_Lag1',
+    'price_accel_10d',
+    'log_alpha001',  # log-transformed
+    'log_current_ratio',  # log-transformed
+    'log_RS_MA_Delta',  # log-transformed
+    'log_fcf_margin',  # log-transformed
+    'log_gross_margin_trend',  # log-transformed
+    'log_eps_growth_yoy',  # log-transformed
+    'log_days_since_report',  # log-transformed
+    'log_pe_ratio',
+    'm03_delta_20d',
+    'roe',
+    'alpha004',
+    'gross_margin',
+    'log_debt_to_equity',  # log-transformed
+    'm03_pillar_liq',
+    'log_eps_accel',  # log-transformed
+    'log_rs_line_lag_delta',  # log-transformed
+    'eps_stability_score',
+    'log_revenue_accel',  # log-transformed
+    'RS_vs_Sector',
+    'log_pb_ratio',  # log-transformed
+    'earnings_quality_score',
+    'inventory_growth_yoy',
+    'm03_pillar_trend',
+    'alpha046',
+    'log_revenue_growth_yoy',  # log-transformed
+    'm03_score',
+    'log_revenue_cagr_3y',  # log-transformed
+    'ps_ratio',
+    'm03_delta_5d',
+    'log_RS_vs_Industry',  # log-transformed
+]
+
+
 # including M03 features makes M01 worse
 M01_FEATURES = [
     'log_breakout_momentum',  # log-transformed

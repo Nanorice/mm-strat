@@ -39,7 +39,9 @@
       "Bash(ForEach-Object { $_FullName })",
       "Bash(.\\\\.venv\\\\Scripts\\\\python.exe:*)",
       "Bash(C:UsersHangPycharmProjectsquantamental.venvScriptspython.exe debug_exposure.py)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(tree:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": [],
