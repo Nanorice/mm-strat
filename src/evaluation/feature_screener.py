@@ -348,6 +348,11 @@ class FeatureScreener:
                 transforms_applied['skipped'].append(feature)
                 continue
 
+            # Ensure column can hold float values (for winsorization/log)
+            # This handles Int32, Int64, and other numeric types that might reject float assignment
+            if pd.api.types.is_numeric_dtype(df[feature]) and not pd.api.types.is_float_dtype(df[feature]):
+                df[feature] = df[feature].astype(float)
+
             # Decision tree for treatment
             if feature in cls.BOUNDED_FEATURES:
                 # Known bounded feature - always winsorize

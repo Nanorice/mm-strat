@@ -206,7 +206,7 @@ class DuckDBDataLoader:
                 start_date = con.execute(f"""
                     SELECT MIN(date)
                     FROM (
-                        SELECT date
+                        SELECT DISTINCT date
                         FROM price_data
                         WHERE date <= '{end_date}'
                         ORDER BY date DESC

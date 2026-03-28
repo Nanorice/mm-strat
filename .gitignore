@@ -80,6 +80,7 @@ pip-wheel-metadata/
 # ML Models and Evaluation (generated artifacts)
 # models/*.json
 models/*.pkl
+models/artifacts/
 evaluation/*.png
 evaluation/*.jpg
 sepa_xgboost_model.json

@@ -577,10 +577,34 @@ class EarningsEngine:
             fund_cache = fundamentals_dir / f"{ticker}.parquet"
             if fund_cache.exists():
                 try:
-                    # Read filing_date column - this matches earnings announcement dates
-                    fund_df = pd.read_parquet(fund_cache, columns=['filing_date'])
+                    # Read filing_date and last_api_fetch_date columns
+                    cols_to_read = ['filing_date']
+                    try:
+                        peek = pd.read_parquet(fund_cache, columns=['last_api_fetch_date'])
+                        has_fetch_date = 'last_api_fetch_date' in peek.columns
+                    except Exception:
+                        has_fetch_date = False
+                    
+                    if has_fetch_date:
+                        cols_to_read.append('last_api_fetch_date')
+                    
+                    fund_df = pd.read_parquet(fund_cache, columns=cols_to_read)
+                    
                     if not fund_df.empty and 'filing_date' in fund_df.columns:
-                        # Get the most recent filing date
+                        # Check if we recently fetched from API (< 2 days ago)
+                        if has_fetch_date and 'last_api_fetch_date' in fund_df.columns:
+                            last_fetch = pd.to_datetime(fund_df['last_api_fetch_date']).max()
+                            if pd.notna(last_fetch):
+                                days_since_fetch = (pd.Timestamp.now() - last_fetch).days
+                                if days_since_fetch < 2:
+                                    # Recently fetched - skip regardless of filing_date vs earnings
+                                    fund_metadata.append({
+                                        'ticker': ticker,
+                                        'latest_filing_date': pd.Timestamp.max  # Sentinel: "fresh enough"
+                                    })
+                                    continue
+                        
+                        # Normal path: use actual filing_date
                         latest_filing = pd.to_datetime(fund_df['filing_date']).max()
                         if pd.notna(latest_filing):
                             fund_metadata.append({
@@ -589,7 +613,7 @@ class EarningsEngine:
                             })
                             continue
                 except Exception as e:
-                    logger.debug(f"{ticker}: Could not read filing_date from cache: {e}")
+                    logger.debug(f"{ticker}: Could not read cache metadata: {e}")
                 # Fallback: file mtime
                 fund_metadata.append({
                     'ticker': ticker,
@@ -673,6 +697,11 @@ class EarningsEngine:
         # it means there's a new earnings report we don't have yet
         stale_mask = merged['latest_earnings_date'] > merged['latest_filing_date']
         stale_tickers = merged.loc[stale_mask, 'ticker'].tolist()
+        
+        if stale_tickers:
+            # excessive logging to debug redundant downloads
+            sample = merged.loc[stale_mask].head(5)
+            logger.info(f"Sample stale tickers:\n{sample[['ticker', 'latest_filing_date', 'latest_earnings_date']]}")
 
         needs_update.extend(stale_tickers)
 

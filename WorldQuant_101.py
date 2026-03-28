@@ -277,9 +277,11 @@ class Alphas(object):
         self.high = df_data['S_DQ_HIGH'] 
         self.low = df_data['S_DQ_LOW']   
         self.close = df_data['S_DQ_CLOSE'] 
-        self.volume = df_data['S_DQ_VOLUME']*100 
+        self.volume = df_data['S_DQ_VOLUME']
         self.returns = df_data['S_DQ_PCTCHANGE'] 
-        self.vwap = (df_data['S_DQ_AMOUNT']*1000)/(df_data['S_DQ_VOLUME']*100+1) 
+        # Fix VWAP: S_DQ_AMOUNT is (Vol*Price)/1000.  S_DQ_VOLUME is Vol.
+        # VWAP = (Amount * 1000) / Volume
+        self.vwap = (df_data['S_DQ_AMOUNT']*1000)/(df_data['S_DQ_VOLUME']+0.001) 
         
     # Alpha#1	 (rank(Ts_ArgMax(SignedPower(((returns < 0) ? stddev(returns, 20) : close), 2.), 5)) -0.5)
     def alpha001(self):

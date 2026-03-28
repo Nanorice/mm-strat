@@ -116,33 +116,66 @@ logging.basicConfig(
 logger = logging.getLogger("AblationStudy")
 
 
-def load_data(start_date: str, end_date: str):
+def load_data(start_date: str, end_date: str, use_db: bool = False):
     """Load D2 and D2R datasets using DataPipeline (same as M01 training)."""
     pipeline = DataPipeline()
 
-    # Load D2 (same method as M01 training workflow)
-    d2 = pipeline.load_d2()
-    d2['date'] = pd.to_datetime(d2['date'])
+    if use_db:
+        logger.info("Loading D2 training data from DuckDB...")
+        d2 = pipeline.load_training_data_from_db()
+        d2['date'] = pd.to_datetime(d2['date'])
+        
+        # Load D2R from DB if needed for complex targets
+        logger.info("Loading D2R hydrated data from DuckDB...")
+        try:
+             d2r = pipeline.load_d2r_from_db()
+             # Ensure date/timestamp types match
+             d2r['date'] = pd.to_datetime(d2r['date'])
+             d2r['entry_date'] = pd.to_datetime(d2r['entry_date'])
+             
+             # MAP COLUMNS TO LEGACY FORMAT (TargetEngineer expects TitleCase)
+             # DuckDB returns lowercase, but legacy Parquet had TitleCase for OHLCV
+             column_map = {
+                 'date': 'Date',
+                 'open': 'Open',
+                 'high': 'High',
+                 'low': 'Low',
+                 'close': 'Close',
+                 'volume': 'Volume'
+             }
+             d2r = d2r.rename(columns=column_map)
+             
+             logger.info(f"Loaded D2R: {len(d2r)} bars (mapped to legacy schema)")
+        except Exception as e:
+            logger.warning(f"Failed to load D2R from DB: {e}")
+            d2r = None
+            
+    else:
+        # Load D2 (same method as M01 training workflow)
+        d2 = pipeline.load_d2()
+        d2['date'] = pd.to_datetime(d2['date'])
+
+        logger.info(f"Loaded D2: {len(d2)} trades")
+
+        # Load D2R if exists
+        d2r = None
+        try:
+            d2r = pipeline.load_d2r()
+            logger.info(f"Loaded D2R: {len(d2r)} bars")
+        except FileNotFoundError:
+            logger.warning("D2R not found, using return_pct as fallback")
 
     # Filter by date range
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
     d2 = d2[(d2['date'] >= start) & (d2['date'] <= end)]
-
-    logger.info(f"Loaded D2: {len(d2)} trades from {start_date} to {end_date}")
-
-    # Load D2R if exists
-    d2r = None
-    try:
-        d2r = pipeline.load_d2r()
-        logger.info(f"Loaded D2R: {len(d2r)} bars")
-    except FileNotFoundError:
-        logger.warning("D2R not found, using return_pct as fallback")
+    
+    logger.info(f"Filtered D2: {len(d2)} trades from {start_date} to {end_date}")
 
     return d2, d2r
 
 
-def run_ablation_study(start_date: str, end_date: str, skip_training: bool = False):
+def run_ablation_study(start_date: str, end_date: str, skip_training: bool = False, use_db: bool = False):
     """
     Run ablation study comparing 5 target definitions.
 
@@ -150,9 +183,12 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
         start_date: Training start date
         end_date: Training end date
         skip_training: If True, skip training and just compare existing results
+        use_db: If True, load data from DuckDB views
     """
     logger.info("=" * 70)
     logger.info("M01 ABLATION STUDY")
+    logger.info(f"Period: {start_date} to {end_date}")
+    logger.info(f"Source: {'DuckDB Views' if use_db else 'Parquet Files'}")
     logger.info("=" * 70)
 
     # Create ablation study output directory
@@ -160,7 +196,7 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
     ablation_dir.mkdir(parents=True, exist_ok=True)
 
     # Load data
-    d2, d2r = load_data(start_date, end_date)
+    d2, d2r = load_data(start_date, end_date, use_db=use_db)
     
     # Define target configurations
     target_configs = [
@@ -172,7 +208,9 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
         },
     ]
     
-    # Only add advanced targets if D2R exists
+    # Only add advanced targets if D2R exists OR if using DB (since v_d2_training has computed targets)
+    # Note: Complex targets like log_hybrid still currently require D2R for stop check logic in TargetEngineer.
+    # If using DB, we loaded D2R from v_d2r_hydrated, so we are good.
     if d2r is not None:
         target_configs.extend([
             {
@@ -212,9 +250,15 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
             # Prepare target
             if config['type'] == 'return_pct':
                 d2_with_target = d2.copy()
+                if 'return_pct' not in d2_with_target.columns and 'return_at_exit' in d2_with_target.columns:
+                     d2_with_target['return_pct'] = d2_with_target['return_at_exit']
+                
                 d2_with_target['target'] = d2_with_target['return_pct']
                 target_stats = {'target_type': 'return_pct'}
             else:
+                # If using DB and columns exist, we could bypass TargetEngineer, but for now reuse logic
+                # TargetEngineer will recalculate using D2R. 
+                # Optimization: Pass pre-computed columns if supported in future.
                 d2_with_target, target_stats = TargetEngineer.prepare_target(
                     d2, d2r, config['type']
                 )
@@ -333,7 +377,11 @@ def run_ablation_study(start_date: str, end_date: str, skip_training: bool = Fal
         print(comparison_df.to_string(index=False))
 
         # Winner selection based on edge_sharpe
-        winner = comparison_df.loc[comparison_df['edge_sharpe'].idxmax()]
+        if 'edge_sharpe' in comparison_df.columns and not comparison_df['edge_sharpe'].isna().all():
+             winner = comparison_df.loc[comparison_df['edge_sharpe'].idxmax()]
+        else:
+             winner = comparison_df.loc[comparison_df['avg_edge'].idxmax()]
+
         print(f"\n[WINNER] RECOMMENDED TARGET: {winner['model']}")
         print(f"   Target Type: {winner['target_type']}")
         print(f"   Selection Edge: {winner['avg_edge']:+.2f}%")
@@ -432,10 +480,15 @@ def main():
         action='store_true',
         help='Skip training, just show target preparation stats'
     )
+    parser.add_argument(
+        '--use-db',
+        action='store_true',
+        help='Use DuckDB views (v_d2_training, v_d2r_hydrated) via DataPipeline'
+    )
     
     args = parser.parse_args()
     
-    run_ablation_study(args.start, args.end, args.skip_training)
+    run_ablation_study(args.start, args.end, args.skip_training, args.use_db)
 
 
 if __name__ == '__main__':

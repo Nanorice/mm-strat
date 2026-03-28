@@ -15,6 +15,8 @@ load_dotenv()
 # ==============================================================================
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
+# DEPRECATED: parquet per-ticker cache — replaced by direct DuckDB writes in Phase 1.
+# Retained as cold backup only; existing files in data/price/ are not written to.
 PRICE_DATA_DIR = DATA_DIR / 'price'
 FUNDAMENTALS_DIR = DATA_DIR / 'fundamentals'
 COMPANY_INFO_DIR = DATA_DIR / 'company_info'
@@ -22,6 +24,9 @@ EARNINGS_DIR = DATA_DIR / 'earnings'
 MACRO_DATA_DIR = DATA_DIR / 'macro'
 DATABASE_DIR = BASE_DIR / 'database'
 NOTEBOOKS_DIR = BASE_DIR / 'notebooks'
+
+# DuckDB database path (used by engines/pipelines)
+DUCKDB_PATH = DATA_DIR / 'market_data.duckdb'
 
 # Ensure directories exist
 for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, EARNINGS_DIR, MACRO_DATA_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
@@ -226,6 +231,53 @@ BARRIER_MAX_TIME = 30   # Maximum trading days
 ML_ENABLED = False
 ML_MODEL_PATH = None
 ML_CONFIDENCE_THRESHOLD = 0.6  # Only take trades with >60% ML confidence
+
+# ==============================================================================
+# PIPELINE ORCHESTRATION CONFIGURATION
+# ==============================================================================
+
+from enum import Enum
+
+class PipelineFailureMode(Enum):
+    """How to handle phase failures."""
+    HALT = "halt"       # Stop pipeline immediately (critical phase)
+    WARN = "warn"       # Log warning, continue (non-critical phase)
+    SKIP = "skip"       # Skip phase, continue (optional phase)
+
+
+# Pipeline failure modes per phase
+# HALT: Critical phases that must succeed (price data, daily_features)
+# WARN: Non-critical phases that can fail without blocking (fundamentals, macro)
+# SKIP: Optional phases (T3 lazy can lag by 1 day)
+PIPELINE_FAILURE_MODES = {
+    # Phase 1: T1 Ingestion
+    "phase_1_t1_price": PipelineFailureMode.HALT,         # CRITICAL - can't proceed without prices
+    "phase_1_t1_fundamentals": PipelineFailureMode.WARN,  # Non-critical - stale data OK
+    "phase_1_t1_shares": PipelineFailureMode.WARN,        # Non-critical - use previous shares
+    "phase_1_t1_macro": PipelineFailureMode.WARN,         # Non-critical - M03 will use previous scores
+
+    # Phase 2-3: T2 Screener
+    "phase_2_screener_membership": PipelineFailureMode.HALT,  # CRITICAL - needed for T2 features
+    "phase_3_t2_screener": PipelineFailureMode.HALT,          # CRITICAL - needed for T3
+
+    # Phase 4: T2 Regime
+    "phase_4_t2_regime": PipelineFailureMode.WARN,        # Non-critical - daily_features will use NULLs
+
+    # Phase 5: daily_features
+    "phase_5_daily_features": PipelineFailureMode.HALT,   # CRITICAL - needed for T3
+
+    # Phase 6-8: T3 + Views
+    "phase_6_t3_lazy": PipelineFailureMode.WARN,          # Non-critical - T3 can lag by 1 day
+    "phase_7_views": PipelineFailureMode.WARN,            # Non-critical - views are recreatable
+    "phase_8_cache": PipelineFailureMode.WARN,            # Non-critical - cache is optional
+}
+
+# Alert thresholds
+PIPELINE_ALERT_THRESHOLDS = {
+    'breakout_drought_days': 5,      # Alert if 0 breakouts for N days
+    'runtime_multiplier': 2.0,        # Alert if phase runtime >N× average
+    'failure_rate_threshold': 0.1,    # Alert if failure rate >10%
+}
 
 # ==============================================================================
 # LOGGING & OUTPUT

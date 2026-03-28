@@ -412,6 +412,56 @@ cerebro.addstrategy(
 | `atr_target2_add` | 2.0 | ATR to add for T2 |
 | `sma_exit_period` | 50 | SMA period for trend exit |
 
+### NEW: Optimization Parameters (Phase 6.5)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `entry_percentile_min` | 0.0 | Minimum percentile rank to enter (0.0 = no filter) |
+| `entry_mode` | 'percentile' | Entry mode: 'percentile' or 'top_n' |
+| `entry_top_n` | None | If mode='top_n', max positions to enter per day |
+| `exit_percentile_max` | 0.40 | Exit if rank falls below this percentile |
+| `exit_use_percentile` | False | Enable percentile-based exits |
+| `sizing_mode` | 'regime' | Position sizing: 'regime', 'equal_weight', 'rank_weighted', 'score_weighted' |
+
+**Entry/Exit Thresholds**:
+- `entry_percentile_min`: Filter candidates by minimum percentile rank (0.0-1.0). Example: 0.70 = only enter top 30% of candidates
+- `exit_percentile_max`: Exit positions when rank deteriorates below threshold. Example: 0.40 = exit if rank drops to bottom 60%
+- `exit_use_percentile`: Must be True to enable rank-based exits (default False for backward compatibility)
+
+**Position Sizing Modes**:
+- `regime` (default): Size based on M03 regime (bullish=100%, neutral=50%, bearish=0%)
+- `equal_weight`: Fixed size = 1.0 / max_positions (ignores regime)
+- `rank_weighted`: Scale by percentile rank: `(0.5 + rank * 1.5) * regime_weight`
+- `score_weighted`: Scale by M01 score: `(score / 50.0) * regime_weight`
+
+**Usage Examples**:
+
+```python
+# Conservative entry (top 20% only), aggressive exit (hold until bottom 40%)
+cerebro.addstrategy(
+    SEPAHybridV1,
+    entry_percentile_min=0.80,
+    exit_percentile_max=0.40,
+    exit_use_percentile=True,
+    sizing_mode='regime',
+)
+
+# Equal weight sizing (ignore regime)
+cerebro.addstrategy(
+    SEPAHybridV1,
+    sizing_mode='equal_weight',
+)
+
+# Rank-weighted sizing (stronger candidates get bigger positions)
+cerebro.addstrategy(
+    SEPAHybridV1,
+    sizing_mode='rank_weighted',
+)
+```
+
+**Optimization Workflow**:
+See `docs/manual/09_Backtest_Optimization.md` for grid search and walk-forward validation guide.
+
 ---
 
 ## Report & Diagnostics
@@ -421,7 +471,7 @@ cerebro.addstrategy(
 The auto-generated report (`data/backtest/reports/`) includes:
 
 1. **Overview**: Period, capital, total return
-2. **Performance Metrics**: Sharpe, SQN, drawdown
+2. **Performance Metrics**: Sharpe, Calmar (NEW), annualized return (NEW), SQN, drawdown
 3. **Trade Statistics**: Win rate, won/lost counts
 4. **Trade Analysis**:
    - Exit reasons breakdown

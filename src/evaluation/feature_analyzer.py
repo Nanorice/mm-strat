@@ -582,15 +582,22 @@ class FeatureAnalyzer:
         distance_matrix = 1 - np.abs(corr_matrix.values)
         np.fill_diagonal(distance_matrix, 0)
 
-        # Ensure symmetry
+        # Ensure symmetry and clip to [0, 1] to guard against float imprecision
+        # (1 - |corr| can be tiny-negative when corr == 1.0 exactly)
         distance_matrix = (distance_matrix + distance_matrix.T) / 2
+        distance_matrix = np.clip(distance_matrix, 0, 1)
 
-        # Hierarchical clustering
-        condensed_dist = squareform(distance_matrix)
-        linkage_matrix = linkage(condensed_dist, method='average')
+        try:
+             # Hierarchical clustering
+            condensed_dist = squareform(distance_matrix)
+            linkage_matrix = linkage(condensed_dist, method='average')
 
-        # Form clusters at threshold
-        cluster_labels = fcluster(linkage_matrix, t=1 - threshold, criterion='distance')
+            # Form clusters at threshold
+            cluster_labels = fcluster(linkage_matrix, t=1 - threshold, criterion='distance')
+        except Exception as e:
+            logger.error(f"Clustering failed: {e}. Fallback to no clustering.")
+            # Fallback: each feature is its own cluster
+            cluster_labels = range(len(valid_features))
 
         # Group features by cluster
         clusters = {}

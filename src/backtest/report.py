@@ -347,7 +347,9 @@ def generate_report(
     report.append("| Metric | Value |")
     report.append("|--------|-------|")
     report.append(f"| Sharpe Ratio | {_fmt(metrics.get('sharpe_ratio'))} |")
+    report.append(f"| Calmar Ratio | {_fmt(metrics.get('calmar_ratio'))} |")
     report.append(f"| SQN | {_fmt(metrics.get('sqn'))} |")
+    report.append(f"| Annualized Return | {metrics.get('annualized_return', 0) * 100:.2f}% |")
     report.append(f"| Max Drawdown | {metrics.get('max_drawdown', 0):.2f}% |")
     report.append(f"| Max DD Duration | {metrics.get('max_drawdown_len', 0)} bars |")
 

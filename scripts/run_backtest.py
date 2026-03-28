@@ -37,6 +37,7 @@ from src.backtest.runner import SEPABacktestRunner
 logger = logging.getLogger(__name__)
 
 MODELS_DIR = Path(__file__).parent.parent / 'models'
+DEFAULT_DB_PATH = Path(__file__).parent.parent / 'data' / 'market_data.duckdb'
 
 
 def list_m01_variants() -> list[str]:
@@ -99,6 +100,104 @@ def prepare_data(start_date: str, end_date: str, model: str = None):
     print("=" * 60)
 
 
+def run_backtest_duckdb(
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    model: str = None,
+    max_tickers: int = None,
+    specific_tickers: list = None,
+    save_report: bool = True,
+    no_plot: bool = False,
+    save_run: bool = True,
+    run_note: str = "",
+    force_overwrite: bool = False,
+):
+    """Run backtest using DuckDB as the data source (no parquet prep needed)."""
+    print("\n" + "=" * 60)
+    print("SEPA HYBRID V1 BACKTEST (DuckDB)")
+    print("=" * 60)
+
+    # Resolve model paths
+    m01_path = 'models/m01.json'
+    calibration_path = 'models/m01_calibration.json'
+    if model:
+        model_dir = MODELS_DIR / model
+        m01_path = str(model_dir / 'model.json')
+        cal_candidate = model_dir / 'calibration.json'
+        if cal_candidate.exists():
+            calibration_path = str(cal_candidate)
+        print(f"  Model: {model}")
+
+    # Add 1-year warm-up for rolling calculations
+    from datetime import datetime, timedelta
+    start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+    warmup_start = (start_dt - timedelta(days=365)).strftime('%Y-%m-%d')
+
+    # Step 1: Score universe from DuckDB
+    print(f"\n[1/2] Scoring universe from DuckDB...")
+    scorer = UniverseScorer(m01_path=m01_path, calibration_path=calibration_path)
+    scores_df = scorer.score_from_duckdb(warmup_start, end_date)
+    print(f"      Scored {len(scores_df)} rows, {scores_df['ticker'].nunique()} tickers")
+
+    # Step 2: Setup and run
+    print(f"\n[2/2] Setting up backtest...")
+    runner = SEPABacktestRunner(
+        start_date=start_date,
+        end_date=end_date,
+        initial_cash=initial_cash,
+    )
+    runner.setup_from_duckdb(
+        scores_df=scores_df,
+        max_tickers=max_tickers,
+        specific_tickers=specific_tickers,
+    )
+
+    print("\nRunning backtest...")
+    metrics = runner.run()
+    runner.print_results(metrics)
+
+    # Save artifacts (same logic as parquet mode)
+    run_dir = None
+    if save_run or save_report or not no_plot:
+        target_dir = runner.get_run_dir_path(run_note)
+        overwrite = False
+        if target_dir.exists() and run_note:
+            if force_overwrite:
+                overwrite = True
+            else:
+                print(f"\n[WARN] Run '{run_note}' already exists: {target_dir}")
+                response = input("Overwrite? [y/N]: ").strip().lower()
+                if response in ('y', 'yes'):
+                    overwrite = True
+                else:
+                    print("[SKIP] Saving cancelled.")
+                    return metrics, runner
+        run_dir = runner.create_run_dir(run_note, overwrite=overwrite)
+        print(f"\nSaving all artifacts to: {run_dir}")
+
+    if save_report and run_dir:
+        print("  - Generating report...")
+        report_path = runner.save_report(metrics, run_dir=run_dir)
+        print(f"    Saved: {Path(report_path).name}")
+
+    if save_run and run_dir:
+        print("  - Saving run data...")
+        runner.save_run(metrics, run_dir=run_dir)
+        print("    Saved: equity_curve.parquet, trades.parquet, metrics.json, manifest.json")
+
+    if not no_plot and run_dir:
+        plot_path = str(run_dir / 'plot.png')
+        print("  - Generating plot...")
+        runner.plot(save_path=plot_path)
+        print(f"    Saved: plot.png")
+
+    if run_dir:
+        print(f"\n[OK] Run complete: {run_dir}")
+
+    return metrics, runner
+
+
 def run_backtest(
     start_date: str,
     end_date: str,
@@ -111,7 +210,7 @@ def run_backtest(
     run_note: str = "",
     force_overwrite: bool = False,
 ):
-    """Run the backtest."""
+    """Run the backtest (parquet mode)."""
     from pathlib import Path
 
     print("\n" + "=" * 60)
@@ -186,19 +285,24 @@ def main():
     # Mode selection
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
+        '--duckdb',
+        action='store_true',
+        help='Run backtest from DuckDB (no parquet prep needed)'
+    )
+    mode_group.add_argument(
         '--full',
         action='store_true',
-        help='Run full pipeline: prepare data + run backtest'
+        help='Run full pipeline: prepare data + run backtest (parquet mode)'
     )
     mode_group.add_argument(
         '--prepare-data',
         action='store_true',
-        help='Prepare data only (regime, scores, prices)'
+        help='Prepare data only (regime, scores, prices) (parquet mode)'
     )
     mode_group.add_argument(
         '--run',
         action='store_true',
-        help='Run backtest only (data must be prepared)'
+        help='Run backtest only (parquet data must be prepared)'
     )
 
     # Date range
@@ -313,9 +417,9 @@ def main():
             print("\nUse --list-models to see available variants.")
             sys.exit(1)
 
-    # Default to --full if no mode specified
-    if not (args.full or args.prepare_data or args.run):
-        args.run = True
+    # Default to --duckdb if no mode specified
+    if not (args.duckdb or args.full or args.prepare_data or args.run):
+        args.duckdb = True
 
     # Parse tickers
     specific_tickers = None
@@ -323,7 +427,22 @@ def main():
         specific_tickers = [t.strip() for t in args.tickers.split(',')]
 
     try:
-        if args.full:
+        if args.duckdb:
+            run_backtest_duckdb(
+                args.start,
+                args.end,
+                args.capital,
+                model=args.model,
+                max_tickers=args.max_tickers,
+                specific_tickers=specific_tickers,
+                save_report=not args.no_report,
+                no_plot=args.no_plot,
+                save_run=not args.no_save_run,
+                run_note=args.note,
+                force_overwrite=args.force,
+            )
+
+        elif args.full:
             prepare_data(args.start, args.end, model=args.model)
             run_backtest(
                 args.start,

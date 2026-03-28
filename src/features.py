@@ -2,6 +2,9 @@
 Feature Engine - FeatureEngineer Class
 Implements dual-stage feature calculation (Lightweight + Heavyweight modes)
 as specified in QSS Module B.
+
+DEPRECATED: Parquet pipeline only. DuckDB production uses src/feature_pipeline.py.
+Will be removed after DuckDB migration completes.
 """
 
 import pandas as pd

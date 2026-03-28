@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Any, Tuple
 import backtrader as bt
 import pandas as pd
 
+import duckdb
+
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
 import config
@@ -27,10 +29,12 @@ from .feeds import SEPAStockFeed, M03RegimeFeed
 from .sepa_strategy import SEPAHybridV1
 from .price_feed import list_prepared_tickers, get_qualifying_tickers
 from .report import generate_report
+from .analyzers import CalmarRatio
 
 logger = logging.getLogger(__name__)
 
 BACKTEST_DATA_DIR = config.DATA_DIR / 'backtest'
+DEFAULT_DB_PATH = config.DATA_DIR / 'market_data.duckdb'
 
 
 class SEPABacktestRunner:
@@ -54,31 +58,22 @@ class SEPABacktestRunner:
         regime_path: Optional[str] = None,
         prices_dir: Optional[str] = None,
         scores_path: Optional[str] = None,
+        db_path: Optional[str] = None,
     ):
-        """
-        Initialize backtest runner.
-
-        Args:
-            start_date: Backtest start date (YYYY-MM-DD)
-            end_date: Backtest end date (YYYY-MM-DD)
-            initial_cash: Starting capital
-            commission: Commission per share
-            slippage_pct: Slippage as percentage
-            regime_path: Path to M03 regime parquet
-            prices_dir: Directory containing price parquets
-            scores_path: Path to universe scores parquet
-        """
         self.start_date = pd.to_datetime(start_date)
         self.end_date = pd.to_datetime(end_date)
         self.initial_cash = initial_cash
         self.commission = commission
         self.slippage_pct = slippage_pct
 
-        # Paths
+        # Paths (parquet mode)
         self.regime_path = Path(regime_path) if regime_path else BACKTEST_DATA_DIR / 'm03_feed.parquet'
         self.prices_dir = Path(prices_dir) if prices_dir else BACKTEST_DATA_DIR / 'prices'
         self.scores_path = Path(scores_path) if scores_path else BACKTEST_DATA_DIR / 'universe_scores.parquet'
-        
+
+        # DuckDB path
+        self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+
         # Filtering defaults
         self.stock_min_score = 30.0
         self.stock_min_percentile = 0.0
@@ -220,8 +215,189 @@ class SEPABacktestRunner:
         self.cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         self.cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
         self.cerebro.addanalyzer(bt.analyzers.SQN, _name='sqn')
+        self.cerebro.addanalyzer(CalmarRatio, _name='calmar')  # Calmar must be after DrawDown
 
         logger.info("Setup complete")
+
+    def setup_from_duckdb(
+        self,
+        scores_df: pd.DataFrame,
+        max_tickers: Optional[int] = None,
+        specific_tickers: List[str] = None,
+    ):
+        """
+        Set up Cerebro with data feeds loaded directly from DuckDB.
+
+        Args:
+            scores_df: Pre-computed scores DataFrame from UniverseScorer.score_from_duckdb()
+                       (columns: date, ticker, normalized_score, daily_pct_rank, trailing_10d_pct)
+            max_tickers: Limit number of tickers loaded (for testing)
+            specific_tickers: A list of specific tickers to include
+        """
+        logger.info("Setting up backtest (DuckDB mode)...")
+        self.cerebro = bt.Cerebro()
+
+        start_str = self.start_date.strftime('%Y-%m-%d')
+        end_str = self.end_date.strftime('%Y-%m-%d')
+
+        # === REGIME FEED from t2_regime_scores ===
+        regime_df = self._load_regime_from_duckdb()
+        regime_df = self._filter_date_range(regime_df)
+        regime_df = regime_df[regime_df.index.dayofweek < 5]
+        self.regime_df = regime_df.copy()
+
+        regime_feed = M03RegimeFeed(
+            dataname=regime_df,
+            name='regime',
+            fromdate=self.start_date,
+            todate=self.end_date,
+        )
+        self.cerebro.adddata(regime_feed, name='regime')
+        logger.info(f"Added regime feed from DuckDB ({len(regime_df)} bars)")
+
+        # === SAVE SCORES to temp parquet for ScoreLookup ===
+        # ScoreLookup expects a parquet file — write scores_df to a temp location
+        scores_parquet = BACKTEST_DATA_DIR / 'universe_scores_duckdb.parquet'
+        scores_parquet.parent.mkdir(parents=True, exist_ok=True)
+        scores_df.to_parquet(scores_parquet, index=False)
+        self.scores_path = scores_parquet
+        logger.info(f"Wrote {len(scores_df)} scores to {scores_parquet}")
+
+        # === DETERMINE QUALIFYING TICKERS from scores ===
+        tickers = sorted(scores_df['ticker'].unique().tolist())
+
+        if specific_tickers:
+            tickers = [t for t in tickers if t in specific_tickers]
+            logger.info(f"Filtered to {len(tickers)} specific tickers")
+        elif max_tickers:
+            tickers = tickers[:max_tickers]
+            logger.info(f"Limited to {max_tickers} tickers")
+
+        if not tickers:
+            raise ValueError("No qualifying tickers found!")
+
+        # === LOAD PRICE FEEDS from price_data table ===
+        self._add_price_feeds_from_duckdb(tickers)
+
+        # === BROKER ===
+        self.cerebro.broker.setcash(self.initial_cash)
+        self.cerebro.broker.setcommission(commission=self.commission)
+        self.cerebro.broker.set_slippage_perc(perc=self.slippage_pct)
+
+        logger.info("DuckDB setup complete")
+
+    def _load_regime_from_duckdb(self) -> pd.DataFrame:
+        """Load regime data from t2_regime_scores table."""
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        try:
+            df = con.execute("""
+                SELECT
+                    date,
+                    CASE
+                        WHEN m03_score >= 75 THEN 4
+                        WHEN m03_score >= 55 THEN 3
+                        WHEN m03_score >= 35 THEN 2
+                        WHEN m03_score >= 15 THEN 1
+                        ELSE 0
+                    END AS regime_cat,
+                    m03_score AS composite_score,
+                    m03_pillar_trend AS trend_pillar,
+                    m03_pillar_liq AS liq_pillar,
+                    m03_pillar_risk AS risk_pillar
+                FROM t2_regime_scores
+                ORDER BY date
+            """).fetchdf()
+        finally:
+            con.close()
+
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date')
+        logger.info(f"Loaded {len(df)} regime rows from DuckDB")
+        return df
+
+    def _add_price_feeds_from_duckdb(self, tickers: List[str]):
+        """Load stock price feeds directly from DuckDB price_data table."""
+        start_str = self.start_date.strftime('%Y-%m-%d')
+        end_str = self.end_date.strftime('%Y-%m-%d')
+        late_start_cutoff = self.start_date + pd.Timedelta(days=60)
+
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        try:
+            placeholders = ','.join([f"'{t}'" for t in tickers])
+            df_all = con.execute(f"""
+                SELECT date, ticker,
+                       CAST(open AS DOUBLE) AS open,
+                       CAST(high AS DOUBLE) AS high,
+                       CAST(low AS DOUBLE) AS low,
+                       CAST(close AS DOUBLE) AS close,
+                       CAST(volume AS BIGINT) AS volume
+                FROM price_data
+                WHERE ticker IN ({placeholders})
+                  AND date >= ?
+                  AND date <= ?
+                ORDER BY ticker, date
+            """, [start_str, end_str]).fetchdf()
+        finally:
+            con.close()
+
+        df_all['date'] = pd.to_datetime(df_all['date'])
+        logger.info(f"Loaded {len(df_all)} price rows for {df_all['ticker'].nunique()} tickers from DuckDB")
+
+        loaded_count = 0
+        skipped_late = 0
+
+        for ticker, df in df_all.groupby('ticker'):
+            df = df.set_index('date').drop(columns=['ticker']).sort_index()
+
+            if df.index.min() > late_start_cutoff:
+                skipped_late += 1
+                continue
+
+            if len(df) < 50:
+                continue
+
+            # ATR-14 inline (lowercase columns from DuckDB)
+            tr = pd.concat([
+                df['high'] - df['low'],
+                (df['high'] - df['close'].shift(1)).abs(),
+                (df['low'] - df['close'].shift(1)).abs(),
+            ], axis=1).max(axis=1)
+            df['atr_14'] = tr.ewm(span=14, adjust=False).mean()
+            df = df.dropna(subset=['atr_14'])
+
+            if len(df) < 50:
+                continue
+
+            feed = SEPAStockFeed(
+                dataname=df,
+                name=ticker,
+                fromdate=self.start_date,
+                todate=self.end_date,
+            )
+            self.cerebro.adddata(feed, name=ticker)
+            loaded_count += 1
+
+        if skipped_late > 0:
+            logger.info(f"Skipped {skipped_late} late-starting tickers")
+        logger.info(f"Added {loaded_count} stock feeds from DuckDB")
+
+        # === ADD STRATEGY ===
+        self.cerebro.addstrategy(
+            SEPAHybridV1,
+            scores_path=str(self.scores_path),
+        )
+
+        # === ADD ANALYZERS ===
+        self.cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe',
+                                  timeframe=bt.TimeFrame.Days, annualize=True)
+        self.cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+        self.cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+        self.cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+        self.cerebro.addanalyzer(bt.analyzers.SQN, _name='sqn')
+        self.cerebro.addanalyzer(CalmarRatio, _name='calmar')
+
+        logger.info(f"Broker: cash=${self.initial_cash:,.0f}, "
+                   f"commission={self.commission*100:.2f}%, slippage={self.slippage_pct*100:.1f}%")
 
     def _filter_date_range(self, df: pd.DataFrame) -> pd.DataFrame:
         """Filter DataFrame to backtest date range."""
@@ -314,6 +490,15 @@ class SEPABacktestRunner:
             metrics['sqn'] = sqn.get('sqn', None)
         except Exception:
             metrics['sqn'] = None
+
+        # Calmar Ratio
+        try:
+            calmar = self.strategy.analyzers.calmar.get_analysis()
+            metrics['calmar_ratio'] = calmar.get('calmar_ratio', None)
+            metrics['annualized_return'] = calmar.get('annualized_return', None)
+        except Exception:
+            metrics['calmar_ratio'] = None
+            metrics['annualized_return'] = None
 
         # Position tracker stats
         try:
@@ -424,7 +609,7 @@ class SEPABacktestRunner:
         if self.strategy is not None:
             strategy_params = {
                 'min_score': self.strategy.p.min_score,
-                'min_percentile': self.strategy.p.min_percentile,
+                'min_percentile': self.strategy.p.entry_percentile_min,
                 'rank_by': self.strategy.p.rank_by,
                 'min_price': self.strategy.p.min_price,
                 'cooldown_days': self.strategy.p.cooldown_days,
@@ -605,7 +790,7 @@ class SEPABacktestRunner:
         if self.strategy is not None:
             strategy_params = {
                 'min_score': self.strategy.p.min_score,
-                'min_percentile': self.strategy.p.min_percentile,
+                'min_percentile': self.strategy.p.entry_percentile_min,
                 'atr_stop_mult': self.strategy.p.atr_stop_mult,
                 'atr_target1_mult': self.strategy.p.atr_target1_mult,
                 'max_stop_pct': self.strategy.p.max_stop_pct,

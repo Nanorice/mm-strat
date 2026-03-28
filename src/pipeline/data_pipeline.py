@@ -681,3 +681,75 @@ class DataPipeline:
         if not path.exists():
             raise FileNotFoundError(f"D3 not found: {path}")
         return pd.read_parquet(path)
+
+    # =========================================================================
+    # UTILITY: Load data from DuckDB (New Architecture)
+    # =========================================================================
+    def _get_db_connection(self):
+        """Get connection to DuckDB market data."""
+        import duckdb
+        # Get project root robustly (src/pipeline -> src -> root)
+        project_root = Path(__file__).parent.parent.parent
+        db_path = project_root / "data" / "market_data.duckdb"
+        
+        if not db_path.exists():
+             raise FileNotFoundError(f"DuckDB not found at {db_path}")
+        
+        return duckdb.connect(str(db_path), read_only=True)
+
+    def load_d2_from_db(self) -> pd.DataFrame:
+        """Load D2 features from DuckDB view v_d2_features."""
+        con = self._get_db_connection()
+        try:
+            return con.execute("SELECT * FROM v_d2_features").df()
+        finally:
+            con.close()
+
+    def load_d2r_from_db(self) -> pd.DataFrame:
+        """Load D2R hydrated data from DuckDB view v_d2r_hydrated."""
+        con = self._get_db_connection()
+        try:
+            return con.execute("SELECT * FROM v_d2r_hydrated").df()
+        finally:
+            con.close()
+
+    def load_training_data_from_db(self, use_cache: bool = True) -> pd.DataFrame:
+        """
+        Load complete training dataset from DuckDB.
+
+        Args:
+            use_cache: If True (default), load from d2_training_cache table (5-10s → <1s).
+                      If False, query v_d2_training view directly (slower, but always fresh).
+
+        Contains:
+        - D2 Features (Point-in-time)
+        - D2R Outcomes (MAE, MFE, Returns)
+        - Labels (implicit via outcomes)
+
+        Performance:
+        - Cache: <1s for 12K rows (materialized table)
+        - View: 5-10s for 12K rows (joins + log transforms)
+        """
+        from src.managers.view_manager import COLUMN_CASE_MAP
+        con = self._get_db_connection()
+        try:
+            if use_cache:
+                # Try to use cache first
+                try:
+                    # Exclude cached_at column from results
+                    df = con.execute("""
+                        SELECT * EXCLUDE (cached_at)
+                        FROM d2_training_cache
+                    """).df()
+                    return df.rename(columns=COLUMN_CASE_MAP)
+                except Exception:
+                    # Cache doesn't exist or query failed - fall back to view
+                    logger.warning("Cache table not available, falling back to view")
+                    df = con.execute("SELECT * FROM v_d2_training").df()
+                    return df.rename(columns=COLUMN_CASE_MAP)
+            else:
+                # Direct view query (always fresh)
+                df = con.execute("SELECT * FROM v_d2_training").df()
+                return df.rename(columns=COLUMN_CASE_MAP)
+        finally:
+            con.close()

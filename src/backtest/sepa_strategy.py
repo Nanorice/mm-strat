@@ -60,7 +60,9 @@ class SEPAHybridV1(bt.Strategy):
         - regime_sizes: Position size % by regime (0-4)
         - regime_max_pos: Max positions by regime (0-4)
         - min_score: Minimum normalized M01 score (0-100) - absolute floor
-        - min_percentile: Percentile gate (0.0 = no gate, 0.95 = top 5%)
+        - entry_percentile_min: Minimum percentile for entry (0.0 = no gate, 0.60 = top 40%)
+        - entry_mode: Entry mode ('percentile' or 'top_n')
+        - entry_top_n: If entry_mode='top_n', take top N candidates (None = use percentile)
         - rank_by: 'trailing' (10-day cohort) or 'daily' (single-day)
         - min_price: Minimum stock price
         - min_dollar_volume: Minimum daily dollar volume
@@ -71,6 +73,9 @@ class SEPAHybridV1(bt.Strategy):
         - min_target1_pct: Minimum target 1 percentage
         - atr_target2_add: ATR to add for target 2 (from target 1)
         - sma_exit_period: SMA period for trend exit (tranche 3)
+        - exit_percentile_max: Exit if percentile rank falls below this (0.40 = bottom 40%)
+        - exit_use_percentile: Enable percentile-based exits (default: False)
+        - sizing_mode: Position sizing mode ('regime', 'equal_weight', 'rank_weighted', 'score_weighted')
     """
 
     params = (
@@ -80,23 +85,34 @@ class SEPAHybridV1(bt.Strategy):
 
         # Entry filters (Top N Competition mode)
         # - min_score: absolute floor on M01 prediction quality
-        # - min_percentile: set to 0.0 for "Top N Competition" (no hard gate)
+        # - entry_percentile_min: minimum percentile (0.0 = no gate, 0.60 = top 40%)
+        # - entry_mode: 'percentile' (filter by percentile) or 'top_n' (take top N)
+        # - entry_top_n: if entry_mode='top_n', take this many candidates (None = use percentile)
         # - rank_by: 'trailing' uses 10-day cohort percentile, 'daily' uses single-day
         # NOTE: Regime controls exposure; percentile is just a ranking metric now
         ('min_score', 30),  # Safety floor (scaled 0-100) - RS > 30
-        ('min_percentile', 0.0),  # Top 50 percentile filter
+        ('entry_percentile_min', 0.0),  # Minimum percentile gate (0.0 = no gate)
+        ('entry_mode', 'percentile'),  # 'percentile' or 'top_n'
+        ('entry_top_n', None),  # Alternative: take top N candidates (None = use percentile)
         ('rank_by', 'trailing'),  # 'trailing' = 10-day cohort, 'daily' = single-day
         ('min_price', 1.0),
         ('min_dollar_volume', 0),
         ('cooldown_days', 3),
 
-        # Exit params
+        # Exit params (stop-loss and targets)
         ('atr_stop_mult', 2.0),
         ('max_stop_pct', 0.10),
         ('atr_target1_mult', 3.0),
         ('min_target1_pct', 0.15),
         ('atr_target2_add', 2.0),
         ('sma_exit_period', 50),
+
+        # Exit params (rank-based exits)
+        ('exit_percentile_max', 0.40),  # Exit if rank falls below 40th percentile
+        ('exit_use_percentile', False),  # Enable percentile-based exit
+
+        # Position sizing mode
+        ('sizing_mode', 'regime'),  # 'regime', 'equal_weight', 'rank_weighted', 'score_weighted'
 
         # Score lookup path
         ('scores_path', 'data/backtest/universe_scores.parquet'),
@@ -255,6 +271,10 @@ class SEPAHybridV1(bt.Strategy):
         # === CHECK TREND EXITS (Tranche 3) ===
         self._check_trend_exits()
 
+        # === CHECK RANK-BASED EXITS (Optional) ===
+        if self.p.exit_use_percentile:
+            self._check_rank_exits(current_date)
+
         # === ENTRY LOGIC ===
         self._process_entries(regime, current_date)
 
@@ -406,6 +426,35 @@ class SEPAHybridV1(bt.Strategy):
                     pos.exit_pending = True  # Prevent duplicate orders
                     logger.info(f"Trend exit for {ticker}: Close {data.close[0]:.2f} < SMA50 {sma[0]:.2f}")
 
+    def _check_rank_exits(self, current_date: datetime):
+        """
+        Check for rank-based exits: exit if percentile rank falls below threshold.
+
+        This allows testing "momentum fade" exits where we exit positions that
+        lose relative strength vs the universe (even if trend is intact).
+        """
+        for ticker, pos in list(self.position_tracker.positions.items()):
+            # Skip if exit already pending
+            if pos.exit_pending:
+                continue
+
+            # Lookup current percentile rank
+            score_data = self.score_lookup.get_score(ticker, current_date)
+            if not score_data:
+                continue
+
+            # Use trailing 10-day percentile (same as entry ranking)
+            pct_rank = score_data.get('trailing_10d_pct', 0.0)
+
+            # Exit if rank falls below threshold
+            if pct_rank < self.p.exit_percentile_max:
+                data = self.stock_feeds.get(ticker)
+                if data and pos.remaining_shares > 0:
+                    order = self.sell(data=data, size=pos.remaining_shares)
+                    self.pending_orders[order.ref] = {'reason': 'low_rank', 'ticker': ticker}
+                    pos.exit_pending = True
+                    logger.info(f"Rank exit for {ticker}: percentile {pct_rank:.2f} < threshold {self.p.exit_percentile_max:.2f}")
+
     def _process_entries(self, regime: int, current_date: datetime):
         """Process new entry signals with rejection tracking."""
         # Check position limits
@@ -417,7 +466,7 @@ class SEPAHybridV1(bt.Strategy):
         candidates = self.score_lookup.get_candidates(
             current_date,
             min_score=self.p.min_score,
-            min_percentile=self.p.min_percentile,
+            min_percentile=self.p.entry_percentile_min,
             rank_by=self.p.rank_by,
         )
         
@@ -486,6 +535,48 @@ class SEPAHybridV1(bt.Strategy):
         for ticker, score, trailing_pct, data in valid_candidates[:available_slots]:
             self._enter_position(ticker, score, trailing_pct, data, regime, current_date)
 
+    def calculate_position_size(self, regime_cat: int, score: float, rank: float) -> float:
+        """
+        Calculate position size based on sizing mode.
+
+        Args:
+            regime_cat: M03 regime category (0-4)
+            score: M01 normalized score (0-100)
+            rank: Trailing 10-day percentile (0.0-1.0)
+
+        Returns:
+            Position size as fraction of portfolio (0.0-1.0)
+        """
+        mode = self.p.sizing_mode
+
+        if mode == 'regime':
+            # Original: regime-based sizing
+            return self.p.regime_sizes.get(regime_cat, 0.0)
+
+        elif mode == 'equal_weight':
+            # Equal weight across all positions
+            max_pos = self.p.regime_max_pos.get(regime_cat, 0)
+            if max_pos == 0:
+                return 0.0
+            return 1.0 / max_pos  # e.g., 10 max pos → 10% each
+
+        elif mode == 'rank_weighted':
+            # Weight by percentile rank (top-ranked get more capital)
+            base_size = self.p.regime_sizes.get(regime_cat, 0.0)
+            # Scale by rank: 90th percentile (0.9) → 1.8x, 50th (0.5) → 1.0x, 10th (0.1) → 0.2x
+            rank_multiplier = 0.5 + (rank * 1.5)
+            return base_size * rank_multiplier
+
+        elif mode == 'score_weighted':
+            # Weight by M01 score (higher score = bigger position)
+            base_size = self.p.regime_sizes.get(regime_cat, 0.0)
+            # Scale by score: 100 → 2.0x, 50 → 1.0x, 0 → 0.0x
+            score_multiplier = score / 50.0
+            return base_size * score_multiplier
+
+        else:
+            raise ValueError(f"Unknown sizing_mode: {mode}")
+
     def _enter_position(
         self,
         ticker: str,
@@ -504,8 +595,8 @@ class SEPAHybridV1(bt.Strategy):
         price = data.close[0]
         atr = data.atr[0]
 
-        # Position size based on regime
-        size_pct = self.p.regime_sizes[regime]
+        # Position size based on sizing mode
+        size_pct = self.calculate_position_size(regime, score, trailing_pct)
         position_value = self.broker.getvalue() * size_pct
         shares = int(position_value / price)
 

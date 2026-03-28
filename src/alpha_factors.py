@@ -1,6 +1,9 @@
 """
 Alpha Factor Engine - WorldQuant Alpha Integration
 
+REFERENCE ONLY: Production alpha computation uses src/feature_pipeline.py.
+Kept for standalone experimentation and parity validation.
+
 Provides a clean interface to WorldQuant 101 alpha factors with:
 - Automatic temporal alignment (no future leakage)
 - Selective alpha calculation (only specified alphas)

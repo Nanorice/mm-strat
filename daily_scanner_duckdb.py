@@ -34,6 +34,7 @@ from typing import Optional, List
 import time
 import argparse
 import logging
+import duckdb
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
@@ -41,7 +42,6 @@ sys.path.append(str(Path(__file__).parent))
 import config
 from src.data_loader_duckdb import DuckDBDataLoader
 from src.database_duckdb import DuckDBManager
-from src.strategy import SEPAStrategy
 from src.features import FeatureEngineer
 from src.utils import get_latest_trading_day
 from src.feature_preprocessor import FeaturePreprocessor
@@ -343,27 +343,49 @@ def run_daily_scanner_duckdb(
     m03_category = m03_result['category'] if m03_result else None
     m03_allow_longs = m03_result['allow_longs'] if m03_result else True
 
-    total_steps = 4 if use_ml else 3
+    total_steps = 3 if use_ml else 2  # Step 3 (SEPA screening) eliminated via v_d1_candidates view
 
     # ========================================================================
-    # STEP 1: Load SEPA Candidates from DuckDB
+    # STEP 1: Load D1 Candidates from v_d1_candidates View
     # ========================================================================
-    print(f"\n[1/{total_steps}] Loading SEPA Candidates from DuckDB...")
+    print(f"\n[1/{total_steps}] Loading D1 Candidates (C1-C11 SEPA) from v_d1_candidates...")
     load_start = time.time()
 
     if tickers is None:
-        # Use pre-filtered v_sepa_candidates view
-        candidates_df = loader.get_sepa_candidates(as_of_date=scan_date_str)
+        # Use v_d1_candidates view (full C1-C11 SEPA with breakout detection)
+        con = duckdb.connect(loader.db_path)
+        candidates_df = con.execute("""
+            SELECT *
+            FROM v_d1_candidates
+            WHERE date = ?
+        """, [scan_date_str]).df()
+        con.close()
+
         tickers = candidates_df['ticker'].tolist()
+
+        # Separate new triggers from trend-ok stocks
+        new_triggers_raw = candidates_df[candidates_df['is_new_trigger'] == 1]
+        new_triggers_today = [
+            {'ticker': row['ticker'], 'entry_price': row['close']}
+            for _, row in new_triggers_raw.iterrows()
+        ]
+        trend_ok_stocks = [
+            {'ticker': row['ticker']}
+            for _, row in candidates_df.iterrows()
+        ]
     else:
         # Load specified tickers
         print(f"       Using specified tickers: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''} ({len(tickers)} total)")
         # Load their data
         price_data_batch = loader.get_price_data_batch(tickers, end_date=scan_date_str, include_features=True)
         tickers = list(price_data_batch.keys())
+        new_triggers_today = []
+        trend_ok_stocks = []
 
     load_time = time.time() - load_start
     print(f"       Loaded {len(tickers)} candidates in {load_time:.2f}s")
+    print(f"       Trend OK (C1-C11): {len(trend_ok_stocks)} stocks")
+    print(f"       New triggers: {len(new_triggers_today)} stocks")
 
     if len(tickers) == 0:
         print("\n[WARN] No candidates found!")
@@ -386,7 +408,7 @@ def run_daily_scanner_duckdb(
 
     price_time = time.time() - price_start
     print(f"       Loaded {len(price_data)} tickers in {price_time:.2f}s")
-    print(f"       ⚡ Performance: {price_time/len(price_data)*1000:.1f}ms/ticker (vs 5-30s ThreadPool)")
+    print(f"       [PERF] {price_time/len(price_data)*1000:.1f}ms/ticker (vs 5-30s ThreadPool)")
 
     # Load benchmark for strategy
     benchmark_data = price_data.get(config.BENCHMARK_TICKER)
@@ -395,52 +417,37 @@ def run_daily_scanner_duckdb(
         return
 
     # ========================================================================
-    # STEP 3: SEPA Screening (using pre-computed features)
+    # STEP 3: SEPA Screening - SKIPPED (Done in v_d1_candidates view)
     # ========================================================================
-    print(f"\n[3/{total_steps}] SEPA Screening (using pre-computed features)...")
-    screen_start = time.time()
-
-    # Initialize strategy
-    strategy = SEPAStrategy(benchmark_data=benchmark_data)
-    feature_engine = FeatureEngineer(benchmark_data=benchmark_data)
-
-    # Run batch scan
-    results = strategy.batch_scan_universe(price_data, scan_date=scan_date_obj)
-
-    trend_ok_stocks = results.get('trend_ok_stocks', [])
-    new_triggers_today = results['new_triggers']
-
-    screen_time = time.time() - screen_start
-    print(f"       Screening complete in {screen_time:.2f}s")
-    print(f"       Trend OK (C1-C8): {len(trend_ok_stocks)} stocks")
-    print(f"       New triggers: {len(new_triggers_today)} stocks")
+    # SEPA C1-C11 screening now done in SQL via v_d1_candidates view
+    # This eliminates 10-20s batch_scan_universe overhead
 
     # ========================================================================
-    # STEP 4 (Optional): M01 + M02 Loser Detector Scoring
+    # STEP 3 (Optional): M01 + M02 Loser Detector Scoring
     # ========================================================================
     ml_scores_df = None
     if use_ml and production_scorer:
-        print(f"\n[4/{total_steps}] M01 + M02 Loser Detector Scoring...")
+        print(f"\n[3/{total_steps}] M01 + M02 Loser Detector Scoring...")
         ml_start = time.time()
 
         # Identify candidates to score
-        print("       [4.1] Identifying candidates...")
+        print("       [3.1] Identifying candidates...")
         current_buy_list = db.get_buy_list(active_only=True, as_of_date=scan_date_str)
         tickers_in_buy_list = set(current_buy_list['ticker'].tolist()) if not current_buy_list.empty else set()
         new_trigger_tickers = set([t['ticker'] for t in new_triggers_today])
         trend_ok_tickers = set([s['ticker'] for s in trend_ok_stocks])
 
         tickers_to_score = list(new_trigger_tickers | (tickers_in_buy_list & trend_ok_tickers))
-        print(f"       [4.1] Identified {len(tickers_to_score)} candidates")
+        print(f"       [3.1] Identified {len(tickers_to_score)} candidates")
 
         if len(tickers_to_score) > 0:
             # Load fundamentals using vectorized ASOF JOIN
-            print(f"       [4.2] Loading fundamentals (Vectorized ASOF JOIN)...")
+            print(f"       [3.2] Loading fundamentals (Vectorized ASOF JOIN)...")
             fund_start = time.time()
             fundamentals_df = loader.get_fundamentals_batch(tickers_to_score, as_of_date=scan_date_str)
             fund_time = time.time() - fund_start
-            print(f"       [4.2] Fundamentals loaded in {fund_time:.2f}s")
-            print(f"       ⚡ Performance: <1s (vs 5-50s loop in old scanner)")
+            print(f"       [3.2] Fundamentals loaded in {fund_time:.2f}s")
+            print(f"       [PERF] <1s (vs 5-50s loop in old scanner)")
 
             # Prepare ML candidates
             candidates_df = prepare_ml_candidates_duckdb(
@@ -457,12 +464,12 @@ def run_daily_scanner_duckdb(
                     try:
                         preprocessor = FeaturePreprocessor.load(str(preprocess_config_path))
                         candidates_df = preprocessor.transform(candidates_df)
-                        print(f"       [4.3] Applied preprocessing transforms")
+                        print(f"       [3.3] Applied preprocessing transforms")
                     except Exception as e:
                         logger.warning(f"Could not load preprocessing config: {e}")
 
                 # Run ProductionScorer
-                print(f"       [4.4] Running ProductionScorer...")
+                print(f"       [3.4] Running ProductionScorer...")
                 score_start = time.time()
 
                 ml_scores_df = production_scorer.score(
@@ -475,8 +482,8 @@ def run_daily_scanner_duckdb(
                 ml_time = time.time() - ml_start
 
                 valid_scores = ml_scores_df['final_score'].notna().sum() if 'final_score' in ml_scores_df.columns else 0
-                print(f"       [4.4] Inference complete in {score_time:.2f}s")
-                print(f"       [4.x] Total ML scoring time: {ml_time:.2f}s")
+                print(f"       [3.4] Inference complete in {score_time:.2f}s")
+                print(f"       [3.x] Total ML scoring time: {ml_time:.2f}s")
                 print(f"             Valid final scores: {valid_scores}")
             else:
                 print("       [WARN] No candidates with sufficient data")
@@ -623,16 +630,16 @@ def run_daily_scanner_duckdb(
     # Total time
     total_time = time.time() - start_time
     print("\n" + "=" * 80)
-    print(f"✅ Scanner Complete in {total_time:.1f}s")
+    print(f"[OK] Scanner Complete in {total_time:.1f}s")
     print("=" * 80 + "\n")
 
     # Performance comparison
-    print(f"📊 Performance Highlights:")
+    print(f"[PERF] Performance Highlights:")
     print(f"   Price loading: {price_time:.2f}s (vs 5-30s ThreadPool)")
     if use_ml:
         print(f"   Fundamental merge: {fund_time:.2f}s (vs 5-50s loop)")
     print(f"   Total: {total_time:.1f}s (vs 30-60s expected old scanner)")
-    print(f"   ⚡ Speedup: ~{60/total_time:.1f}x faster\n")
+    print(f"   [PERF] Speedup: ~{60/total_time:.1f}x faster\n")
 
 
 if __name__ == "__main__":

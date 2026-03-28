@@ -390,19 +390,12 @@ class FundamentalMerger:
         else:
             df['pb_ratio'] = np.nan
         
-        # NEW MINERVINI VALUATION - PEG Ratio (Price/Earnings to Growth)
-        # Peter Lynch's favorite: PEG < 1.0-1.5 = undervalued growth
-        # Only calculated for stocks with positive growth (> 0%)
-        if 'pe_ratio' in df.columns and 'eps_growth_yoy' in df.columns:
-            df['peg_adjusted'] = np.where(
-                df['eps_growth_yoy'] > 0,
-                np.clip(df['pe_ratio'] / df['eps_growth_yoy'], 0, 10),
-                np.nan
-            )
-        else:
-            df['peg_adjusted'] = np.nan
+        # Option 3: XGBoost natively handles numerator/denominator relationships. 
+        # We drop the manual PEG calculation so we don't accidentally throw away
+        # negative growth or negative earnings rows (which contain valuable signal).
+        # We ensure pe_ratio and eps_growth_yoy are intact.
         
-        # Separate flag for declining earnings (model can branch on this)
+        # Separate flag for declining earnings (model can branch on this safely)
         if 'eps_growth_yoy' in df.columns:
             df['is_declining_earnings'] = (df['eps_growth_yoy'] <= 0).astype(int)
         else:

@@ -654,6 +654,71 @@ class CompanyProfileEngine:
 
         return profiles.loc[ticker]
 
+    def fetch_shares_float(self, tickers: List[str], batch_size: int = 200) -> pd.DataFrame:
+        """Fetch shares outstanding and float from Yahoo Finance.
+
+        Uses yf.Tickers() for shared session/cookie, processes in batches
+        with pauses to avoid rate limiting.
+
+        Args:
+            tickers: List of ticker symbols
+            batch_size: Tickers per batch (pause between batches)
+
+        Returns:
+            DataFrame with columns: ticker, shares_outstanding, float_shares
+        """
+        import yfinance as yf
+
+        results = []
+        total = len(tickers)
+
+        try:
+            from tqdm import tqdm
+            pbar = tqdm(total=total, desc="Fetching shares float", unit="ticker")
+        except ImportError:
+            pbar = None
+
+        for batch_start in range(0, total, batch_size):
+            batch = tickers[batch_start:batch_start + batch_size]
+            batch_str = " ".join(batch)
+
+            try:
+                yf_batch = yf.Tickers(batch_str)
+                for symbol, ticker_obj in yf_batch.tickers.items():
+                    try:
+                        info = ticker_obj.info
+                        outstanding = info.get("sharesOutstanding")
+                        float_val = info.get("floatShares")
+                        if outstanding is not None or float_val is not None:
+                            results.append({
+                                "ticker": symbol,
+                                "shares_outstanding": int(outstanding) if outstanding else None,
+                                "float_shares": int(float_val) if float_val else None,
+                            })
+                    except Exception as e:
+                        logger.debug(f"yfinance shares failed for {symbol}: {e}")
+                    if pbar:
+                        pbar.update(1)
+            except Exception as e:
+                logger.warning(f"yfinance batch failed (offset {batch_start}): {e}")
+                if pbar:
+                    pbar.update(len(batch))
+
+            # Pause between batches
+            if batch_start + batch_size < total:
+                time.sleep(2)
+
+        if pbar:
+            pbar.close()
+
+        success = len(results)
+        logger.info(f"Shares float: {success}/{total} tickers fetched")
+
+        if not results:
+            return pd.DataFrame(columns=["ticker", "shares_outstanding", "float_shares"])
+
+        return pd.DataFrame(results)
+
     def get_cache_info(self) -> Dict:
         """
         Get information about cached company profiles.

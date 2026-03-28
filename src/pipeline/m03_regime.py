@@ -116,7 +116,7 @@ class M03RegimeCalculator:
             try:
                 with open(config_file) as f:
                     loaded = json.load(f)
-                logger.info(f"Loaded M03 config from {config_file}")
+                logger.debug(f"Loaded M03 config from {config_file}")
                 return loaded
             except Exception as e:
                 logger.warning(f"Failed to load config: {e}, using defaults")

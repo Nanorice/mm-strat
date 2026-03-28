@@ -168,7 +168,14 @@ class FundamentalProcessor:
         for base_col, growth_col in growth_metrics.items():
             if base_col in df.columns:
                 # YoY: compare to 4 quarters ago
-                df[growth_col] = df[base_col].pct_change(periods=4, fill_method=None) * 100
+                prior_4q = df[base_col].shift(4)
+                
+                # Use (Current - Prior) / ABS(Prior) to correctly handle negative bases
+                df[growth_col] = np.where(
+                    prior_4q.abs() > 1e-6,
+                    (df[base_col] - prior_4q) / prior_4q.abs() * 100,
+                    np.nan
+                )
                 # Replace inf with nan (inf growth from division by zero is not meaningful)
                 df[growth_col] = df[growth_col].replace([np.inf, -np.inf], np.nan)
             else:
@@ -196,9 +203,11 @@ class FundamentalProcessor:
         # For quarterly data: 12 quarters = 3 years
         if 'revenue' in df.columns:
             revenue_3y_ago = df['revenue'].shift(12)
+            # Use np.cbrt on (Current - Prior) / ABS(Prior) + 1 to properly handle negative revenue
+            ratio = (df['revenue'] - revenue_3y_ago) / revenue_3y_ago.abs() + 1
             df['revenue_cagr_3y'] = np.where(
-                (revenue_3y_ago > 0) & (df['revenue'] > 0),
-                ((df['revenue'] / revenue_3y_ago) ** (1/3) - 1) * 100,
+                revenue_3y_ago.abs() > 1e-6,
+                (np.cbrt(ratio) - 1) * 100,
                 np.nan
             )
         else:

@@ -1,6 +1,6 @@
 """
-Macro Engine - FRED API Data Fetcher
-Fetches and caches macroeconomic data for M03 regime scoring.
+Macro Engine - DuckDB Macro Data Fetcher
+Fetches and writes macroeconomic data (SPY, QQQ, VIX) to t1_macro table.
 """
 
 import pandas as pd
@@ -9,6 +9,8 @@ import requests
 import threading
 import time
 import logging
+import duckdb
+import yfinance as yf
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
@@ -36,7 +38,8 @@ class MacroEngine:
 
     FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
-    def __init__(self, fred_api_key: str = None, fmp_api_key: str = None):
+    def __init__(self, db_path: str = None, fred_api_key: str = None, fmp_api_key: str = None):
+        self.db_path = db_path or str(config.DUCKDB_PATH)
         self.fred_api_key = fred_api_key or config.FRED_API_KEY
         self.fmp_api_key = fmp_api_key or config.FMP_API_KEY
         self.macro_dir = config.MACRO_DATA_DIR
@@ -364,3 +367,178 @@ class MacroEngine:
             df = df[df.index <= as_of]
 
         return df.dropna()
+
+    # ------------------------------------------------------------------
+    # DuckDB t1_macro table methods (v2 architecture)
+    # ------------------------------------------------------------------
+
+    def fetch_daily_macro(self, start_date: str = '2020-01-01', end_date: str = None) -> pd.DataFrame:
+        """
+        Fetch daily macro data for t1_macro table.
+
+        Fetches:
+        - SPY OHLCV
+        - QQQ OHLCV
+        - VIX close
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (defaults to yesterday)
+
+        Returns:
+            DataFrame with columns matching t1_macro schema
+        """
+        if end_date is None:
+            from src.utils import get_latest_trading_day
+            end_date = get_latest_trading_day().strftime('%Y-%m-%d')
+
+        # yfinance end is exclusive — add 1 day to include the end_date
+        yf_end = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+
+        logger.info(f"Fetching macro data from yfinance ({start_date} -> {end_date})")
+
+        # Fetch SPY, QQQ, VIX in parallel
+        tickers = ['SPY', 'QQQ', '^VIX']
+        try:
+            data = yf.download(tickers, start=start_date, end=yf_end, progress=False, threads=True, auto_adjust=True)
+
+            if data.empty:
+                logger.warning(f"No data returned from yfinance for {tickers}")
+                return pd.DataFrame()
+
+            # Handle MultiIndex columns (when multiple tickers)
+            df_list = []
+            for ticker in tickers:
+                prefix = ticker.replace('^', '').lower()
+                if len(tickers) == 1:
+                    # Single ticker: columns are ['Open', 'High', 'Low', 'Close', 'Volume']
+                    ticker_df = data[['Close']].copy()
+                    ticker_df.columns = [f'{prefix}_close']
+                else:
+                    # Multiple tickers: columns are MultiIndex [('Close', 'SPY'), ('Volume', 'SPY'), ...]
+                    ticker_df = pd.DataFrame()
+                    if ('Close', ticker) in data.columns:
+                        ticker_df[f'{prefix}_close'] = data[('Close', ticker)]
+                    if ('High', ticker) in data.columns:
+                        ticker_df[f'{prefix}_high'] = data[('High', ticker)]
+                    if ('Low', ticker) in data.columns:
+                        ticker_df[f'{prefix}_low'] = data[('Low', ticker)]
+                    if ('Volume', ticker) in data.columns and prefix != 'vix':
+                        ticker_df[f'{prefix}_volume'] = data[('Volume', ticker)].astype('Int64')
+
+                df_list.append(ticker_df)
+
+            # Merge all tickers on date index
+            result = pd.concat(df_list, axis=1)
+            result.index.name = 'date'
+            result = result.reset_index()
+
+            # Ensure date is DATE type (not datetime)
+            result['date'] = pd.to_datetime(result['date']).dt.date
+
+            logger.info(f"Fetched {len(result)} macro records")
+            return result
+
+        except Exception as e:
+            logger.error(f"yfinance fetch failed: {e}")
+            return pd.DataFrame()
+
+    def write_to_t1_macro(self, df: pd.DataFrame) -> int:
+        """
+        Write macro data to t1_macro table (INSERT OR IGNORE for idempotency).
+
+        Args:
+            df: DataFrame with columns matching t1_macro schema
+
+        Returns:
+            Number of rows inserted
+        """
+        if df.empty:
+            logger.warning("Empty DataFrame, nothing to write")
+            return 0
+
+        con = duckdb.connect(self.db_path)
+        try:
+            # Ensure table exists
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS t1_macro (
+                    date DATE PRIMARY KEY,
+                    spy_close DOUBLE,
+                    spy_volume UBIGINT,
+                    spy_high DOUBLE,
+                    spy_low DOUBLE,
+                    qqq_close DOUBLE,
+                    qqq_volume UBIGINT,
+                    qqq_high DOUBLE,
+                    qqq_low DOUBLE,
+                    vix_close DOUBLE,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            # Register DataFrame
+            con.register('macro_feed', df)
+
+            # Count before
+            before = con.execute("SELECT COUNT(*) FROM t1_macro").fetchone()[0]
+
+            # Insert (skip duplicates)
+            con.execute("""
+                INSERT OR IGNORE INTO t1_macro (
+                    date, spy_close, spy_high, spy_low, spy_volume,
+                    qqq_close, qqq_high, qqq_low, qqq_volume,
+                    vix_close
+                )
+                SELECT
+                    date, spy_close, spy_high, spy_low, spy_volume,
+                    qqq_close, qqq_high, qqq_low, qqq_volume,
+                    vix_close
+                FROM macro_feed
+            """)
+
+            # Count after
+            after = con.execute("SELECT COUNT(*) FROM t1_macro").fetchone()[0]
+            inserted = after - before
+
+            logger.info(f"Inserted {inserted} new rows into t1_macro (total: {after})")
+            return inserted
+
+        finally:
+            con.close()
+
+    def ingest_daily_macro(self, start_date: str = None, force: bool = False) -> int:
+        """
+        Ingest macro data into t1_macro table (idempotent).
+
+        Args:
+            start_date: Start date (defaults to last date in table + 1 day)
+            force: If True, re-ingest from 2020-01-01
+
+        Returns:
+            Number of rows inserted
+        """
+        con = duckdb.connect(self.db_path)
+        try:
+            # Determine start_date
+            if force or start_date:
+                fetch_start = start_date or '2020-01-01'
+            else:
+                # Incremental: start from last date in table
+                con.execute("CREATE TABLE IF NOT EXISTS t1_macro (date DATE PRIMARY KEY)")
+                max_date_result = con.execute("SELECT MAX(date) FROM t1_macro").fetchone()
+                if max_date_result[0]:
+                    last_date = pd.to_datetime(max_date_result[0])
+                    fetch_start = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                else:
+                    fetch_start = '2020-01-01'
+
+            # Fetch and write
+            df = self.fetch_daily_macro(start_date=fetch_start)
+            if df.empty:
+                logger.info("No new macro data to ingest")
+                return 0
+
+            return self.write_to_t1_macro(df)
+
+        finally:
+            con.close()

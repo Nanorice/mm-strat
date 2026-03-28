@@ -21,6 +21,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+import duckdb
+
 import config
 from src.feature_config import get_model_features
 
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 BACKTEST_DATA_DIR = config.DATA_DIR / 'backtest'
 D2_PATH = config.DATA_DIR / 'ml' / 'd2.parquet'
+DEFAULT_DB_PATH = config.DATA_DIR / 'market_data.duckdb'
 
 
 class UniverseScorer:
@@ -57,7 +60,23 @@ class UniverseScorer:
         if not self.m01_path.exists():
             raise FileNotFoundError(f"M01 model not found: {self.m01_path}")
 
-        self.m01_model = xgb.XGBRegressor()
+        # Detect model type from booster config
+        booster = xgb.Booster()
+        booster.load_model(str(self.m01_path))
+        model_config = json.loads(booster.save_config())
+        objective = model_config.get('learner', {}).get('objective', {}).get('name', '')
+        num_class = model_config.get('learner', {}).get('learner_model_param', {}).get('num_class', '0')
+
+        if 'softprob' in objective or 'softmax' in objective:
+            self.m01_model = xgb.XGBClassifier()
+            self._is_classifier = True
+            self._num_classes = int(num_class)
+            logger.info(f"M01 is a {self._num_classes}-class classifier (objective={objective})")
+        else:
+            self.m01_model = xgb.XGBRegressor()
+            self._is_classifier = False
+            self._num_classes = 0
+
         self.m01_model.load_model(str(self.m01_path))
         logger.info(f"Loaded M01 from {self.m01_path}")
 
@@ -78,19 +97,28 @@ class UniverseScorer:
         else:
             logger.warning(f"No calibration table at {self.calibration_path}")
 
-        # Load features from model config (source of truth) instead of feature_config
-        # Support both flat layout (models/m01_config.json) and folder layout (models/m01_v2/config.json)
-        m01_config_path = self.m01_path.with_name('config.json')  # Folder layout
-        if not m01_config_path.exists():
-            m01_config_path = self.m01_path.with_name('m01_config.json')  # Flat layout
+        # Load features from model metadata (source of truth)
+        # Try metadata.json first, then config.json, then feature_config fallback
+        metadata_path = self.m01_path.with_name('metadata.json')
+        m01_config_path = self.m01_path.with_name('config.json')
+        m01_config_flat = self.m01_path.with_name('m01_config.json')
 
-        if m01_config_path.exists():
+        if metadata_path.exists():
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+            self._m01_features = metadata.get('valid_features', [])
+            logger.info(f"M01 uses {len(self._m01_features)} features (from metadata.json)")
+        elif m01_config_path.exists():
             with open(m01_config_path) as f:
                 m01_config = json.load(f)
             self._m01_features = m01_config.get('feature_columns', [])
-            logger.info(f"M01 uses {len(self._m01_features)} features (from config)")
+            logger.info(f"M01 uses {len(self._m01_features)} features (from config.json)")
+        elif m01_config_flat.exists():
+            with open(m01_config_flat) as f:
+                m01_config = json.load(f)
+            self._m01_features = m01_config.get('feature_columns', [])
+            logger.info(f"M01 uses {len(self._m01_features)} features (from m01_config.json)")
         else:
-            # Fallback to feature_config if no model config
             self._m01_features = get_model_features('M01')
             logger.info(f"M01 uses {len(self._m01_features)} features (from feature_config)")
 
@@ -213,6 +241,106 @@ class UniverseScorer:
         )
         # pd.cut returns Categorical; convert to float array
         return pd.Series(binned).astype(float).values
+
+    def score_from_duckdb(
+        self,
+        start_date: str,
+        end_date: str,
+        db_path: Optional[Path] = None,
+    ) -> pd.DataFrame:
+        """
+        Score SEPA candidates directly from d2_training_cache in DuckDB.
+
+        Returns DataFrame with columns: date, ticker, calibrated_score,
+        normalized_score, daily_pct_rank, trailing_10d_pct.
+        """
+        db_path = db_path or DEFAULT_DB_PATH
+
+        if self.m01_model is None:
+            self.load_model()
+
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            df = con.execute("""
+                SELECT * FROM d2_training_cache
+                WHERE date >= ? AND date <= ?
+                ORDER BY date, ticker
+            """, [start_date, end_date]).fetchdf()
+        finally:
+            con.close()
+
+        logger.info(f"Loaded {len(df)} rows from d2_training_cache ({start_date} to {end_date})")
+
+        if df.empty:
+            raise ValueError(f"No data in d2_training_cache for {start_date} to {end_date}")
+
+        # Generate missing log_* features inline
+        missing_features = [f for f in self._m01_features if f not in df.columns]
+        log_missing = [f for f in missing_features if f.startswith('log_')]
+        if log_missing:
+            for log_feat in log_missing:
+                base_feat = log_feat[4:]
+                if base_feat in df.columns:
+                    df[log_feat] = np.sign(df[base_feat]) * np.log1p(np.abs(df[base_feat]))
+            missing_features = [f for f in self._m01_features if f not in df.columns]
+
+        if missing_features:
+            logger.warning(f"Missing features: {missing_features}")
+            for f in missing_features:
+                df[f] = np.nan
+
+        X = df[self._m01_features].copy()
+
+        # Handle categoricals (sector/industry are VARCHAR in DuckDB)
+        for col in ['industry', 'sector', 'industry_id', 'sector_id']:
+            if col in X.columns:
+                X[col] = X[col].astype('category')
+
+        # Fill NaNs with median (numeric only)
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        X[numeric_cols] = X[numeric_cols].fillna(X[numeric_cols].median())
+
+        # Predict — classifier uses expected MFE, regressor uses raw score
+        if self._is_classifier:
+            # MFE class midpoints: 0=Noise(0-2%), 1=Moderate(2-10%), 2=Strong(10-30%), 3=HomeRun(30%+)
+            midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
+            proba = self.m01_model.predict_proba(X)
+            calibrated_scores = (proba * midpoints).sum(axis=1)
+            logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
+        else:
+            raw_scores = self.m01_model.predict(X)
+            calibrated_scores = self._calibrate_vectorized(raw_scores)
+
+        result = pd.DataFrame({
+            'date': df['date'].values,
+            'ticker': df['ticker'].values,
+            'calibrated_score': calibrated_scores,
+        })
+        result = result.dropna(subset=['calibrated_score'])
+
+        # Daily percentile rank
+        result['daily_pct_rank'] = result.groupby('date')['calibrated_score'].transform(
+            lambda x: x.rank(pct=True)
+        )
+
+        # Trailing 10-day percentile
+        result = result.sort_values(['date', 'ticker'])
+        result['trailing_10d_pct'] = self._compute_trailing_percentile(result, window=10)
+
+        # Normalized score (0-100)
+        cal_min = result['calibrated_score'].min()
+        cal_max = result['calibrated_score'].max()
+        if cal_max > cal_min:
+            result['normalized_score'] = (
+                (result['calibrated_score'] - cal_min) / (cal_max - cal_min) * 100
+            )
+        else:
+            result['normalized_score'] = 50.0
+
+        result = result.sort_values(['date', 'daily_pct_rank'], ascending=[True, False])
+        logger.info(f"Scored {len(result)} rows, {result['ticker'].nunique()} tickers, "
+                    f"{result['date'].nunique()} dates")
+        return result
 
     def score_universe(
         self,
@@ -401,9 +529,21 @@ def score_universe(
     end_date: str,
     output_path: Optional[Path] = None,
 ) -> pd.DataFrame:
-    """Convenience function to score the universe."""
+    """Convenience function to score the universe (parquet-based)."""
     scorer = UniverseScorer()
     return scorer.score_universe(start_date, end_date, output_path)
+
+
+def score_universe_duckdb(
+    start_date: str,
+    end_date: str,
+    m01_path: str = 'models/m01.json',
+    calibration_path: str = 'models/m01_calibration.json',
+    db_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Convenience function to score the universe from DuckDB."""
+    scorer = UniverseScorer(m01_path=m01_path, calibration_path=calibration_path)
+    return scorer.score_from_duckdb(start_date, end_date, db_path)
 
 
 if __name__ == '__main__':
