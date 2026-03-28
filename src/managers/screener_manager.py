@@ -3,7 +3,6 @@ ScreenerManager - Event-log based screener membership (Phase 2 redesign).
 
 Design:
 - screener_membership: append-only event log (one row per status change per ticker)
-- screener_members: compatibility VIEW showing latest event per ticker
 
 Two execution paths:
   backfill_all(start, end)  — vectorised SQL over full history, no Python loop
@@ -82,22 +81,12 @@ class ScreenerManager:
             WHERE NOT EXISTS (SELECT 1 FROM screener_criteria_versions WHERE version_id = 2)
         """)
 
-        # Migrate old screener_members TABLE → VIEW
+        # Drop legacy screener_members view/table if it still exists
         try:
+            conn.execute("DROP VIEW IF EXISTS screener_members")
             conn.execute("DROP TABLE IF EXISTS screener_members")
         except Exception:
-            pass  # Already a view
-
-        conn.execute("""
-            CREATE OR REPLACE VIEW screener_members AS
-            WITH latest AS (
-                SELECT ticker, is_active, last_price, avg_volume_20d, market_cap,
-                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY effective_date DESC) AS rn
-                FROM screener_membership
-            )
-            SELECT ticker, is_active, last_price, avg_volume_20d, market_cap
-            FROM latest WHERE rn = 1
-        """)
+            pass
 
     # ------------------------------------------------------------------
     # Criteria lookup

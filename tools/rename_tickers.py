@@ -26,15 +26,14 @@ DATED_TABLES = {
     "fundamentals":         "period_end",
     "shares_history":       "date",
     "earnings_calendar":    "earnings_date",
-    "daily_features":       "date",
     "t2_screener_features": "date",
     "t3_sepa_features":     "date",
+    "screener_membership":  "effective_date",
 }
 
-# Tables with ticker only (or ticker + non-date key)
+# Tables with ticker only (no composite date key)
 OTHER_TABLES = [
     "company_profiles",
-    "screener_members",
 ]
 
 ALL_TABLES = list(DATED_TABLES.keys()) + OTHER_TABLES
@@ -108,7 +107,7 @@ def run(renames: list[tuple[str, str]], dry_run: bool = True):
                     )
                     conn.execute(f"UPDATE {table} SET ticker = ? WHERE ticker = ?", [new, old])
             else:
-                # screener_members etc — delete new, rename old
+                # company_profiles: delete new, rename old
                 print(f"  {table}: DELETE {new_count} new, RENAME {old_count} old ({old} -> {new})")
                 if not dry_run:
                     conn.execute(f"DELETE FROM {table} WHERE ticker = ?", [new])

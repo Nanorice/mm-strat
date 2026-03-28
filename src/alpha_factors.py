@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Add parent to path for WorldQuant_101 import
 sys.path.append(str(Path(__file__).parent.parent))
-from WorldQuant_101 import Alphas
+from scripts.WorldQuant_101 import Alphas
 
 logger = logging.getLogger(__name__)
 

@@ -489,6 +489,8 @@ class DailyPipelineOrchestrator:
                 fund_ok = sum(1 for v in fund_results.values() if v)
                 results['fundamentals'] = {'success': True, 'ok': fund_ok, 'failed': len(fund_results) - fund_ok}
                 logger.info(f"  [1.2] Fundamentals: {fund_ok}/{len(fund_results)} OK")
+                # DQ check: flag rows where filing_date is < 30 days after period_end (suspiciously fast)
+                self._check_filing_date_quality(active_tickers)
             except Exception as e:
                 results['fundamentals'] = {'success': False, 'error': str(e)}
                 logger.error(f"  [1.2] Fundamentals FAILED: {e}")
@@ -565,6 +567,15 @@ class DailyPipelineOrchestrator:
         start_date = (pd.to_datetime(max_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
         if start_date > last_trading_day:
+            # Date is current, but check for coverage gaps (partial ingestion)
+            coverage = self._t2_coverage_deficit(last_trading_day, con_factory=lambda: duckdb.connect(self.db_path, read_only=True))
+            if coverage > 0:
+                logger.warning(f"[Phase 3] Coverage gap: {coverage} tickers missing for {last_trading_day} — recomputing")
+                rows = self.feature_pipeline.compute_t2_screener_features(
+                    start_date=last_trading_day,
+                    end_date=last_trading_day
+                )
+                return {'rows_processed': rows}
             logger.info(f"[Phase 3] t2_screener_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
             return {'rows_processed': 0}
 
@@ -574,6 +585,33 @@ class DailyPipelineOrchestrator:
             end_date=last_trading_day
         )
         return {'rows_processed': rows}
+
+    def _t2_coverage_deficit(self, target_date: str, con_factory=None) -> int:
+        """Return number of tickers missing from t2_screener_features for target_date."""
+        con = con_factory() if con_factory else duckdb.connect(self.db_path, read_only=True)
+        try:
+            expected = con.execute(f"""
+                SELECT COUNT(DISTINCT p.ticker)
+                FROM price_data p
+                INNER JOIN (
+                    SELECT ticker, effective_date, is_active,
+                           LEAD(effective_date) OVER (PARTITION BY ticker ORDER BY effective_date) AS next_date
+                    FROM screener_membership
+                ) sm ON p.ticker = sm.ticker
+                    AND p.date >= sm.effective_date
+                    AND (sm.next_date IS NULL OR p.date < sm.next_date)
+                    AND sm.is_active = TRUE
+                WHERE p.date = '{target_date}'
+            """).fetchone()[0]
+            actual = con.execute(f"""
+                SELECT COUNT(DISTINCT ticker) FROM t2_screener_features WHERE date = '{target_date}'
+            """).fetchone()[0]
+            deficit = expected - actual
+            if deficit > 0 and (actual / expected * 100) < 99:
+                return deficit
+            return 0
+        finally:
+            con.close()
 
     def _run_phase_4_t2_regime(self, target_date: str) -> Dict:
         """Phase 4: Compute M03 regime scores."""
@@ -600,6 +638,15 @@ class DailyPipelineOrchestrator:
         start_date = (pd.to_datetime(max_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
         if start_date > last_trading_day:
+            # Date is current, but check for coverage gaps
+            deficit = self._t3_coverage_deficit(last_trading_day)
+            if deficit > 0:
+                logger.warning(f"[Phase 5] Coverage gap: {deficit} breakout tickers missing for {last_trading_day} — recomputing")
+                rows = self.feature_pipeline.compute_t3_features(
+                    start_date=last_trading_day,
+                    end_date=last_trading_day
+                )
+                return {'rows_processed': rows}
             logger.info(f"[Phase 5] t3_sepa_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
             return {'rows_processed': 0}
 
@@ -609,6 +656,24 @@ class DailyPipelineOrchestrator:
             end_date=last_trading_day
         )
         return {'rows_processed': rows}
+
+    def _t3_coverage_deficit(self, target_date: str) -> int:
+        """Return number of breakout tickers missing from t3_sepa_features for target_date."""
+        con = duckdb.connect(self.db_path, read_only=True)
+        try:
+            expected = con.execute(f"""
+                SELECT COUNT(DISTINCT ticker)
+                FROM t2_screener_features
+                WHERE date = '{target_date}' AND trend_ok = TRUE AND breakout_ok = TRUE
+            """).fetchone()[0]
+            actual = con.execute(f"""
+                SELECT COUNT(DISTINCT ticker)
+                FROM t3_sepa_features
+                WHERE date = '{target_date}'
+            """).fetchone()[0]
+            return max(0, expected - actual)
+        finally:
+            con.close()
 
     def _run_phase_6_views(self, target_date: str) -> Dict:
         """Phase 6: Refresh all views."""
@@ -627,7 +692,7 @@ class DailyPipelineOrchestrator:
         return {'rows_processed': rows}
 
     def _run_phase_8_monitoring(self, target_date: str, run_stats: Dict) -> Dict:
-        """Phase 8: Generate health report and alerts. Always runs."""
+        """Phase 8: Generate health report, coverage check, and alerts. Always runs."""
 
         # Get health report
         health = self.run_manager.get_health_report(target_date)
@@ -654,6 +719,11 @@ class DailyPipelineOrchestrator:
                 f"[WARN] ALERT: {len(health['recent_failures'])} phase failures in last 7 days"
             )
 
+        # Alert 4: Coverage check — detect partial ingestion gaps
+        coverage = self._check_coverage(target_date)
+        if coverage['alerts']:
+            alerts.extend(coverage['alerts'])
+
         # Log alerts
         if alerts:
             logger.warning("ALERTS TRIGGERED:")
@@ -669,5 +739,149 @@ class DailyPipelineOrchestrator:
         return {
             'rows_processed': 0,
             'alerts': alerts,
-            'health': health
+            'health': health,
+            'coverage': coverage,
         }
+
+    def _check_filing_date_quality(self, tickers: list) -> None:
+        """Warn if any newly ingested fundamental rows have filing_date < 30 days after period_end.
+
+        A gap < 30 days is suspiciously fast — most companies take 30-90 days to file.
+        This likely indicates a bad date mapping (e.g., earnings_date matched wrong quarter).
+        Only checks tickers in the current ingestion batch to avoid redundant full-table scans.
+        """
+        if not tickers:
+            return
+        ticker_list = ", ".join(f"'{t}'" for t in tickers)
+        con = duckdb.connect(self.db_path, read_only=True)
+        try:
+            rows = con.execute(f"""
+                SELECT ticker, period_end, filing_date,
+                       DATE_DIFF('day', period_end, filing_date) AS gap_days
+                FROM fundamentals
+                WHERE ticker IN ({ticker_list})
+                  AND filing_date IS NOT NULL
+                  AND DATE_DIFF('day', period_end, filing_date) < 30
+                ORDER BY gap_days
+                LIMIT 20
+            """).fetchdf()
+        finally:
+            con.close()
+
+        if not rows.empty:
+            logger.warning(
+                f"  [1.2] ⚠️ DQ: {len(rows)} fundamental rows with filing_date < 30d after period_end "
+                f"(likely bad date mapping). Sample: "
+                + ", ".join(
+                    f"{r.ticker} {r.period_end} ({r.gap_days}d)"
+                    for r in rows.head(5).itertuples()
+                )
+            )
+
+    def _check_coverage(self, target_date: str) -> Dict:
+        """Check ticker coverage across pipeline tables for the target date.
+
+        Compares expected tickers (price_data + screener_membership) against
+        actual tickers in t2_screener_features and t3_sepa_features. Gaps
+        indicate partial ingestion (e.g., API rate limits during Phase 1).
+        """
+        con = duckdb.connect(self.db_path, read_only=True)
+        alerts = []
+        details = {}
+
+        try:
+            # Expected: tickers with price data AND active screener membership on target_date
+            expected = con.execute(f"""
+                SELECT COUNT(DISTINCT p.ticker)
+                FROM price_data p
+                INNER JOIN (
+                    SELECT ticker, effective_date, is_active,
+                           LEAD(effective_date) OVER (PARTITION BY ticker ORDER BY effective_date) AS next_date
+                    FROM screener_membership
+                ) sm ON p.ticker = sm.ticker
+                    AND p.date >= sm.effective_date
+                    AND (sm.next_date IS NULL OR p.date < sm.next_date)
+                    AND sm.is_active = TRUE
+                WHERE p.date = '{target_date}'
+            """).fetchone()[0]
+
+            # Actual: tickers in t2_screener_features
+            actual_t2 = con.execute(f"""
+                SELECT COUNT(DISTINCT ticker)
+                FROM t2_screener_features
+                WHERE date = '{target_date}'
+            """).fetchone()[0]
+
+            details['expected_tickers'] = expected
+            details['t2_tickers'] = actual_t2
+            details['t2_deficit'] = expected - actual_t2
+
+            coverage_pct = (actual_t2 / expected * 100) if expected > 0 else 100
+            if expected > 0 and coverage_pct < 99:
+                pct = round(coverage_pct, 1)
+                deficit = expected - actual_t2
+                alerts.append(
+                    f"⚠️  COVERAGE GAP: t2_screener_features has {actual_t2}/{expected} tickers "
+                    f"for {target_date} ({pct}% coverage, {deficit} missing). "
+                    f"Likely cause: partial price ingestion (API rate limit). "
+                    f"Fix: rerun with --phase-3-only"
+                )
+                # Log sample missing tickers for debugging
+                missing = con.execute(f"""
+                    SELECT p.ticker
+                    FROM price_data p
+                    INNER JOIN (
+                        SELECT ticker, effective_date, is_active,
+                               LEAD(effective_date) OVER (PARTITION BY ticker ORDER BY effective_date) AS next_date
+                        FROM screener_membership
+                    ) sm ON p.ticker = sm.ticker
+                        AND p.date >= sm.effective_date
+                        AND (sm.next_date IS NULL OR p.date < sm.next_date)
+                        AND sm.is_active = TRUE
+                    LEFT JOIN t2_screener_features t2
+                        ON p.ticker = t2.ticker AND t2.date = '{target_date}'
+                    WHERE p.date = '{target_date}' AND t2.ticker IS NULL
+                    ORDER BY p.ticker
+                    LIMIT 10
+                """).fetchdf()
+                sample = ", ".join(missing['ticker'].tolist())
+                logger.warning(f"   Sample missing tickers: {sample}")
+                details['sample_missing'] = missing['ticker'].tolist()
+
+            # T3 coverage (only meaningful if t2 has breakouts)
+            t2_breakouts = con.execute(f"""
+                SELECT COUNT(DISTINCT ticker)
+                FROM t2_screener_features
+                WHERE date = '{target_date}' AND trend_ok = TRUE AND breakout_ok = TRUE
+            """).fetchone()[0]
+
+            actual_t3 = con.execute(f"""
+                SELECT COUNT(DISTINCT ticker)
+                FROM t3_sepa_features
+                WHERE date = '{target_date}'
+            """).fetchone()[0]
+
+            details['t2_breakouts'] = t2_breakouts
+            details['t3_tickers'] = actual_t3
+
+            if t2_breakouts > 0 and actual_t3 < t2_breakouts:
+                deficit = t2_breakouts - actual_t3
+                alerts.append(
+                    f"⚠️  COVERAGE GAP: t3_sepa_features has {actual_t3}/{t2_breakouts} "
+                    f"breakout tickers for {target_date} ({deficit} missing). "
+                    f"Fix: rerun with --phase-5-only"
+                )
+
+        except Exception as e:
+            logger.error(f"Coverage check failed: {e}")
+            alerts.append(f"[ERR] Coverage check failed: {e}")
+        finally:
+            con.close()
+
+        if not alerts:
+            logger.info(
+                f"[OK] Coverage: t2={details.get('t2_tickers', '?')}/{details.get('expected_tickers', '?')} tickers, "
+                f"t3={details.get('t3_tickers', '?')}/{details.get('t2_breakouts', '?')} breakouts"
+            )
+
+        return {'alerts': alerts, 'details': details}

@@ -100,12 +100,17 @@ def setUpModule():
     })
     con.execute("CREATE TABLE company_profiles AS SELECT * FROM profiles")
 
-    # screener_members: AAPL/MSFT/TSLA active, JUNK inactive
+    # screener_membership: AAPL/MSFT/TSLA active from start of test period, JUNK never active
     screener = pd.DataFrame({
         'ticker': ['AAPL', 'MSFT', 'TSLA', 'JUNK'],
+        'effective_date': ['2022-01-01', '2022-01-01', '2022-01-01', '2022-01-01'],
         'is_active': [True, True, True, False],
+        'last_price': [None, None, None, None],
+        'avg_volume_20d': [None, None, None, None],
+        'market_cap': [None, None, None, None],
+        'criteria_version': ['v2', 'v2', 'v2', 'v2'],
     })
-    con.execute("CREATE TABLE screener_members AS SELECT * FROM screener")
+    con.execute("CREATE TABLE screener_membership AS SELECT * FROM screener")
 
     # t1_macro: SPY benchmark (replaces price_data WHERE ticker='SPY')
     base_spy = 450.0
