@@ -238,7 +238,9 @@ def check_current_universe(con: duckdb.DuckDBPyConnection, as_of_date: str) -> N
     _check("current_universe", "active_tickers", status, active,
            f"Active tickers as of {as_of_date} (expected {EXPECTED_MIN_ACTIVE}–{EXPECTED_MAX_ACTIVE})")
 
-    # Breakdown: tickers active today that have no price_data in last 5 days (ghost tickers)
+    # Breakdown: tickers active today that have no price_data in last 5 days (ghost tickers).
+    # Exclude tickers where cp.is_active=FALSE — those are confirmed delisted and expected to
+    # have no recent price; screener exit events should be (or will be) logged for them.
     ghost = con.execute(f"""
         WITH latest AS (
             SELECT ticker, is_active,
@@ -247,7 +249,9 @@ def check_current_universe(con: duckdb.DuckDBPyConnection, as_of_date: str) -> N
             WHERE effective_date <= '{as_of_date}'
         ),
         active_now AS (
-            SELECT ticker FROM latest WHERE rn = 1 AND is_active = TRUE
+            SELECT sm.ticker FROM latest sm
+            JOIN company_profiles cp ON sm.ticker = cp.ticker
+            WHERE sm.rn = 1 AND sm.is_active = TRUE AND cp.is_active = TRUE
         )
         SELECT COUNT(*) FROM active_now a
         WHERE NOT EXISTS (
@@ -258,7 +262,7 @@ def check_current_universe(con: duckdb.DuckDBPyConnection, as_of_date: str) -> N
     """).fetchone()[0]
     status = "WARNING" if ghost > 10 else "OK"
     _check("current_universe", "active_tickers_no_recent_price", status, ghost,
-           f"Active tickers with no price data in last 5 days before {as_of_date} (may be delisted but still in grace period)")
+           f"Active tickers (cp.is_active=TRUE) with no price data in last 5 days before {as_of_date}")
 
 
 # ---------------------------------------------------------------------------

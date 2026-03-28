@@ -32,6 +32,15 @@ MIN_PRICE_COVERAGE_PCT = 80.0      # warn if price coverage drops below this
 MIN_SHARES_COVERAGE_PCT = 60.0     # warn if shares coverage drops below this
 MIN_FUND_COVERAGE_PCT = 60.0       # warn if fundamentals coverage drops below this
 
+# Dates known to be legitimately absent from t1_macro (market closures / extraordinary events).
+# Gaps limited to these dates are downgraded from FAIL to INFO — they are expected, not bugs.
+KNOWN_MACRO_GAP_DATES: set[str] = {
+    "2001-09-11",  # 9/11 — NYSE closed
+    "2001-09-12",  # NYSE remained closed
+    "2001-09-13",  # NYSE remained closed
+    "2001-09-14",  # NYSE remained closed
+}
+
 FUNDAMENTAL_KEY_COLS = [
     "total_revenue", "net_income", "gross_profit", "operating_income",
     "ebit", "ebitda", "total_assets", "stockholders_equity",
@@ -83,30 +92,51 @@ def check_coverage(con: duckdb.DuckDBPyConnection) -> None:
         _check("coverage", f"{table}_coverage_pct", status, pct,
                f"{covered}/{total_cp} company_profile tickers present in {table}")
 
-    # CP tickers missing entirely from each downstream table
+    # CP tickers missing entirely from each downstream table — only warn for active tickers.
+    # Inactive/delisted tickers are expected to have gaps (e.g. ETFs, preferred shares delisted recently).
     for table in ("price_data", "shares_history", "fundamentals"):
-        missing = con.execute(f"""
+        missing_active = con.execute(f"""
             SELECT COUNT(DISTINCT cp.ticker)
             FROM company_profiles cp
             LEFT JOIN (SELECT DISTINCT ticker FROM {table}) t ON cp.ticker = t.ticker
-            WHERE t.ticker IS NULL
+            WHERE t.ticker IS NULL AND cp.is_active = TRUE
         """).fetchone()[0]
-        status = "OK" if missing == 0 else "WARNING"
-        _check("coverage", f"{table}_missing_from_cp", status, missing,
-               f"Tickers in company_profiles with NO rows in {table}")
+        missing_inactive = con.execute(f"""
+            SELECT COUNT(DISTINCT cp.ticker)
+            FROM company_profiles cp
+            LEFT JOIN (SELECT DISTINCT ticker FROM {table}) t ON cp.ticker = t.ticker
+            WHERE t.ticker IS NULL AND cp.is_active = FALSE
+        """).fetchone()[0]
+        status = "OK" if missing_active == 0 else "WARNING"
+        detail = f"Active tickers in company_profiles with NO rows in {table}"
+        if missing_inactive:
+            detail += f" ({missing_inactive} inactive/delisted tickers also missing — expected)"
+        _check("coverage", f"{table}_missing_from_cp", status, missing_active, detail)
 
-    # Orphan tickers: in downstream table but NOT in company_profiles
+    # Orphan tickers: in downstream table but NOT in company_profiles.
+    # Warrants (*W, *-WT), preferred (*-PA/PB/etc), rights (*-RI) are expected to remain as
+    # historical data after CP cleanup — report as INFO. Unexpected regular equities = WARNING.
+    _INSTRUMENT_PATTERN = r".*W$|.*-WT$|.*-P[A-Z]$|.*-RI$|.*-R$"
     for table in ("price_data", "shares_history", "fundamentals"):
-        orphans = con.execute(f"""
+        orphans_regular = con.execute(f"""
             SELECT COUNT(DISTINCT t.ticker)
             FROM {table} t
             LEFT JOIN company_profiles cp ON t.ticker = cp.ticker
             WHERE cp.ticker IS NULL
+              AND NOT t.ticker SIMILAR TO '{_INSTRUMENT_PATTERN}'
         """).fetchone()[0]
-        status = "OK" if orphans == 0 else "WARNING"
+        orphans_instrument = con.execute(f"""
+            SELECT COUNT(DISTINCT t.ticker)
+            FROM {table} t
+            LEFT JOIN company_profiles cp ON t.ticker = cp.ticker
+            WHERE cp.ticker IS NULL
+              AND t.ticker SIMILAR TO '{_INSTRUMENT_PATTERN}'
+        """).fetchone()[0]
+        orphans_total = orphans_regular + orphans_instrument
+        status = "OK" if orphans_regular == 0 else "WARNING"
         by_source = ""
-        if table == "fundamentals" and orphans > 0:
-            rows = con.execute("""
+        if table == "fundamentals" and orphans_total > 0:
+            rows = con.execute(f"""
                 SELECT f.source, COUNT(DISTINCT f.ticker) cnt
                 FROM fundamentals f
                 LEFT JOIN company_profiles cp ON f.ticker = cp.ticker
@@ -114,8 +144,11 @@ def check_coverage(con: duckdb.DuckDBPyConnection) -> None:
                 GROUP BY f.source ORDER BY cnt DESC
             """).fetchall()
             by_source = " | by source: " + ", ".join(f"{s}={c}" for s, c in rows)
-        _check("coverage", f"{table}_orphan_tickers", status, orphans,
-               f"Tickers in {table} not in company_profiles (historical / purge candidates){by_source}")
+        detail = f"Unexpected orphan tickers in {table} (purge candidates)"
+        if orphans_instrument:
+            detail += f" | {orphans_instrument} warrants/preferred/rights excluded from count (expected)"
+        detail += by_source
+        _check("coverage", f"{table}_orphan_tickers", status, orphans_regular, detail)
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +381,67 @@ def check_price_integrity(con: duckdb.DuckDBPyConnection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section 4b: Filing Date Integrity
+# ---------------------------------------------------------------------------
+def check_filing_date_integrity(con: duckdb.DuckDBPyConnection) -> None:
+    total = con.execute("SELECT COUNT(*) FROM fundamentals").fetchone()[0]
+    if total == 0:
+        return
+
+    # NULL filing_date — expected for pre-yfinance historical rows, but track the rate
+    nulls = con.execute("SELECT COUNT(*) FROM fundamentals WHERE filing_date IS NULL").fetchone()[0]
+    pct_null = _pct(nulls, total)
+    status = "WARNING" if pct_null > 30.0 else "OK"
+    _check("filing_date", "null_filing_date", status, pct_null,
+           f"{nulls}/{total} rows missing filing_date (historical pre-yfinance rows expected)")
+
+    # filing_date < period_end: physically impossible — report date cannot precede period end
+    impossible = con.execute("""
+        SELECT COUNT(*) FROM fundamentals
+        WHERE filing_date IS NOT NULL AND filing_date < period_end
+    """).fetchone()[0]
+    _check("filing_date", "filing_before_period_end", "FAIL" if impossible > 0 else "OK", impossible,
+           "Rows where filing_date < period_end (bad date mapping)")
+
+    # filing_date < 30 days after period_end: suspiciously fast filing
+    fast = con.execute("""
+        SELECT COUNT(*) FROM fundamentals
+        WHERE filing_date IS NOT NULL
+          AND DATE_DIFF('day', period_end, filing_date) < 30
+          AND filing_date >= period_end
+    """).fetchone()[0]
+    status = "WARNING" if fast > 0 else "OK"
+    _check("filing_date", "filing_lt_30d_after_period", status, fast,
+           "Rows filed <30 days after period_end (likely bad earnings date match)")
+
+    # filing_date > 90 days after period_end: outside legal filing window
+    late = con.execute("""
+        SELECT COUNT(*) FROM fundamentals
+        WHERE filing_date IS NOT NULL
+          AND DATE_DIFF('day', period_end, filing_date) > 90
+    """).fetchone()[0]
+    status = "WARNING" if late > 0 else "OK"
+    _check("filing_date", "filing_gt_90d_after_period", status, late,
+           "Rows filed >90 days after period_end (outside SEC filing window — possible date mismatch)")
+
+    # Sample worst offenders for fast filings
+    if fast > 0:
+        rows = con.execute("""
+            SELECT ticker, period_end, filing_date,
+                   DATE_DIFF('day', period_end, filing_date) AS gap_days
+            FROM fundamentals
+            WHERE filing_date IS NOT NULL
+              AND DATE_DIFF('day', period_end, filing_date) < 30
+              AND filing_date >= period_end
+            ORDER BY gap_days
+            LIMIT 5
+        """).fetchall()
+        sample = ", ".join(f"{t} {pe} ({g}d)" for t, pe, fd, g in rows)
+        _check("filing_date", "filing_lt_30d_sample", "INFO", fast,
+               f"Fastest filers: {sample}")
+
+
+# ---------------------------------------------------------------------------
 # Section 5: Macro Data (t1_macro) Integrity
 # ---------------------------------------------------------------------------
 def check_macro_integrity(con: duckdb.DuckDBPyConnection) -> None:
@@ -394,13 +488,20 @@ def check_macro_integrity(con: duckdb.DuckDBPyConnection) -> None:
         ORDER BY pd_date DESC
         LIMIT 20
     """).fetchall()
-    gap_count = len(gap_dates)
-    status = "FAIL" if gap_count > 0 else "OK"
-    detail = f"{gap_count} trading days in price_data have no t1_macro row"
-    if gap_count > 0:
-        dates_str = ", ".join(str(r[0]) for r in gap_dates[:10])
-        detail += f" (recent: {dates_str})"
-    _check("t1_macro", "date_gaps_vs_price_data", status, gap_count, detail)
+    all_gaps = [str(r[0]) for r in gap_dates]
+    unexpected_gaps = [d for d in all_gaps if d not in KNOWN_MACRO_GAP_DATES]
+    whitelisted_gaps = [d for d in all_gaps if d in KNOWN_MACRO_GAP_DATES]
+
+    if unexpected_gaps:
+        status = "FAIL"
+        detail = f"{len(unexpected_gaps)} unexpected trading days in price_data have no t1_macro row (recent: {', '.join(unexpected_gaps[:10])})"
+    elif whitelisted_gaps:
+        status = "INFO"
+        detail = f"All {len(whitelisted_gaps)} gap date(s) are known market closures (whitelisted): {', '.join(whitelisted_gaps)}"
+    else:
+        status = "OK"
+        detail = "No date gaps between price_data and t1_macro"
+    _check("t1_macro", "date_gaps_vs_price_data", status, len(unexpected_gaps), detail)
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +583,7 @@ def main() -> None:
         check_coverage(con)
         check_freshness(con)
         check_fundamental_completeness(con)
+        check_filing_date_integrity(con)
         check_price_integrity(con)
         check_macro_integrity(con)
         check_shares_integrity(con)

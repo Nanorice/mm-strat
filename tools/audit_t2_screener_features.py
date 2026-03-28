@@ -159,6 +159,33 @@ def check_sepa_flags(con: duckdb.DuckDBPyConnection) -> None:
     _check("sepa_flags", "trend_ok_false_pct", "INFO", _pct(trend_false, total), f"{trend_false:,} rows with trend_ok=FALSE")
 
 
+# RS requires 252 trading days of history to compute; rank columns depend on RS.
+# Nulls confined to a ticker's first ~252 rows are expected (warmup window) and should
+# not trigger a WARNING. We use 270 rows as a conservative warmup boundary.
+_RS_WARMUP_ROWS = 270
+# Columns whose nulls are expected during the warmup window
+_WARMUP_NULL_COLS = {"rs", "rs_ma", "rs_rating", "RS_Universe_Rank", "RS_Sector_Rank", "RS_vs_Sector", "Sector_Momentum"}
+
+
+def _warmup_null_split(con: duckdb.DuckDBPyConnection, col: str) -> tuple[int, int]:
+    """
+    Returns (nulls_in_warmup, nulls_after_warmup) for a column.
+    Warmup = first _RS_WARMUP_ROWS rows per ticker (ordered by date).
+    """
+    row = con.execute(f"""
+        WITH ranked AS (
+            SELECT {col},
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date) AS rn
+            FROM t2_screener_features
+        )
+        SELECT
+            COUNT(*) FILTER (WHERE {col} IS NULL AND rn <= {_RS_WARMUP_ROWS}),
+            COUNT(*) FILTER (WHERE {col} IS NULL AND rn >  {_RS_WARMUP_ROWS})
+        FROM ranked
+    """).fetchone()
+    return row[0], row[1]
+
+
 # ---------------------------------------------------------------------------
 # Section 3: Key Column Null Rates
 # ---------------------------------------------------------------------------
@@ -167,13 +194,25 @@ def check_column_nulls(con: duckdb.DuckDBPyConnection) -> None:
     if total == 0:
         return
 
-    # Check SEPA critical columns
     for col in SEPA_CRITICAL_COLS:
         try:
             nulls = con.execute(f"SELECT COUNT(*) FROM t2_screener_features WHERE {col} IS NULL").fetchone()[0]
             pct   = _pct(nulls, total)
-            _check("key_columns", f"null_pct_{col}", _null_status(pct), pct,
-                   f"{nulls:,}/{total:,} rows null")
+            if col in _WARMUP_NULL_COLS and nulls > 0:
+                in_warmup, after_warmup = _warmup_null_split(con, col)
+                if after_warmup == 0:
+                    # All nulls are in warmup — expected, downgrade to INFO
+                    _check("key_columns", f"null_pct_{col}", "INFO", pct,
+                           f"{nulls:,}/{total:,} rows null — all within warmup window (first {_RS_WARMUP_ROWS} rows/ticker, expected)")
+                else:
+                    # Some nulls outside warmup — that's unexpected
+                    status = _null_status(_pct(after_warmup, total))
+                    _check("key_columns", f"null_pct_{col}", status, _pct(after_warmup, total),
+                           f"{after_warmup:,} rows null OUTSIDE warmup window — possible pipeline gap "
+                           f"({in_warmup:,} warmup nulls excluded)")
+            else:
+                _check("key_columns", f"null_pct_{col}", _null_status(pct), pct,
+                       f"{nulls:,}/{total:,} rows null")
         except Exception:
             _check("key_columns", f"missing_col_{col}", "FAIL", "N/A", f"Column {col} not found in t2_screener_features")
 
@@ -186,18 +225,27 @@ def check_ranks_and_alphas(con: duckdb.DuckDBPyConnection) -> None:
     if total == 0:
         return
 
-    # Check rank columns
     for col in RANK_COLS:
         try:
             nulls = con.execute(f"SELECT COUNT(*) FROM t2_screener_features WHERE {col} IS NULL").fetchone()[0]
             pct   = _pct(nulls, total)
-            _check("ranks_alphas", f"null_pct_{col}", _null_status(pct), pct,
-                   f"{nulls:,}/{total:,} rows null — Phase C (cross-sectional ranks) may not have run")
+            if col in _WARMUP_NULL_COLS and nulls > 0:
+                in_warmup, after_warmup = _warmup_null_split(con, col)
+                if after_warmup == 0:
+                    _check("ranks_alphas", f"null_pct_{col}", "INFO", pct,
+                           f"{nulls:,}/{total:,} rows null — all within warmup window (first {_RS_WARMUP_ROWS} rows/ticker, expected)")
+                else:
+                    status = "WARNING" if after_warmup > 0 else "OK"
+                    _check("ranks_alphas", f"null_pct_{col}", status, _pct(after_warmup, total),
+                           f"{after_warmup:,} rows null OUTSIDE warmup — Phase C may not have run for some dates "
+                           f"({in_warmup:,} warmup nulls excluded)")
+            else:
+                _check("ranks_alphas", f"null_pct_{col}", _null_status(pct), pct,
+                       f"{nulls:,}/{total:,} rows null — Phase C (cross-sectional ranks) may not have run")
         except Exception:
             _check("ranks_alphas", f"missing_col_{col}", "WARNING", "N/A",
                    f"Column {col} not in t2_screener_features schema yet")
 
-    # Check alpha columns
     for col in ALPHA_COLS:
         try:
             nulls = con.execute(f"SELECT COUNT(*) FROM t2_screener_features WHERE {col} IS NULL").fetchone()[0]
@@ -265,16 +313,31 @@ def check_referential(con: duckdb.DuckDBPyConnection) -> None:
 TREND_DROP_WARN_PCT = 50.0   # warn if trend_ok count drops >50% day-over-day
 TREND_ZERO_IS_FAIL  = True   # fail if any date has 0 trend_ok tickers
 
+# Dates before this are in the SMA warmup period — RS/trend_ok requires 252d of history.
+# Zero trend_ok during warmup is expected and should not be flagged.
+WARMUP_CUTOFF_DATE = "2001-01-01"
+
+# Dates where price_vs_spy NULL is expected (SPY missing from t1_macro — known market closures).
+KNOWN_SPY_NULL_DATES: set[str] = {
+    "2001-09-11",  # 9/11 — NYSE closed
+    "2001-09-12",
+    "2001-09-13",
+    "2001-09-14",
+}
+
 
 def check_trend_continuity(con: duckdb.DuckDBPyConnection) -> None:
     total = con.execute("SELECT COUNT(*) FROM t2_screener_features").fetchone()[0]
     if total == 0:
         return
 
-    # Find dates where trend_ok=0 (all tickers lost trend — almost certainly a data issue)
-    zero_dates = con.execute("""
+    # Find dates where trend_ok=0 (all tickers lost trend — almost certainly a data issue).
+    # Exclude warmup period: RS/SMA require 252d history so early dates are expected to have
+    # zero trend_ok candidates.
+    zero_dates = con.execute(f"""
         SELECT date, COUNT(*) AS total_rows
         FROM t2_screener_features
+        WHERE date >= '{WARMUP_CUTOFF_DATE}'
         GROUP BY date
         HAVING SUM(CASE WHEN trend_ok THEN 1 ELSE 0 END) = 0
            AND COUNT(*) > 100
@@ -282,7 +345,7 @@ def check_trend_continuity(con: duckdb.DuckDBPyConnection) -> None:
         LIMIT 20
     """).fetchall()
     status = "FAIL" if (zero_dates and TREND_ZERO_IS_FAIL) else "OK"
-    detail = f"{len(zero_dates)} dates with 0 trend_ok tickers (likely upstream data gap)"
+    detail = f"{len(zero_dates)} dates with 0 trend_ok tickers (likely upstream data gap) — warmup period before {WARMUP_CUTOFF_DATE} excluded"
     if zero_dates:
         dates_str = ", ".join(f"{r[0]}({r[1]} rows)" for r in zero_dates[:10])
         detail += f" — {dates_str}"
@@ -316,7 +379,8 @@ def check_trend_continuity(con: duckdb.DuckDBPyConnection) -> None:
         detail += f" — {dates_str}"
     _check("trend_continuity", "trend_ok_large_drops", status, len(drop_dates), detail)
 
-    # Check price_vs_spy NULLs per date (the specific root cause of this bug)
+    # Check price_vs_spy NULLs per date (the specific root cause of this bug).
+    # Whitelisted dates (known market closures) are excluded from FAIL logic.
     pvs_null_dates = con.execute("""
         SELECT date, COUNT(*) AS total,
                SUM(CASE WHEN price_vs_spy IS NULL THEN 1 ELSE 0 END) AS null_count
@@ -326,12 +390,21 @@ def check_trend_continuity(con: duckdb.DuckDBPyConnection) -> None:
         ORDER BY date DESC
         LIMIT 10
     """).fetchall()
-    status = "FAIL" if pvs_null_dates else "OK"
-    detail = f"{len(pvs_null_dates)} dates with NULL price_vs_spy (missing SPY in t1_macro)"
-    if pvs_null_dates:
-        dates_str = ", ".join(f"{r[0]}({r[2]}/{r[1]})" for r in pvs_null_dates[:5])
-        detail += f" — {dates_str}"
-    _check("trend_continuity", "price_vs_spy_null_dates", status, len(pvs_null_dates), detail)
+    unexpected = [(d, total, nulls) for d, total, nulls in pvs_null_dates if str(d) not in KNOWN_SPY_NULL_DATES]
+    whitelisted = [(d, total, nulls) for d, total, nulls in pvs_null_dates if str(d) in KNOWN_SPY_NULL_DATES]
+
+    if unexpected:
+        status = "FAIL"
+        dates_str = ", ".join(f"{d}({n}/{t})" for d, t, n in unexpected[:5])
+        detail = f"{len(unexpected)} dates with NULL price_vs_spy (missing SPY in t1_macro) — {dates_str}"
+    elif whitelisted:
+        status = "INFO"
+        dates_str = ", ".join(str(d) for d, _, _ in whitelisted)
+        detail = f"All NULL price_vs_spy dates are known market closures (whitelisted): {dates_str}"
+    else:
+        status = "OK"
+        detail = "No dates with NULL price_vs_spy"
+    _check("trend_continuity", "price_vs_spy_null_dates", status, len(unexpected), detail)
 
 
 # ---------------------------------------------------------------------------
