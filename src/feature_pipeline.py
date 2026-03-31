@@ -326,6 +326,7 @@ class FeaturePipeline:
                         AVG(volume) OVER w5 as vol_avg_5,
                         AVG(volume) OVER w20 as vol_avg_20,
                         AVG(volume) OVER w50 as vol_avg_50,
+                        AVG(volume) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING) as vol_avg_50_prev,
 
                         STDDEV(close) OVER w20 as volatility_20d,
                         GREATEST(high - low, ABS(high - prev_close), ABS(low - prev_close)) as true_range,
@@ -414,7 +415,7 @@ class FeaturePipeline:
                         ) AS trend_ok,
 
                         COALESCE(
-                            breakout = 1 AND volume / NULLIF(vol_avg_50, 0) > 1.3,
+                            breakout = 1 AND volume / NULLIF(vol_avg_50_prev, 0) > 1.3,
                             FALSE
                         ) AS breakout_ok
 

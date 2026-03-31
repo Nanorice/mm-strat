@@ -242,36 +242,52 @@ class ViewManager:
         """Phase 5.1: Updated to query t3_sepa_features with feature_version filter."""
         con.execute(f"""
             CREATE OR REPLACE VIEW v_d1_candidates AS
-            -- Step 1: Detect trend sessions from T2 (has all trend_ok days, not just breakouts)
-            WITH trend_sessions AS (
+            -- Step 0: Compute exit trend (C1+C2+C6 only) for session boundaries.
+            --         C1: close > SMA150, C2: close > SMA200, C6: close > SMA50.
+            --         C3-C5/C7/C8 lag price by weeks/months — not useful for timely exits.
+            --         C9 RS line excluded (entry filter only, not Minervini exit criteria).
+            --         Entry still requires full trend_ok (C1-C9) + breakout_ok.
+            WITH trend_c8_base AS (
                 SELECT
                     t2.ticker,
                     t2.date,
                     t2.trend_ok,
                     t2.breakout_ok,
-                    CASE WHEN t2.trend_ok AND NOT COALESCE(
-                        LAG(t2.trend_ok) OVER (PARTITION BY t2.ticker ORDER BY t2.date),
+                    COALESCE(
+                        t2.close > t2.sma_150
+                        AND t2.close > t2.sma_200
+                        AND t2.close > t2.sma_50,
                         FALSE
-                    ) THEN 1 ELSE 0 END AS trend_session_start
+                    ) AS trend_c8
                 FROM t2_screener_features t2
                 INNER JOIN company_profiles c ON t2.ticker = c.ticker
                 WHERE c.is_active = TRUE
             ),
-            -- Step 2: Assign monotonic session_id per ticker
+            -- Step 1: Detect session starts (C1+C2+C6 transitions from FALSE to TRUE)
+            trend_sessions AS (
+                SELECT
+                    *,
+                    CASE WHEN trend_c8 AND NOT COALESCE(
+                        LAG(trend_c8) OVER (PARTITION BY ticker ORDER BY date),
+                        FALSE
+                    ) THEN 1 ELSE 0 END AS trend_session_start
+                FROM trend_c8_base
+            ),
+            -- Step 2: Assign monotonic session_id per ticker (sessions defined by C1+C2+C6)
             sessions AS (
                 SELECT
-                    ticker, date, trend_ok, breakout_ok,
+                    ticker, date, trend_ok, breakout_ok, trend_c8,
                     SUM(trend_session_start) OVER (
                         PARTITION BY ticker ORDER BY date
                     ) AS session_id
                 FROM trend_sessions
-                WHERE trend_ok
+                WHERE trend_c8
             ),
-            -- Step 3: Find entry date = first breakout_ok per session
+            -- Step 3: Find entry date = first day with FULL trend_ok (C1-C9) + breakout_ok per session
             entries AS (
                 SELECT ticker, session_id, MIN(date) AS entry_date
                 FROM sessions
-                WHERE breakout_ok
+                WHERE trend_ok AND breakout_ok
                 GROUP BY ticker, session_id
             ),
             -- Step 4: Keep only entry_date row (one row per trade)
@@ -289,11 +305,19 @@ class ViewManager:
                     AND s.session_id = e.session_id
                 WHERE s.date = e.entry_date
             ),
-            -- Step 5: Compute per-trade prices (entry/exit at next-day open)
+            -- Step 5: Exit = first trading day AFTER C1-C8 trend breaks (no lookahead bias).
+            --         Precompute LEAD(date)/LEAD(close) per ticker in price_data (O(n), not O(n²)).
             session_bounds AS (
                 SELECT ticker, session_id, MAX(date) AS last_trend_date
                 FROM sessions
                 GROUP BY ticker, session_id
+            ),
+            price_with_next AS (
+                SELECT
+                    ticker, date, close,
+                    LEAD(date)  OVER (PARTITION BY ticker ORDER BY date) AS next_date,
+                    LEAD(close) OVER (PARTITION BY ticker ORDER BY date) AS next_close
+                FROM price_data
             ),
             trade_prices AS (
                 SELECT
@@ -301,19 +325,16 @@ class ViewManager:
                     c.trade_id,
                     c.entry_date,
                     sb.last_trend_date,
-                    -- Entry price: signal day close
-                    (SELECT p.close FROM price_data p
-                     WHERE p.ticker = c.ticker AND p.date = c.entry_date
-                    ) AS entry_price,
-                    -- Exit date: last_trend_date (last day trend_ok was TRUE)
-                    sb.last_trend_date AS exit_date,
-                    -- Exit price: close on last_trend_date
-                    (SELECT p.close FROM price_data p
-                     WHERE p.ticker = c.ticker AND p.date = sb.last_trend_date
-                    ) AS exit_price
+                    pe.close  AS entry_price,
+                    COALESCE(px.next_date,  sb.last_trend_date) AS exit_date,
+                    COALESCE(px.next_close, px.close)           AS exit_price
                 FROM candidates c
                 INNER JOIN session_bounds sb
                     ON c.ticker = sb.ticker AND c.session_id = sb.session_id
+                LEFT JOIN price_with_next pe
+                    ON c.ticker = pe.ticker AND c.entry_date = pe.date
+                LEFT JOIN price_with_next px
+                    ON sb.ticker = px.ticker AND sb.last_trend_date = px.date
             ),
             -- Step 6: Enrich with full features + lags computed across ALL days
             enriched AS (
@@ -692,62 +713,83 @@ class ViewManager:
         when they first triggered, entry price, and return vs current price."""
         con.execute("""
             CREATE OR REPLACE VIEW v_screener_dashboard AS
-            -- Step 1: Detect trend sessions (reuses v_d1_candidates logic)
-            WITH trend_sessions AS (
+            -- Step 1: Detect trend sessions using C1+C2+C6 only (matches v_d1_candidates)
+            --         C1: close > SMA150, C2: close > SMA200, C6: close > SMA50
+            WITH trend_c8_base AS (
                 SELECT
                     t2.ticker,
                     t2.date,
                     t2.trend_ok,
                     t2.breakout_ok,
-                    CASE WHEN t2.trend_ok AND NOT COALESCE(
-                        LAG(t2.trend_ok) OVER (PARTITION BY t2.ticker ORDER BY t2.date),
+                    COALESCE(
+                        t2.close > t2.sma_150
+                        AND t2.close > t2.sma_200
+                        AND t2.close > t2.sma_50,
                         FALSE
-                    ) THEN 1 ELSE 0 END AS trend_session_start
+                    ) AS trend_c8
                 FROM t2_screener_features t2
                 INNER JOIN company_profiles c ON t2.ticker = c.ticker
                 WHERE c.is_active = TRUE
             ),
+            trend_sessions AS (
+                SELECT
+                    *,
+                    CASE WHEN trend_c8 AND NOT COALESCE(
+                        LAG(trend_c8) OVER (PARTITION BY ticker ORDER BY date),
+                        FALSE
+                    ) THEN 1 ELSE 0 END AS trend_session_start
+                FROM trend_c8_base
+            ),
             sessions AS (
                 SELECT
-                    ticker, date, trend_ok, breakout_ok,
+                    ticker, date, trend_ok, breakout_ok, trend_c8,
                     SUM(trend_session_start) OVER (
                         PARTITION BY ticker ORDER BY date
                     ) AS session_id
                 FROM trend_sessions
-                WHERE trend_ok
+                WHERE trend_c8
             ),
-            -- Step 2: First breakout per session = entry
+            -- Step 2: First breakout per session = entry (requires full trend_ok + breakout_ok)
             entries AS (
                 SELECT
                     ticker,
                     session_id,
                     MIN(date) AS entry_date
                 FROM sessions
-                WHERE breakout_ok
+                WHERE trend_ok AND breakout_ok
                 GROUP BY ticker, session_id
             ),
-            -- Step 3: Session end date
+            -- Step 3: Session end = last C1-C8 True day
             session_bounds AS (
-                SELECT ticker, session_id, MAX(date) AS exit_date
+                SELECT ticker, session_id, MAX(date) AS last_trend_date
                 FROM sessions
                 GROUP BY ticker, session_id
             ),
+            -- Precompute LEAD(date)/LEAD(close) to avoid O(n²) correlated subqueries
+            price_with_next AS (
+                SELECT
+                    ticker, date, close,
+                    LEAD(date)  OVER (PARTITION BY ticker ORDER BY date) AS next_date,
+                    LEAD(close) OVER (PARTITION BY ticker ORDER BY date) AS next_close
+                FROM price_data
+            ),
             -- Step 4: Entry price + exit price per trade
+            --         Exit = first trading day AFTER trend breaks (no lookahead bias)
             trades AS (
                 SELECT
                     e.ticker,
                     e.session_id,
                     e.entry_date,
-                    sb.exit_date,
-                    p_entry.close AS entry_price,
-                    p_exit.close AS exit_price
+                    pe.close AS entry_price,
+                    COALESCE(px.next_date,  sb.last_trend_date) AS exit_date,
+                    COALESCE(px.next_close, px.close)           AS exit_price
                 FROM entries e
                 INNER JOIN session_bounds sb
                     ON e.ticker = sb.ticker AND e.session_id = sb.session_id
-                INNER JOIN price_data p_entry
-                    ON e.ticker = p_entry.ticker AND e.entry_date = p_entry.date
-                LEFT JOIN price_data p_exit
-                    ON e.ticker = p_exit.ticker AND sb.exit_date = p_exit.date
+                LEFT JOIN price_with_next pe
+                    ON e.ticker = pe.ticker AND e.entry_date = pe.date
+                LEFT JOIN price_with_next px
+                    ON sb.ticker = px.ticker AND sb.last_trend_date = px.date
             ),
             -- Step 5: Latest available close per ticker (handles delistings)
             latest_prices AS (
