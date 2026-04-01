@@ -706,14 +706,7 @@ class DailyPipelineOrchestrator:
                 f"[WARN] ALERT: 0 breakouts for {health['breakout_drought_days']} consecutive days"
             )
 
-        # Alert 2: Runtime anomalies
-        for anomaly in health['runtime_anomalies']:
-            alerts.append(
-                f"[WARN] ALERT: Phase '{anomaly['phase_name']}' took {anomaly['runtime_sec']}s "
-                f"(avg: {anomaly['avg_runtime_sec']}s, {anomaly['ratio']}x slower)"
-            )
-
-        # Alert 3: Recent failures
+        # Alert 2: Recent failures
         if health['recent_failures']:
             alerts.append(
                 f"[WARN] ALERT: {len(health['recent_failures'])} phase failures in last 7 days"
@@ -744,11 +737,11 @@ class DailyPipelineOrchestrator:
         }
 
     def _check_filing_date_quality(self, tickers: list) -> None:
-        """Warn if any newly ingested fundamental rows have filing_date < 30 days after period_end.
+        """Warn if any fundamental rows have filing_date <= 7 days after period_end.
 
-        A gap < 30 days is suspiciously fast — most companies take 30-90 days to file.
-        This likely indicates a bad date mapping (e.g., earnings_date matched wrong quarter).
-        Only checks tickers in the current ingestion batch to avoid redundant full-table scans.
+        A gap <= 7 days means yfinance mapped an earnings announcement date (which can be
+        1-3 days after quarter-end for fast reporters) rather than the actual 10-Q filing date.
+        Legitimate 10-Q filings take at least 8 days; accelerated filers average 20-30 days.
         """
         if not tickers:
             return
@@ -761,7 +754,7 @@ class DailyPipelineOrchestrator:
                 FROM fundamentals
                 WHERE ticker IN ({ticker_list})
                   AND filing_date IS NOT NULL
-                  AND DATE_DIFF('day', period_end, filing_date) < 30
+                  AND DATE_DIFF('day', period_end, filing_date) <= 7
                 ORDER BY gap_days
                 LIMIT 20
             """).fetchdf()
@@ -770,8 +763,8 @@ class DailyPipelineOrchestrator:
 
         if not rows.empty:
             logger.warning(
-                f"  [1.2] ⚠️ DQ: {len(rows)} fundamental rows with filing_date < 30d after period_end "
-                f"(likely bad date mapping). Sample: "
+                f"  [1.2] ⚠️ DQ: {len(rows)} fundamental rows with filing_date <= 7d after period_end "
+                f"(earnings date used instead of actual 10-Q filing date — yfinance limitation). Sample: "
                 + ", ".join(
                     f"{r.ticker} {r.period_end} ({r.gap_days}d)"
                     for r in rows.head(5).itertuples()

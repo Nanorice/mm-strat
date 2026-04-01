@@ -23,8 +23,8 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)-5s %(message)s',
     datefmt='%H:%M:%S',
     handlers=[
-        logging.FileHandler("logs/daily_pipeline.log"),
-        logging.StreamHandler()
+        logging.FileHandler("logs/daily_pipeline.log", encoding='utf-8'),
+        logging.StreamHandler(stream=open(1, 'w', encoding='utf-8', closefd=False))
     ]
 )
 logger = logging.getLogger(__name__)

@@ -238,7 +238,12 @@ class RegimePipeline:
             return 0
 
         logger.info(f"Computing incremental regime scores from {start_date}")
-        df = self.compute_m03_history(start_date=start_date)
+        # Pad by 250 days so SMA-200 and rolling windows have enough warmup history.
+        # Only dates >= start_date are written to avoid overwriting existing rows.
+        warmup_start = (pd.to_datetime(start_date) - timedelta(days=250)).strftime('%Y-%m-%d')
+        df = self.compute_m03_history(start_date=warmup_start)
+        if not df.empty:
+            df = df[df['date'] >= start_date]
 
         # Write to DB
         return self.write_to_db(df, mode='replace')

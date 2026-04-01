@@ -275,7 +275,6 @@ PIPELINE_FAILURE_MODES = {
 # Alert thresholds
 PIPELINE_ALERT_THRESHOLDS = {
     'breakout_drought_days': 5,      # Alert if 0 breakouts for N days
-    'runtime_multiplier': 2.0,        # Alert if phase runtime >N× average
     'failure_rate_threshold': 0.1,    # Alert if failure rate >10%
 }
 
