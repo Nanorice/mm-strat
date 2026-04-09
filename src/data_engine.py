@@ -78,6 +78,10 @@ class DataRepository:
         self.enable_validation = enable_validation
         self._ipo_cache = {}  # Cache for IPO dates to avoid repeated API calls
 
+        # Error tracking: populated after each update_cache() call
+        # List of (ticker, error_detail) for tickers that failed
+        self.last_errors: List[Tuple[str, Optional[str]]] = []
+
     def get_screener_universe(self) -> List[str]:
         """
         Fetch ticker universe from FMP stock screener API.
@@ -233,14 +237,10 @@ class DataRepository:
             ).fetchone()[0]
 
             if stale:
-                top10 = ', '.join(stale[:10])
-                suffix = f" (+{len(stale) - 10} more)" if len(stale) > 10 else ""
-                logger.info(
-                    f"[Staleness] {len(stale)} stale / {total} active "
-                    f"(target={latest_trading_day}): {top10}{suffix}"
-                )
+                logger.info(f"[Phase 1] Staleness: {len(stale)}/{total} stale (target={latest_trading_day})")
+                logger.debug(f"[Phase 1] Stale sample: {', '.join(stale[:10])}")
             else:
-                logger.info(f"[Staleness] All {total} active tickers fresh for {latest_trading_day}")
+                logger.info(f"[Phase 1] All {total} tickers fresh for {latest_trading_day}")
             return stale
         finally:
             conn.close()
@@ -955,22 +955,26 @@ class DataRepository:
             to_update = self._get_stale_tickers(latest_trading_day)
 
         if not to_update:
-            logger.info(f"All active tickers fresh as of {latest_trading_day}")
+            logger.debug(f"All active tickers fresh as of {latest_trading_day}")
             return {}
 
-        logger.info(f"{len(to_update)} tickers to update (latest: {latest_trading_day})")
+        logger.debug(f"{len(to_update)} tickers to update (latest: {latest_trading_day})")
 
         buffer: List[Tuple[str, pd.DataFrame]] = []
         results: Dict[str, bool] = {}
         rows_written = 0
+        self.last_errors = []
 
         if source == 'fmp' and config.FMP_API_KEY:
-            fmp_results, buffer = self._update_cache_fmp(to_update, max_workers=max_workers, from_date=from_date)
+            fmp_results, buffer, fmp_errors = self._update_cache_fmp(to_update, max_workers=max_workers, from_date=from_date)
             results.update(fmp_results)
+            self.last_errors = fmp_errors
         else:
             # yfinance path: returns (results_dict, buffer)
             yf_results, buffer = self._update_cache_yfinance(to_update, latest_trading_day)
             results.update(yf_results)
+            # yfinance bulk download doesn't produce per-ticker error messages
+            self.last_errors = [(t, 'No data from yfinance bulk download') for t, ok in yf_results.items() if not ok]
 
             # Intermediate flush if buffer is large (force=True full-history scenario)
             if len(buffer) > 0:
@@ -998,7 +1002,7 @@ class DataRepository:
                 latest_trading_day,
             )
 
-        logger.info(f"{rows_written} rows written to price_data")
+        logger.debug(f"Price flush: {rows_written} rows written to price_data")
         return results    
     
     def _fetch_price_worker(self, ticker: str, max_retries: int = 3, from_date: str = None) -> tuple:
@@ -1074,8 +1078,7 @@ class DataRepository:
         success_count = 0
         fail_count = 0
 
-        logger.info(f"Fetching {total_tickers} tickers from FMP with {max_workers} parallel workers...")
-        logger.info(f"Rate limit: {self.rate_limit} calls/minute")
+        logger.debug(f"FMP fetch: {total_tickers} tickers, {max_workers} workers, rate={self.rate_limit}/min")
         start_time = time.time()
 
         use_tqdm = False
@@ -1084,7 +1087,7 @@ class DataRepository:
                 from tqdm import tqdm
                 use_tqdm = True
             except ImportError:
-                logger.info("Install tqdm for progress bar: pip install tqdm")
+                pass
 
         def _collect(ticker: str, df: Optional[pd.DataFrame], error_msg: Optional[str]) -> None:
             if df is not None:
@@ -1096,7 +1099,7 @@ class DataRepository:
                 results[ticker] = False
                 failed_tickers.append((ticker, error_msg))
 
-        # ========== FIRST PASS ==========
+        # First pass
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 5, from_date): ticker for ticker in tickers}
 
@@ -1117,19 +1120,17 @@ class DataRepository:
                     success_count = sum(v for v in results.values() if v)
                     fail_count = sum(1 for v in results.values() if not v)
                     completed += 1
-                    if completed % 25 == 0 or completed == total_tickers:
+                    if completed % 100 == 0 or completed == total_tickers:
                         elapsed = time.time() - start_time
                         rate = completed / elapsed if elapsed > 0 else 0
-                        eta_minutes = (total_tickers - completed) / rate / 60 if rate > 0 else 0
-                        logger.info(
-                            f"Progress: {completed}/{total_tickers} ({completed/total_tickers*100:.1f}%) | "
-                            f"OK {success_count} FAIL {fail_count} | "
-                            f"Rate: {rate:.1f}/sec | ETA: {eta_minutes:.1f} min"
+                        logger.debug(
+                            f"FMP progress: {completed}/{total_tickers} | "
+                            f"OK {success_count} FAIL {fail_count} | {rate:.1f}/sec"
                         )
 
-        # ========== AUTOMATIC RETRY PASS ==========
+        # Retry pass
         if failed_tickers and len(failed_tickers) <= 100:
-            logger.info(f"RETRY PASS: {len(failed_tickers)} failed tickers (after 10s cooldown)...")
+            logger.debug(f"FMP retry: {len(failed_tickers)} tickers (10s cooldown)")
             time.sleep(10)
             retry_tickers = [t for t, _ in failed_tickers]
             failed_tickers.clear()
@@ -1141,28 +1142,16 @@ class DataRepository:
                     ticker, df, error_msg = future.result()
                     _collect(ticker, df, error_msg)
                     if results.get(ticker):
-                        logger.debug(f"  RECOVERED: {ticker}")
+                        logger.debug(f"FMP recovered: {ticker}")
 
-            logger.info(f"Retry complete")
-
-        # ========== FINAL SUMMARY ==========
+        # Summary
         elapsed_total = time.time() - start_time
         success_count = sum(1 for v in results.values() if v)
         fail_count = sum(1 for v in results.values() if not v)
-        logger.info(f"FMP complete: {success_count}/{total_tickers} OK, {fail_count} failed, {elapsed_total:.1f}s")
+        logger.debug(f"FMP done: {success_count}/{total_tickers} OK, {fail_count} failed | {elapsed_total:.1f}s")
 
-        if failed_tickers:
-            # Group failures by error category instead of listing all tickers
-            error_categories: Dict[str, int] = {}
-            for _, error in failed_tickers:
-                # Bucket by first meaningful token of error message
-                key = error.split(':')[0].strip() if ':' in error else error[:40]
-                error_categories[key] = error_categories.get(key, 0) + 1
-            for category, count in sorted(error_categories.items(), key=lambda x: -x[1]):
-                logger.warning(f"  {count} tickers failed — {category}")
+        return results, buffer, failed_tickers
 
-        return results, buffer
-    
     def _update_cache_yfinance(self, tickers: List[str], latest_trading_day: str = None) -> Tuple[Dict[str, bool], List[Tuple[str, pd.DataFrame]]]:
         """
         Update cache using a single yfinance bulk download (no batching).
@@ -1209,7 +1198,7 @@ class DataRepository:
         else:
             end_date = (pd.Timestamp.now() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
-        logger.info(f"[yfinance] Downloading {len(tickers)} tickers from {from_date} to {end_date}...")
+        logger.debug(f"yfinance bulk download: {len(tickers)} tickers, {from_date} to {end_date}")
 
         try:
             data = yf.download(
@@ -1222,7 +1211,7 @@ class DataRepository:
                 threads=True,
             )
         except Exception as e:
-            logger.error(f"[yfinance] Download failed: {e}")
+            logger.error(f"[Phase 1] yfinance download failed: {e}", exc_info=True)
             for ticker in tickers:
                 results[ticker] = False
             return results, buffer
@@ -1243,9 +1232,7 @@ class DataRepository:
                 no_data.append(ticker)
 
         ok = sum(1 for v in results.values() if v)
-        logger.info(f"[yfinance] {ok}/{len(tickers)} tickers extracted, {len(no_data)} had no data")
-        if no_data:
-            logger.debug(f"[yfinance] No-data tickers: {no_data[:20]}{'...' if len(no_data) > 20 else ''}")
+        logger.debug(f"yfinance done: {ok}/{len(tickers)} OK, {len(no_data)} no data")
 
         return results, buffer
 
@@ -1284,7 +1271,7 @@ class DataRepository:
             conn.commit()
             return len(df)
         except Exception as e:
-            logger.error(f"Bulk DuckDB write failed: {e}")
+            logger.error(f"[Phase 1] Bulk DuckDB write failed: {e}", exc_info=True)
             return 0
         finally:
             conn.close()

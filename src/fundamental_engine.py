@@ -100,6 +100,7 @@ class FundamentalEngine:
         self.db_path = str(db_path) if db_path else str(
             Path(__file__).parent.parent / "data" / "market_data.duckdb"
         )
+        self.last_errors: List[Tuple[str, Optional[str]]] = []
 
         if source == 'yfinance':
             self._ensure_tables()
@@ -365,16 +366,43 @@ class FundamentalEngine:
     # yfinance: Earnings calendar
     # =========================================================================
 
+    def _get_tickers_needing_earnings_refresh(self, tickers: List[str]) -> List[str]:
+        """Return tickers that don't already have a known future unconfirmed earnings date."""
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            conn.register('_all_tickers', pd.DataFrame({'ticker': tickers}))
+            rows = conn.execute("""
+                SELECT t.ticker
+                FROM _all_tickers t
+                WHERE t.ticker NOT IN (
+                    SELECT DISTINCT ticker FROM earnings_calendar
+                    WHERE NOT is_confirmed AND earnings_date > CURRENT_DATE
+                )
+            """).fetchall()
+            return [r[0] for r in rows]
+        finally:
+            conn.close()
+
     def refresh_earnings_calendar(self, tickers: List[str], max_workers: int = 8) -> int:
         """
-        Refresh upcoming earnings dates for all tickers (monthly cadence).
+        Refresh upcoming earnings dates for tickers missing a future earnings date.
 
-        Fetches earnings dates in parallel (network I/O), then writes
-        sequentially with a single DuckDB connection (single-writer constraint).
+        Skips tickers that already have a known future unconfirmed earnings date
+        in the calendar (no need to re-fetch). Fetches in parallel (network I/O),
+        then writes sequentially with a single DuckDB connection.
         Returns total rows written.
         """
+        # Filter to tickers that actually need a refresh
+        tickers_to_fetch = self._get_tickers_needing_earnings_refresh(tickers)
+        skipped = len(tickers) - len(tickers_to_fetch)
+        logger.debug(f"Earnings calendar: {len(tickers_to_fetch)} to refresh, {skipped} skipped")
+        if not tickers_to_fetch:
+            return 0
+
+        errors = 0
 
         def _fetch_one(ticker: str) -> Optional[pd.DataFrame]:
+            nonlocal errors
             try:
                 t = yf.Ticker(ticker)
                 ed = t.get_earnings_dates(limit=10)
@@ -384,18 +412,22 @@ class FundamentalEngine:
                 rows = []
                 for dt, row in ed.iterrows():
                     dt_clean = pd.Timestamp(dt).tz_localize(None).date()
+                    # Only keep confirmed (reported) earnings rows
+                    if not pd.notna(row.get('Reported EPS')):
+                        continue
                     rows.append({
                         'ticker':           ticker,
                         'earnings_date':    dt_clean,
                         'eps_estimate':     _nan_to_none(row.get('EPS Estimate')),
                         'reported_eps':     _nan_to_none(row.get('Reported EPS')),
                         'eps_surprise_pct': _nan_to_none(row.get('Surprise(%)')),
-                        'is_confirmed':     pd.notna(row.get('Reported EPS')),
+                        'is_confirmed':     True,
                         'updated_at':       datetime.utcnow(),
                     })
                 return pd.DataFrame(rows) if rows else None
 
             except Exception as e:
+                errors += 1
                 logger.debug(f"[FundamentalEngine] earnings fetch failed for {ticker}: {e}")
                 return None
 
@@ -403,17 +435,16 @@ class FundamentalEngine:
         fetched: List[pd.DataFrame] = []
         done = 0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_one, t): t for t in tickers}
+            futures = {executor.submit(_fetch_one, t): t for t in tickers_to_fetch}
             for future in as_completed(futures):
                 result = future.result()
                 if result is not None:
                     fetched.append(result)
                 done += 1
                 if done % 500 == 0:
-                    logger.info(f"[FundamentalEngine] Earnings calendar: {done}/{len(tickers)} fetched, {len(fetched)} with data")
+                    logger.debug(f"Earnings calendar progress: {done}/{len(tickers_to_fetch)}")
 
         if not fetched:
-            logger.info(f"[FundamentalEngine] Earnings calendar: no data found for {len(tickers)} tickers")
             return 0
 
         # Phase 2: Sequential write (single DuckDB connection)
@@ -436,7 +467,7 @@ class FundamentalEngine:
         finally:
             conn.close()
 
-        logger.info(f"[FundamentalEngine] Earnings calendar refreshed: {total} rows across {len(fetched)} tickers")
+        logger.debug(f"Earnings calendar: {total} rows upserted across {len(fetched)} tickers")
         return total
 
     def _get_stale_fundamental_tickers(self, tickers: List[str], max_age_days: int = 90) -> List[str]:
@@ -505,33 +536,25 @@ class FundamentalEngine:
 
         if force:
             to_fetch = tickers
-            logger.info(f"[FundamentalEngine] Force mode: fetching {len(to_fetch)} tickers")
+            reason = "force"
         else:
             pending = set(self.get_tickers_with_pending_earnings(target_date))
             to_fetch = [t for t in tickers if t in pending]
 
             if not to_fetch:
-                # No pending earnings for today — use 90-day staleness check
                 stale = set(self._get_stale_fundamental_tickers(tickers, max_age_days=90))
                 to_fetch = [t for t in tickers if t in stale]
-                if to_fetch:
-                    logger.info(
-                        f"[FundamentalEngine] No pending earnings for {target_date} — "
-                        f"staleness fallback: {len(to_fetch)}/{len(tickers)} tickers stale (>90 days)"
-                    )
+                reason = "staleness (>90d)" if to_fetch else None
             else:
-                logger.info(
-                    f"[FundamentalEngine] {len(to_fetch)}/{len(tickers)} tickers have pending earnings "
-                    f"as of {target_date}"
-                )
+                reason = "pending earnings"
 
         if not to_fetch:
-            logger.info(f"[FundamentalEngine] All {len(tickers)} tickers up-to-date")
+            logger.debug(f"Fundamentals: all {len(tickers)} tickers up-to-date")
             return {t: True for t in tickers}
 
-        results: Dict[str, bool] = {}
+        logger.debug(f"Fundamentals: {len(to_fetch)}/{len(tickers)} to fetch ({reason})")
 
-        # Fetch in parallel (network I/O only), write sequentially (DuckDB single-writer)
+        results: Dict[str, bool] = {}
         fetched: Dict[str, object] = {}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -541,10 +564,9 @@ class FundamentalEngine:
                 ticker = futures[future]
                 fetched[ticker] = future.result()
                 done += 1
-                if done % 50 == 0 or done == len(to_fetch):
-                    logger.info(f"[FundamentalEngine] fetched {done}/{len(to_fetch)} tickers")
+                if done % 100 == 0:
+                    logger.debug(f"Fundamentals fetch progress: {done}/{len(to_fetch)}")
 
-        # Sequential writes
         conn = duckdb.connect(self.db_path)
         try:
             for ticker, df in fetched.items():
@@ -559,13 +581,14 @@ class FundamentalEngine:
         finally:
             conn.close()
 
-        # Mark skipped tickers as successful (they didn't need updating)
         for t in tickers:
             if t not in results:
                 results[t] = True
 
-        ok_count = sum(results.values())
-        logger.info(f"[FundamentalEngine] update_fundamentals: {ok_count}/{len(tickers)} OK")
+        self.last_errors = [
+            (t, 'yfinance fetch returned None') for t, ok in results.items() if not ok
+        ]
+
         return results
 
     def _mark_earnings_confirmed(

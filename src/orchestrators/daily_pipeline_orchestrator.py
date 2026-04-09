@@ -68,6 +68,8 @@ class DailyPipelineOrchestrator:
         self.dry_run = dry_run
         self.force = force
 
+        self._current_run_id = None  # set by _execute_phase, used by sub-phases for error logging
+
         logger.debug(f"[Orchestrator] Initialized (db={self.db_path}, dry_run={dry_run}, force={force})")
 
         # Initialize managers (delegate state tracking)
@@ -113,9 +115,7 @@ class DailyPipelineOrchestrator:
         # Get actual trading day (accounts for weekends/holidays)
         actual_trading_day = self._get_last_trading_day(target_date)
 
-        logger.info("=" * 60)
-        logger.info(f"DAILY PIPELINE | Trading Day: {actual_trading_day}")
-        logger.info("=" * 60)
+        logger.info(f"[Pipeline] START | Trading Day: {actual_trading_day}")
 
         # Track overall success (CRITICAL phases only)
         critical_success = True
@@ -123,7 +123,7 @@ class DailyPipelineOrchestrator:
 
         # --- Phase-only shortcuts ---
         if phase_3_only:
-            logger.info("[Orchestrator] --phase-3-only: running Phase 3 incremental only")
+            logger.info("[Pipeline] Single-phase mode: Phase 3 only")
             phase_success, phase_stats = self._execute_phase(
                 "phase_3_t2_screener",
                 lambda: self._run_phase_3_t2_screener_incremental(actual_trading_day),
@@ -133,7 +133,7 @@ class DailyPipelineOrchestrator:
             return phase_success
 
         if phase_4_only:
-            logger.info("[Orchestrator] --phase-4-only: running Phase 4 incremental only")
+            logger.info("[Pipeline] Single-phase mode: Phase 4 only")
             phase_success, phase_stats = self._execute_phase(
                 "phase_4_t2_regime",
                 lambda: self._run_phase_4_t2_regime(actual_trading_day),
@@ -143,7 +143,7 @@ class DailyPipelineOrchestrator:
             return phase_success
 
         if phase_5_only:
-            logger.info("[Orchestrator] --phase-5-only: running Phase 5 incremental only")
+            logger.info("[Pipeline] Single-phase mode: Phase 5 only")
             phase_success, phase_stats = self._execute_phase(
                 "phase_5_t3_features",
                 lambda: self._run_phase_5_t3_features_incremental(actual_trading_day),
@@ -153,7 +153,7 @@ class DailyPipelineOrchestrator:
             return phase_success
 
         if phase_2_only:
-            logger.info("[Orchestrator] --phase-2-only: skipping Phase 1, running Phase 2 only")
+            logger.info("[Pipeline] Single-phase mode: Phase 2 only")
         else:
             # Universe Refresh (only when explicitly requested)
             if universe_refresh:
@@ -170,11 +170,9 @@ class DailyPipelineOrchestrator:
             run_stats['phase_1'] = phase_stats
             if not phase_success and PIPELINE_FAILURE_MODES.get("phase_1_t1_price") == PipelineFailureMode.HALT:
                 critical_success = False
-                logger.error("[Orchestrator] Phase 1 FAILED - HALTING pipeline")
                 return False
 
             if phase_1_only:
-                logger.info("[Orchestrator] --phase-1-only: stopping after Phase 1")
                 return critical_success
 
         # Phase 2: Screener Membership
@@ -186,11 +184,9 @@ class DailyPipelineOrchestrator:
         run_stats['phase_2'] = phase_stats
         if not phase_success:
             critical_success = False
-            logger.error("[Orchestrator] Phase 2 FAILED - HALTING pipeline")
             return False
 
         if phase_2_only:
-            logger.info("[Orchestrator] --phase-2-only: stopping after Phase 2")
             return critical_success
 
         # Phase 3: T2 Screener Features (incremental — auto-fills gaps)
@@ -203,8 +199,9 @@ class DailyPipelineOrchestrator:
         run_stats['phase_3'] = phase_stats
         if not phase_success:
             critical_success = False
-            logger.error("[Orchestrator] Phase 3 FAILED - HALTING pipeline")
             return False
+        if phase_stats.get('rows_processed', 0) > 0:
+            self.run_manager.record_write('t2_screener_features', phase_stats['rows_processed'], 'phase_3_t2_screener')
 
         # Phase 4: T2 Regime Scores
         phase_success, phase_stats = self._execute_phase(
@@ -225,8 +222,9 @@ class DailyPipelineOrchestrator:
         run_stats['phase_5'] = phase_stats
         if not phase_success:
             critical_success = False
-            logger.error("[Orchestrator] Phase 5 FAILED - HALTING pipeline")
             return False
+        if phase_stats.get('rows_processed', 0) > 0:
+            self.run_manager.record_write('t3_sepa_features', phase_stats['rows_processed'], 'phase_5_t3_features')
 
         # Phase 6: View Refresh
         phase_success, phase_stats = self._execute_phase(
@@ -235,6 +233,8 @@ class DailyPipelineOrchestrator:
             target_date
         )
         run_stats['phase_6'] = phase_stats
+        if phase_success and phase_stats.get('rows_processed', 0) > 0:
+            self.run_manager.record_write('screener_watchlist', phase_stats['rows_processed'], 'phase_6_views')
         # Non-critical, continue even if failed
 
         # Phase 7: Training Cache Refresh
@@ -244,6 +244,8 @@ class DailyPipelineOrchestrator:
             target_date
         )
         run_stats['phase_7'] = phase_stats
+        if phase_success and phase_stats.get('rows_processed', 0) > 0:
+            self.run_manager.record_write('d2_training_cache', phase_stats['rows_processed'], 'phase_7_cache')
         # Non-critical, continue even if failed
 
         # Phase 8: Monitoring (ALWAYS RUN)
@@ -254,9 +256,8 @@ class DailyPipelineOrchestrator:
         )
         run_stats['phase_8'] = phase_stats
 
-        logger.info("=" * 60)
-        logger.info(f"PIPELINE {'OK' if critical_success else 'FAILED'}")
-        logger.info("=" * 60)
+        phases_run = len(run_stats)
+        logger.info(f"[Pipeline] DONE | {phases_run} phases | {'OK' if critical_success else 'FAILED'}")
 
         return critical_success
 
@@ -279,18 +280,22 @@ class DailyPipelineOrchestrator:
         Returns:
             (success: bool, stats: dict)
         """
+        # Human-readable label: "phase_3_t2_screener" -> "Phase 3"
+        phase_num = phase_name.split('_')[1] if '_' in phase_name else phase_name
+        label = f"Phase {phase_num}"
+
         # Check idempotency (skip if already completed and not force)
         if not skip_idempotency_check and not self.force and self.run_manager.is_phase_completed(target_date, phase_name):
-            logger.info(f"[{phase_name}] SKIPPED (already completed for {target_date})")
+            logger.debug(f"[{label}] SKIPPED (already completed for {target_date})")
             return True, {'status': 'skipped', 'reason': 'already_completed'}
 
         # Start phase tracking
         run_id = None
         if not self.dry_run:
             run_id = self.run_manager.start_phase(target_date, phase_name)
+        self._current_run_id = run_id
 
         try:
-            # Execute phase function (phases log their own details)
             stats = phase_func()
 
             # Complete phase tracking
@@ -305,9 +310,8 @@ class DailyPipelineOrchestrator:
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"[{phase_name}] FAILED - {error_msg}", exc_info=True)
+            logger.error(f"[{label}] FAILED: {error_msg}", exc_info=True)
 
-            # Complete phase tracking with FAILED status
             if not self.dry_run:
                 self.run_manager.complete_phase(
                     run_id,
@@ -315,17 +319,15 @@ class DailyPipelineOrchestrator:
                     error_message=error_msg
                 )
 
-            # Handle error per failure mode
             failure_mode = PIPELINE_FAILURE_MODES.get(phase_name, PipelineFailureMode.HALT)
 
             if failure_mode == PipelineFailureMode.HALT:
-                logger.critical(f"[{phase_name}] CRITICAL FAILURE - HALTING PIPELINE")
                 return False, {'status': 'failed', 'error': error_msg}
             elif failure_mode == PipelineFailureMode.WARN:
-                logger.warning(f"[{phase_name}] NON-CRITICAL FAILURE - CONTINUING")
+                logger.warning(f"[{label}] Non-critical, continuing")
                 return True, {'status': 'warned', 'error': error_msg}
             else:  # SKIP
-                logger.info(f"[{phase_name}] OPTIONAL FAILURE - SKIPPING")
+                logger.info(f"[{label}] Optional, skipping")
                 return True, {'status': 'skipped', 'error': error_msg}
 
     # ========================================================================
@@ -351,17 +353,17 @@ class DailyPipelineOrchestrator:
                              progress=False, auto_adjust=True)
             if not spy.empty:
                 last_day = spy.index[-1].strftime('%Y-%m-%d')
-                logger.debug(f"[Market Calendar] Last trading day: {last_day} (via SPY)")
+                logger.debug(f"[Pipeline] Trading day resolved: {last_day} (via SPY)")
                 return last_day
         except Exception as e:
-            logger.warning(f"[Market Calendar] SPY download failed: {e}")
+            logger.warning(f"[Pipeline] SPY calendar lookup failed: {e}")
 
         # Last resort: skip weekends arithmetically
         dt = datetime.strptime(target_date, '%Y-%m-%d')
         while dt.weekday() >= 5:  # Saturday=5, Sunday=6
             dt -= timedelta(days=1)
         last_day = dt.strftime('%Y-%m-%d')
-        logger.warning(f"[Market Calendar] Using weekend-adjusted fallback: {last_day}")
+        logger.warning(f"[Pipeline] Using weekend-adjusted fallback: {last_day}")
         return last_day
 
     def _should_refresh_earnings_calendar(self, trading_day: str) -> bool:
@@ -384,7 +386,7 @@ class DailyPipelineOrchestrator:
             conn.close()
 
         if not already_refreshed:
-            logger.info(f"[Earnings Calendar] No refresh this month (since {month_start}) — triggering refresh")
+            logger.debug(f"[Phase 1] Earnings calendar needs monthly refresh (since {month_start})")
         return not already_refreshed
 
     def _run_phase_1_1_quarterly_refresh(self, run_stats: Dict) -> None:
@@ -395,12 +397,11 @@ class DailyPipelineOrchestrator:
         Non-critical: pipeline continues on failure.
         """
         try:
-            logger.info("[Universe Refresh] Running quarterly universe refresh...")
             new_tickers = self.universe_backfill.quarterly_refresh()
-            logger.info(f"[Universe Refresh] {'SUCCESS' if new_tickers >= 0 else 'WARN'} - {new_tickers} new tickers added")
+            logger.info(f"[Phase 1] Universe refresh: {new_tickers} new tickers added")
             run_stats['universe_refresh'] = {'status': 'success', 'new_tickers': new_tickers}
         except Exception as e:
-            logger.warning(f"[Universe Refresh] FAILED (non-critical): {e}")
+            logger.warning(f"[Phase 1] Universe refresh FAILED (non-critical): {e}")
             run_stats['universe_refresh'] = {'status': 'failed', 'error': str(e)}
 
     # ========================================================================
@@ -439,7 +440,7 @@ class DailyPipelineOrchestrator:
 
         results = {}
 
-        # 1.1: Price
+        # Price
         if stale_tickers:
             try:
                 result = self.data_repo.update_cache(
@@ -449,35 +450,42 @@ class DailyPipelineOrchestrator:
                 )
                 ticker_results = result if isinstance(result, dict) else {}
                 total = len(ticker_results)
-                failed = sum(1 for ok in ticker_results.values() if not ok)
+                ok_count = sum(1 for ok in ticker_results.values() if ok)
+                failed = total - ok_count
                 failure_rate = failed / total if total > 0 else 0.0
-                results['price'] = {'success': True, 'ok': total - failed, 'failed': failed}
-                logger.info(f"  [1.1] Price: {total - failed}/{total} OK, {failed} failed ({failure_rate:.1%})")
+                results['price'] = {'success': True, 'ok': ok_count, 'failed': failed}
+                logger.info(f"[Phase 1] Price: {ok_count}/{total} OK, {failed} failed ({failure_rate:.1%})")
+                if ok_count > 0:
+                    self.run_manager.record_write('price_data', ok_count, 'phase_1_t1_price')
+                if self._current_run_id and self.data_repo.last_errors:
+                    self.run_manager.record_errors(
+                        self._current_run_id, 'phase_1_t1_price', self.data_repo.last_errors
+                    )
                 if failure_rate > 0.5:
                     logger.warning(
-                        f"  [1.1] ⚠️ High failure rate {failure_rate:.1%} "
+                        f"[Phase 1] High failure rate {failure_rate:.1%} "
                         f"({failed}/{total} tickers) — will retry next run"
                     )
             except Exception as e:
                 results['price'] = {'success': False, 'error': str(e)}
-                logger.error(f"  [1.1] Price FAILED: {e}")
+                logger.error(f"[Phase 1] Price FAILED: {e}", exc_info=True)
                 if PIPELINE_FAILURE_MODES.get("phase_1_t1_price") == PipelineFailureMode.HALT:
                     raise
         else:
-            logger.info("  [1.1] Price: all fresh — skipped")
+            logger.info("[Phase 1] Price: all fresh, skipped")
             results['price'] = {'success': True, 'ok': 0, 'failed': 0}
 
-        # 1.2a: Earnings Calendar Refresh (monthly — first run of each month)
+        # Earnings Calendar (monthly)
         if active_tickers and self._should_refresh_earnings_calendar(latest_trading_day):
             try:
                 rows = self.fund_engine.refresh_earnings_calendar(active_tickers)
                 results['earnings_calendar'] = {'success': True, 'rows_written': rows}
-                logger.info(f"  [1.2a] Earnings calendar: {rows} rows refreshed")
+                logger.info(f"[Phase 1] Earnings calendar: {rows} rows refreshed")
             except Exception as e:
                 results['earnings_calendar'] = {'success': False, 'error': str(e)}
-                logger.warning(f"  [1.2a] Earnings calendar FAILED (non-critical): {e}")
+                logger.warning(f"[Phase 1] Earnings calendar FAILED (non-critical): {e}")
 
-        # 1.2: Fundamentals
+        # Fundamentals
         if active_tickers:
             try:
                 result = self.fund_engine.update_fundamentals(
@@ -487,48 +495,45 @@ class DailyPipelineOrchestrator:
                 )
                 fund_results = result if isinstance(result, dict) else {}
                 fund_ok = sum(1 for v in fund_results.values() if v)
-                results['fundamentals'] = {'success': True, 'ok': fund_ok, 'failed': len(fund_results) - fund_ok}
-                logger.info(f"  [1.2] Fundamentals: {fund_ok}/{len(fund_results)} OK")
-                # DQ check: flag rows where filing_date is < 30 days after period_end (suspiciously fast)
+                fund_failed = len(fund_results) - fund_ok
+                results['fundamentals'] = {'success': True, 'ok': fund_ok, 'failed': fund_failed}
+                logger.info(f"[Phase 1] Fundamentals: {fund_ok}/{len(fund_results)} OK")
+                if fund_ok > 0:
+                    self.run_manager.record_write('fundamentals', fund_ok, 'phase_1_t1_fundamentals')
+                if self._current_run_id and self.fund_engine.last_errors:
+                    self.run_manager.record_errors(
+                        self._current_run_id, 'phase_1_t1_fundamentals', self.fund_engine.last_errors
+                    )
                 self._check_filing_date_quality(active_tickers)
             except Exception as e:
                 results['fundamentals'] = {'success': False, 'error': str(e)}
-                logger.error(f"  [1.2] Fundamentals FAILED: {e}")
+                logger.error(f"[Phase 1] Fundamentals FAILED: {e}", exc_info=True)
 
-        # 1.3: Shares
+        # Shares
         if active_tickers:
             try:
                 result = self.shares_engine.update(
                     tickers=active_tickers, latest_trading_day=latest_trading_day, max_workers=8
                 )
                 results['shares'] = {'success': True, 'rows_written': result}
-                logger.info(f"  [1.3] Shares: {result} rows written")
+                logger.info(f"[Phase 1] Shares: {result} rows")
+                if result and result > 0:
+                    self.run_manager.record_write('shares_outstanding', result, 'phase_1_t1_shares')
             except Exception as e:
                 results['shares'] = {'success': False, 'error': str(e)}
-                logger.error(f"  [1.3] Shares FAILED: {e}")
+                logger.error(f"[Phase 1] Shares FAILED: {e}", exc_info=True)
 
-        # 1.4: Macro
+        # Macro
         try:
             result = self.macro_engine.ingest_daily_macro(start_date=latest_trading_day, force=False)
             rows = result.get('rows_written', 0) if isinstance(result, dict) else result
             results['macro'] = {'success': True, 'rows_written': rows}
-            logger.info(f"  [1.4] Macro: {rows} rows")
+            logger.info(f"[Phase 1] Macro: {rows} rows")
+            if rows and rows > 0:
+                self.run_manager.record_write('macro_data', rows, 'phase_1_t1_macro')
         except Exception as e:
             results['macro'] = {'success': False, 'error': str(e)}
-            logger.error(f"  [1.4] Macro FAILED: {e}")
-
-        # Phase 1 Summary
-        price_r = results.get('price', {})
-        fund_r = results.get('fundamentals', {})
-        shares_r = results.get('shares', {})
-        macro_r = results.get('macro', {})
-        logger.info(
-            f"[Phase 1] Done: "
-            f"Price={price_r.get('ok', 0)}/{price_r.get('ok', 0) + price_r.get('failed', 0)} | "
-            f"Fund={fund_r.get('ok', '?')}/{fund_r.get('ok', 0) + fund_r.get('failed', 0)} | "
-            f"Shares={shares_r.get('rows_written', 0)} | "
-            f"Macro={macro_r.get('rows_written', 0)}"
-        )
+            logger.error(f"[Phase 1] Macro FAILED: {e}", exc_info=True)
 
         return {
             'rows_processed': len(active_tickers),
@@ -539,6 +544,10 @@ class DailyPipelineOrchestrator:
         """Phase 2: Evaluate and log screener membership event."""
 
         result = self.screener_manager.evaluate_and_log(target_date)
+        logger.info(
+            f"[Phase 2] Screener membership: active={result['active']}, "
+            f"entered={result['entered']}, exited={result['exited']}"
+        )
 
         return {
             'rows_processed':   result['entered'] + result['exited'],
@@ -679,6 +688,7 @@ class DailyPipelineOrchestrator:
         """Phase 6: Refresh all views."""
 
         view_count = self.view_manager.create_all()
+        logger.info(f"[Phase 6] Views refreshed: {view_count} views")
 
         return {'rows_processed': view_count}
 
@@ -688,6 +698,7 @@ class DailyPipelineOrchestrator:
         self.view_manager.refresh_cache(verbose=False)
         stats = self.view_manager.get_cache_stats()
         rows = stats.get('row_count', 0)
+        logger.info(f"[Phase 7] Training cache refreshed: {rows:,} rows")
 
         return {'rows_processed': rows}
 
@@ -719,15 +730,15 @@ class DailyPipelineOrchestrator:
 
         # Log alerts
         if alerts:
-            logger.warning("ALERTS TRIGGERED:")
+            logger.warning("[Phase 8] ALERTS TRIGGERED:")
             for alert in alerts:
-                logger.warning(f"   {alert}")
+                logger.warning(f"  {alert}")
         else:
-            logger.info("[OK] No alerts - pipeline health OK")
+            logger.info("[Phase 8] No alerts - pipeline health OK")
 
         # Log health summary
-        logger.info(f"Data Freshness: {health['max_dates']}")
-        logger.info(f"Breakout Drought: {health['breakout_drought_days']} days")
+        logger.info(f"[Phase 8] Data freshness: {health['max_dates']}")
+        logger.info(f"[Phase 8] Breakout drought: {health['breakout_drought_days']} days")
 
         return {
             'rows_processed': 0,
@@ -762,13 +773,10 @@ class DailyPipelineOrchestrator:
             con.close()
 
         if not rows.empty:
+            sample = ", ".join(f"{r.ticker} ({r.gap_days}d)" for r in rows.head(5).itertuples())
             logger.warning(
-                f"  [1.2] ⚠️ DQ: {len(rows)} fundamental rows with filing_date <= 7d after period_end "
-                f"(earnings date used instead of actual 10-Q filing date — yfinance limitation). Sample: "
-                + ", ".join(
-                    f"{r.ticker} {r.period_end} ({r.gap_days}d)"
-                    for r in rows.head(5).itertuples()
-                )
+                f"[Phase 1] DQ: {len(rows)} fundamentals with filing_date <= 7d after period_end. "
+                f"Sample: {sample}"
             )
 
     def _check_coverage(self, target_date: str) -> Dict:
@@ -838,7 +846,7 @@ class DailyPipelineOrchestrator:
                     LIMIT 10
                 """).fetchdf()
                 sample = ", ".join(missing['ticker'].tolist())
-                logger.warning(f"   Sample missing tickers: {sample}")
+                logger.debug(f"[Phase 8] Missing tickers sample: {sample}")
                 details['sample_missing'] = missing['ticker'].tolist()
 
             # T3 coverage (only meaningful if t2 has breakouts)
@@ -866,14 +874,14 @@ class DailyPipelineOrchestrator:
                 )
 
         except Exception as e:
-            logger.error(f"Coverage check failed: {e}")
-            alerts.append(f"[ERR] Coverage check failed: {e}")
+            logger.error(f"[Phase 8] Coverage check failed: {e}", exc_info=True)
+            alerts.append(f"Coverage check failed: {e}")
         finally:
             con.close()
 
         if not alerts:
             logger.info(
-                f"[OK] Coverage: t2={details.get('t2_tickers', '?')}/{details.get('expected_tickers', '?')} tickers, "
+                f"[Phase 8] Coverage: t2={details.get('t2_tickers', '?')}/{details.get('expected_tickers', '?')} tickers, "
                 f"t3={details.get('t3_tickers', '?')}/{details.get('t2_breakouts', '?')} breakouts"
             )
 

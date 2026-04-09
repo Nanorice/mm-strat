@@ -6,12 +6,14 @@ Responsibilities:
 - Track phase execution (start, complete, fail)
 - Query execution history (idempotency checks)
 - Generate health metrics (runtime, failure rates)
+- Track per-table write timestamps (table_write_log)
+- Track per-ticker errors with classification (pipeline_error_log)
 """
 
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 import duckdb
 from datetime import datetime, timedelta
 
@@ -40,7 +42,7 @@ class PipelineRunManager:
         self._ensure_table()
 
     def _ensure_table(self) -> None:
-        """Create pipeline_runs table if not exists."""
+        """Create pipeline_runs, table_write_log, and pipeline_error_log tables if not exists."""
         conn = duckdb.connect(self.db_path)
         try:
             conn.execute("""
@@ -69,7 +71,38 @@ class PipelineRunManager:
                 ON pipeline_runs(status, run_date)
             """)
 
-            logger.debug("[PipelineRunManager] Table 'pipeline_runs' ready")
+            # --- table_write_log: one row per table, upserted on each write ---
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS table_write_log (
+                    table_name VARCHAR PRIMARY KEY,
+                    last_written_at TIMESTAMP NOT NULL,
+                    last_rows_written INTEGER,
+                    last_phase VARCHAR
+                )
+            """)
+
+            # --- pipeline_error_log: one row per error event (append-only) ---
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_error_log (
+                    error_id INTEGER,
+                    run_id INTEGER,
+                    phase_name VARCHAR NOT NULL,
+                    error_type VARCHAR NOT NULL,
+                    affected_entity VARCHAR,
+                    error_detail VARCHAR,
+                    occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_error_log_run
+                ON pipeline_error_log(run_id)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_error_log_type_date
+                ON pipeline_error_log(error_type, occurred_at)
+            """)
+
+            logger.debug("[PipelineRunManager] Tables ready (pipeline_runs, table_write_log, pipeline_error_log)")
         finally:
             conn.close()
 
@@ -331,6 +364,118 @@ class PipelineRunManager:
                 ]
             }
 
+        finally:
+            conn.close()
+
+    # ========================================================================
+    # TABLE WRITE LOG
+    # ========================================================================
+
+    def record_write(
+        self,
+        table_name: str,
+        rows_written: int,
+        phase_name: str = None
+    ) -> None:
+        """
+        Record that a table was written to. Upserts one row per table.
+
+        Args:
+            table_name: DuckDB table that was written (e.g. 'price_data')
+            rows_written: Number of rows written in this operation
+            phase_name: Pipeline phase that triggered the write (optional)
+        """
+        conn = duckdb.connect(self.db_path)
+        try:
+            # DuckDB doesn't have native UPSERT — delete + insert
+            conn.execute("DELETE FROM table_write_log WHERE table_name = ?", [table_name])
+            conn.execute("""
+                INSERT INTO table_write_log (table_name, last_written_at, last_rows_written, last_phase)
+                VALUES (?, CURRENT_TIMESTAMP, ?, ?)
+            """, [table_name, rows_written, phase_name])
+
+            logger.debug(f"[WriteLog] {table_name}: {rows_written} rows (phase={phase_name})")
+        finally:
+            conn.close()
+
+    # ========================================================================
+    # ERROR LOG
+    # ========================================================================
+
+    @staticmethod
+    def classify_error(error_msg: str) -> str:
+        """
+        Classify an error message into a standard error_type.
+
+        Categories:
+            RATE_LIMIT    — API rate limit / HTTP 429
+            TIMEOUT       — Connection or read timeout
+            NO_DATA       — API returned empty / no parseable data
+            VALIDATION    — Data failed quality checks
+            AUTH          — API key / authentication failure
+            FETCH_FAILURE — Catch-all for other fetch errors
+        """
+        if not error_msg:
+            return 'FETCH_FAILURE'
+        msg = error_msg.lower()
+        if '429' in msg or 'rate limit' in msg or 'too many requests' in msg:
+            return 'RATE_LIMIT'
+        if 'timeout' in msg or 'timed out' in msg:
+            return 'TIMEOUT'
+        if 'no fmp response' in msg or 'no data parsed' in msg or 'max retries' in msg:
+            return 'NO_DATA'
+        if 'validation' in msg:
+            return 'VALIDATION'
+        if '401' in msg or '403' in msg or 'unauthorized' in msg or 'api key' in msg:
+            return 'AUTH'
+        return 'FETCH_FAILURE'
+
+    def record_errors(
+        self,
+        run_id: int,
+        phase_name: str,
+        errors: List[Tuple[str, Optional[str]]],
+    ) -> int:
+        """
+        Batch-insert error events into pipeline_error_log.
+
+        Args:
+            run_id: FK to pipeline_runs (from start_phase)
+            phase_name: Phase that produced the errors
+            errors: List of (affected_entity, error_detail) tuples.
+                    error_type is auto-classified from error_detail.
+
+        Returns:
+            Number of error rows inserted.
+        """
+        if not errors:
+            return 0
+
+        conn = duckdb.connect(self.db_path)
+        try:
+            max_id = conn.execute(
+                "SELECT COALESCE(MAX(error_id), 0) FROM pipeline_error_log"
+            ).fetchone()[0]
+
+            rows = []
+            for entity, detail in errors:
+                max_id += 1
+                error_type = self.classify_error(detail)
+                rows.append((max_id, run_id, phase_name, error_type, entity, detail))
+
+            conn.executemany("""
+                INSERT INTO pipeline_error_log
+                    (error_id, run_id, phase_name, error_type, affected_entity, error_detail, occurred_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, rows)
+
+            # Log summary by error_type
+            from collections import Counter
+            type_counts = Counter(r[3] for r in rows)
+            summary = ", ".join(f"{t}={c}" for t, c in type_counts.most_common())
+            logger.info(f"[ErrorLog] {phase_name}: {len(rows)} errors recorded ({summary})")
+
+            return len(rows)
         finally:
             conn.close()
 
