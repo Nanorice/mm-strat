@@ -118,7 +118,7 @@ class FeaturePipeline:
     # T2: Lightweight Screener Features (Milestone 3.3)
     # ------------------------------------------------------------------
 
-    def compute_t2_screener_features(self, start_date: str = '2020-01-01', warmup_days: int = 365, end_date: str = None) -> int:
+    def compute_t2_screener_features(self, start_date: str = '2020-01-01', warmup_days: int = 400, end_date: str = None) -> int:
         """Compute T2 screener features for full universe (30 lightweight columns).
 
         This table supports SEPA C1-C11 screening and is computed eagerly for all tickers.
@@ -531,7 +531,7 @@ class FeaturePipeline:
                 breakout INTEGER, is_green_day INTEGER, green_days_ratio_20d DOUBLE, adr_20d DOUBLE,
                 rs_velocity DOUBLE, volume_acceleration DOUBLE, breakout_momentum DOUBLE,
                 consolidation_duration DOUBLE, price_momentum_curve DOUBLE,
-                log_volume_velocity DOUBLE, price_accel_10d DOUBLE, immediate_thrust DOUBLE,
+                volume_velocity_2d DOUBLE, price_accel_10d DOUBLE, immediate_thrust DOUBLE,
 
                 -- pct_chg deltas (clean, no _1 duplicates)
                 price_vs_sma_50_pct_chg DOUBLE, price_vs_sma_150_pct_chg DOUBLE,
@@ -612,7 +612,7 @@ class FeaturePipeline:
                     return_1d, return_5d, return_20d, return_60d,
                     breakout, is_green_day, green_days_ratio_20d, adr_20d,
                     rs_velocity, volume_acceleration, breakout_momentum, consolidation_duration,
-                    price_momentum_curve, log_volume_velocity, price_accel_10d, immediate_thrust,
+                    price_momentum_curve, volume_velocity_2d, price_accel_10d, immediate_thrust,
                     -- pct_chg deltas
                     price_vs_sma_50_pct_chg, price_vs_sma_150_pct_chg, price_vs_sma_200_pct_chg,
                     rs_pct_chg, rs_ma_pct_chg, dry_up_volume_pct_chg,
@@ -738,7 +738,7 @@ class FeaturePipeline:
                             as consolidation_duration,
                         (pt.close - LAG(pt.close, 1) OVER w_tk)
                             - (LAG(pt.close, 1) OVER w_tk - LAG(pt.close, 2) OVER w_tk) as price_momentum_curve,
-                        LN(NULLIF(pt.volume, 0)) - LAG(LN(NULLIF(pt.volume, 0)), 2) OVER w_tk as log_volume_velocity,
+                        LN(NULLIF(pt.volume, 0)) - LAG(LN(NULLIF(pt.volume, 0)), 2) OVER w_tk as volume_velocity_2d,
                         ((pt.close - pt.close_lag5) / 5.0)
                             - ((pt.close_lag5 - LAG(pt.close, 10) OVER w_tk) / 5.0) as price_accel_10d,
                         pt.close - 2 * LAG(pt.close, 1) OVER w_tk + LAG(pt.close, 2) OVER w_tk as immediate_thrust
@@ -776,7 +776,7 @@ class FeaturePipeline:
                     wv.breakout, wv.is_green_day, wv.green_days_ratio_20d, wv.adr_20d,
                     wv.rs_velocity, wv.volume_acceleration, wv.breakout_momentum,
                     wv.consolidation_duration, wv.price_momentum_curve,
-                    wv.log_volume_velocity, wv.price_accel_10d, wv.immediate_thrust,
+                    wv.volume_velocity_2d, wv.price_accel_10d, wv.immediate_thrust,
                     -- pct_chg deltas
                     wv.price_vs_sma_50_pct_chg, wv.price_vs_sma_150_pct_chg, wv.price_vs_sma_200_pct_chg,
                     wv.rs_pct_chg, wv.rs_ma_pct_chg, wv.dry_up_volume_pct_chg,

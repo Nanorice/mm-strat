@@ -136,7 +136,7 @@ def create_t3_schema(db_path: str = 'data/market_data.duckdb', dry_run: bool = F
         breakout_momentum DOUBLE,
         consolidation_duration HUGEINT,
         price_momentum_curve DOUBLE,
-        log_volume_velocity DOUBLE,
+        volume_velocity_2d DOUBLE,
         price_accel_10d DOUBLE,
         immediate_thrust DOUBLE,
 

@@ -8,6 +8,7 @@ Usage:
     python scripts/run_daily_pipeline.py --force            # Ignore idempotency
 """
 
+import atexit
 import sys
 import argparse
 import logging
@@ -18,18 +19,34 @@ from datetime import datetime, timedelta
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Configure logging BEFORE imports (modules call getLogger at import time)
+# Per-run log: logs/daily_pipeline_YYYY-MM-DD_HHMMSS.log (one file per invocation)
+_log_dir = Path("logs")
+_log_dir.mkdir(exist_ok=True)
+_run_ts = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+_log_file = _log_dir / f"daily_pipeline_{_run_ts}.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)-5s %(message)s',
     datefmt='%H:%M:%S',
     handlers=[
-        logging.FileHandler("logs/daily_pipeline.log", encoding='utf-8'),
+        logging.FileHandler(_log_file, encoding='utf-8'),
         logging.StreamHandler(stream=open(1, 'w', encoding='utf-8', closefd=False))
     ]
 )
 logger = logging.getLogger(__name__)
 
-from src.orchestrators.daily_pipeline_orchestrator import DailyPipelineOrchestrator
+
+def _cleanup_empty_log():
+    """Remove log file if nothing was written (killed before first log line)."""
+    try:
+        if _log_file.exists() and _log_file.stat().st_size == 0:
+            _log_file.unlink()
+    except OSError:
+        pass
+
+
+atexit.register(_cleanup_empty_log)
 
 
 def main():
@@ -114,15 +131,17 @@ def main():
             logger.error(f"Invalid date format: {args.date}. Expected YYYY-MM-DD")
             return 1
 
-    # Initialize orchestrator
+    # Import + init + run inside try/except so import-time crashes
+    # (DuckDB lock, missing dependency) get logged instead of producing empty files.
     try:
+        from src.orchestrators.daily_pipeline_orchestrator import DailyPipelineOrchestrator
+
         orchestrator = DailyPipelineOrchestrator(
             db_path=args.db,
             dry_run=args.dry_run,
             force=args.force
         )
 
-        # Run pipeline
         success = orchestrator.run_pipeline(
             target_date=args.date,
             phase_1_only=args.phase_1_only,

@@ -339,6 +339,124 @@ def fix_filing_date_stale_historical(
 
 
 # ---------------------------------------------------------------------------
+# Fix: filing_date 1-7 days after period_end (yfinance used earnings date, not SEC filing date)
+# ---------------------------------------------------------------------------
+
+def _audit_filing_date_suspicious(con: duckdb.DuckDBPyConnection, tickers: Optional[list[str]]) -> pd.DataFrame:
+    ticker_filter = f"AND ticker IN ({','.join('?' * len(tickers))})" if tickers else ""
+    params = tickers if tickers else []
+    return con.execute(f"""
+        SELECT ticker, period_end, filing_date, source,
+               DATE_DIFF('day', period_end, filing_date) AS gap_days
+        FROM fundamentals
+        WHERE filing_date IS NOT NULL
+          AND DATE_DIFF('day', period_end, filing_date) BETWEEN 1 AND 7
+          {ticker_filter}
+        ORDER BY ticker, period_end
+    """, params).df()
+
+
+def fix_filing_date_suspicious(
+    con: duckdb.DuckDBPyConnection, dry_run: bool, tickers: Optional[list[str]] = None
+) -> None:
+    """
+    Fix rows where filing_date is 1-7 days after period_end.
+
+    A 10-Q/10-K filing cannot realistically be submitted within 7 days of
+    quarter end. These dates come from yfinance mapping the earnings
+    announcement date (which CAN be 1-3 days after quarter end) as the
+    filing_date. The actual SEC filing happens 20-45+ days later.
+
+    Strategy: EDGAR lookup for real 10-Q/10-K filing date, fallback to NULL.
+    """
+    bad = _audit_filing_date_suspicious(con, tickers)
+    if bad.empty:
+        print("[OK] No rows with filing_date 1-7d after period_end — nothing to fix.")
+        return
+
+    affected_tickers = sorted(bad["ticker"].unique())
+    print(f"\nfiling_date 1-7d after period_end: {len(bad)} rows across {len(affected_tickers)} tickers")
+    print("Strategy: EDGAR lookup -> fall back to NULL (no guessing)")
+
+    print("  Loading EDGAR ticker -> CIK map...", end=" ", flush=True)
+    ticker_map = _load_edgar_ticker_map()
+    print("done.")
+
+    updates_edgar: list[tuple[date, str, date]] = []   # (new_date, ticker, period_end)
+    updates_null: list[tuple[str, date]] = []           # (ticker, period_end) -> NULL
+    stats = {"edgar_hit": 0, "no_cik": 0, "null_fallback": 0}
+
+    for ticker, group in bad.groupby("ticker"):
+        cik = ticker_map.get(ticker)
+        edgar_dates: dict[str, str] = {}
+        if cik:
+            try:
+                edgar_dates = _fetch_edgar_filing_dates(cik)
+                time.sleep(_EDGAR_RATE_LIMIT_SLEEP)
+            except Exception as e:
+                print(f"  ⚠️  EDGAR fetch failed for {ticker}: {e}")
+        else:
+            stats["no_cik"] += 1
+
+        for _, row in group.iterrows():
+            period_dt = row["period_end"].date() if hasattr(row["period_end"], "date") else row["period_end"]
+            period_str = str(period_dt)
+
+            if period_str in edgar_dates:
+                new_date = date.fromisoformat(edgar_dates[period_str])
+                # Sanity: EDGAR date must be > 7 days after period_end (real filing)
+                if (new_date - period_dt).days > 7:
+                    updates_edgar.append((new_date, ticker, period_dt))
+                    stats["edgar_hit"] += 1
+                else:
+                    # EDGAR also returned a suspicious date — NULL it
+                    updates_null.append((ticker, period_dt))
+                    stats["null_fallback"] += 1
+            else:
+                updates_null.append((ticker, period_dt))
+                stats["null_fallback"] += 1
+
+    print(f"\n  Results: {stats['edgar_hit']} EDGAR corrected | "
+          f"{stats['null_fallback']} nulled (no valid EDGAR match) | "
+          f"{stats['no_cik']} tickers not in EDGAR")
+
+    total_changes = len(updates_edgar) + len(updates_null)
+    if dry_run:
+        print(f"\n[DRY RUN] Would update {len(updates_edgar)} rows via EDGAR and null {len(updates_null)} rows:")
+        for new_date, ticker, period_end in updates_edgar[:10]:
+            print(f"   SET   {ticker}  period={period_end}  new_filing_date={new_date}")
+        for ticker, period_end in updates_null[:10]:
+            print(f"   NULL  {ticker}  period={period_end}")
+        if total_changes > 20:
+            print(f"   ... and {total_changes - 20} more")
+        print("\n[DRY RUN] No changes made.")
+        return
+
+    edgar_updated = 0
+    for new_date, ticker, period_end in updates_edgar:
+        con.execute(
+            "UPDATE fundamentals SET filing_date = ? WHERE ticker = ? AND period_end = ?",
+            [new_date, ticker, period_end],
+        )
+        edgar_updated += 1
+
+    nulled = 0
+    for ticker, period_end in updates_null:
+        con.execute(
+            "UPDATE fundamentals SET filing_date = NULL WHERE ticker = ? AND period_end = ?",
+            [ticker, period_end],
+        )
+        nulled += 1
+
+    print(f"[OK] EDGAR-corrected {edgar_updated} rows | Nulled {nulled} rows")
+    remaining = con.execute(
+        "SELECT COUNT(*) FROM fundamentals WHERE filing_date IS NOT NULL "
+        "AND DATE_DIFF('day', period_end, filing_date) BETWEEN 1 AND 7"
+    ).fetchone()[0]
+    print(f"[OK] Remaining suspicious rows (1-7d gap): {remaining}")
+
+
+# ---------------------------------------------------------------------------
 # Registry — add new fix modes here
 # ---------------------------------------------------------------------------
 
@@ -354,6 +472,10 @@ FIX_MODES = {
     "filing_date_stale_historical": {
         "description": "Patch rows where filing_date >90d after period_end (FMP used download date for old filings)",
         "fn": fix_filing_date_stale_historical,
+    },
+    "filing_date_suspicious": {
+        "description": "Patch rows where filing_date is 1-7d after period_end (yfinance used earnings date, not SEC filing date)",
+        "fn": fix_filing_date_suspicious,
     },
 }
 

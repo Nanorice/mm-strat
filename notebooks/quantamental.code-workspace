@@ -7,5 +7,7 @@
 			"path": "../../../.claude/plans"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"accessibility.signalOptions.volume": 5
+	}
 }

@@ -152,6 +152,10 @@ def score_active_trades(
             X[f] = np.nan
     X = X[features]
 
+    # pandas merge can upcast bool columns to object — cast back to int
+    for col in X.select_dtypes(include="object").columns:
+        X[col] = X[col].astype(float)
+
     probas = model.predict_proba(X)
     preds = np.argmax(probas, axis=1)
 
@@ -167,6 +171,7 @@ def score_active_trades(
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
 def render_regime_header(regime: pd.Series | None) -> None:
+    st.subheader("M03 Market Regime")
     if regime is None:
         st.warning("No M03 regime data found in t2_regime_scores.")
         return
@@ -174,16 +179,13 @@ def render_regime_header(regime: pd.Series | None) -> None:
     score = regime["m03_score"]
     label, color = classify_regime(score)
 
-    col_badge, col_score, col_date = st.columns([2, 2, 2])
-    with col_badge:
-        st.markdown(
-            f"<h3 style='color:{color};margin:0'>{label}</h3>",
-            unsafe_allow_html=True,
-        )
-    with col_score:
-        st.metric("Composite Score", f"{score:.1f}", delta=f"{regime['m03_delta_5d']:+.1f} (5d)")
-    with col_date:
-        st.caption(f"As of {regime['date']}")
+    st.markdown(
+        f"<span style='font-size:1.4em;font-weight:bold;color:{color}'>{label}</span>"
+        f" &nbsp; Score: **{score:.1f}** &nbsp; "
+        f"<span style='font-size:0.85em;color:#888'>"
+        f"{regime['m03_delta_5d']:+.1f} (5d) · as of {regime['date']}</span>",
+        unsafe_allow_html=True,
+    )
 
     p1, p2, p3 = st.columns(3)
     for col, pillar_name, value, formula_key in [
@@ -224,13 +226,18 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     st.subheader("Screener Watchlist")
 
     # Filters
-    fc1, fc2, fc3 = st.columns(3)
+    fc1, fc2, fc3, fc4 = st.columns([1, 1, 1, 1])
     with fc1:
-        status_filter = st.selectbox("Status", ["ACTIVE", "EXITED", "All"], index=0)
+        ticker_search = st.text_input(
+            "Search Ticker", "", placeholder="e.g. ROST",
+            key="watchlist_ticker_search",
+        ).strip().upper()
     with fc2:
+        status_filter = st.selectbox("Status", ["ACTIVE", "EXITED", "All"], index=0)
+    with fc3:
         sectors = ["All"] + sorted(watchlist["sector"].dropna().unique().tolist())
         sector_filter = st.selectbox("Sector", sectors)
-    with fc3:
+    with fc4:
         date_range = st.date_input(
             "Entry Date Range",
             value=[],
@@ -253,6 +260,8 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
         return
 
     # Apply filters
+    if ticker_search:
+        display = display[display["ticker"].str.contains(ticker_search, case=False, na=False)]
     if sector_filter != "All":
         display = display[display["sector"] == sector_filter]
     if len(date_range) == 2:
@@ -363,19 +372,25 @@ def render_analytics(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
         else:
             st.info("No active trades.")
 
-    # M01 score vs actual return (exited trades)
-    if not exited.empty and "m01_class_id" in scored.columns:
-        # For exited trades we'd need to re-score them with historical features.
-        # For now, show return distribution by status as a proxy.
+    # Return distribution (exited trades)
+    if not exited.empty:
         st.markdown("---")
         st.markdown("**Return Distribution (Exited Trades)**")
+        returns = exited["pct_return"].dropna()
+        # symlog: sign(x) * log10(1 + |x|) — handles negatives and zero
+        log_returns = np.sign(returns) * np.log10(1 + returns.abs())
+        plot_df = pd.DataFrame({"log_return": log_returns})
         fig = px.histogram(
-            exited, x="pct_return", nbins=50,
-            title="Exited Trade Returns",
+            plot_df, x="log_return", nbins=50,
+            title="Exited Trade Returns (symlog scale)",
             color_discrete_sequence=["#42a5f5"],
         )
         fig.add_vline(x=0, line_dash="dash", line_color="red")
-        fig.update_layout(height=300, xaxis_title="Return %", yaxis_title="Count")
+        fig.update_layout(
+            height=300,
+            xaxis_title="Return % — sign(x) * log10(1+|x|)",
+            yaxis_title="Count",
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -388,21 +403,14 @@ def render_pipeline_status(pipeline: pd.DataFrame) -> None:
     st.caption(f"Pipeline: {status_icon} {latest['phase_name']} — {ts}")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Page: Screener Watchlist ──────────────────────────────────────────────────
 
-def main() -> None:
-    st.set_page_config(page_title="Quantamental Dashboard", layout="wide")
+def page_screener_watchlist() -> None:
     st.title("Quantamental — Screener Watchlist")
 
     # Pipeline status
     pipeline = load_pipeline_status()
     render_pipeline_status(pipeline)
-
-    st.markdown("---")
-
-    # M03 Regime header
-    regime = load_regime()
-    render_regime_header(regime)
 
     st.markdown("---")
 
@@ -413,8 +421,13 @@ def main() -> None:
     # Score active trades
     scored = score_active_trades(watchlist, deployment)
 
-    # M01 signal summary
-    render_signal_summary(scored)
+    # M03 Regime + M01 Signal side-by-side
+    regime = load_regime()
+    col_regime, col_signals = st.columns(2)
+    with col_regime:
+        render_regime_header(regime)
+    with col_signals:
+        render_signal_summary(scored)
 
     st.markdown("---")
 
@@ -427,5 +440,14 @@ def main() -> None:
     render_analytics(scored, watchlist)
 
 
-if __name__ == "__main__":
-    main()
+# ── Entrypoint with navigation ───────────────────────────────────────────────
+
+st.set_page_config(page_title="Quantamental Dashboard", layout="wide")
+
+PAGES_DIR = Path(__file__).resolve().parent / "pages"
+
+pg = st.navigation([
+    st.Page(page_screener_watchlist, title="Screener Watchlist", icon="📋"),
+    st.Page(str(PAGES_DIR / "1_Feature_Time_Series.py"), title="Feature Time Series", icon="📈"),
+])
+pg.run()
