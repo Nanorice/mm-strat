@@ -4,7 +4,7 @@ Feature Configuration - Centralized Feature Management
 This file is the SINGLE SOURCE OF TRUTH for all features used in the SEPA ML models.
 Edit this file to add/remove features from training and scoring.
 
-PHILOSOPHY: 
+PHILOSOPHY:
   - Define ONCE, use EVERYWHERE.
   - Model-specific feature sets reference this config.
 """
@@ -52,20 +52,20 @@ TECHNICAL_FEATURES = [
     'RSI_14',
     # 'RSI_Regime',  # EXCLUDED: Constant column (no variance)
     'SMA_50_Slope',
-    
+
     # Price Structure
     'Dist_From_52W_High',
     'Dist_From_52W_Low',     # Distance from 52-week low
     'Dist_From_20D_Low',     # Distance from 20-day low
     'Dist_From_20D_High',    # Distance from 20-day high
-    
+
     'Green_Days_Ratio_20D',
     'High_52W',
     'Low_52W',
     'Lowest_Low_20D',        # 20-day low value (needed for distance calc)
     'Highest_High_20D',      # 20-day high value (needed for distance calc)
     'High_20D',              # 20-day high (for breakout detection)
-    
+
     # Binary Flags & Regimes
     'Breakout',              # Breakout signal (1/0)
     'Is_Green_Day',          # Bullish candle (1/0)
@@ -113,41 +113,41 @@ FUNDAMENTAL_FEATURES = [
     'net_income_growth_yoy',  # YoY net income growth
     'eps_accel',           # QoQ change in EPS growth rate
     'revenue_accel',       # QoQ change in revenue growth rate
-    
+
     # Profitability Margins
     'gross_margin',
     'operating_margin',
     'net_margin',          # netIncome / revenue
     'roe',                 # Return on Equity
     'roa',                 # Return on Assets (ALREADY CALCULATED)
-    
+
     # Safety & Solvency Ratios (ALREADY CALCULATED)
     'debt_to_equity',      # Total Debt / Total Equity
     'current_ratio',       # Current Assets / Current Liabilities
     'quick_ratio',         # (Current Assets - Inventory) / Current Liabilities
-    
+
     # Long-term Track Record (ALREADY CALCULATED)
     'revenue_cagr_3y',     # 3-year revenue compound annual growth rate
     'eps_stability_score', # StdDev of EPS growth over 8 quarters (lower = better)
-    
+
     # SEPA Specific Quality Checks
     'inventory_vs_sales_spread',  # Inventory growth - Revenue growth (positive = red flag)
     'inventory_growth_yoy',       # YoY inventory growth (ALREADY CALCULATED)
-    
+
     # Cash Flow & Quality Metrics
     'earnings_quality_score',     # Operating_Cash_Flow / Net_Income
     'fcf_margin',                 # Free_Cash_Flow / Revenue (%)
     'gross_margin_trend',         # Current_Gross_Margin - Avg_Gross_Margin_4Q
-    
+
     # Valuation Ratios (ALREADY IMPLEMENTED in fundamental_merger.py)
     'pe_ratio',            # Price / EPS
     'ps_ratio',            # Market Cap / Revenue
     'pb_ratio',            # Price / Book Value Per Share
     'peg_adjusted',        # (P/E) / EPS Growth (Peter Lynch metric)
-    
+
     # Quality & Risk Flags
     'is_declining_earnings',  # Flag: EPS growth <= 0 (turnaround risk)
-    
+
     # Staleness Indicator (days since last earnings filing)
     'days_since_earnings',
 ]
@@ -255,332 +255,6 @@ EXCLUDE_STALE_FEATURES = ['mktCap_log', 'beta', 'RSI_Regime', 'log_beta']
 # Combined auto-exclusion list for EDA/feature selection
 FEATURE_AUTO_EXCLUDE = EXCLUDE_BENCHMARK_RS + EXCLUDE_STALE_FEATURES + LEAKAGE_FEATURES
 
-# =============================================================================
-# MODEL-SPECIFIC FEATURE SETS
-# =============================================================================
-# M01: SEPA Signal Regressor Model (Predicts: expected return)
-M01_Bench_FEATURES = [
-    # Alphas
-    'alpha009', 
-    'alpha011', 
-    'alpha013', 
-    'alpha041', 
-    'alpha060', 
-    'alpha101', 
-    # Price Structure
-    'nATR', 
-    'RS', 
-    'RS_Delta', 
-    'VCP_Ratio', 
-    'SMA_50_Slope', 
-    'Price_vs_SMA_50', 
-    'Price_vs_SMA_200', 
-    'Dry_Up_Volume',
-    'Dist_From_20D_Low',
-    'Dist_From_52W_High',
-    # Fundamentals
-    'operating_margin', 
-    'eps_growth_yoy', 
-    'revenue_accel', 
-    'pe_ratio', 
-    'eps_accel', 
-]
-
-M01_V3_FEATURES = [
-    'breakout_momentum',
-    'log_VCP_Ratio_Delta',  # log-transformed
-    'price_momentum_curve',
-    'log_rs_line_delta',  # log-transformed
-    'log_Dist_From_20D_Low_Delta',  # log-transformed
-    'log_Dry_Up_Volume_Delta',  # log-transformed
-    'alpha013',
-    'log_Price_vs_SMA_50',  # log-transformed
-    'log_RS_Delta',  # log-transformed
-    'Dist_From_52W_High_Delta',
-    'alpha101',
-    'log_alpha060',  # log-transformed
-    'log_Price_vs_SMA_200_Delta',  # log-transformed
-    'log_volume_velocity',  # already log-transformed
-    'log_Price_vs_SMA_150',  # log-transformed
-    'Price_vs_SMA_150_Delta',
-    'RSI_14',
-    'log_mom_63d',  # log-transformed
-    'alpha009',
-    'log_rs_velocity',  # log-transformed
-    'industry',
-    'Dist_From_20D_High_Delta',
-    'VCP_Ratio',
-    # 'price_vs_spy_ma63',
-    'log_Dry_Up_Volume',  # log-transformed
-    'alpha011',
-    'm03_pillar_risk',
-    'RS_Universe_Rank',
-    'alpha054',
-    'operating_margin',
-    'Price_vs_SMA_50_Delta',
-    'alpha006',
-    'log_turnover_ma20',
-    'turnover_ma20',
-    'log_volume_acceleration',  # log-transformed
-    'roa',
-    'alpha002',
-    'alpha015',
-    'm03_regime_vol',
-    'log_Price_vs_SMA_50_Lag1',
-    'price_accel_10d',
-    'log_alpha001',  # log-transformed
-    'log_current_ratio',  # log-transformed
-    'log_RS_MA_Delta',  # log-transformed
-    'log_fcf_margin',  # log-transformed
-    'log_gross_margin_trend',  # log-transformed
-    'log_eps_growth_yoy',  # log-transformed
-    'log_days_since_report',  # log-transformed
-    'log_pe_ratio',
-    'm03_delta_20d',
-    'roe',
-    'alpha004',
-    'gross_margin',
-    'log_debt_to_equity',  # log-transformed
-    'm03_pillar_liq',
-    'log_eps_accel',  # log-transformed
-    'log_rs_line_lag_delta',  # log-transformed
-    'eps_stability_score',
-    'log_revenue_accel',  # log-transformed
-    'RS_vs_Sector',
-    'log_pb_ratio',  # log-transformed
-    'earnings_quality_score',
-    'inventory_growth_yoy',
-    'm03_pillar_trend',
-    'alpha046',
-    'log_revenue_growth_yoy',  # log-transformed
-    'm03_score',
-    'log_revenue_cagr_3y',  # log-transformed
-    'ps_ratio',
-    'm03_delta_5d',
-    'log_RS_vs_Industry',  # log-transformed
-]
-
-
-# including M03 features makes M01 worse
-M01_FEATURES = [
-    'log_breakout_momentum',  # log-transformed
-    'log_VCP_Ratio_Delta',  # log-transformed
-    'log_price_momentum_curve',  # log-transformed
-    'alpha012',
-    'log_Dist_From_52W_Low_Delta',  # log-transformed
-    'log_RS',  # log-transformed (momentum-based)
-    'log_Price_vs_SMA_50',  # log-transformed
-    'alpha013',
-    'log_Price_vs_SMA_200',  # log-transformed
-    'alpha101',
-    'log_Dry_Up_Volume_Delta',  # log-transformed
-    'log_Dist_From_20D_Low_Delta',  # log-transformed
-    'log_alpha060',  # log-transformed
-    'log_mom_63d',  # log-transformed
-    'log_volume_velocity',  # already log-transformed
-    'rs_velocity',
-    'log_rs_velocity',      # log-transformed
-    'log_alpha009',  # log-transformed
-    'log_Price_vs_SMA_200_Delta',  # log-transformed
-    'log_High_52W_Delta',  # log-transformed
-    'Price_vs_SMA_150_Delta',
-    'RSI_14',
-    'Dist_From_20D_High_Delta',
-    'RS_Universe_Rank',
-    'current_ratio',
-    'alpha054',
-    'operating_margin',
-    # v3.1: Removed log_Dry_Up_Volume_Lag1 (duplicate of log_Dry_Up_Volume_Delta at line 376)
-    'VCP_Ratio',
-    'eps_stability_score',
-    'log_Price_vs_SMA_50_Delta',  # v3.1: was log_Price_vs_SMA_50_Lag1
-    'alpha002',
-    'Price_vs_SMA_50_Delta',
-    'alpha011',
-    'm03_pillar_risk',
-    'turnover_ma20',
-    'Dist_From_52W_High_Delta',
-    'alpha006',
-    'log_vol_ma20',  # log-transformed
-    'roe',
-    'log_alpha001',  # log-transformed
-    'm03_pillar_trend',
-    'log_volume_acceleration',  # log-transformed
-    'alpha015',
-    'log_fcf_margin',  # log-transformed
-    'alpha041',
-    'roa',
-    'log_pb_ratio',  # log-transformed
-    'm03_score',
-    'alpha004',
-    'Is_Green_Day',
-    'log_debt_to_equity',  # log-transformed
-    'log_days_since_report',  # log-transformed
-    'log_revenue_cagr_3y',  # log-transformed
-    'earnings_quality_score',
-    'alpha046',
-    'm03_regime_vol',
-    'RS_vs_Sector',
-    'log_gross_margin_trend',  # log-transformed
-    'm03_pillar_liq',
-    'pe_ratio',
-    'log_eps_growth_yoy',  # log-transformed
-    'ps_ratio',
-    'net_income_growth_yoy',
-    'log_net_income_growth_yoy',
-    'log_revenue_growth_yoy',  # log-transformed
-    'm03_delta_20d',
-    'inventory_vs_sales_spread',
-    'log_eps_accel',  # log-transformed
-    'm03_delta_5d',
-    'gross_margin',
-    'log_revenue_accel',  # log-transformed
-    'peg_adjusted',
-    # Native categorical features (XGBoost enable_categorical)
-    'industry',
-    'sector',
-]
-
-M01_NO_INDUSTRY = [f for f in M01_FEATURES if f != 'industry']  # For testing industry exclusion impact
-
-M01_V2_FEATURES = [
-    'log_Price_vs_SMA_200',  # log-transformed
-    'alpha011',
-    'log_nATR',  # log-transformed
-    'alpha013',
-    'log_RS_Delta',  # log-transformed
-    'log_Dist_From_52W_Low',  # log-transformed
-    'log_alpha060',  # log-transformed
-    'log_current_ratio',  # log-transformed
-    'eps_stability_score',
-    'operating_margin',
-    'log_Dry_Up_Volume_Delta',  # log-transformed
-    'Price_vs_SMA_50_Delta',
-    'alpha101',
-    'log_debt_to_equity',  # log-transformed
-    'log_volume_velocity',  # already log-transformed
-    'log_eps_growth_yoy',  # log-transformed
-    'log_alpha001',  # log-transformed
-    'rs_velocity',
-    'alpha054',
-    'earnings_quality_score',
-    'nATR_Delta',
-    'log_revenue_growth_yoy',  # log-transformed
-    'price_accel_10d',
-    'log_fcf_margin',  # log-transformed
-    'alpha006',
-    'log_Dist_From_20D_Low_Delta',  # log-transformed
-    'pe_ratio',
-    'RSI_14',
-    'log_RS_MA_Delta',  # log-transformed
-    'log_revenue_accel',  # log-transformed
-    'inventory_vs_sales_spread',
-    'roa',
-    'alpha012',
-    'alpha015',
-    'log_revenue_cagr_3y',  # log-transformed
-    'Price_vs_SMA_150_Delta',
-    'alpha041',
-    'log_breakout_momentum',  # log-transformed
-    'roe',
-    'alpha002',
-    'alpha009',
-    'Dist_From_20D_High_Delta',
-    'log_eps_accel',  # log-transformed
-    'VCP_Ratio',
-    'days_since_report',
-    'log_pb_ratio',  # log-transformed
-    'log_Price_vs_SMA_200_Delta',  # log-transformed
-    'peg_adjusted',
-    'ps_ratio',
-    'log_gross_margin_trend',  # log-transformed
-    'log_Dry_Up_Volume',  # log-transformed
-    'log_volume_acceleration',  # log-transformed
-    'gross_margin',
-    'SMA_50_Slope',
-    'Dist_From_52W_High',
-    'Is_Green_Day',
-    'log_Lowest_Low_20D_Delta',  # log-transformed
-]
-
-# M01_3BAR: Triple Barrier Meta-Labeling Model (Baseline)
-# Uses same features as M01 but predicts barrier-exit outcomes (TP vs SL/Time)
-M01_3BAR_FEATURES = M01_FEATURES.copy()  # Start with proven M01 feature set
-
-# M01_3BAR_V2: Enhanced with Velocity Features (Phase 2: Ignition Engine)
-# Adds velocity-specific features to distinguish igniters from drifters
-# =============================================================================
-# M02: IGNITION CLASSIFIER (Velocity-Only Features)
-# =============================================================================
-# M02 is the Ignition Classifier that predicts triple barrier outcomes.
-# Uses velocity-focused features to identify fast-moving "igniters".
-
-M01_3BAR_VELOCITY_ONLY = [
-    # --- 1. THE CAPTAINS (Core Strength) ---
-    'RS',                   # Relative Strength Ratio (The "Freshness" Signal)
-    'alpha011',             # VWAP Divergence (Institutional Intent)
-    'Dist_From_20D_Low',    # Support Proximity (Risk/Reward)
-    'Price_vs_SMA_200',     # Primary Trend Extension (Normalized)
-    'alpha054',             # Structure (Open/Close/Low physics)
-    'Vol_Ratio',            # Demand Fuel
-    'VCP_Ratio',            # Tightness (Volatility Contraction)
-
-    # --- 2. THE VELOCITY SQUAD (Speed & Acceleration) ---
-    'volume_acceleration',  # Demand Surge (2nd derivative)
-    'rs_velocity',          # Speed of RS change
-    'RS_Delta',             # Rate of change of Strength
-    'price_momentum_curve', # Parabolic check
-    'breakout_momentum',    # Thrust
-    'Dist_From_52W_High_Delta', # Speed into highs
-    'Dry_Up_Volume_Delta',  # Supply shock
-    # 'immediate_thrust',     # Price 2nd derivative (Physics)
-    'log_volume_velocity',  # Log-scaled volume force
-
-    # --- 3. WORLDQUANT PHYSICS (Alpha Factors) ---
-    'alpha046',   # Slope Acceleration
-    'alpha051',   # Conditional Slope Change
-    'alpha101',   # Candle Body Strength
-    'alpha009',   # Delta Close Stability
-    'alpha013',   # Price/Volume Covariance
-    'alpha006',   # Volume/Open Correlation
-    'alpha001',   # Rank of Returns
-    'alpha015',   # Rank Correlation (High/Vol)
-    # -- RESTORED ALPHAS --
-    'alpha002',   # Volume/Price Rank Correlation (Unique Physics)
-    'alpha004',   # Rank of Lows (Trend Consistency)
-    'alpha012',   # Directional Volume Force
-
-    # --- 4. CONTEXT & STRUCTURE (No Raw Prices) ---
-    'Dist_From_52W_High',       # Proximity to Blue Sky
-    'consolidation_duration',   # Fuel tank size
-    'Breakout',                 # Context Switch
-    'Consolidation_Width_Delta',# Base tightening
-    'Dist_From_20D_High',       # Proximity to trigger
-    'Dist_From_52W_Low',        # Trend Maturity
-    'RSI_14_Delta',             # Momentum Regime Change
-
-    # --- 5. LAGGED STATE (Context) ---
-    'RS_Lag1',
-    'VCP_Ratio_Lag1',
-    'Dist_From_20D_Low_Lag1',
-    'Price_vs_SMA_200_Lag1',
-    'Dist_From_52W_High_Lag1'
-]
-
-# M02_FEATURES: The canonical feature set for Ignition Classifier
-M02_FEATURES = M01_3BAR_VELOCITY_ONLY.copy()
-
-# Backward compatibility aliases (deprecated - use M02_FEATURES)
-M01_3BAR_FEATURES_V2 = M02_FEATURES
-
-# =============================================================================
-# FEATURE PRE-FILTERS (Applied before KS threshold screening)
-# =============================================================================
-# These columns are excluded BEFORE statistical screening because they are:
-# - Metadata (not features)
-# - Raw/non-stationary (absolute prices, volumes)
-# - Structurally redundant (lagged versions used to compute deltas)
-
 # Metadata columns (not features)
 EXCLUDE_METADATA = ['date', 'ticker', 'label', 'return_pct', 'days_held', 'exit_reason', 'year', 'breakout', 'is_new_trigger']
 
@@ -620,47 +294,69 @@ FEATURE_EXCLUSION_LIST = (
     CATEGORICAL_FEATURES     # Exclude categoricals from linear EDA (handle separately)
 )
 
-
 # =============================================================================
-# CANDIDATE FEATURES FOR AUTOMATED WORKFLOW
+# MODEL FEATURE LOOKUP (DuckDB-backed)
 # =============================================================================
-# Add experimental features here to test in the automated workflow.
-# The workflow will screen these using KS test and select those that pass.
-M01_CANDIDATE_FEATURES = M01_FEATURES + [
-    # --- Cross-Sectional Features (New) ---
-    'RS_Universe_Rank',
-    'RS_Sector_Rank',
-    'RS_Industry_Rank',
-    'RS_vs_Sector',
-    'RS_vs_Industry',
-    'Sector_Momentum',
-    'Industry_Momentum',
-    # mktCap_log, beta removed - company profile data rarely updated
-]
+# Model feature sets are stored in `model_feature_sets` table.
+# Run scripts/populate_feature_catalog.py to seed if empty.
 
+def get_model_features(model_name: str = 'M01', db_path: str = 'data/market_data.duckdb') -> List[str]:
+    """Return the feature list for a model from the model_feature_sets table.
 
-def get_model_features(model_name: str = 'M01') -> List[str]:
-    """
-    Get the feature list for a specific model.
+    Queries the prod model version for model_name and returns its registered features
+    in ordinal order.
 
     Args:
-        model_name: 'M01', 'M02', or legacy 'M01_3BAR' names (deprecated).
+        model_name: Prefix to match against version_id (e.g., 'M01' matches 'M01_baseline_v0.1').
+        db_path: Path to DuckDB database.
 
     Returns:
-        List of feature column names.
+        Ordered list of feature names.
+
+    Raises:
+        RuntimeError: If model_feature_sets table is empty or no prod model found.
     """
-    registry = {
-        # Current models
-        'M01': M01_FEATURES,
-        'M02': M02_FEATURES,
-        
-        # Legacy aliases (backward compatibility - deprecated)
-        'M01_3BAR': M01_3BAR_FEATURES,        # Original baseline
-        'M01_3BAR_V2': M02_FEATURES,           # Now called M02
-        'M01_3BAR_VELOCITY_ONLY': M02_FEATURES # Now called M02
-    }
+    import duckdb as _duckdb
 
-    if model_name not in registry:
-        raise ValueError(f"Unknown model: {model_name}. Available: {list(registry.keys())}")
+    con = _duckdb.connect(db_path)
+    try:
+        result = con.execute(
+            """
+            SELECT feature_set_id FROM models
+            WHERE status_flag = 'prod' AND version_id LIKE ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            [f"{model_name}%"],
+        ).fetchone()
 
-    return registry[model_name]
+        if not result:
+            raise RuntimeError(
+                f"No prod model found for '{model_name}'. "
+                "Run scripts/populate_feature_catalog.py first."
+            )
+
+        feature_set_id = result[0]
+        if not feature_set_id:
+            raise RuntimeError(
+                f"Prod model for '{model_name}' has no feature_set_id. "
+                "Run scripts/populate_feature_catalog.py first."
+            )
+
+        rows = con.execute(
+            """
+            SELECT feature_name FROM model_feature_sets
+            WHERE feature_set_id = ?
+            ORDER BY ordinal
+            """,
+            [feature_set_id],
+        ).fetchall()
+
+        if not rows:
+            raise RuntimeError(
+                f"model_feature_sets is empty for feature_set_id='{feature_set_id}'. "
+                "Run scripts/populate_feature_catalog.py first."
+            )
+
+        return [r[0] for r in rows]
+    finally:
+        con.close()

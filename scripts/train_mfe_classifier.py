@@ -459,8 +459,11 @@ def main():
 
     # Use timestamp-based version ID to avoid duplicates
     version_id = f'M01_baseline_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    feature_set_id = f'fs_{version_id}'
+    git_sha = ModelRegistry.get_git_sha()
 
     try:
+        registry.register_feature_set(feature_set_id, valid_features, FEATURE_GROUPS)
         registry.register_version(
             version_id=version_id,
             specs={
@@ -483,7 +486,13 @@ def main():
             status='test',
             feature_version='v3.1',
             training_date=datetime.now().date(),
-            dataset_rows=len(df)
+            dataset_rows=len(df),
+            accuracy=results.get('accuracy'),
+            weighted_f1=results.get('weighted_f1'),
+            macro_f1=results.get('macro_f1'),
+            feature_set_id=feature_set_id,
+            git_sha=git_sha,
+            model_type='classifier',
         )
         logger.info(f"✅ Registered model version: {version_id}")
     except Exception as e:

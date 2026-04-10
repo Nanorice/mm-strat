@@ -119,8 +119,8 @@ class UniverseScorer:
             self._m01_features = m01_config.get('feature_columns', [])
             logger.info(f"M01 uses {len(self._m01_features)} features (from m01_config.json)")
         else:
-            self._m01_features = get_model_features('M01')
-            logger.info(f"M01 uses {len(self._m01_features)} features (from feature_config)")
+            self._m01_features = get_model_features('M01', db_path=str(DEFAULT_DB_PATH))
+            logger.info(f"M01 uses {len(self._m01_features)} features (from model_feature_sets)")
 
     def _merge_m03_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Merge M03 regime features from m03_feed.parquet if needed."""

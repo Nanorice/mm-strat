@@ -1,14 +1,6 @@
-"""Model Registry for MLOps metadata and versioning.
-
-Provides CRUD operations for the `models` table in DuckDB:
-- Register new model versions with specs and metrics
-- Update evaluation metrics
-- Promote models to production
-- Query model history and artifacts
-"""
-
 import json
 import logging
+import subprocess
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,34 +15,67 @@ ARTIFACTS_BASE = Path("models/artifacts")
 
 
 class ModelRegistry:
-    """Manages model versions, specs, and evaluation artifacts in DuckDB."""
+    """Manages model versions, specs, metrics, and feature catalog in DuckDB."""
 
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = str(db_path or DEFAULT_DB_PATH)
         ARTIFACTS_BASE.mkdir(parents=True, exist_ok=True)
+        self._create_feature_catalog_tables()
+
+    # ------------------------------------------------------------------
+    # SCHEMA SETUP
+    # ------------------------------------------------------------------
+
+    def _create_feature_catalog_tables(self) -> None:
+        con = duckdb.connect(self.db_path)
+        try:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS feature_catalog (
+                    feature_name       VARCHAR NOT NULL,
+                    display_name       VARCHAR,
+                    description        VARCHAR,
+                    formula_summary    VARCHAR,
+                    source_layer       VARCHAR NOT NULL,
+                    source_table       VARCHAR,
+                    data_type          VARCHAR DEFAULT 'DOUBLE',
+                    is_categorical     BOOLEAN DEFAULT FALSE,
+                    version_introduced VARCHAR NOT NULL DEFAULT 'v3.1',
+                    version_retired    VARCHAR,
+                    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (feature_name, version_introduced)
+                )
+            """)
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS model_feature_sets (
+                    feature_set_id  VARCHAR NOT NULL,
+                    feature_name    VARCHAR NOT NULL,
+                    feature_group   VARCHAR,
+                    ordinal         INTEGER,
+                    PRIMARY KEY (feature_set_id, feature_name)
+                )
+            """)
+        finally:
+            con.close()
+
+    # ------------------------------------------------------------------
+    # MODEL VERSIONS
+    # ------------------------------------------------------------------
 
     def register_version(
         self,
         version_id: str,
         specs: Dict[str, Any],
         status: str = "test",
-        feature_version: str = "v3.0",
+        feature_version: str = "v3.1",
         training_date: Optional[date] = None,
         dataset_rows: Optional[int] = None,
+        accuracy: Optional[float] = None,
+        weighted_f1: Optional[float] = None,
+        macro_f1: Optional[float] = None,
+        feature_set_id: Optional[str] = None,
+        git_sha: Optional[str] = None,
+        model_type: str = "classifier",
     ) -> None:
-        """Register a new model version.
-
-        Args:
-            version_id: Unique identifier (e.g., 'M01_v4')
-            specs: Dictionary containing:
-                - features: List[str] - Feature names
-                - hyperparameters: Dict - XGBoost params, etc.
-                - training_config: Dict - Train/test split, cv folds, etc.
-            status: 'test' | 'prod' | 'archived'
-            feature_version: Feature schema version (e.g., 'v3.0')
-            training_date: Date of training (defaults to today)
-            dataset_rows: Number of rows in training set
-        """
         if status not in ("test", "prod", "archived"):
             raise ValueError(f"Invalid status: {status}. Must be test/prod/archived")
 
@@ -66,17 +91,16 @@ class ModelRegistry:
                 """
                 INSERT INTO models (
                     version_id, status_flag, specs_json, feature_version,
-                    training_date, dataset_rows, artifacts_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    training_date, dataset_rows, artifacts_path,
+                    accuracy, weighted_f1, macro_f1,
+                    feature_set_id, git_sha, model_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    version_id,
-                    status,
-                    specs_json,
-                    feature_version,
-                    training_date,
-                    dataset_rows,
-                    artifacts_path,
+                    version_id, status, specs_json, feature_version,
+                    training_date, dataset_rows, artifacts_path,
+                    accuracy, weighted_f1, macro_f1,
+                    feature_set_id, git_sha, model_type,
                 ],
             )
             logger.info(f"[OK] Registered {version_id} (status={status})")
@@ -88,11 +112,6 @@ class ModelRegistry:
             con.close()
 
     def get_model_specs(self, version_id: str) -> Dict[str, Any]:
-        """Load model specs for a given version.
-
-        Returns:
-            Dictionary with keys: features, hyperparameters, training_config
-        """
         con = duckdb.connect(self.db_path)
         try:
             result = con.execute(
@@ -111,23 +130,21 @@ class ModelRegistry:
         mae: Optional[float] = None,
         r2: Optional[float] = None,
         spearman_corr: Optional[float] = None,
+        accuracy: Optional[float] = None,
+        weighted_f1: Optional[float] = None,
+        macro_f1: Optional[float] = None,
     ) -> None:
-        """Update evaluation metrics for a model version."""
         updates = []
         params = []
 
-        if rmse is not None:
-            updates.append("rmse = ?")
-            params.append(rmse)
-        if mae is not None:
-            updates.append("mae = ?")
-            params.append(mae)
-        if r2 is not None:
-            updates.append("r2 = ?")
-            params.append(r2)
-        if spearman_corr is not None:
-            updates.append("spearman_corr = ?")
-            params.append(spearman_corr)
+        for col, val in [
+            ("rmse", rmse), ("mae", mae), ("r2", r2),
+            ("spearman_corr", spearman_corr),
+            ("accuracy", accuracy), ("weighted_f1", weighted_f1), ("macro_f1", macro_f1),
+        ]:
+            if val is not None:
+                updates.append(f"{col} = ?")
+                params.append(val)
 
         if not updates:
             logger.warning("No metrics provided for update")
@@ -136,37 +153,27 @@ class ModelRegistry:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         params.append(version_id)
 
-        sql = f"UPDATE models SET {', '.join(updates)} WHERE version_id = ?"
-
         con = duckdb.connect(self.db_path)
         try:
-            con.execute(sql, params)
+            con.execute(
+                f"UPDATE models SET {', '.join(updates)} WHERE version_id = ?", params
+            )
             logger.info(f"[OK] Updated metrics for {version_id}")
             print(f"[OK] Updated metrics for {version_id}")
         finally:
             con.close()
 
     def set_prod(self, version_id: str) -> None:
-        """Promote a model to production status.
-
-        Sets status_flag='prod' for the specified version and
-        demotes all other versions to 'archived'.
-        """
         con = duckdb.connect(self.db_path)
         try:
-            # Verify version exists
             exists = con.execute(
                 "SELECT COUNT(*) FROM models WHERE version_id = ?", [version_id]
             ).fetchone()[0]
             if not exists:
                 raise ValueError(f"Model version not found: {version_id}")
-
-            # Demote all current prod models to archived
             con.execute(
                 "UPDATE models SET status_flag = 'archived' WHERE status_flag = 'prod'"
             )
-
-            # Promote target version to prod
             con.execute(
                 "UPDATE models SET status_flag = 'prod', updated_at = CURRENT_TIMESTAMP WHERE version_id = ?",
                 [version_id],
@@ -179,43 +186,25 @@ class ModelRegistry:
     def list_versions(
         self, status: Optional[str] = None, limit: int = 20
     ) -> pd.DataFrame:
-        """List registered model versions.
-
-        Args:
-            status: Filter by 'prod' | 'test' | 'archived' (None = all)
-            limit: Maximum number of rows to return
-
-        Returns:
-            DataFrame with columns: version_id, status_flag, training_date,
-                                    rmse, mae, r2, spearman_corr, created_at
-        """
         con = duckdb.connect(self.db_path)
         try:
-            if status:
-                sql = """
-                    SELECT version_id, status_flag, feature_version, training_date,
-                           dataset_rows, rmse, mae, r2, spearman_corr, created_at
-                    FROM models
-                    WHERE status_flag = ?
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                """
-                df = con.execute(sql, [status, limit]).fetchdf()
-            else:
-                sql = """
-                    SELECT version_id, status_flag, feature_version, training_date,
-                           dataset_rows, rmse, mae, r2, spearman_corr, created_at
-                    FROM models
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                """
-                df = con.execute(sql, [limit]).fetchdf()
-            return df
+            where = "WHERE status_flag = ?" if status else ""
+            params = [status, limit] if status else [limit]
+            sql = f"""
+                SELECT version_id, status_flag, feature_version, training_date,
+                       dataset_rows, accuracy, weighted_f1, macro_f1,
+                       feature_set_id, git_sha, model_type,
+                       rmse, mae, r2, spearman_corr, created_at
+                FROM models
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+            """
+            return con.execute(sql, params).fetchdf()
         finally:
             con.close()
 
     def get_prod_version(self) -> Optional[str]:
-        """Get the current production model version ID."""
         con = duckdb.connect(self.db_path)
         try:
             result = con.execute(
@@ -226,7 +215,6 @@ class ModelRegistry:
             con.close()
 
     def get_artifacts_path(self, version_id: str) -> Path:
-        """Get the filesystem path for a version's artifacts."""
         con = duckdb.connect(self.db_path)
         try:
             result = con.execute(
@@ -237,3 +225,95 @@ class ModelRegistry:
             return Path(result[0])
         finally:
             con.close()
+
+    # ------------------------------------------------------------------
+    # FEATURE CATALOG
+    # ------------------------------------------------------------------
+
+    def register_feature_set(
+        self,
+        feature_set_id: str,
+        features: List[str],
+        feature_groups: Dict[str, List[str]],
+    ) -> None:
+        """Insert feature set rows into model_feature_sets."""
+        group_lookup: Dict[str, str] = {}
+        for group, names in feature_groups.items():
+            for name in names:
+                group_lookup[name] = group
+
+        rows = [
+            (feature_set_id, f, group_lookup.get(f), i)
+            for i, f in enumerate(features)
+        ]
+
+        con = duckdb.connect(self.db_path)
+        try:
+            con.executemany(
+                "INSERT OR IGNORE INTO model_feature_sets "
+                "(feature_set_id, feature_name, feature_group, ordinal) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+            print(f"[OK] Registered feature set '{feature_set_id}' ({len(rows)} features)")
+        finally:
+            con.close()
+
+    def get_reproducibility_info(self, version_id: str) -> pd.DataFrame:
+        """Return full feature definitions for a model version.
+
+        Joins models → model_feature_sets → feature_catalog.
+        """
+        con = duckdb.connect(self.db_path)
+        try:
+            result = con.execute(
+                "SELECT feature_set_id, git_sha, model_type, feature_version "
+                "FROM models WHERE version_id = ?",
+                [version_id],
+            ).fetchone()
+            if not result:
+                raise ValueError(f"Model version not found: {version_id}")
+
+            feature_set_id, git_sha, model_type, feature_version = result
+
+            df = con.execute(
+                """
+                SELECT
+                    mfs.ordinal,
+                    mfs.feature_name,
+                    mfs.feature_group,
+                    fc.description,
+                    fc.formula_summary,
+                    fc.source_layer,
+                    fc.source_table,
+                    fc.is_categorical,
+                    fc.version_introduced,
+                    fc.version_retired
+                FROM model_feature_sets mfs
+                LEFT JOIN feature_catalog fc
+                    ON mfs.feature_name = fc.feature_name
+                    AND fc.version_introduced = ?
+                WHERE mfs.feature_set_id = ?
+                ORDER BY mfs.ordinal
+                """,
+                [feature_version, feature_set_id],
+            ).fetchdf()
+
+            df.attrs["version_id"] = version_id
+            df.attrs["git_sha"] = git_sha
+            df.attrs["model_type"] = model_type
+            return df
+        finally:
+            con.close()
+
+    # ------------------------------------------------------------------
+    # HELPERS
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_git_sha() -> str:
+        try:
+            return subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            return "unknown"

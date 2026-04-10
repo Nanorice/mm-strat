@@ -600,76 +600,14 @@ class ViewManager:
                 sl.sl_exit_date,
                 CASE WHEN sl.sl_exit_price IS NOT NULL AND sl.entry_price > 0
                     THEN (sl.sl_exit_price / sl.entry_price - 1.0) * 100.0
-                END AS sl_pct,
-
-                -- =============================================================
-                -- Log transforms: sign(x) * ln(1 + |x|)
-                -- Source: t3_sepa_features (via v_d1_candidates -> v_d2_features)
-                -- =============================================================
-                SIGN(f.breakout_momentum) * LN(1.0 + ABS(f.breakout_momentum)) AS log_breakout_momentum,
-                SIGN(f.price_momentum_curve) * LN(1.0 + ABS(f.price_momentum_curve)) AS log_price_momentum_curve,
-                SIGN(f.rs) * LN(1.0 + ABS(f.rs)) AS log_RS,
-                SIGN(f.price_vs_sma_50) * LN(1.0 + ABS(f.price_vs_sma_50)) AS log_Price_vs_SMA_50,
-                SIGN(f.price_vs_sma_200) * LN(1.0 + ABS(f.price_vs_sma_200)) AS log_Price_vs_SMA_200,
-                SIGN(f.price_vs_sma_150) * LN(1.0 + ABS(f.price_vs_sma_150)) AS log_Price_vs_SMA_150,
-                SIGN(f.mom_63d) * LN(1.0 + ABS(f.mom_63d)) AS log_mom_63d,
-                SIGN(f.alpha060) * LN(1.0 + ABS(f.alpha060)) AS log_alpha060,
-                SIGN(f.alpha009) * LN(1.0 + ABS(f.alpha009)) AS log_alpha009,
-                SIGN(f.alpha001) * LN(1.0 + ABS(f.alpha001)) AS log_alpha001,
-                SIGN(f.vol_ma20) * LN(1.0 + ABS(f.vol_ma20)) AS log_vol_ma20,
-                SIGN(f.volume_acceleration) * LN(1.0 + ABS(f.volume_acceleration)) AS log_volume_acceleration,
-                SIGN(f.dry_up_volume) * LN(1.0 + ABS(f.dry_up_volume)) AS log_Dry_Up_Volume,
-
-                -- Log transforms: delta features (from v_d1_candidates)
-                SIGN(f.vcp_ratio_delta) * LN(1.0 + ABS(f.vcp_ratio_delta)) AS log_VCP_Ratio_Delta,
-                SIGN(f.dist_from_52w_low_delta) * LN(1.0 + ABS(f.dist_from_52w_low_delta)) AS log_Dist_From_52W_Low_Delta,
-                SIGN(f.dry_up_volume_delta) * LN(1.0 + ABS(f.dry_up_volume_delta)) AS log_Dry_Up_Volume_Delta,
-                SIGN(f.dist_from_20d_low_delta) * LN(1.0 + ABS(f.dist_from_20d_low_delta)) AS log_Dist_From_20D_Low_Delta,
-                SIGN(f.price_vs_sma_200_delta) * LN(1.0 + ABS(f.price_vs_sma_200_delta)) AS log_Price_vs_SMA_200_Delta,
-                SIGN(f.high_52w_delta) * LN(1.0 + ABS(f.high_52w_delta)) AS log_High_52W_Delta,
-                SIGN(f.rs_delta) * LN(1.0 + ABS(f.rs_delta)) AS log_RS_Delta,
-                SIGN(f.rs_ma_delta) * LN(1.0 + ABS(f.rs_ma_delta)) AS log_RS_MA_Delta,
-
-                -- v3.1: Added log transforms for pct_chg-derived deltas (replaces lag1)
-                SIGN(f.price_vs_sma_50_delta) * LN(1.0 + ABS(f.price_vs_sma_50_delta)) AS log_Price_vs_SMA_50_Delta,
-                SIGN(f.price_vs_sma_150_delta) * LN(1.0 + ABS(f.price_vs_sma_150_delta)) AS log_Price_vs_SMA_150_Delta,
-                SIGN(f.dist_from_20d_high_delta) * LN(1.0 + ABS(f.dist_from_20d_high_delta)) AS log_Dist_From_20D_High_Delta,
-                SIGN(f.dist_from_52w_high_delta) * LN(1.0 + ABS(f.dist_from_52w_high_delta)) AS log_Dist_From_52W_High_Delta,
-
-                -- Log transforms: t3_sepa_features columns referenced via pipeline names
-                SIGN(f.rs_line_delta) * LN(1.0 + ABS(f.rs_line_delta)) AS log_rs_line_delta,
-                SIGN(f.rs_line_lag_delta) * LN(1.0 + ABS(f.rs_line_lag_delta)) AS log_rs_line_lag_delta,
-                SIGN(f.rs_velocity) * LN(1.0 + ABS(f.rs_velocity)) AS log_rs_velocity,
-                SIGN(f.natr) * LN(1.0 + ABS(f.natr)) AS log_nATR,
-                SIGN(f.dist_from_52w_low) * LN(1.0 + ABS(f.dist_from_52w_low)) AS log_Dist_From_52W_Low,
-                SIGN(f.lowest_low_20d_delta) * LN(1.0 + ABS(f.lowest_low_20d_delta)) AS log_Lowest_Low_20D_Delta,
-                SIGN(f.turnover_ma20) * LN(1.0 + ABS(f.turnover_ma20)) AS log_turnover_ma20,
-
-
-                -- =============================================================
-                -- Log transforms: fundamental features (via v_d2_features)
-                -- =============================================================
-                SIGN(f.fcf_margin) * LN(1.0 + ABS(f.fcf_margin)) AS log_fcf_margin,
-                SIGN(f.debt_to_equity) * LN(1.0 + ABS(f.debt_to_equity)) AS log_debt_to_equity,
-                SIGN(f.revenue_cagr_3y) * LN(1.0 + ABS(f.revenue_cagr_3y)) AS log_revenue_cagr_3y,
-                SIGN(f.gross_margin_trend) * LN(1.0 + ABS(f.gross_margin_trend)) AS log_gross_margin_trend,
-                SIGN(f.eps_growth_yoy) * LN(1.0 + ABS(f.eps_growth_yoy)) AS log_eps_growth_yoy,
-                SIGN(f.net_income_growth_yoy) * LN(1.0 + ABS(f.net_income_growth_yoy)) AS log_net_income_growth_yoy,
-                SIGN(f.revenue_growth_yoy) * LN(1.0 + ABS(f.revenue_growth_yoy)) AS log_revenue_growth_yoy,
-                SIGN(f.eps_accel) * LN(1.0 + ABS(f.eps_accel)) AS log_eps_accel,
-                SIGN(f.revenue_accel) * LN(1.0 + ABS(f.revenue_accel)) AS log_revenue_accel,
-                SIGN(f.current_ratio) * LN(1.0 + ABS(f.current_ratio)) AS log_current_ratio,
-                SIGN(f.days_since_report) * LN(1.0 + ABS(f.days_since_report)) AS log_days_since_report,
-
-                -- Log transforms: valuation ratios (via v_d2_features)
-                SIGN(f.pb_ratio) * LN(1.0 + ABS(f.pb_ratio)) AS log_pb_ratio
+                END AS sl_pct
 
             FROM v_d2_features f
             LEFT JOIN outcomes o ON f.trade_id = o.trade_id
             LEFT JOIN sl_exits sl ON f.trade_id = sl.trade_id
         """)
         n = con.execute("SELECT COUNT(*) FROM v_d2_training").fetchone()[0]
-        print(f"   [OK] v_d2_training: features + outcomes + log transforms ({n:,} rows)")
+        print(f"   [OK] v_d2_training: features + outcomes ({n:,} rows)")
 
     # ------------------------------------------------------------------
     # VIEW 6: v_d1_trades — Alias for v_d1_candidates (Standardized Naming)
