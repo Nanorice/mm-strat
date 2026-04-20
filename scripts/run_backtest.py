@@ -193,6 +193,15 @@ def run_backtest_duckdb(
         print(f"    Saved: plot.png")
 
     if run_dir:
+        tearsheet_path = str(run_dir / 'tearsheet.html')
+        print("  - Generating interactive tearsheet...")
+        result = runner.generate_tearsheet(output_path=tearsheet_path)
+        if result:
+            print(f"    Saved: tearsheet.html")
+        else:
+            print(f"    Skipped (quantstats unavailable or insufficient equity data)")
+
+    if run_dir:
         print(f"\n[OK] Run complete: {run_dir}")
 
     return metrics, runner
@@ -268,6 +277,15 @@ def run_backtest(
         print("  - Generating plot...")
         runner.plot(save_path=plot_path)
         print(f"    Saved: plot.png")
+
+    if run_dir:
+        tearsheet_path = str(run_dir / 'tearsheet.html')
+        print("  - Generating interactive tearsheet...")
+        result = runner.generate_tearsheet(output_path=tearsheet_path)
+        if result:
+            print(f"    Saved: tearsheet.html")
+        else:
+            print(f"    Skipped (quantstats unavailable or insufficient equity data)")
 
     if run_dir:
         print(f"\n[OK] Run complete: {run_dir}")

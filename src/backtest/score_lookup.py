@@ -38,11 +38,11 @@ class ScoreLookup:
         """
         self.scores_path = Path(scores_path)
         self.df: Optional[pd.DataFrame] = None
-        self._index: Dict[datetime, Dict[str, Tuple[float, float]]] = {}
+        self._index: Dict[datetime, Dict[str, Tuple[float, float, float, float]]] = {}
         self._load_and_index()
 
     def _load_and_index(self):
-        """Load parquet and build date -> {ticker: (norm_score, daily_rank)} index."""
+        """Load parquet and build date -> {ticker: (norm_score, daily_rank, trailing_pct, prob_elite)} index."""
         if not self.scores_path.exists():
             raise FileNotFoundError(f"Scores file not found: {self.scores_path}")
 
@@ -52,47 +52,40 @@ class ScoreLookup:
         # Ensure date is datetime
         self.df['date'] = pd.to_datetime(self.df['date'])
 
-        # Build index
         logger.info("Building score index...")
 
-        # Check if trailing_10d_pct exists (new format)
-        has_trailing = 'trailing_10d_pct' in self.df.columns
+        if 'trailing_pct' not in self.df.columns:
+            raise ValueError(
+                f"Scores file {self.scores_path} missing 'trailing_pct' column. "
+                "Re-score with the current UniverseScorer."
+            )
+
+        has_prob_elite = 'prob_elite' in self.df.columns
 
         for date, group in self.df.groupby('date'):
-            # Convert to datetime.date for consistent lookup
             date_key = date.date() if hasattr(date, 'date') else date
-
-            if has_trailing:
-                # New format: include trailing percentile
-                self._index[date_key] = {
-                    row['ticker']: (
-                        row['normalized_score'],
-                        row['daily_pct_rank'],
-                        row['trailing_10d_pct'],
-                    )
-                    for _, row in group.iterrows()
-                }
-            else:
-                # Legacy format: pad with daily_pct_rank for backwards compatibility
-                self._index[date_key] = {
-                    row['ticker']: (
-                        row['normalized_score'],
-                        row['daily_pct_rank'],
-                        row['daily_pct_rank'],  # Fallback to daily
-                    )
-                    for _, row in group.iterrows()
-                }
+            self._index[date_key] = {
+                row['ticker']: (
+                    row['normalized_score'],
+                    row['daily_pct_rank'],
+                    row['trailing_pct'],
+                    row['prob_elite'] if has_prob_elite else 0.0,
+                )
+                for _, row in group.iterrows()
+            }
 
         logger.info(f"Indexed {len(self._index)} dates, "
-                   f"{self.df['ticker'].nunique()} unique tickers")
+                   f"{self.df['ticker'].nunique()} unique tickers"
+                   f"{' (with prob_elite)' if has_prob_elite else ''}")
 
     def get_candidates(
         self,
         date: datetime,
         min_score: float = 30.0,
         min_percentile: float = 0.0,
-        rank_by: Literal['trailing', 'daily'] = 'trailing',
-    ) -> List[Tuple[str, float, float]]:
+        min_prob_elite: float = 0.0,
+        rank_by: Literal['trailing', 'daily', 'prob_elite'] = 'trailing',
+    ) -> List[Tuple[str, float, float, float]]:
         """
         Get tickers passing score floor, sorted by rank.
 
@@ -100,21 +93,12 @@ class ScoreLookup:
             date: Trading date to query
             min_score: Minimum normalized score (0-100) - absolute floor
             min_percentile: Minimum percentile rank (0-1) - optional gate
-                           0.0 = no gate (Top N Competition mode)
-                           0.95 = top 5% filter (legacy mode)
-            rank_by: Which percentile to use for sorting:
-                    'trailing' = 10-day cohort percentile (recommended)
-                    'daily' = single-day cross-sectional rank
+            min_prob_elite: Minimum P(Class 3) Elite probability (0-1)
+            rank_by: Sort key — 'trailing' | 'daily' | 'prob_elite'
 
         Returns:
-            List of (ticker, normalized_score, trailing_pct) tuples,
-            sorted by selected rank descending.
-            Returns empty list if no scores exist for the date (holiday, data gap).
-
-        Note:
-            The "Top N Competition" approach uses min_percentile=0.0 and fills
-            available slots with the best-ranked candidates. This avoids the
-            double-gating problem (percentile gate + regime gate).
+            List of (ticker, normalized_score, trailing_pct, prob_elite) tuples,
+            sorted by `rank_by` descending. Empty list if date has no scores.
         """
         # Normalize date to date object
         if hasattr(date, 'date'):
@@ -128,41 +112,42 @@ class ScoreLookup:
             logger.debug(f"No scores for {date_key}, skipping entry logic")
             return []
 
-        # Filter candidates by score floor and optional percentile gate
+        # Filter candidates by score floor, percentile gate, and elite threshold
         candidates = []
-        for ticker, (score, daily_rank, trailing_rank) in day_data.items():
+        for ticker, (score, daily_rank, trailing_rank, prob_elite) in day_data.items():
             if score < min_score:
                 continue
+            if prob_elite < min_prob_elite:
+                continue
 
-            # Use selected rank for filtering
             rank_value = trailing_rank if rank_by == 'trailing' else daily_rank
             if rank_value < min_percentile:
                 continue
 
-            candidates.append((ticker, score, trailing_rank, daily_rank))
+            candidates.append((ticker, score, trailing_rank, daily_rank, prob_elite))
 
         # Sort by selected rank descending (best candidates first)
-        sort_idx = 2 if rank_by == 'trailing' else 3
-        candidates.sort(key=lambda x: -x[sort_idx])
+        if rank_by == 'prob_elite':
+            candidates.sort(key=lambda x: -x[4])
+        elif rank_by == 'trailing':
+            candidates.sort(key=lambda x: -x[2])
+        else:  # 'daily'
+            candidates.sort(key=lambda x: -x[3])
 
-        # Return (ticker, score, trailing_pct) for strategy use
-        return [(ticker, score, trailing) for ticker, score, trailing, _ in candidates]
+        return [(ticker, score, trailing, prob_elite)
+                for ticker, score, trailing, _, prob_elite in candidates]
 
     def get_score(
         self,
         date: datetime,
         ticker: str,
-    ) -> Optional[Tuple[float, float, float]]:
+    ) -> Optional[Tuple[float, float, float, float]]:
         """
         Get score for a specific ticker on a specific date.
 
-        Args:
-            date: Trading date
-            ticker: Stock ticker
-
         Returns:
-            Tuple of (normalized_score, daily_pct_rank, trailing_10d_pct)
-            or None if not found
+            Tuple of (normalized_score, daily_pct_rank, trailing_pct, prob_elite)
+            or None if not found.
         """
         if hasattr(date, 'date'):
             date_key = date.date()
@@ -215,10 +200,10 @@ if __name__ == '__main__':
     if dates:
         test_date = dates[len(dates) // 2]  # Middle date
 
-        # Top N Competition mode (no percentile gate)
         candidates = lookup.get_candidates(
             test_date, min_score=30.0, min_percentile=0.0, rank_by='trailing'
         )
-        print(f"\nTop N Competition for {test_date} (sorted by 10-day trailing pct):")
-        for ticker, score, trailing in candidates[:10]:
-            print(f"  {ticker}: score={score:.1f}, trailing_pct={trailing:.3f}")
+        print(f"\nTop N Competition for {test_date} (sorted by trailing pct):")
+        for ticker, score, trailing, prob_elite in candidates[:10]:
+            print(f"  {ticker}: score={score:.1f}, trailing_pct={trailing:.3f}, "
+                  f"prob_elite={prob_elite:.3f}")

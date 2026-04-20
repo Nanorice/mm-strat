@@ -94,7 +94,9 @@ class SEPAHybridV1(bt.Strategy):
         ('entry_percentile_min', 0.0),  # Minimum percentile gate (0.0 = no gate)
         ('entry_mode', 'percentile'),  # 'percentile' or 'top_n'
         ('entry_top_n', None),  # Alternative: take top N candidates (None = use percentile)
-        ('rank_by', 'trailing'),  # 'trailing' = 10-day cohort, 'daily' = single-day
+        ('rank_by', 'trailing'),  # 'trailing' | 'daily' | 'prob_elite'
+        ('min_prob_elite', 0.0),  # Min P(Class 3) for entry (e.g., 0.15)
+        ('warmup_days', 0),  # Skip entries during initial warmup
         ('min_price', 1.0),
         ('min_dollar_volume', 0),
         ('cooldown_days', 3),
@@ -145,6 +147,9 @@ class SEPAHybridV1(bt.Strategy):
         # Exposure & equity tracking
         self.daily_snapshots: List[DailySnapshot] = []
         self.signal_rejections: List[SignalRejection] = []
+
+        # Warmup bar counter (used to suppress entries during initial bars)
+        self._bars_seen = 0
 
         logger.info(f"SEPA Strategy initialized with {len(self.stock_feeds)} stock feeds")
 
@@ -274,6 +279,12 @@ class SEPAHybridV1(bt.Strategy):
         # === CHECK RANK-BASED EXITS (Optional) ===
         if self.p.exit_use_percentile:
             self._check_rank_exits(current_date)
+
+        # === WARMUP CHECK ===
+        # Skip entries during initial warmup bars (exits still run above).
+        self._bars_seen += 1
+        if self._bars_seen <= self.p.warmup_days:
+            return
 
         # === ENTRY LOGIC ===
         self._process_entries(regime, current_date)
@@ -467,15 +478,16 @@ class SEPAHybridV1(bt.Strategy):
             current_date,
             min_score=self.p.min_score,
             min_percentile=self.p.entry_percentile_min,
+            min_prob_elite=self.p.min_prob_elite,
             rank_by=self.p.rank_by,
         )
-        
+
         if not candidates:
             return
 
         # Filter candidates with rejection tracking
         valid_candidates = []
-        for ticker, score, trailing_pct in candidates:
+        for ticker, score, trailing_pct, prob_elite in candidates:
             # Skip if in cooldown
             if self.position_tracker.is_in_cooldown(ticker, current_date, self.p.cooldown_days):
                 self.signal_rejections.append(SignalRejection(

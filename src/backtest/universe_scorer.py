@@ -181,6 +181,7 @@ class UniverseScorer:
         self,
         df: pd.DataFrame,
         window: int = 10,
+        score_col: str = 'calibrated_score',
     ) -> pd.Series:
         """
         Compute trailing N-day cohort percentile for each row.
@@ -192,8 +193,9 @@ class UniverseScorer:
         single-day ranking which can be noisy.
 
         Args:
-            df: DataFrame with 'date', 'ticker', 'calibrated_score' columns
+            df: DataFrame with 'date', 'ticker', and `score_col` columns
             window: Number of trading days to include (default: 10)
+            score_col: Column to compute percentile on
 
         Returns:
             Series of trailing percentile ranks (0-1)
@@ -214,11 +216,11 @@ class UniverseScorer:
             window_dates = date_to_window_dates[date]
             # Get all scores in the window (all tickers, all dates in window)
             window_mask = df['date'].isin(window_dates)
-            window_scores = df.loc[window_mask, 'calibrated_score'].values
+            window_scores = df.loc[window_mask, score_col].values
 
             # For each ticker today, compute percentile vs window scores
             for idx, row in group.iterrows():
-                score = row['calibrated_score']
+                score = row[score_col]
                 # Percentile: proportion of window scores <= this score
                 pct = (window_scores <= score).sum() / len(window_scores)
                 results.append((idx, pct))
@@ -301,11 +303,13 @@ class UniverseScorer:
         X[numeric_cols] = X[numeric_cols].fillna(X[numeric_cols].median())
 
         # Predict — classifier uses expected MFE, regressor uses raw score
+        prob_elite = None
         if self._is_classifier:
             # MFE class midpoints: 0=Noise(0-2%), 1=Moderate(2-10%), 2=Strong(10-30%), 3=HomeRun(30%+)
             midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
             proba = self.m01_model.predict_proba(X)
             calibrated_scores = (proba * midpoints).sum(axis=1)
+            prob_elite = proba[:, -1]
             logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
         else:
             raw_scores = self.m01_model.predict(X)
@@ -316,6 +320,8 @@ class UniverseScorer:
             'ticker': df['ticker'].values,
             'calibrated_score': calibrated_scores,
         })
+        if prob_elite is not None:
+            result['prob_elite'] = prob_elite
         result = result.dropna(subset=['calibrated_score'])
 
         # Daily percentile rank
@@ -323,9 +329,9 @@ class UniverseScorer:
             lambda x: x.rank(pct=True)
         )
 
-        # Trailing 10-day percentile
+        # Trailing N-day percentile (default 10)
         result = result.sort_values(['date', 'ticker'])
-        result['trailing_10d_pct'] = self._compute_trailing_percentile(result, window=10)
+        result['trailing_pct'] = self._compute_trailing_percentile(result, window=10)
 
         # Normalized score (0-100)
         cal_min = result['calibrated_score'].min()
@@ -340,6 +346,119 @@ class UniverseScorer:
         result = result.sort_values(['date', 'daily_pct_rank'], ascending=[True, False])
         logger.info(f"Scored {len(result)} rows, {result['ticker'].nunique()} tickers, "
                     f"{result['date'].nunique()} dates")
+        return result
+
+    def score_from_t3(
+        self,
+        start_date: str,
+        end_date: str,
+        db_path: Optional[Path] = None,
+        ranking_lookback_days: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Score SEPA candidates daily from t3_sepa_features.
+
+        Unlike score_from_duckdb() which only scores Day 0 breakout snapshots,
+        this method scores every active SEPA candidate every day, enabling
+        the strategy to catch setups whose conviction improves post-breakout.
+
+        Joins company_profiles for sector/industry (T3 does not store them).
+
+        Returns DataFrame with columns: date, ticker, calibrated_score,
+        prob_elite, normalized_score, daily_pct_rank, trailing_pct.
+        """
+        db_path = db_path or DEFAULT_DB_PATH
+
+        if self.m01_model is None:
+            self.load_model()
+
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            df = con.execute("""
+                SELECT t3.*, cp.sector, cp.industry
+                FROM t3_sepa_features t3
+                LEFT JOIN company_profiles cp ON t3.ticker = cp.ticker
+                WHERE t3.date >= ? AND t3.date <= ?
+                  AND t3.feature_version = 'v3.1'
+                ORDER BY t3.date, t3.ticker
+            """, [start_date, end_date]).fetchdf()
+        finally:
+            con.close()
+
+        logger.info(f"Loaded {len(df)} rows from t3_sepa_features ({start_date} to {end_date})")
+
+        if df.empty:
+            raise ValueError(f"No data in t3_sepa_features for {start_date} to {end_date}")
+
+        # Generate missing log_* features inline
+        missing_features = [f for f in self._m01_features if f not in df.columns]
+        log_missing = [f for f in missing_features if f.startswith('log_')]
+        if log_missing:
+            for log_feat in log_missing:
+                base_feat = log_feat[4:]
+                if base_feat in df.columns:
+                    df[log_feat] = np.sign(df[base_feat]) * np.log1p(np.abs(df[base_feat]))
+            missing_features = [f for f in self._m01_features if f not in df.columns]
+
+        # Merge M03 features if model needs them and they're absent
+        df = self._merge_m03_features(df)
+        missing_features = [f for f in self._m01_features if f not in df.columns]
+
+        if missing_features:
+            logger.warning(f"Missing features: {missing_features}")
+            for f in missing_features:
+                df[f] = np.nan
+
+        X = df[self._m01_features].copy()
+
+        for col in ['industry', 'sector', 'industry_id', 'sector_id']:
+            if col in X.columns:
+                X[col] = X[col].astype('category')
+
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        X[numeric_cols] = X[numeric_cols].fillna(X[numeric_cols].median())
+
+        prob_elite = None
+        if self._is_classifier:
+            midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
+            proba = self.m01_model.predict_proba(X)
+            calibrated_scores = (proba * midpoints).sum(axis=1)
+            prob_elite = proba[:, -1]
+            logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
+        else:
+            raw_scores = self.m01_model.predict(X)
+            calibrated_scores = self._calibrate_vectorized(raw_scores)
+
+        result = pd.DataFrame({
+            'date': df['date'].values,
+            'ticker': df['ticker'].values,
+            'calibrated_score': calibrated_scores,
+        })
+        if prob_elite is not None:
+            result['prob_elite'] = prob_elite
+        result = result.dropna(subset=['calibrated_score'])
+
+        result['daily_pct_rank'] = result.groupby('date')['calibrated_score'].transform(
+            lambda x: x.rank(pct=True)
+        )
+
+        result = result.sort_values(['date', 'ticker'])
+        result['trailing_pct'] = self._compute_trailing_percentile(
+            result, window=ranking_lookback_days
+        )
+
+        cal_min = result['calibrated_score'].min()
+        cal_max = result['calibrated_score'].max()
+        if cal_max > cal_min:
+            result['normalized_score'] = (
+                (result['calibrated_score'] - cal_min) / (cal_max - cal_min) * 100
+            )
+        else:
+            result['normalized_score'] = 50.0
+
+        result = result.sort_values(['date', 'daily_pct_rank'], ascending=[True, False])
+        logger.info(f"Scored {len(result)} rows from T3, {result['ticker'].nunique()} tickers, "
+                    f"{result['date'].nunique()} dates (lookback={ranking_lookback_days}d)")
         return result
 
     def score_universe(
@@ -492,7 +611,7 @@ class UniverseScorer:
 
         # For each row, we need the percentile of this stock's score vs ALL scores
         # in the past 10 trading days (including today)
-        result['trailing_10d_pct'] = self._compute_trailing_percentile(result, window=10)
+        result['trailing_pct'] = self._compute_trailing_percentile(result, window=10)
 
         # Normalized score: keep calibrated score scaled to 0-100 for human readability
         # This represents the M01 model's actual prediction (not a relative rank)

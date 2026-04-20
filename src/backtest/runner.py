@@ -961,6 +961,46 @@ class SEPABacktestRunner:
         else:
             plt.show()
 
+    def generate_tearsheet(
+        self,
+        benchmark: str = 'SPY',
+        output_path: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Generate interactive QuantStats HTML tearsheet from the equity curve.
+
+        Args:
+            benchmark: Benchmark ticker (default: SPY).
+            output_path: If provided, save HTML to file. If None, render inline.
+
+        Returns:
+            Path to saved HTML, or None if displayed inline / unavailable.
+        """
+        try:
+            import quantstats as qs
+        except ImportError:
+            logger.error("quantstats not installed. Run: pip install quantstats")
+            return None
+
+        equity_df = self.get_equity_curve_dataframe()
+        if equity_df is None or len(equity_df) < 2:
+            logger.warning("Insufficient equity data for tearsheet")
+            return None
+
+        equity_df = equity_df.copy()
+        equity_df['date'] = pd.to_datetime(equity_df['date'])
+        equity_df = equity_df.set_index('date').sort_index()
+        returns = equity_df['value'].pct_change().dropna()
+        returns.index.name = None
+
+        if output_path:
+            qs.reports.html(returns, benchmark=benchmark, output=output_path)
+            logger.info(f"Tearsheet saved to {output_path}")
+            return output_path
+
+        qs.reports.html(returns, benchmark=benchmark)
+        return None
+
     def _plot_equity_with_regime(self, ax, trade_df: pd.DataFrame):
         """Plot equity curve with regime background colors."""
         from matplotlib.patches import Patch
