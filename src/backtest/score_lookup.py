@@ -9,7 +9,6 @@ empty lists for dates without score data.
 
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 import pandas as pd
@@ -24,43 +23,34 @@ class ScoreLookup:
     Builds an in-memory index for O(1) date lookups.
 
     Usage:
-        lookup = ScoreLookup('data/backtest/universe_scores.parquet')
+        lookup = ScoreLookup(scores_df)
         candidates = lookup.get_candidates(date, min_score=30.0, min_percentile=0.95)
-        # Returns: [(ticker, score), ...] sorted by daily rank descending
+        # Returns: [(ticker, score, trailing_pct, prob_elite), ...] sorted by rank descending
     """
 
-    def __init__(self, scores_path: str):
+    def __init__(self, scores: pd.DataFrame):
         """
-        Load and index universe scores.
+        Index universe scores produced by UniverseScorer.score_from_t3().
 
         Args:
-            scores_path: Path to universe_scores.parquet
+            scores: DataFrame with columns date, ticker, normalized_score,
+                    daily_pct_rank, trailing_pct, prob_elite.
         """
-        self.scores_path = Path(scores_path)
-        self.df: Optional[pd.DataFrame] = None
+        self.df: pd.DataFrame = scores.copy()
         self._index: Dict[datetime, Dict[str, Tuple[float, float, float, float]]] = {}
-        self._load_and_index()
+        self._build_index()
 
-    def _load_and_index(self):
-        """Load parquet and build date -> {ticker: (norm_score, daily_rank, trailing_pct, prob_elite)} index."""
-        if not self.scores_path.exists():
-            raise FileNotFoundError(f"Scores file not found: {self.scores_path}")
-
-        logger.info(f"Loading scores from {self.scores_path}")
-        self.df = pd.read_parquet(self.scores_path)
-
-        # Ensure date is datetime
+    def _build_index(self):
+        """Build date -> {ticker: (norm_score, daily_rank, trailing_pct, prob_elite)} index."""
         self.df['date'] = pd.to_datetime(self.df['date'])
 
-        logger.info("Building score index...")
-
-        if 'trailing_pct' not in self.df.columns:
+        required = {'normalized_score', 'daily_pct_rank', 'trailing_pct', 'prob_elite'}
+        missing = required - set(self.df.columns)
+        if missing:
             raise ValueError(
-                f"Scores file {self.scores_path} missing 'trailing_pct' column. "
-                "Re-score with the current UniverseScorer."
+                f"ScoreLookup missing required columns: {missing}. "
+                "Re-score with UniverseScorer.score_from_t3()."
             )
-
-        has_prob_elite = 'prob_elite' in self.df.columns
 
         for date, group in self.df.groupby('date'):
             date_key = date.date() if hasattr(date, 'date') else date
@@ -69,14 +59,13 @@ class ScoreLookup:
                     row['normalized_score'],
                     row['daily_pct_rank'],
                     row['trailing_pct'],
-                    row['prob_elite'] if has_prob_elite else 0.0,
+                    row['prob_elite'],
                 )
                 for _, row in group.iterrows()
             }
 
         logger.info(f"Indexed {len(self._index)} dates, "
-                   f"{self.df['ticker'].nunique()} unique tickers"
-                   f"{' (with prob_elite)' if has_prob_elite else ''}")
+                   f"{self.df['ticker'].nunique()} unique tickers")
 
     def get_candidates(
         self,
@@ -171,9 +160,6 @@ class ScoreLookup:
 
     def get_stats(self) -> Dict:
         """Get summary statistics about the score data."""
-        if self.df is None:
-            return {}
-
         return {
             'total_scores': len(self.df),
             'unique_tickers': self.df['ticker'].nunique(),
@@ -186,24 +172,25 @@ class ScoreLookup:
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO)
 
-    # Test lookup
-    lookup = ScoreLookup('data/backtest/universe_scores.parquet')
+    from src.backtest.universe_scorer import UniverseScorer
+    scorer = UniverseScorer(m01_path='models/m01_prototype/model.json')
+    scores_df = scorer.score_from_t3('2024-01-01', '2024-03-31')
+    lookup = ScoreLookup(scores_df)
 
     print("\nStats:")
     for k, v in lookup.get_stats().items():
         print(f"  {k}: {v}")
 
-    # Test candidate lookup
     dates = lookup.get_available_dates()
     if dates:
-        test_date = dates[len(dates) // 2]  # Middle date
-
+        test_date = dates[len(dates) // 2]
         candidates = lookup.get_candidates(
             test_date, min_score=30.0, min_percentile=0.0, rank_by='trailing'
         )
-        print(f"\nTop N Competition for {test_date} (sorted by trailing pct):")
+        print(f"\nCandidates for {test_date} (sorted by trailing pct):")
         for ticker, score, trailing, prob_elite in candidates[:10]:
             print(f"  {ticker}: score={score:.1f}, trailing_pct={trailing:.3f}, "
                   f"prob_elite={prob_elite:.3f}")

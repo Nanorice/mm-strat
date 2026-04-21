@@ -260,8 +260,8 @@ def _generate_fee_section(metrics: Dict[str, Any], trade_df: pd.DataFrame) -> Li
     return lines
 
 
-def _load_model_info() -> Dict[str, Any]:
-    """Load M01 model config and feature importance."""
+def _load_model_info(model_dir: str = 'models/m01_prototype') -> Dict[str, Any]:
+    """Load M01 model metadata + feature importance from a model directory."""
     from pathlib import Path
     import json
 
@@ -272,21 +272,20 @@ def _load_model_info() -> Dict[str, Any]:
         'created_at': None,
     }
 
-    # Load config
-    config_path = Path('models/m01_config.json')
-    if config_path.exists():
-        with open(config_path) as f:
-            config = json.load(f)
-        result['features'] = config.get('feature_columns', [])
+    mdir = Path(model_dir)
+    metadata_path = mdir / 'metadata.json'
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            meta = json.load(f)
+        result['features'] = meta.get('feature_columns', meta.get('features', []))
         result['feature_count'] = len(result['features'])
-        result['created_at'] = config.get('created_at')
+        result['created_at'] = meta.get('created_at') or meta.get('trained_at')
 
-    # Load model for feature importance
-    model_path = Path('models/m01.json')
+    model_path = mdir / 'model.json'
     if model_path.exists():
         try:
             import xgboost as xgb
-            model = xgb.XGBRegressor()
+            model = xgb.XGBClassifier()
             model.load_model(str(model_path))
             importance = model.get_booster().get_score(importance_type='gain')
             sorted_imp = sorted(importance.items(), key=lambda x: -x[1])[:10]

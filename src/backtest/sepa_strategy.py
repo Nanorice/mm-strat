@@ -116,14 +116,15 @@ class SEPAHybridV1(bt.Strategy):
         # Position sizing mode
         ('sizing_mode', 'regime'),  # 'regime', 'equal_weight', 'rank_weighted', 'score_weighted'
 
-        # Score lookup path
-        ('scores_path', 'data/backtest/universe_scores.parquet'),
+        # Score data (DataFrame from UniverseScorer.score_from_t3())
+        ('scores_df', None),
     )
 
     def __init__(self):
         """Initialize strategy components."""
-        # Score lookup for candidate filtering
-        self.score_lookup = ScoreLookup(self.p.scores_path)
+        if self.p.scores_df is None:
+            raise ValueError("SEPAHybridV1 requires scores_df param (DataFrame from UniverseScorer)")
+        self.score_lookup = ScoreLookup(self.p.scores_df)
 
         # Position tracker (READ-MODEL - only updated in notify_order)
         self.position_tracker = PositionTracker()

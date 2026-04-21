@@ -28,8 +28,6 @@ from src.feature_config import get_model_features
 
 logger = logging.getLogger(__name__)
 
-BACKTEST_DATA_DIR = config.DATA_DIR / 'backtest'
-D2_PATH = config.DATA_DIR / 'ml' / 'd2.parquet'
 DEFAULT_DB_PATH = config.DATA_DIR / 'market_data.duckdb'
 
 
@@ -44,10 +42,10 @@ class UniverseScorer:
     def __init__(
         self,
         m01_path: str = 'models/m01.json',
-        calibration_path: str = 'models/m01_calibration.json',
+        calibration_path: Optional[str] = 'models/m01_calibration.json',
     ):
         self.m01_path = Path(m01_path)
-        self.calibration_path = Path(calibration_path)
+        self.calibration_path = Path(calibration_path) if calibration_path else None
         self.m01_model = None
         self.calibration_bins = None
         self.calibration_values = None
@@ -80,7 +78,7 @@ class UniverseScorer:
         self.m01_model.load_model(str(self.m01_path))
         logger.info(f"Loaded M01 from {self.m01_path}")
 
-        if self.calibration_path.exists():
+        if self.calibration_path and self.calibration_path.exists():
             with open(self.calibration_path) as f:
                 cal_data = json.load(f)
             deciles = cal_data.get('deciles', [])
@@ -121,61 +119,6 @@ class UniverseScorer:
         else:
             self._m01_features = get_model_features('M01', db_path=str(DEFAULT_DB_PATH))
             logger.info(f"M01 uses {len(self._m01_features)} features (from model_feature_sets)")
-
-    def _merge_m03_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Merge M03 regime features from m03_feed.parquet if needed."""
-        m03_features_needed = [f for f in self._m01_features if f.startswith('m03_')]
-        if not m03_features_needed:
-            return df
-
-        # Check which features are already present
-        missing_m03 = [f for f in m03_features_needed if f not in df.columns]
-        if not missing_m03:
-            logger.info("All M03 features already present in data")
-            return df
-
-        # Load M03 feed
-        m03_path = BACKTEST_DATA_DIR / 'm03_feed.parquet'
-        if not m03_path.exists():
-            logger.warning(f"M03 feed not found at {m03_path}, cannot add regime features")
-            return df
-
-        logger.info(f"Loading M03 feed from {m03_path}")
-        m03_df = pd.read_parquet(m03_path)
-
-        # Map column names to expected M01 feature names
-        column_map = {
-            'composite_score': 'm03_score',
-            'risk_pillar': 'm03_pillar_risk',
-            'trend_pillar': 'm03_pillar_trend',
-            'liq_pillar': 'm03_pillar_liq',
-            'regime_cat': 'm03_regime_vol',  # Ordinal regime category
-        }
-        m03_df = m03_df.rename(columns=column_map)
-
-        # Compute delta features (change over N days)
-        m03_df = m03_df.sort_index()
-        m03_df['m03_delta_5d'] = m03_df['m03_score'].diff(5)
-        m03_df['m03_delta_20d'] = m03_df['m03_score'].diff(20)
-
-        # Reset index for merge (date becomes a column)
-        m03_df = m03_df.reset_index()
-
-        # Ensure date columns are compatible
-        df['date'] = pd.to_datetime(df['date'])
-        m03_df['date'] = pd.to_datetime(m03_df['date'])
-
-        # Merge on date (M03 is market-level, not ticker-level)
-        m03_cols = ['date'] + [c for c in m03_df.columns if c.startswith('m03_')]
-        df = df.merge(m03_df[m03_cols], on='date', how='left')
-
-        present = [f for f in m03_features_needed if f in df.columns]
-        still_missing = [f for f in m03_features_needed if f not in df.columns]
-        logger.info(f"Added {len(present)} M03 features: {present}")
-        if still_missing:
-            logger.warning(f"Still missing M03 features: {still_missing}")
-
-        return df
 
     def _compute_trailing_percentile(
         self,
@@ -374,10 +317,51 @@ class UniverseScorer:
 
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            df = con.execute("""
-                SELECT t3.*, cp.sector, cp.industry
+            has_shares = con.execute("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_name = 'shares_history'
+            """).fetchone()[0] > 0
+
+            if has_shares:
+                shares_col = "sh.shares_outstanding"
+                shares_join = """
+                LEFT JOIN shares_history sh
+                    ON t3.ticker = sh.ticker
+                    AND sh.date = (
+                        SELECT MAX(date) FROM shares_history
+                        WHERE ticker = t3.ticker AND date <= t3.date
+                    )"""
+            else:
+                shares_col = "cp.shares_outstanding"
+                shares_join = ""
+
+            df = con.execute(f"""
+                SELECT
+                    t3.*,
+                    cp.sector, cp.industry,
+                    ff.eps_diluted,
+                    ff.revenue_growth_yoy, ff.eps_growth_yoy, ff.net_income_growth_yoy,
+                    ff.revenue_cagr_3y, ff.eps_accel, ff.revenue_accel,
+                    ff.eps_stability_score, ff.earnings_quality_score,
+                    ff.debt_to_equity, ff.current_ratio,
+                    ff.gross_margin, ff.operating_margin, ff.gross_margin_trend,
+                    ff.roe, ff.roa, ff.fcf_margin,
+                    CAST(datediff('day', ff.filing_date, t3.date) AS INTEGER) AS days_since_report,
+                    CASE WHEN ABS(ff.eps_diluted) > 0.01
+                        THEN t3.close / ff.eps_diluted END AS pe_ratio,
+                    CASE WHEN ff.revenue > 0 AND {shares_col} > 0
+                        THEN (t3.close * {shares_col}) / ff.revenue END AS ps_ratio,
+                    CASE WHEN ff.total_equity > 0 AND {shares_col} > 0
+                        THEN (t3.close * {shares_col}) / ff.total_equity END AS pb_ratio
                 FROM t3_sepa_features t3
                 LEFT JOIN company_profiles cp ON t3.ticker = cp.ticker
+                {shares_join}
+                LEFT JOIN fundamental_features ff
+                    ON t3.ticker = ff.ticker
+                    AND ff.filing_date = (
+                        SELECT MAX(filing_date) FROM fundamental_features
+                        WHERE ticker = t3.ticker AND filing_date <= t3.date
+                    )
                 WHERE t3.date >= ? AND t3.date <= ?
                   AND t3.feature_version = 'v3.1'
                 ORDER BY t3.date, t3.ticker
@@ -390,6 +374,27 @@ class UniverseScorer:
         if df.empty:
             raise ValueError(f"No data in t3_sepa_features for {start_date} to {end_date}")
 
+        # Derive *_delta features from existing *_pct_chg columns (pct_chg / 100 = delta ratio)
+        for col in list(df.columns):
+            if col.endswith('_pct_chg'):
+                delta_col = col[:-len('_pct_chg')] + '_delta'
+                if delta_col not in df.columns:
+                    df[delta_col] = df[col] / 100.0
+
+        # Cross-sectional rank features: DuckDB stores TitleCase, M01 expects lowercase
+        case_map = {
+            'RS_Sector_Rank': 'rs_sector_rank',
+            'RS_Industry_Rank': 'rs_industry_rank',
+            'RS_vs_Sector': 'rs_vs_sector',
+            'RS_vs_Industry': 'rs_vs_industry',
+            'Sector_Momentum': 'sector_momentum',
+            'Industry_Momentum': 'industry_momentum',
+            'RS_Universe_Rank': 'rs_universe_rank',
+        }
+        for src, dst in case_map.items():
+            if src in df.columns and dst not in df.columns:
+                df[dst] = df[src]
+
         # Generate missing log_* features inline
         missing_features = [f for f in self._m01_features if f not in df.columns]
         log_missing = [f for f in missing_features if f.startswith('log_')]
@@ -399,10 +404,6 @@ class UniverseScorer:
                 if base_feat in df.columns:
                     df[log_feat] = np.sign(df[base_feat]) * np.log1p(np.abs(df[base_feat]))
             missing_features = [f for f in self._m01_features if f not in df.columns]
-
-        # Merge M03 features if model needs them and they're absent
-        df = self._merge_m03_features(df)
-        missing_features = [f for f in self._m01_features if f not in df.columns]
 
         if missing_features:
             logger.warning(f"Missing features: {missing_features}")
@@ -461,211 +462,8 @@ class UniverseScorer:
                     f"{result['date'].nunique()} dates (lookback={ranking_lookback_days}d)")
         return result
 
-    def score_universe(
-        self,
-        start_date: str,
-        end_date: str,
-        output_path: Optional[Path] = None,
-    ) -> pd.DataFrame:
-        """
-        Score the entire D2 universe with vectorized operations.
-
-        Args:
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-            output_path: Where to save (default: data/backtest/universe_scores.parquet)
-
-        Returns:
-            DataFrame with columns:
-            - date, ticker: Row identifiers
-            - calibrated_score: Raw calibrated M01 score
-            - normalized_score: Percentile rank within ticker's history (0-100)
-            - daily_pct_rank: Daily percentile rank (0-1)
-        """
-        if output_path is None:
-            output_path = BACKTEST_DATA_DIR / 'universe_scores.parquet'
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if self.m01_model is None:
-            self.load_model()
-
-        # Load D2 (Hydrated)
-        # We prefer using d2r_sepa.parquet if available as it provides DAILY M01 scores (hydrated)
-        # rather than just sparse signals. This allows tracking score evolution.
-        d2r_path = config.DATA_DIR / 'ml' / 'd2r_sepa.parquet'
-
-        if d2r_path.exists():
-            logger.info(f"Loading d2r (hydrated) from {d2r_path}")
-            df = pd.read_parquet(d2r_path)
-            # Normalize column names: d2r uses Title Case (Date, Ticker), d2 uses lower (date, ticker)
-            df = df.rename(columns={'Date': 'date', 'Ticker': 'ticker'})
-        else:
-            logger.warning(f"d2r not found, falling back to sparse d2 at {D2_PATH}")
-            df = pd.read_parquet(D2_PATH)
-
-        logger.info(f"Loaded {len(df)} rows")
-
-        # Merge M03 regime features if needed
-        df = self._merge_m03_features(df)
-        if not df.empty:
-            logger.info(f"Date column dtype: {df['date'].dtype}")
-            logger.info(f"Date range in file: {df['date'].min()} to {df['date'].max()}")
-
-        # Filter date range
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
-        df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
-        logger.info(f"After date filter ({start_date} to {end_date}): {len(df)} rows")
-
-        if df.empty:
-            raise ValueError("No data in specified date range")
-
-        # Prepare feature matrix
-        missing_features = [f for f in self._m01_features if f not in df.columns]
-        if missing_features:
-            # Try to generate missing log_* features inline
-            # Log transform: sign(x) * log(1 + |x|)
-            log_missing = [f for f in missing_features if f.startswith('log_')]
-            if log_missing:
-                logger.info(f"Generating {len(log_missing)} log-transformed features inline")
-                for log_feat in log_missing:
-                    base_feat = log_feat[4:]  # Remove 'log_' prefix
-                    if base_feat in df.columns:
-                        df[log_feat] = np.sign(df[base_feat]) * np.log1p(np.abs(df[base_feat]))
-                    else:
-                        logger.debug(f"Base feature {base_feat} not found for {log_feat}")
-                # Re-check missing
-                missing_features = [f for f in self._m01_features if f not in df.columns]
-
-            # Try preprocessor for remaining features
-            if missing_features:
-                from src.feature_preprocessor import FeaturePreprocessor
-                preproc_path = Path('models/preprocessing_config.json')
-
-                if preproc_path.exists():
-                    logger.info(f"Applying feature preprocessing from {preproc_path}")
-                    try:
-                        preprocessor = FeaturePreprocessor.load(str(preproc_path))
-                        df = preprocessor.transform(df)
-                        missing_features = [f for f in self._m01_features if f not in df.columns]
-                    except Exception as e:
-                        logger.error(f"Preprocessing failed: {e}")
-
-        if missing_features:
-            logger.warning(f"Missing features even after preprocessing: {missing_features}")
-            for f in missing_features:
-                df[f] = np.nan
-
-        X = df[self._m01_features].copy()
-        logger.info(f"Feature matrix shape: {X.shape}")
-
-        # Convert categorical features to category dtype (required by XGBoost)
-        categorical_cols = ['industry_id', 'sector_id']
-        for col in categorical_cols:
-            if col in X.columns:
-                X[col] = X[col].fillna(-1).astype(int).astype('category')
-
-        # Handle missing values - drop rows with too many NaNs
-        nan_counts = X.isna().sum(axis=1)
-        valid_mask = nan_counts < len(self._m01_features) * 0.2  # Allow up to 20% missing
-        logger.info(f"Valid rows (<=20% missing): {valid_mask.sum()}/{len(df)}")
-
-        # Fill remaining NaNs with column median for prediction (skip categoricals)
-        numeric_cols = X.select_dtypes(include=[np.number]).columns
-        X_filled = X.copy()
-        X_filled[numeric_cols] = X_filled[numeric_cols].fillna(X[numeric_cols].median())
-
-        # Vectorized prediction
-        logger.info("Running M01 prediction (vectorized)...")
-        raw_scores = self.m01_model.predict(X_filled)
-        logger.info(f"Raw score range: {raw_scores.min():.3f} to {raw_scores.max():.3f}")
-
-        # Vectorized calibration
-        logger.info("Calibrating scores...")
-        calibrated_scores = self._calibrate_vectorized(raw_scores)
-        valid_cal = calibrated_scores[~np.isnan(calibrated_scores)]
-        logger.info(f"Calibrated range: {valid_cal.min():.3f} to {valid_cal.max():.3f}")
-
-        # Build result DataFrame
-        result = pd.DataFrame({
-            'date': df['date'].values,
-            'ticker': df['ticker'].values,
-            'calibrated_score': calibrated_scores,
-        })
-
-        # Mark invalid rows (too many missing features)
-        result.loc[~valid_mask.values, 'calibrated_score'] = np.nan
-        result = result.dropna(subset=['calibrated_score'])
-        logger.info(f"After dropping invalid: {len(result)} rows")
-
-        # Daily percentile rank: cross-sectional rank per day (0-1 scale)
-        result['daily_pct_rank'] = result.groupby('date')['calibrated_score'].transform(
-            lambda x: x.rank(pct=True)
-        )
-
-        # 10-Day Trailing Percentile: rolling cohort rank over past 10 trading days
-        # This is the PRIMARY ranking metric for entry selection
-        # Captures persistent strength, not just single-day spikes
-        logger.info("Calculating 10-day trailing percentile...")
-        result = result.sort_values(['date', 'ticker'])
-
-        # For each row, we need the percentile of this stock's score vs ALL scores
-        # in the past 10 trading days (including today)
-        result['trailing_pct'] = self._compute_trailing_percentile(result, window=10)
-
-        # Normalized score: keep calibrated score scaled to 0-100 for human readability
-        # This represents the M01 model's actual prediction (not a relative rank)
-        # Used as an absolute floor filter to avoid buying truly weak candidates
-        cal_min = result['calibrated_score'].min()
-        cal_max = result['calibrated_score'].max()
-        result['normalized_score'] = (
-            (result['calibrated_score'] - cal_min) / (cal_max - cal_min) * 100
-        )
-
-        # Sort by date, daily rank desc (best candidates first)
-        result = result.sort_values(['date', 'daily_pct_rank'], ascending=[True, False])
-
-        # Save
-        result.to_parquet(output_path, index=False)
-        logger.info(f"Saved {len(result)} scores to {output_path}")
-
-        # Statistics
-        logger.info(f"Date range: {result['date'].min()} to {result['date'].max()}")
-        logger.info(f"Unique tickers: {result['ticker'].nunique()}")
-        logger.info(f"Unique dates: {result['date'].nunique()}")
-        if result['date'].nunique() > 0:
-            logger.info(f"Avg signals per day: {len(result) / result['date'].nunique():.1f}")
-        else:
-            logger.info("Avg signals per day: 0.0")
-        logger.info(f"Normalized score: mean={result['normalized_score'].mean():.1f}, "
-                    f"std={result['normalized_score'].std():.1f}")
-
-        return result
-
-
-def score_universe(
-    start_date: str,
-    end_date: str,
-    output_path: Optional[Path] = None,
-) -> pd.DataFrame:
-    """Convenience function to score the universe (parquet-based)."""
-    scorer = UniverseScorer()
-    return scorer.score_universe(start_date, end_date, output_path)
-
-
-def score_universe_duckdb(
-    start_date: str,
-    end_date: str,
-    m01_path: str = 'models/m01.json',
-    calibration_path: str = 'models/m01_calibration.json',
-    db_path: Optional[Path] = None,
-) -> pd.DataFrame:
-    """Convenience function to score the universe from DuckDB."""
-    scorer = UniverseScorer(m01_path=m01_path, calibration_path=calibration_path)
-    return scorer.score_from_duckdb(start_date, end_date, db_path)
-
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    df = score_universe('2015-01-01', '2025-12-31')
-    print(f"\nSample (last 20 rows):\n{df.tail(20)}")
+    scorer = UniverseScorer(m01_path='models/m01_prototype/model.json')
+    df = scorer.score_from_t3('2024-01-01', '2024-03-31')
+    print(df.head(10))
