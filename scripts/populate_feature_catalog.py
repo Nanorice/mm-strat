@@ -17,12 +17,36 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.model_registry import ModelRegistry
 
 DB_PATH = Path(__file__).parent.parent / "data" / "market_data.duckdb"
-METADATA_PATH = Path(__file__).parent.parent / "models" / "m01_baseline" / "v1" / "metadata.json"
+METADATA_PATH = Path(__file__).parent.parent / "models" / "m01_baseline" / "metadata.json"
 
 VERSION_INTRODUCED = "v3.1"
 VERSION_RETIRED_LOG = "v3.2"   # log_ features retired when v3.2 removes them from the view
 FEATURE_SET_ID = "fs_m01_baseline_v0.1"
 MODEL_VERSION_ID = "M01_baseline_v0.1"
+
+# m01_prototype: 33 baseline features removed, 24 new features added.
+# Source: notebooks/memo.md (m01_prototype design notes).
+PROTOTYPE_FEATURE_SET_ID = "fs_m01_prototype"
+PROTOTYPE_REMOVED = [
+    'alpha002', 'alpha101', 'atr_delta', 'breakout', 'close_above_sma200',
+    'consolidation_duration', 'days_since_report', 'dist_from_20d_low',
+    'dist_from_20d_low_delta', 'dist_from_52w_high', 'dist_from_52w_low',
+    'dist_from_52w_low_delta', 'dry_up_volume', 'eps_accel',
+    'green_days_ratio_20d', 'is_green_day', 'low_52w_delta',
+    'lowest_low_20d_delta', 'mom_126d', 'mom_189d', 'mom_63d',
+    'net_income_growth_yoy', 'price_vs_sma_150', 'price_vs_sma_150_delta',
+    'price_vs_sma_200', 'price_vs_sma_200_delta', 'price_vs_sma_50',
+    'price_vs_sma_50_delta', 'ps_ratio', 'rs_line_delta', 'rs_line_uptrend',
+    'rs_rating', 'rs_velocity',
+]
+PROTOTYPE_ADDED = [
+    'adr_20d', 'alpha008', 'atr_pct_chg', 'dollar_volume_avg_20',
+    'ema_21_50_ratio', 'ema_50_100_ratio', 'ema_8_21_ratio', 'gap_risk_ratio',
+    'industry', 'mom_21d_vol_adj', 'mom_slope_21_63', 'mom_slope_63_126',
+    'net_income', 'peg_adjusted', 'price_vs_sma_50_vol_adj', 'price_vs_spy_ma63',
+    'return_60d', 'revenue', 'rs_universe_rank', 'sector', 'shares_outstanding',
+    'sma_ratio_150_200', 'volatility_20d', 'volume_velocity_2d',
+]
 
 # ------------------------------------------------------------------
 # Feature definitions: all 106 features declared in FEATURE_GROUPS
@@ -1099,6 +1123,260 @@ FEATURE_DEFS = [
     },
 ]
 
+# ------------------------------------------------------------------
+# m01_prototype-only feature definitions (24 features added in PROTOTYPE_ADDED)
+# These extend FEATURE_DEFS — they are NOT used by M01_baseline_v0.1.
+# ------------------------------------------------------------------
+PROTOTYPE_FEATURE_DEFS = [
+    # ---- Volume_Liquidity ----
+    {
+        "feature_name": "adr_20d",
+        "feature_group": "Core_Volume",
+        "description": "Average daily range over 20 days as fraction of prior close",
+        "formula_summary": "AVG((high - low) / lag(close, 1), 20)",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "dollar_volume_avg_20",
+        "feature_group": "Core_Volume",
+        "description": "20-day average dollar volume (close * volume)",
+        "formula_summary": "AVG(close * volume, 20)",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "volume_velocity_2d",
+        "feature_group": "Core_Volume",
+        "description": "2-day log-volume velocity",
+        "formula_summary": "LN(volume) - lag(LN(volume), 2)",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    # ---- Volatility_Range ----
+    {
+        "feature_name": "atr_pct_chg",
+        "feature_group": "Volatility_Ranges",
+        "description": "1-day percentage change of ATR(20)",
+        "formula_summary": "(atr_20d - lag(atr_20d, 1)) / abs(lag(atr_20d, 1)) * 100",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "volatility_20d",
+        "feature_group": "Volatility_Ranges",
+        "description": "20-day rolling stdev of return_1d",
+        "formula_summary": "STDDEV(return_1d, 20)",
+        "source_layer": "t2_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "gap_risk_ratio",
+        "feature_group": "Volatility_Ranges",
+        "description": "NATR / ADR(20) — overnight risk relative to typical daily range",
+        "formula_summary": "natr / NULLIF(adr_20d, 0)",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    # ---- Moving_Averages ----
+    {
+        "feature_name": "ema_8_21_ratio",
+        "feature_group": "Moving_Averages",
+        "description": "EMA(8) vs EMA(21) percentage spread (short trend slope)",
+        "formula_summary": "(ema_8 / NULLIF(ema_21, 0) - 1) * 100",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "ema_21_50_ratio",
+        "feature_group": "Moving_Averages",
+        "description": "EMA(21) vs EMA(50) percentage spread (medium trend slope)",
+        "formula_summary": "(ema_21 / NULLIF(ema_50, 0) - 1) * 100",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "ema_50_100_ratio",
+        "feature_group": "Moving_Averages",
+        "description": "EMA(50) vs EMA(100) percentage spread (long trend slope)",
+        "formula_summary": "(ema_50 / NULLIF(ema_100, 0) - 1) * 100",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "sma_ratio_150_200",
+        "feature_group": "Moving_Averages",
+        "description": "SMA(200) vs SMA(150) ratio expressed in price-vs-MA space",
+        "formula_summary": "((price_vs_sma_200 + 100) / NULLIF(price_vs_sma_150 + 100, 0) - 1) * 100",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "price_vs_sma_50_vol_adj",
+        "feature_group": "Moving_Averages",
+        "description": "price_vs_sma_50 normalized by 50-day stdev of return_1d",
+        "formula_summary": "price_vs_sma_50 / rolling_std(return_1d, 50)",
+        "source_layer": "t3_python",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    # ---- Momentum_RS ----
+    {
+        "feature_name": "mom_slope_21_63",
+        "feature_group": "Momentum_RS",
+        "description": "Short-vs-medium momentum slope: 21d minus 63d return",
+        "formula_summary": "mom_21d - mom_63d",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "mom_slope_63_126",
+        "feature_group": "Momentum_RS",
+        "description": "Medium-vs-long momentum slope: 63d minus 126d return",
+        "formula_summary": "mom_63d - mom_126d",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "mom_21d_vol_adj",
+        "feature_group": "Momentum_RS",
+        "description": "21-day momentum normalized by 21-day stdev of return_1d",
+        "formula_summary": "mom_21d / rolling_std(return_1d, 21)",
+        "source_layer": "t3_python",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "rs_universe_rank",
+        "feature_group": "Momentum_RS",
+        "description": "Cross-sectional RS percentile rank across universe",
+        "formula_summary": "PERCENT_RANK() OVER (PARTITION BY date ORDER BY rs)",
+        "source_layer": "t1d_rank",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "price_vs_spy_ma63",
+        "feature_group": "Momentum_RS",
+        "description": "63-day MA of price relative to SPY (smoothed RS line proxy)",
+        "formula_summary": "AVG(close / spy_close, 63)",
+        "source_layer": "t2_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "return_60d",
+        "feature_group": "Momentum_RS",
+        "description": "60-day price return",
+        "formula_summary": "(close / lag(close, 60) - 1)",
+        "source_layer": "t3_sql",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    # ---- Alphas ----
+    {
+        "feature_name": "alpha008",
+        "feature_group": "Fast_Alphas",
+        "description": "WQ Alpha008: -rank(((sum(open,5)*sum(returns,5)) - lag((sum(open,5)*sum(returns,5)),10)))",
+        "formula_summary": "-rank((open_sum5 * returns_sum5) - lag(open_sum5 * returns_sum5, 10))",
+        "source_layer": "t2_python",
+        "source_table": "t3_sepa_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    # ---- Fundamentals_PIT ----
+    {
+        "feature_name": "net_income",
+        "feature_group": "Fundamentals",
+        "description": "Net income from latest filing on or before trade date",
+        "formula_summary": "fundamental_features.net_income (point-in-time, filing_date <= date)",
+        "source_layer": "t3_sql",
+        "source_table": "fundamental_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "revenue",
+        "feature_group": "Fundamentals",
+        "description": "Revenue from latest filing on or before trade date",
+        "formula_summary": "fundamental_features.revenue (point-in-time, filing_date <= date)",
+        "source_layer": "t3_sql",
+        "source_table": "fundamental_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "shares_outstanding",
+        "feature_group": "Fundamentals",
+        "description": "Shares outstanding from latest record on or before trade date",
+        "formula_summary": "shares_history.shares_outstanding (point-in-time, date <= trade_date)",
+        "source_layer": "t3_sql",
+        "source_table": "shares_history",
+        "data_type": "BIGINT",
+        "is_categorical": False,
+    },
+    {
+        "feature_name": "peg_adjusted",
+        "feature_group": "Fundamentals",
+        "description": "PE / EPS growth ratio, defined only when growth > 0 and EPS material",
+        "formula_summary": "(close / eps_diluted) / eps_growth_yoy WHEN eps_growth_yoy > 0 AND ABS(eps_diluted) > 0.01",
+        "source_layer": "t3_sql",
+        "source_table": "fundamental_features",
+        "data_type": "DOUBLE",
+        "is_categorical": False,
+    },
+    # ---- Categoricals ----
+    {
+        "feature_name": "sector",
+        "feature_group": "Categoricals",
+        "description": "Company sector (GICS-style)",
+        "formula_summary": "company_profiles.sector",
+        "source_layer": "company_profiles",
+        "source_table": "company_profiles",
+        "data_type": "VARCHAR",
+        "is_categorical": True,
+    },
+    {
+        "feature_name": "industry",
+        "feature_group": "Categoricals",
+        "description": "Company industry (GICS-style)",
+        "formula_summary": "company_profiles.industry",
+        "source_layer": "company_profiles",
+        "source_table": "company_profiles",
+        "data_type": "VARCHAR",
+        "is_categorical": True,
+    },
+]
+
 # Retired log_ features (removed from v_d2_training in v3.2)
 LOG_FEATURE_NAMES = [
     "log_breakout_momentum", "log_price_momentum_curve", "log_RS",
@@ -1132,6 +1410,7 @@ def run(db_path: Path) -> None:
     try:
         # Wipe and re-seed to allow safe re-runs after name corrections
         con.execute("DELETE FROM model_feature_sets WHERE feature_set_id = ?", [FEATURE_SET_ID])
+        con.execute("DELETE FROM model_feature_sets WHERE feature_set_id = ?", [PROTOTYPE_FEATURE_SET_ID])
         con.execute(
             "DELETE FROM feature_catalog WHERE version_introduced = ? AND version_retired IS NULL",
             [VERSION_INTRODUCED],
@@ -1141,7 +1420,8 @@ def run(db_path: Path) -> None:
             [VERSION_INTRODUCED, VERSION_RETIRED_LOG],
         )
 
-        # 1. Insert active feature definitions
+        # 1. Insert active feature definitions (baseline + prototype additions)
+        active_defs = FEATURE_DEFS + PROTOTYPE_FEATURE_DEFS
         catalog_rows = [
             (
                 d["feature_name"],
@@ -1155,7 +1435,7 @@ def run(db_path: Path) -> None:
                 VERSION_INTRODUCED,
                 None,  # version_retired = NULL (active)
             )
-            for d in FEATURE_DEFS
+            for d in active_defs
         ]
         con.executemany(
             """
@@ -1200,9 +1480,9 @@ def run(db_path: Path) -> None:
         # 3. Register feature set: all features declared in FEATURE_GROUPS
         #    (includes atr_delta even though absent from valid_features artifact)
         all_declared = [d["feature_name"] for d in FEATURE_DEFS]
-        group_lookup = {d["feature_name"]: d["feature_group"] for d in FEATURE_DEFS}
+        baseline_group_lookup = {d["feature_name"]: d["feature_group"] for d in FEATURE_DEFS}
         fs_rows = [
-            (FEATURE_SET_ID, name, group_lookup.get(name), i)
+            (FEATURE_SET_ID, name, baseline_group_lookup.get(name), i)
             for i, name in enumerate(all_declared)
         ]
         con.executemany(
@@ -1211,6 +1491,23 @@ def run(db_path: Path) -> None:
             fs_rows,
         )
         print(f"[OK] Registered feature set '{FEATURE_SET_ID}' ({len(fs_rows)} features)")
+
+        # 3b. Register fs_m01_prototype: baseline minus REMOVED, plus ADDED.
+        #     Group lookup spans both FEATURE_DEFS and PROTOTYPE_FEATURE_DEFS.
+        proto_group_lookup = {d["feature_name"]: d["feature_group"] for d in active_defs}
+        prototype_features = [
+            f for f in all_declared if f not in PROTOTYPE_REMOVED
+        ] + PROTOTYPE_ADDED
+        proto_fs_rows = [
+            (PROTOTYPE_FEATURE_SET_ID, name, proto_group_lookup.get(name), i)
+            for i, name in enumerate(prototype_features)
+        ]
+        con.executemany(
+            "INSERT OR IGNORE INTO model_feature_sets "
+            "(feature_set_id, feature_name, feature_group, ordinal) VALUES (?, ?, ?, ?)",
+            proto_fs_rows,
+        )
+        print(f"[OK] Registered feature set '{PROTOTYPE_FEATURE_SET_ID}' ({len(proto_fs_rows)} features)")
 
         # 4. Register model version in models table
         git_sha = ModelRegistry.get_git_sha()

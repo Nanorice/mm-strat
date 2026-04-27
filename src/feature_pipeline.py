@@ -44,6 +44,11 @@ EMA_COLS = [f"ema_{s}" for s in EMA_SPANS]
 M03_BASE_COLS = ['m03_score', 'm03_pillar_trend', 'm03_pillar_liq', 'm03_pillar_risk']
 M03_DERIVED_COLS = ['m03_delta_5d', 'm03_delta_20d', 'm03_regime_vol']
 
+# Tripwire: must equal the column count produced by _create_t3_table.
+# Update this constant whenever the DDL changes — the post-INSERT guard in
+# compute_t3_features() will fail if DDL and INSERT/SELECT lists drift apart.
+EXPECTED_T3_COLUMN_COUNT = 146
+
 
 # Module-level function for multiprocessing (must be picklable)
 def _compute_single_alpha_wrapper(alpha_tuple, df):
@@ -269,14 +274,13 @@ class FeaturePipeline:
                     sma_20, sma_50, sma_150, sma_200, sma_200_lag20,
                     price_vs_sma_50, price_vs_sma_150, price_vs_sma_200, close_above_sma200,
                     rs_rating, rs, rs_ma, rs_line_log, rs_line_delta, rs_line_uptrend,
-                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w,
+                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w, pct_above_low_52w,
                     high_20d, lowest_low_20d, highest_high_20d, dist_from_20d_high, dist_from_20d_low,
                     vol_avg_20, vol_avg_50, vol_ratio, dry_up_volume,
                     atr_20d, natr, volatility_20d,
                     vcp_ratio, consolidation_width,
                     trend_ok, breakout_ok,
                     price_vs_spy, price_vs_spy_ma63,
-                    pct_above_low_52w,
                     updated_at
                 )
                 WITH price_base AS (
@@ -429,14 +433,13 @@ class FeaturePipeline:
                     sma_20, sma_50, sma_150, sma_200, sma_200_lag20,
                     price_vs_sma_50, price_vs_sma_150, price_vs_sma_200, close_above_sma200,
                     rs_rating, rs, rs_ma, rs_line_log, rs_line_delta, rs_line_uptrend,
-                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w,
+                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w, pct_above_low_52w,
                     high_20d, lowest_low_20d, highest_high_20d, dist_from_20d_high, dist_from_20d_low,
                     vol_avg_20, vol_avg_50, vol_ratio, dry_up_volume,
                     atr_20d, natr, volatility_20d,
                     vcp_ratio, consolidation_width,
                     trend_ok, breakout_ok,
                     price_vs_spy, price_vs_spy_ma63,
-                    pct_above_low_52w,
                     CURRENT_TIMESTAMP as updated_at
                 FROM final_features
                 WHERE date BETWEEN '{start_date}' AND '{end_date}'
@@ -533,7 +536,7 @@ class FeaturePipeline:
                 consolidation_duration DOUBLE, price_momentum_curve DOUBLE,
                 volume_velocity_2d DOUBLE, price_accel_10d DOUBLE, immediate_thrust DOUBLE,
 
-                -- pct_chg deltas (clean, no _1 duplicates)
+                -- pct_chg deltas (required by v_d1_candidates which converts them to _delta names)
                 price_vs_sma_50_pct_chg DOUBLE, price_vs_sma_150_pct_chg DOUBLE,
                 price_vs_sma_200_pct_chg DOUBLE,
                 rs_pct_chg DOUBLE, rs_ma_pct_chg DOUBLE, dry_up_volume_pct_chg DOUBLE,
@@ -543,6 +546,25 @@ class FeaturePipeline:
                 low_52w_pct_chg DOUBLE, high_52w_pct_chg DOUBLE,
                 dist_from_20d_high_pct_chg DOUBLE, dist_from_20d_low_pct_chg DOUBLE,
                 lowest_low_20d_pct_chg DOUBLE, highest_high_20d_pct_chg DOUBLE,
+
+                -- m01_prototype features: SQL-derived ratios/slopes (Group A)
+                ema_8_21_ratio DOUBLE,
+                ema_21_50_ratio DOUBLE,
+                ema_50_100_ratio DOUBLE,
+                mom_slope_21_63 DOUBLE,
+                mom_slope_63_126 DOUBLE,
+                sma_ratio_150_200 DOUBLE,
+                gap_risk_ratio DOUBLE,
+
+                -- m01_prototype features: vol-adjusted (Group B, Python-computed)
+                price_vs_sma_50_vol_adj DOUBLE,
+                mom_21d_vol_adj DOUBLE,
+
+                -- m01_prototype features: fundamentals point-in-time (Group C)
+                net_income DOUBLE,
+                revenue DOUBLE,
+                shares_outstanding BIGINT,
+                peg_adjusted DOUBLE,
 
                 -- TS alpha factors (per-ticker only)
                 alpha006 DOUBLE, alpha009 DOUBLE, alpha012 DOUBLE, alpha041 DOUBLE,
@@ -593,11 +615,10 @@ class FeaturePipeline:
                     price_vs_sma_50, price_vs_sma_150, price_vs_sma_200, close_above_sma200,
                     price_vs_spy, price_vs_spy_ma63,
                     rs_rating, rs, rs_ma, rs_line_log, rs_line_delta, rs_line_uptrend,
-                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w,
+                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w, pct_above_low_52w,
                     high_20d, lowest_low_20d, highest_high_20d, dist_from_20d_high, dist_from_20d_low,
                     vol_avg_20, vol_avg_50, vol_ratio, dry_up_volume,
                     atr_20d, natr, volatility_20d, vcp_ratio, consolidation_width,
-                    pct_above_low_52w,
                     RS_Universe_Rank, RS_Sector_Rank, RS_vs_Sector, Sector_Momentum,
                     RS_Industry_Rank, RS_vs_Industry, Industry_Momentum,
                     alpha001, alpha002, alpha004, alpha008, alpha011, alpha013,
@@ -620,6 +641,12 @@ class FeaturePipeline:
                     rsi_14_pct_chg, dist_from_52w_high_pct_chg, dist_from_52w_low_pct_chg,
                     low_52w_pct_chg, high_52w_pct_chg, dist_from_20d_high_pct_chg,
                     dist_from_20d_low_pct_chg, lowest_low_20d_pct_chg, highest_high_20d_pct_chg,
+                    -- m01_prototype Group A (SQL-derived ratios/slopes)
+                    ema_8_21_ratio, ema_21_50_ratio, ema_50_100_ratio,
+                    mom_slope_21_63, mom_slope_63_126,
+                    sma_ratio_150_200, gap_risk_ratio,
+                    -- m01_prototype Group C (fundamentals point-in-time)
+                    net_income, revenue, shares_outstanding, peg_adjusted,
                     -- M03
                     m03_score, m03_pillar_trend, m03_pillar_liq, m03_pillar_risk,
                     m03_delta_5d, m03_delta_20d, m03_regime_vol
@@ -691,7 +718,7 @@ class FeaturePipeline:
                     SELECT pt.*,
                         100.0 / (1.0 + NULLIF(rsi_rs, -1)) as rsi_14,
 
-                        -- pct_chg deltas (LAG over screener history is valid — all candidates present)
+                        -- pct_chg deltas (required by v_d1_candidates)
                         (t2.price_vs_sma_50  - LAG(t2.price_vs_sma_50,  1) OVER w_tk) / NULLIF(ABS(LAG(t2.price_vs_sma_50,  1) OVER w_tk), 0) * 100 as price_vs_sma_50_pct_chg,
                         (t2.price_vs_sma_150 - LAG(t2.price_vs_sma_150, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.price_vs_sma_150, 1) OVER w_tk), 0) * 100 as price_vs_sma_150_pct_chg,
                         (t2.price_vs_sma_200 - LAG(t2.price_vs_sma_200, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.price_vs_sma_200, 1) OVER w_tk), 0) * 100 as price_vs_sma_200_pct_chg,
@@ -703,22 +730,41 @@ class FeaturePipeline:
                         (t2.vcp_ratio - LAG(t2.vcp_ratio, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.vcp_ratio, 1) OVER w_tk), 0) * 100 as vcp_ratio_pct_chg,
                         (t2.consolidation_width - LAG(t2.consolidation_width, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.consolidation_width, 1) OVER w_tk), 0) * 100 as consolidation_width_pct_chg,
                         CASE WHEN t2.dist_from_52w_high = LAG(t2.dist_from_52w_high, 1) OVER w_tk THEN 0.0
-                            ELSE (t2.dist_from_52w_high - LAG(t2.dist_from_52w_high, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.dist_from_52w_high, 1) OVER w_tk), 0) * 100
+                             WHEN LAG(t2.dist_from_52w_high, 1) OVER w_tk = 0.0
+                               THEN (t2.dist_from_52w_high - LAG(t2.dist_from_52w_high, 1) OVER w_tk) * 100
+                             ELSE (t2.dist_from_52w_high - LAG(t2.dist_from_52w_high, 1) OVER w_tk) / ABS(LAG(t2.dist_from_52w_high, 1) OVER w_tk) * 100
                         END as dist_from_52w_high_pct_chg,
                         (t2.dist_from_52w_low  - LAG(t2.dist_from_52w_low,  1) OVER w_tk) / NULLIF(ABS(LAG(t2.dist_from_52w_low,  1) OVER w_tk), 0) * 100 as dist_from_52w_low_pct_chg,
                         (t2.low_52w  - LAG(t2.low_52w,  1) OVER w_tk) / NULLIF(ABS(LAG(t2.low_52w,  1) OVER w_tk), 0) * 100 as low_52w_pct_chg,
                         (t2.high_52w - LAG(t2.high_52w, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.high_52w, 1) OVER w_tk), 0) * 100 as high_52w_pct_chg,
                         CASE WHEN t2.dist_from_20d_high = LAG(t2.dist_from_20d_high, 1) OVER w_tk THEN 0.0
-                            ELSE (t2.dist_from_20d_high - LAG(t2.dist_from_20d_high, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.dist_from_20d_high, 1) OVER w_tk), 0) * 100
+                             WHEN LAG(t2.dist_from_20d_high, 1) OVER w_tk = 0.0
+                               THEN (t2.dist_from_20d_high - LAG(t2.dist_from_20d_high, 1) OVER w_tk) * 100
+                             ELSE (t2.dist_from_20d_high - LAG(t2.dist_from_20d_high, 1) OVER w_tk) / ABS(LAG(t2.dist_from_20d_high, 1) OVER w_tk) * 100
                         END as dist_from_20d_high_pct_chg,
                         (t2.dist_from_20d_low    - LAG(t2.dist_from_20d_low,    1) OVER w_tk) / NULLIF(ABS(LAG(t2.dist_from_20d_low,    1) OVER w_tk), 0) * 100 as dist_from_20d_low_pct_chg,
                         (t2.lowest_low_20d  - LAG(t2.lowest_low_20d,  1) OVER w_tk) / NULLIF(ABS(LAG(t2.lowest_low_20d,  1) OVER w_tk), 0) * 100 as lowest_low_20d_pct_chg,
                         (t2.highest_high_20d - LAG(t2.highest_high_20d, 1) OVER w_tk) / NULLIF(ABS(LAG(t2.highest_high_20d, 1) OVER w_tk), 0) * 100 as highest_high_20d_pct_chg,
 
-                        -- rsi_14 pct_chg (from current rsi computed above)
+                        -- rsi_14 pct_chg
                         (100.0 / (1.0 + NULLIF(pt.rsi_rs, -1))
                             - LAG(100.0 / (1.0 + NULLIF(pt.rsi_rs, -1)), 1) OVER w_tk)
                             / NULLIF(ABS(LAG(100.0 / (1.0 + NULLIF(pt.rsi_rs, -1)), 1) OVER w_tk), 0) * 100 as rsi_14_pct_chg,
+
+                        -- m01_prototype Group A: EMA ratios (slope of MA stack, scale-free %)
+                        (t2.ema_8  / NULLIF(t2.ema_21,  0) - 1) * 100 as ema_8_21_ratio,
+                        (t2.ema_21 / NULLIF(t2.ema_50,  0) - 1) * 100 as ema_21_50_ratio,
+                        (t2.ema_50 / NULLIF(t2.ema_100, 0) - 1) * 100 as ema_50_100_ratio,
+
+                        -- m01_prototype Group A: momentum slope diffs (acceleration/deceleration)
+                        pt.mom_21d - pt.mom_63d  as mom_slope_21_63,
+                        pt.mom_63d - pt.mom_126d as mom_slope_63_126,
+
+                        -- m01_prototype Group A: SMA stack ratio (sma_200/sma_150 expressed in price-vs-MA space)
+                        ((t2.price_vs_sma_200 + 100) / NULLIF(t2.price_vs_sma_150 + 100, 0) - 1) * 100 as sma_ratio_150_200,
+
+                        -- m01_prototype Group A: gap risk (intraday vol vs avg daily range)
+                        t2.natr / NULLIF(pt.adr_20d, 0) as gap_risk_ratio,
 
                         -- SMA50 slope: uses t2.sma_50 (avoids nested window functions)
                         (t2.sma_50 - LAG(t2.sma_50, 5) OVER w_tk) / 5.0 as sma_50_slope,
@@ -784,6 +830,17 @@ class FeaturePipeline:
                     wv.rsi_14_pct_chg, wv.dist_from_52w_high_pct_chg, wv.dist_from_52w_low_pct_chg,
                     wv.low_52w_pct_chg, wv.high_52w_pct_chg, wv.dist_from_20d_high_pct_chg,
                     wv.dist_from_20d_low_pct_chg, wv.lowest_low_20d_pct_chg, wv.highest_high_20d_pct_chg,
+                    -- m01_prototype Group A
+                    wv.ema_8_21_ratio, wv.ema_21_50_ratio, wv.ema_50_100_ratio,
+                    wv.mom_slope_21_63, wv.mom_slope_63_126,
+                    wv.sma_ratio_150_200, wv.gap_risk_ratio,
+                    -- m01_prototype Group C: fundamentals point-in-time
+                    ff.net_income,
+                    ff.revenue,
+                    sh.shares_outstanding,
+                    CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
+                        THEN (wv.close / ff.eps_diluted) / ff.eps_growth_yoy
+                        ELSE NULL END as peg_adjusted,
                     -- M03 regime
                     r.m03_score, r.m03_pillar_trend, r.m03_pillar_liq, r.m03_pillar_risk,
                     r.m03_delta_5d, r.m03_delta_20d, r.m03_regime_vol
@@ -793,6 +850,18 @@ class FeaturePipeline:
                     AND t2.trend_ok = TRUE AND t2.breakout_ok = TRUE
                 LEFT JOIN t2_regime_scores r
                     ON wv.date = r.date
+                LEFT JOIN fundamental_features ff
+                    ON wv.ticker = ff.ticker
+                    AND ff.filing_date = (
+                        SELECT MAX(filing_date) FROM fundamental_features
+                        WHERE ticker = wv.ticker AND filing_date <= wv.date
+                    )
+                LEFT JOIN shares_history sh
+                    ON wv.ticker = sh.ticker
+                    AND sh.date = (
+                        SELECT MAX(date) FROM shares_history
+                        WHERE ticker = wv.ticker AND date <= wv.date
+                    )
                 WHERE wv.date BETWEEN '{start_date}' AND '{end_date}'
             """)
 
@@ -803,11 +872,27 @@ class FeaturePipeline:
             ).fetchone()[0]
             print(f"   [T3] Inserted {inserted:,} SEPA rows ({ticker_count} tickers)")
 
+            # Tripwire: catch INSERT/SELECT column-list drift early. The DDL, INSERT list,
+            # and SELECT list must all align — a silent shift would corrupt every column
+            # downstream. Update EXPECTED_T3_COLUMN_COUNT alongside any DDL change.
+            actual_cols = con.execute(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='t3_sepa_features'"
+            ).fetchone()[0]
+            if actual_cols != EXPECTED_T3_COLUMN_COUNT:
+                raise RuntimeError(
+                    f"t3_sepa_features column count mismatch: expected {EXPECTED_T3_COLUMN_COUNT}, got {actual_cols}. "
+                    "Schema drift detected — DDL, INSERT list, and EXPECTED_T3_COLUMN_COUNT must stay in sync."
+                )
+
         except Exception as e:
             logger.error(f"T3 feature computation failed: {e}")
             raise
         finally:
             con.close()
+
+        # Group B (m01_prototype): vol-adjusted features — needs return_1d history,
+        # so runs after the SQL INSERT populates the base columns.
+        self._compute_vol_adjusted_features(start_date=start_date, end_date=end_date)
 
         # TS alphas — per-ticker rolling windows; load history from t2 (continuous),
         # but write results back only to t3 rows (via UPDATE WHERE ticker+date match)
@@ -820,6 +905,62 @@ class FeaturePipeline:
         )
 
         return inserted
+
+    def _compute_vol_adjusted_features(self, start_date: str, end_date: str) -> None:
+        """Compute price_vs_sma_50_vol_adj and mom_21d_vol_adj per-ticker.
+
+        Both features divide a position metric by the rolling std of return_1d.
+        return_1d is pulled from price_data (continuous history) so the rolling
+        windows seed properly even when t3 only covers a short range. Numerator
+        columns (price_vs_sma_50, mom_21d) come from t2 — also continuous — so
+        we can compute the ratio for every (ticker, date), then write back only
+        rows that exist in t3 via the existing UPDATE pattern.
+        """
+        VOL_ADJ_COLS = ['price_vs_sma_50_vol_adj', 'mom_21d_vol_adj']
+        print(f"   [B-VolAdj] Computing {VOL_ADJ_COLS} for {start_date}..{end_date}")
+
+        # 90-day warmup is plenty for 50d rolling std (need ~50 trading days = ~70 calendar days)
+        fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=90)).strftime('%Y-%m-%d')
+
+        con = duckdb.connect(self.db_path)
+        try:
+            df = con.execute(f"""
+                SELECT
+                    p.ticker,
+                    p.date,
+                    t2.price_vs_sma_50,
+                    (p.close / NULLIF(LAG(p.close, 1) OVER (PARTITION BY p.ticker ORDER BY p.date), 0) - 1) AS return_1d,
+                    (p.close / NULLIF(LAG(p.close, 21) OVER (PARTITION BY p.ticker ORDER BY p.date), 0) - 1) AS mom_21d
+                FROM {self.price_source} p
+                INNER JOIN t2_screener_features t2
+                    ON p.ticker = t2.ticker AND p.date = t2.date
+                WHERE p.date >= '{fetch_start}' AND p.date <= '{end_date}'
+                ORDER BY p.ticker, p.date
+            """).df()
+        finally:
+            con.close()
+
+        if df.empty:
+            print("   [WARN] [B-VolAdj] No data loaded — skipping")
+            return
+
+        ret_groups = df.groupby('ticker')['return_1d']
+        std_50 = ret_groups.transform(lambda s: s.rolling(50, min_periods=20).std())
+        std_21 = ret_groups.transform(lambda s: s.rolling(21, min_periods=10).std())
+        df['price_vs_sma_50_vol_adj'] = df['price_vs_sma_50'] / std_50.replace(0, np.nan)
+        df['mom_21d_vol_adj'] = df['mom_21d'] / std_21.replace(0, np.nan)
+
+        for col in VOL_ADJ_COLS:
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+
+        start_dt = pd.to_datetime(start_date)
+        write_df = df[df['date'] >= start_dt][['ticker', 'date'] + VOL_ADJ_COLS]
+        if write_df.empty:
+            print("   [WARN] [B-VolAdj] No rows in target window — skipping write")
+            return
+
+        self._write_alpha_columns(write_df, 't3_sepa_features', VOL_ADJ_COLS)
+        print(f"   [OK] [B-VolAdj] Wrote {len(write_df):,} rows")
 
     # ------------------------------------------------------------------
     # Phase B: Python alpha factors (kept for reference — called from compute_t2 and compute_t3)
