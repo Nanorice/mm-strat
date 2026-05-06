@@ -388,6 +388,174 @@ class EvaluationPlotter:
         return output_path
 
     @staticmethod
+    def plot_temporal_stability(
+        period_metrics: pd.DataFrame,
+        output_path: Path,
+        title: str = "Temporal Stability"
+    ) -> Path:
+        """Plot per-period accuracy / weighted F1 / macro F1 to detect decay or split artifacts.
+
+        Args:
+            period_metrics: DataFrame with columns [period, accuracy, weighted_f1, macro_f1, n_samples]
+            output_path: Path to save plot
+            title: Plot title
+        """
+        fig, ax1 = plt.subplots(figsize=FIGSIZE_MEDIUM)
+
+        x = np.arange(len(period_metrics))
+        ax1.plot(x, period_metrics['accuracy'], marker='o', lw=2, label='Accuracy', color='#1f77b4')
+        ax1.plot(x, period_metrics['weighted_f1'], marker='s', lw=2, label='Weighted F1', color='#ff7f0e')
+        ax1.plot(x, period_metrics['macro_f1'], marker='^', lw=2, label='Macro F1', color='#2ca02c')
+        ax1.axhline(0.25, color='red', linestyle='--', alpha=0.5, label='Random (4-class)')
+
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(period_metrics['period'], rotation=45, ha='right')
+        ax1.set_ylabel('Score', fontsize=12)
+        ax1.set_title(title, fontsize=14, fontweight='bold')
+        ax1.legend(loc='upper left', fontsize=9)
+        ax1.grid(True, alpha=0.3)
+
+        # Secondary axis for sample count bars
+        ax2 = ax1.twinx()
+        ax2.bar(x, period_metrics['n_samples'], alpha=0.15, color='gray', label='Samples')
+        ax2.set_ylabel('Samples', fontsize=12, color='gray')
+        ax2.tick_params(axis='y', labelcolor='gray')
+        ax2.grid(False)
+
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=DPI, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Temporal stability saved: {output_path}")
+        return output_path
+
+    @staticmethod
+    def plot_probability_distributions(
+        y_true: np.ndarray,
+        y_pred_proba: np.ndarray,
+        class_names: List[str],
+        output_path: Path,
+        title: str = "Predicted Probability Distribution by True Class"
+    ) -> Path:
+        """For each class, plot histogram of predicted p(class) split by whether the true label matches.
+
+        Reveals whether the model assigns higher probability to true positives than negatives.
+        """
+        n_classes = len(class_names)
+        fig, axes = plt.subplots(1, n_classes, figsize=(4 * n_classes, 4), sharey=True)
+        if n_classes == 1:
+            axes = [axes]
+
+        for i, (ax, class_name) in enumerate(zip(axes, class_names)):
+            mask = y_true == i
+            p_pos = y_pred_proba[mask, i]
+            p_neg = y_pred_proba[~mask, i]
+
+            bins = np.linspace(0, 1, 30)
+            ax.hist(p_neg, bins=bins, alpha=0.5, label='True ≠ class', color='#9e9e9e', density=True)
+            ax.hist(p_pos, bins=bins, alpha=0.7, label='True = class', color='#42a5f5', density=True)
+            ax.set_title(class_name, fontsize=11, fontweight='bold')
+            ax.set_xlabel('Predicted P(class)', fontsize=10)
+            if i == 0:
+                ax.set_ylabel('Density', fontsize=10)
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+        fig.suptitle(title, fontsize=13, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=DPI, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Probability distribution saved: {output_path}")
+        return output_path
+
+    @staticmethod
+    def plot_topk_precision(
+        topk_df: pd.DataFrame,
+        class_names: List[str],
+        output_path: Path,
+        title: str = "Precision @ K (Ranked by Predicted Probability)"
+    ) -> Path:
+        """Plot precision-at-k curve for each class.
+
+        Args:
+            topk_df: DataFrame with columns [k, class_name, precision, lift]
+            class_names: classes to plot
+            output_path: save path
+        """
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=FIGSIZE_LARGE)
+
+        colors = plt.cm.tab10(np.linspace(0, 1, len(class_names)))
+        for color, class_name in zip(colors, class_names):
+            sub = topk_df[topk_df['class'] == class_name].sort_values('k')
+            if sub.empty:
+                continue
+            ax1.plot(sub['k'], sub['precision'], marker='o', lw=2, label=class_name, color=color)
+            ax2.plot(sub['k'], sub['lift'], marker='o', lw=2, label=class_name, color=color)
+
+        ax1.set_xscale('log')
+        ax1.set_xlabel('K (top predictions)', fontsize=11)
+        ax1.set_ylabel('Precision', fontsize=11)
+        ax1.set_title('Precision @ K', fontsize=12, fontweight='bold')
+        ax1.legend(fontsize=9)
+        ax1.grid(True, alpha=0.3)
+
+        ax2.set_xscale('log')
+        ax2.axhline(1.0, color='red', linestyle='--', alpha=0.5, label='Baseline (lift=1)')
+        ax2.set_xlabel('K (top predictions)', fontsize=11)
+        ax2.set_ylabel('Lift over Random', fontsize=11)
+        ax2.set_title('Lift @ K', fontsize=12, fontweight='bold')
+        ax2.legend(fontsize=9)
+        ax2.grid(True, alpha=0.3)
+
+        fig.suptitle(title, fontsize=13, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=DPI, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Top-K precision saved: {output_path}")
+        return output_path
+
+    @staticmethod
+    def plot_threshold_sweep(
+        sweep_df: pd.DataFrame,
+        output_path: Path,
+        title: str = "Actionable Signal Threshold Sweep"
+    ) -> Path:
+        """Plot precision/recall/signal-count vs threshold for an actionable-class signal.
+
+        Args:
+            sweep_df: DataFrame with columns [threshold, precision, recall, n_signals]
+            output_path: save path
+        """
+        fig, ax1 = plt.subplots(figsize=FIGSIZE_MEDIUM)
+
+        ax1.plot(sweep_df['threshold'], sweep_df['precision'], marker='o', lw=2,
+                 label='Precision', color='#1f77b4')
+        ax1.plot(sweep_df['threshold'], sweep_df['recall'], marker='s', lw=2,
+                 label='Recall', color='#ff7f0e')
+        ax1.set_xlabel('Probability Threshold', fontsize=12)
+        ax1.set_ylabel('Precision / Recall', fontsize=12)
+        ax1.set_ylim(0, 1)
+        ax1.legend(loc='upper left', fontsize=10)
+        ax1.grid(True, alpha=0.3)
+
+        ax2 = ax1.twinx()
+        ax2.bar(sweep_df['threshold'], sweep_df['n_signals'], width=0.04,
+                alpha=0.2, color='gray', label='Signals')
+        ax2.set_ylabel('Signal Count', fontsize=12, color='gray')
+        ax2.tick_params(axis='y', labelcolor='gray')
+        ax2.grid(False)
+
+        ax1.set_title(title, fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=DPI, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Threshold sweep saved: {output_path}")
+        return output_path
+
+    @staticmethod
     def plot_class_distribution(
         y_train: np.ndarray,
         y_val: np.ndarray,

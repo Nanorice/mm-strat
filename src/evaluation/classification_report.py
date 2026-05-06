@@ -70,11 +70,31 @@ class ClassificationReportGenerator:
         # Executive Summary
         lines.extend(self._generate_executive_summary(metrics))
 
+        # Class Distribution (placed early — context for all later metrics)
+        if metrics.get('class_distribution'):
+            lines.extend(self._generate_class_distribution_section(metrics, plots))
+
+        # Temporal Stability (the most important leakage detector)
+        if metrics.get('temporal_stability'):
+            lines.extend(self._generate_temporal_stability_section(metrics, plots))
+
         # Confusion Matrix Analysis
         lines.extend(self._generate_confusion_section(metrics, plots))
 
         # Per-Class Performance
         lines.extend(self._generate_per_class_section(metrics))
+
+        # Top-K Precision (trading-relevant)
+        if metrics.get('topk_precision'):
+            lines.extend(self._generate_topk_section(metrics, plots))
+
+        # Threshold Sweep (actionable signal cutoff)
+        if metrics.get('threshold_sweep'):
+            lines.extend(self._generate_threshold_section(metrics, plots))
+
+        # Probability Distribution
+        if metrics.get('probability_stats'):
+            lines.extend(self._generate_probability_section(metrics, plots))
 
         # ROC/PR Performance
         lines.extend(self._generate_roc_pr_section(metrics, plots))
@@ -125,8 +145,14 @@ class ClassificationReportGenerator:
         macro_f1 = metrics.get('macro_f1', 0)
         test_samples = metrics.get('test_samples', 0)
 
+        # Use actual majority-class baseline if available (more honest than 1/n_classes)
+        cd = metrics.get('class_distribution', {})
+        majority_baseline = None
+        if cd.get('test'):
+            majority_baseline = max(c.get('pct', 0) for c in cd['test'].values())
+
         # Viability assessment
-        viability = self._assess_viability(accuracy, weighted_f1, macro_f1)
+        viability = self._assess_viability(accuracy, weighted_f1, macro_f1, majority_baseline)
         lines.append(f"**Viability:** {viability['emoji']} {viability['status']}")
         lines.append("")
 
@@ -151,13 +177,14 @@ class ClassificationReportGenerator:
         self,
         accuracy: float,
         weighted_f1: float,
-        macro_f1: float
+        macro_f1: float,
+        majority_baseline: Optional[float] = None,
     ) -> Dict[str, str]:
         """Assess model viability based on metrics."""
 
-        # Multi-class baseline is 1/n_classes
+        # Prefer the actual majority-class baseline; fall back to 1/n_classes
         n_classes = len(self.class_names) if self.class_names else 4
-        baseline_accuracy = 1 / n_classes
+        baseline_accuracy = majority_baseline if majority_baseline is not None else 1 / n_classes
 
         if accuracy < baseline_accuracy * 1.2:
             return {
@@ -546,6 +573,312 @@ class ClassificationReportGenerator:
             ""
         ])
 
+        return lines
+
+    def _generate_class_distribution_section(self, metrics: Dict, plots: Dict) -> List[str]:
+        """Class balance across train/val/test splits."""
+        lines = ["## ⚖️ Class Distribution Across Splits", ""]
+
+        cd = metrics.get('class_distribution', {})
+        train, val, test = cd.get('train', {}), cd.get('val', {}), cd.get('test', {})
+
+        all_names = list(train.keys()) or list(test.keys())
+        if not all_names:
+            return lines
+
+        lines.extend([
+            "| Class | Train Count | Train % | Val Count | Val % | Test Count | Test % |",
+            "|-------|-------------|---------|-----------|-------|------------|--------|",
+        ])
+
+        for name in all_names:
+            t = train.get(name, {'count': 0, 'pct': 0.0})
+            v = val.get(name, {'count': 0, 'pct': 0.0})
+            te = test.get(name, {'count': 0, 'pct': 0.0})
+            lines.append(
+                f"| **{name}** | {t['count']:,} | {t['pct']:.1%} | "
+                f"{v['count']:,} | {v['pct']:.1%} | "
+                f"{te['count']:,} | {te['pct']:.1%} |"
+            )
+
+        # Detect distribution shift
+        lines.append("")
+        shifts = []
+        for name in all_names:
+            t_pct = train.get(name, {}).get('pct', 0)
+            te_pct = test.get(name, {}).get('pct', 0)
+            if abs(t_pct - te_pct) > 0.05:
+                shifts.append(f"`{name}`: train={t_pct:.1%} vs test={te_pct:.1%}")
+
+        if shifts:
+            lines.append("⚠️ **Distribution shift detected** (>5pp gap between train and test):")
+            for s in shifts:
+                lines.append(f"- {s}")
+            lines.append("")
+            lines.append("This means train and test see different label mixes — "
+                         "metrics like accuracy aren't directly comparable across periods.")
+        else:
+            lines.append("✅ Class proportions are stable across splits (<5pp gap).")
+
+        # Majority-class baseline
+        if test:
+            majority_pct = max(c['pct'] for c in test.values())
+            lines.append("")
+            lines.append(f"**Majority-class baseline (test):** {majority_pct:.1%} — "
+                         "any model must beat this.")
+
+        if 'class_distribution' in plots:
+            lines.append("")
+            lines.append(f"![Class Distribution]({plots['class_distribution'].name})")
+
+        lines.extend(["", "---", ""])
+        return lines
+
+    def _generate_temporal_stability_section(self, metrics: Dict, plots: Dict) -> List[str]:
+        """Per-period accuracy/F1 — the primary leakage detector."""
+        lines = [
+            "## 📅 Temporal Stability",
+            "",
+            "*Per-period metrics. Stable performance across periods = real signal. "
+            "Wide swings or decay over time = likely overfitting or split artifact.*",
+            "",
+        ]
+
+        if 'temporal_stability' in plots:
+            lines.append(f"![Temporal Stability]({plots['temporal_stability'].name})")
+            lines.append("")
+
+        rows = metrics.get('temporal_stability', [])
+        if not rows:
+            lines.append("*Not computed (no dates passed to evaluator).*")
+            lines.extend(["", "---", ""])
+            return lines
+
+        lines.extend([
+            "| Period | Samples | Accuracy | Weighted F1 | Macro F1 |",
+            "|--------|---------|----------|-------------|----------|",
+        ])
+        for r in rows:
+            lines.append(
+                f"| {r['period']} | {r['n_samples']:,} | "
+                f"{r['accuracy']:.3f} | {r['weighted_f1']:.3f} | {r['macro_f1']:.3f} |"
+            )
+        lines.append("")
+
+        # Stability assessment
+        if len(rows) >= 2:
+            accs = [r['accuracy'] for r in rows]
+            f1s = [r['weighted_f1'] for r in rows]
+            acc_std = float(pd.Series(accs).std())
+            acc_range = max(accs) - min(accs)
+            f1_std = float(pd.Series(f1s).std())
+
+            lines.extend([
+                "### Stability Diagnostics",
+                "",
+                f"- **Accuracy std across periods:** {acc_std:.3f}",
+                f"- **Accuracy range:** {acc_range:.3f} (min={min(accs):.3f}, max={max(accs):.3f})",
+                f"- **Weighted F1 std:** {f1_std:.3f}",
+                "",
+            ])
+
+            if acc_range > 0.15:
+                lines.append("⚠️ **Unstable performance** — accuracy varies by >15pp across periods. "
+                             "Investigate whether features behave differently in different regimes, "
+                             "or whether the strong period is overfitted.")
+            elif acc_std < 0.03:
+                lines.append("✅ **Highly stable** — performance is consistent across periods. "
+                             "Less likely to be a leakage artifact.")
+            else:
+                lines.append("🟡 **Moderately stable** — some period-over-period variation. Monitor.")
+
+            # Decay check (compare first and last periods)
+            first_acc = rows[0]['accuracy']
+            last_acc = rows[-1]['accuracy']
+            if last_acc < first_acc - 0.10:
+                lines.append("")
+                lines.append(f"⚠️ **Performance decay**: accuracy fell from {first_acc:.3f} "
+                             f"({rows[0]['period']}) to {last_acc:.3f} ({rows[-1]['period']}). "
+                             "Suggests features are losing predictive power over time.")
+
+            lines.append("")
+
+        lines.extend(["---", ""])
+        return lines
+
+    def _generate_topk_section(self, metrics: Dict, plots: Dict) -> List[str]:
+        """Top-K precision and lift — what matters when you only act on top picks."""
+        lines = [
+            "## 🎯 Top-K Precision & Lift",
+            "",
+            "*Among the top-K predictions ranked by predicted probability, what fraction "
+            "actually belong to the class? Lift > 1 means the model is doing better than random.*",
+            "",
+        ]
+
+        if 'topk_precision' in plots:
+            lines.append(f"![Top-K Precision]({plots['topk_precision'].name})")
+            lines.append("")
+
+        rows = metrics.get('topk_precision', [])
+        if not rows:
+            lines.extend(["*No data.*", "", "---", ""])
+            return lines
+
+        # Pivot to wide table: class × k
+        df = pd.DataFrame(rows)
+        ks = sorted(df['k'].unique())
+        lines.append("### Precision @ K")
+        lines.append("")
+        header = "| Class | Base Rate | " + " | ".join([f"K={k}" for k in ks]) + " |"
+        sep = "|" + "|".join(["---"] * (len(ks) + 2)) + "|"
+        lines.append(header)
+        lines.append(sep)
+
+        for class_name in df['class'].unique():
+            sub = df[df['class'] == class_name]
+            base_rate = sub['base_rate'].iloc[0]
+            cells = [f"**{class_name}**", f"{base_rate:.1%}"]
+            for k in ks:
+                row = sub[sub['k'] == k]
+                if not row.empty:
+                    cells.append(f"{row['precision'].iloc[0]:.1%}")
+                else:
+                    cells.append("—")
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+        lines.append("### Lift @ K (precision / base rate)")
+        lines.append("")
+        lines.append(header)
+        lines.append(sep)
+        for class_name in df['class'].unique():
+            sub = df[df['class'] == class_name]
+            base_rate = sub['base_rate'].iloc[0]
+            cells = [f"**{class_name}**", f"{base_rate:.1%}"]
+            for k in ks:
+                row = sub[sub['k'] == k]
+                if not row.empty and row['lift'].iloc[0] is not None:
+                    cells.append(f"{row['lift'].iloc[0]:.2f}x")
+                else:
+                    cells.append("—")
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+        # Interpretation
+        # Use smallest K for headline interpretation (most concentrated picks)
+        smallest_k = min(ks)
+        small_rows = df[df['k'] == smallest_k]
+        best = small_rows.loc[small_rows['lift'].idxmax()] if not small_rows.empty else None
+        if best is not None:
+            lines.append(f"**Best top-{smallest_k} lift:** `{best['class']}` at "
+                         f"**{best['lift']:.2f}x** (precision {best['precision']:.1%} vs "
+                         f"base rate {best['base_rate']:.1%}).")
+            if best['lift'] < 1.2:
+                lines.append("")
+                lines.append("⚠️ Lift is barely above 1 — high-confidence predictions aren't "
+                             "much better than random picks. Probabilities have little ranking power.")
+            elif best['lift'] >= 2.0:
+                lines.append("")
+                lines.append("✅ Lift ≥ 2x means top picks are at least 2x more likely to be "
+                             "true positives than random. This is the trading-relevant edge.")
+            lines.append("")
+
+        lines.extend(["---", ""])
+        return lines
+
+    def _generate_threshold_section(self, metrics: Dict, plots: Dict) -> List[str]:
+        """Threshold sweep for the actionable-class signal."""
+        actionable = metrics.get('actionable_classes', [])
+        actionable_names = [self.class_names[i] for i in actionable
+                            if i < len(self.class_names)] if self.class_names else [f"C{i}" for i in actionable]
+
+        lines = [
+            "## 🚦 Actionable Signal Threshold Sweep",
+            "",
+            f"*Defines a binary 'go' signal: max P(class) over actionable classes "
+            f"({', '.join(f'`{n}`' for n in actionable_names)}) ≥ threshold. "
+            "Shows how precision/recall/signal-count trade off as you tighten the cutoff.*",
+            "",
+        ]
+
+        if 'threshold_sweep' in plots:
+            lines.append(f"![Threshold Sweep]({plots['threshold_sweep'].name})")
+            lines.append("")
+
+        rows = metrics.get('threshold_sweep', [])
+        if not rows:
+            lines.extend(["*No data.*", "", "---", ""])
+            return lines
+
+        lines.extend([
+            "| Threshold | Signals | True Positives | Precision | Recall |",
+            "|-----------|---------|----------------|-----------|--------|",
+        ])
+        for r in rows:
+            lines.append(
+                f"| {r['threshold']:.2f} | {r['n_signals']:,} | {r['true_positives']:,} | "
+                f"{r['precision']:.1%} | {r['recall']:.1%} |"
+            )
+        lines.append("")
+
+        # Find sweet spot (high precision with reasonable signal count)
+        df = pd.DataFrame(rows)
+        viable = df[df['n_signals'] >= 50]
+        if not viable.empty:
+            best = viable.loc[viable['precision'].idxmax()]
+            lines.append(f"**Suggested operating point:** threshold = **{best['threshold']:.2f}** "
+                         f"→ precision {best['precision']:.1%}, recall {best['recall']:.1%}, "
+                         f"{best['n_signals']:,} signals.")
+            lines.append("")
+
+        lines.extend(["---", ""])
+        return lines
+
+    def _generate_probability_section(self, metrics: Dict, plots: Dict) -> List[str]:
+        """Probability separation per class — true-positive vs true-negative mean p(class)."""
+        lines = [
+            "## 🎲 Probability Separation",
+            "",
+            "*For each class, mean predicted P(class) for true positives vs true negatives. "
+            "Larger separation = better ranking power.*",
+            "",
+        ]
+
+        if 'probability_distributions' in plots:
+            lines.append(f"![Probability Distributions]({plots['probability_distributions'].name})")
+            lines.append("")
+
+        stats = metrics.get('probability_stats', {})
+        if not stats:
+            lines.extend(["*No data.*", "", "---", ""])
+            return lines
+
+        lines.extend([
+            "| Class | Mean P (true=class) | Mean P (true≠class) | Separation | Support |",
+            "|-------|---------------------|---------------------|------------|---------|",
+        ])
+        for name, s in stats.items():
+            lines.append(
+                f"| **{name}** | {s['mean_p_when_true']:.3f} | {s['mean_p_when_false']:.3f} | "
+                f"{s['separation']:+.3f} | {s['support_positive']:,} |"
+            )
+        lines.append("")
+
+        # Diagnostic
+        seps = [s['separation'] for s in stats.values()]
+        if all(abs(s) < 0.03 for s in seps):
+            lines.append("⚠️ **Near-zero separation across all classes** — model is barely "
+                         "distinguishing true positives from negatives. Predictions are essentially uniform.")
+            lines.append("")
+        elif any(s < 0 for s in seps):
+            bad = [n for n, s in stats.items() if s['separation'] < 0]
+            lines.append(f"⚠️ **Negative separation** for: {', '.join(f'`{n}`' for n in bad)}. "
+                         "Model assigns higher probability to false cases than true ones — "
+                         "predictions are anti-informative for these classes.")
+            lines.append("")
+
+        lines.extend(["---", ""])
         return lines
 
     def _generate_footer(self, plots: Dict) -> List[str]:

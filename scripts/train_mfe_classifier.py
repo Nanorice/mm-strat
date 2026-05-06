@@ -9,178 +9,117 @@ Target Classes:
 - 2: Strong (10-30%)
 - 3: Home Run (>30%)
 
-Model: M04 (MFE Classifier)
+Features are loaded dynamically from `model_feature_sets` in DuckDB.
 """
 
-import sys
-from pathlib import Path
-import logging
-import duckdb
-import pandas as pd
-import numpy as np
-import xgboost as xgb
-from sklearn.utils.class_weight import compute_class_weight
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
+import argparse
 import json
+import logging
+import sys
 from datetime import datetime
+from pathlib import Path
+
+import duckdb
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.utils.class_weight import compute_class_weight
 
 sys.path.append(str(Path(__file__).parent.parent))
-from src.model_registry import ModelRegistry
 from src.evaluation.classification_evaluator import ClassificationEvaluator
 from src.evaluation.leakage_guard import LeakageGuard
+from src.model_registry import ModelRegistry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Database path
 DB_PATH = Path(__file__).parent.parent / "data" / "market_data.duckdb"
 
-# Feature groups (baseline)
-FEATURE_GROUPS = {
-    "Moving_Averages": [
-        'close_above_sma200', 'price_vs_sma_50', 'price_vs_sma_150', 'price_vs_sma_200',
-        'sma_50_slope', 'price_vs_sma_50_delta', 'price_vs_sma_150_delta', 'price_vs_sma_200_delta'
-    ],
-    "Momentum_RS": [
-        'rs_line_uptrend', 'rs_line_delta', 'rs_line_lag_delta', 'rs_rating', 'rs', 'rs_ma',
-        'rs_delta', 'rs_ma_delta', 'mom_21d', 'mom_63d', 'mom_126d', 'mom_189d', 'mom_252d',
-        'rs_velocity', 'price_accel_10d', 'rs_sector_rank', 'rs_vs_sector', 'sector_momentum',
-        'rs_industry_rank', 'rs_vs_industry', 'industry_momentum'
-    ],
-    "Core_Volume": [
-        'vol_ratio', 'dry_up_volume', 'dry_up_volume_delta', 'turnover',
-        'volume_acceleration', 'return_1d', 'return_5d'
-    ],
-    "Volatility_Ranges": [
-        'natr', 'natr_delta', 'atr_delta', 'vcp_ratio', 'vcp_ratio_delta',
-        'consolidation_width', 'consolidation_width_delta', 'consolidation_duration',
-        'dist_from_52w_high', 'dist_from_52w_high_delta',
-        'dist_from_52w_low', 'dist_from_52w_low_delta',
-        'low_52w_delta', 'high_52w_delta',
-        'dist_from_20d_high', 'dist_from_20d_high_delta', 'highest_high_20d_delta',
-        'dist_from_20d_low', 'dist_from_20d_low_delta', 'lowest_low_20d_delta'
-    ],
-    "Technical_Oscillators": [
-        'rsi_14', 'rsi_14_delta', 'is_green_day', 'green_days_ratio_20d', 'breakout',
-        'breakout_momentum', 'immediate_thrust'
-    ],
-    "Fundamentals": [
-        'eps_diluted', 'revenue_growth_yoy', 'eps_growth_yoy', 'net_income_growth_yoy',
-        'eps_accel', 'revenue_accel', 'revenue_cagr_3y', 'eps_stability_score',
-        'debt_to_equity', 'current_ratio', 'gross_margin', 'operating_margin', 'roe', 'roa',
-        'fcf_margin', 'earnings_quality_score', 'gross_margin_trend', 'days_since_report',
-        'pe_ratio', 'ps_ratio', 'pb_ratio'
-    ],
-    "Fast_Alphas": [
-        'alpha001', 'alpha002', 'alpha004', 'alpha006', 'alpha009', 'alpha011', 'alpha012',
-        'alpha013', 'alpha015', 'alpha041', 'alpha046', 'alpha049', 'alpha054', 'alpha060',
-        'alpha101'
-    ],
-    "M03_Regime": [
-        'm03_score', 'm03_pillar_trend', 'm03_pillar_liq', 'm03_pillar_risk',
-        'm03_delta_5d', 'm03_delta_20d', 'm03_regime_vol'
-    ]
-}
+
+def get_feature_set(db_path: Path, feature_set_id: str) -> tuple[list[str], dict[str, list[str]]]:
+    """Load feature names and groups from `model_feature_sets`.
+
+    Returns:
+        (features ordered by ordinal, feature_groups dict)
+    """
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = con.execute(
+            "SELECT feature_name, feature_group FROM model_feature_sets "
+            "WHERE feature_set_id = ? ORDER BY ordinal",
+            [feature_set_id],
+        ).fetchall()
+    finally:
+        con.close()
+
+    if not rows:
+        raise ValueError(
+            f"Feature set '{feature_set_id}' is empty or missing. "
+            f"Run `python scripts/populate_feature_catalog.py` first."
+        )
+
+    features = [r[0] for r in rows]
+    groups: dict[str, list[str]] = {}
+    for name, group in rows:
+        groups.setdefault(group or "Ungrouped", []).append(name)
+
+    return features, groups
 
 
 def load_training_data(
     db_path: Path,
-    feature_version: str = 'v3.1',
-    min_date: str = '2020-01-01'
+    feature_version: str,
+    min_date: str,
 ) -> pd.DataFrame:
-    """
-    Load training data from v_d2_training view.
-
-    Args:
-        db_path: Path to DuckDB database
-        feature_version: Feature schema version
-        min_date: Minimum date for training data
-
-    Returns:
-        DataFrame with features and mfe_pct target
-    """
-    con = duckdb.connect(str(db_path))
-
+    """Load training data from v_d2_training view."""
+    con = duckdb.connect(str(db_path), read_only=True)
     try:
-        query = f"""
+        df = con.execute(
+            """
             SELECT *
             FROM v_d2_training
-            WHERE feature_version = '{feature_version}'
-              AND date >= '{min_date}'
+            WHERE feature_version = ?
+              AND date >= ?
               AND mfe_pct IS NOT NULL
             ORDER BY date, ticker
-        """
-
-        df = con.execute(query).df()
-        logger.info(f"✅ Loaded {len(df):,} rows from v_d2_training ({df['date'].min()} to {df['date'].max()})")
-
-        return df
-
+            """,
+            [feature_version, min_date],
+        ).df()
     finally:
         con.close()
 
+    logger.info(f"✅ Loaded {len(df):,} rows from v_d2_training ({df['date'].min()} to {df['date'].max()})")
+    return df
+
 
 def validate_features(df: pd.DataFrame, feature_list: list[str]) -> tuple[list[str], list[str]]:
-    """
-    Validate that features exist in dataframe.
-
-    Args:
-        df: Training dataframe
-        feature_list: List of feature names to validate
-
-    Returns:
-        Tuple of (valid_features, missing_features)
-    """
-    # Normalize column names to lowercase for comparison
+    """Match requested features to actual df columns case-insensitively."""
     df_cols_lower = {col.lower(): col for col in df.columns}
-
-    valid = []
-    missing = []
-
+    valid, missing = [], []
     for feat in feature_list:
-        feat_lower = feat.lower()
-        if feat_lower in df_cols_lower:
-            valid.append(df_cols_lower[feat_lower])  # Use actual column name
+        actual = df_cols_lower.get(feat.lower())
+        if actual is not None:
+            valid.append(actual)
         else:
             missing.append(feat)
-
     return valid, missing
 
 
 def create_mfe_labels(df: pd.DataFrame, return_col: str = 'mfe_pct') -> pd.Series:
-    """
-    Create 4-class MFE labels.
-
-    Classes:
-    - 0: Noise (0-2%)
-    - 1: Moderate (2-10%)
-    - 2: Strong (10-30%)
-    - 3: Home Run (>30%)
-
-    Args:
-        df: Training dataframe
-        return_col: Column name for MFE percentage
-
-    Returns:
-        Series with class labels (0-3)
-    """
+    """Create 4-class MFE labels: Noise / Moderate / Strong / Home Run."""
     conditions = [
         (df[return_col] <= 2.0),
         (df[return_col] > 2.0) & (df[return_col] <= 10.0),
         (df[return_col] > 10.0) & (df[return_col] <= 30.0),
-        (df[return_col] > 30.0)
+        (df[return_col] > 30.0),
     ]
-    choices = [0, 1, 2, 3]
+    labels = np.select(conditions, [0, 1, 2, 3], default=0)
 
-    labels = np.select(conditions, choices, default=0)
-
-    # Log distribution
     unique, counts = np.unique(labels, return_counts=True)
     logger.info("📊 MFE Class Distribution:")
     for cls, count in zip(unique, counts):
-        pct = count / len(labels) * 100
-        logger.info(f"   Class {cls}: {count:,} ({pct:.1f}%)")
+        logger.info(f"   Class {cls}: {count:,} ({count / len(labels) * 100:.1f}%)")
 
     return pd.Series(labels, index=df.index)
 
@@ -190,31 +129,16 @@ def train_mfe_classifier(
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
-    params: dict = None
+    params: dict | None = None,
 ) -> xgb.Booster:
-    """
-    Train XGBoost multi-class classifier for MFE prediction.
-
-    Args:
-        X_train: Training features
-        y_train: Training labels (0-3)
-        X_val: Validation features
-        y_val: Validation labels
-        params: Model hyperparameters (optional)
-
-    Returns:
-        Trained XGBoost booster
-    """
+    """Train XGBoost multi-class classifier with early stopping on val."""
     logger.info("🚀 Training MFE classifier...")
 
-    # Compute class weights
     classes = np.unique(y_train)
     weights = compute_class_weight('balanced', classes=classes, y=y_train)
     sample_weights = y_train.map(dict(zip(classes, weights)))
-
     logger.info(f"⚖️  Class weights: {dict(zip(classes, weights))}")
 
-    # Default parameters
     if params is None:
         params = {
             'objective': 'multi:softprob',
@@ -226,189 +150,153 @@ def train_mfe_classifier(
             'eval_metric': 'mlogloss',
             'random_state': 42,
             'tree_method': 'hist',
-            'enable_categorical': True  # Support sector/industry
+            'enable_categorical': True,
         }
 
-    # Handle infinite values
     X_train = X_train.replace([np.inf, -np.inf], np.nan)
     X_val = X_val.replace([np.inf, -np.inf], np.nan)
 
-    # Create DMatrix
     dtrain = xgb.DMatrix(X_train, label=y_train, weight=sample_weights, enable_categorical=True)
     dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
 
-    # Train
-    evals = [(dtrain, 'train'), (dval, 'val')]
     model = xgb.train(
         params=params,
         dtrain=dtrain,
         num_boost_round=100,
-        evals=evals,
+        evals=[(dtrain, 'train'), (dval, 'val')],
         early_stopping_rounds=20,
-        verbose_eval=10
+        verbose_eval=10,
     )
 
     logger.info(f"✅ Training complete (best iteration: {model.best_iteration})")
-
     return model
 
 
-def evaluate_model_legacy(
-    model: xgb.Booster,
-    X_test: pd.DataFrame,
-    y_test: pd.Series,
-    output_dir: Path
-) -> dict:
-    """
-    LEGACY: Simple evaluation (replaced by ClassificationEvaluator).
-    Kept for backward compatibility.
-
-    Args:
-        model: Trained XGBoost booster
-        X_test: Test features
-        y_test: Test labels
-        output_dir: Directory to save results
-
-    Returns:
-        Dictionary with evaluation metrics
-    """
-    logger.info("📊 Evaluating model (legacy)...")
-
-    # Handle infinite values
-    X_test = X_test.replace([np.inf, -np.inf], np.nan)
-
-    # Predict
-    dtest = xgb.DMatrix(X_test, enable_categorical=True)
-    y_pred_proba = model.predict(dtest)
-    y_pred = np.argmax(y_pred_proba, axis=1)
-
-    # Classification report
-    report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
-    logger.info("\n" + classification_report(y_test, y_pred, zero_division=0))
-
-    # Confusion matrix
-    cm = confusion_matrix(y_test, y_pred)
-    logger.info("\n📊 Confusion Matrix:")
-    logger.info(f"\n{cm}")
-
-    # Save results
-    results = {
-        'classification_report': report,
-        'confusion_matrix': cm.tolist(),
-        'test_samples': len(y_test),
-        'test_accuracy': report['accuracy'],
-        'weighted_f1': report['weighted avg']['f1-score']
-    }
-
-    results_path = output_dir / 'evaluation_results_legacy.json'
-    with open(results_path, 'w') as f:
-        json.dump(results, f, indent=2)
-
-    logger.info(f"✅ Legacy results saved to {results_path}")
-
-    return results
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train MFE classifier from a catalog feature set")
+    parser.add_argument("--feature-set", default="fs_m01_prototype",
+                        help="Feature set ID in model_feature_sets")
+    parser.add_argument("--model-name", default="m01_prototype",
+                        help="Model name (used for artifact paths and version_id prefix)")
+    parser.add_argument("--model-version", default="v1",
+                        help="Model version subdir under models/<model_name>/")
+    parser.add_argument("--feature-version", default="v3.1")
+    parser.add_argument("--min-date", default="2003-01-01")
+    parser.add_argument("--no-holdout", action="store_true",
+                        help="Train on 85%% / val 15%% / no test holdout. Final model uses all recent data; "
+                             "metrics reported are validation-set, not unbiased test metrics.")
+    parser.add_argument("--promote-prod", action="store_true",
+                        help="After registration, mark this version as prod (archives previous prod).")
+    parser.add_argument("--db", type=Path, default=DB_PATH)
+    return parser.parse_args()
 
 
-def main():
-    """Main training workflow."""
+def main() -> None:
+    args = parse_args()
+
     logger.info("=" * 80)
-    logger.info("MFE CLASSIFIER TRAINING (M04 Baseline)")
+    logger.info(f"MFE CLASSIFIER TRAINING — feature_set={args.feature_set}, model={args.model_name}")
+    logger.info(f"Mode: {'NO-HOLDOUT (85/15/0)' if args.no_holdout else 'STANDARD (60/20/20)'}")
     logger.info("=" * 80)
 
-    # 1. Load data
-    df = load_training_data(DB_PATH, feature_version='v3.1', min_date='2020-01-01')
+    # 1. Load feature set from catalog
+    requested_features, feature_groups = get_feature_set(args.db, args.feature_set)
+    logger.info(f"📋 Loaded {len(requested_features)} features from '{args.feature_set}'")
 
-    # 2. Flatten feature groups
-    all_features = []
-    for group_name, features in FEATURE_GROUPS.items():
-        all_features.extend(features)
-
-    logger.info(f"📋 Total features: {len(all_features)}")
+    # 2. Load training data
+    df = load_training_data(args.db, feature_version=args.feature_version, min_date=args.min_date)
 
     # 3. Validate features
-    valid_features, missing_features = validate_features(df, all_features)
-
+    valid_features, missing_features = validate_features(df, requested_features)
     if missing_features:
         logger.warning(f"⚠️  Missing {len(missing_features)} features:")
-        for feat in missing_features[:10]:  # Show first 10
+        for feat in missing_features[:10]:
             logger.warning(f"   - {feat}")
         if len(missing_features) > 10:
             logger.warning(f"   ... and {len(missing_features) - 10} more")
-
     logger.info(f"✅ Valid features: {len(valid_features)}")
 
-    # 4. Create labels
+    # 4. Labels + features
     y = create_mfe_labels(df, return_col='mfe_pct')
-
-    # 5. Filter features
     X = df[valid_features].copy()
 
-    # 6. Train/val/test split (temporal)
-    # Sort by date to ensure temporal split
-    df_sorted = df.sort_values('date')
-    X_sorted = X.loc[df_sorted.index]
-    y_sorted = y.loc[df_sorted.index]
+    # XGBoost requires `category` dtype for categoricals (object dtype is rejected
+    # even with enable_categorical=True). v_d2_training returns sector/industry as
+    # VARCHAR → pandas object — cast them here.
+    for col in X.select_dtypes(include='object').columns:
+        X[col] = X[col].astype('category')
 
-    # 60% train, 20% val, 20% test
-    train_size = int(len(X_sorted) * 0.6)
-    val_size = int(len(X_sorted) * 0.2)
+    # 5. Temporal split — snap boundaries to date boundaries so same-day rows for
+    # many tickers don't straddle splits (would trigger leakage guard).
+    df_sorted = df.sort_values('date').reset_index(drop=True)
+    X_sorted = X.loc[df.sort_values('date').index].reset_index(drop=True)
+    y_sorted = y.loc[df.sort_values('date').index].reset_index(drop=True)
+
+    n = len(X_sorted)
+    train_frac = 0.85 if args.no_holdout else 0.60
+    val_frac = 0.15 if args.no_holdout else 0.20
+
+    dates = df_sorted['date'].to_numpy()
+    train_size = int(np.searchsorted(dates, dates[int(n * train_frac)], side='left'))
+    val_end = int(n * (train_frac + val_frac))
+    val_size = (
+        n - train_size if args.no_holdout
+        else int(np.searchsorted(dates, dates[val_end], side='left')) - train_size
+    )
+    test_size = n - train_size - val_size
 
     X_train = X_sorted.iloc[:train_size]
     y_train = y_sorted.iloc[:train_size]
-
     X_val = X_sorted.iloc[train_size:train_size + val_size]
     y_val = y_sorted.iloc[train_size:train_size + val_size]
 
-    X_test = X_sorted.iloc[train_size + val_size:]
-    y_test = y_sorted.iloc[train_size + val_size:]
+    if args.no_holdout:
+        # No test set — evaluator still needs something; we'll use val and tag metrics accordingly.
+        X_test = X_val
+        y_test = y_val
+        dates_test = df_sorted['date'].iloc[train_size:train_size + val_size].reset_index(drop=True)
+    else:
+        X_test = X_sorted.iloc[train_size + val_size:]
+        y_test = y_sorted.iloc[train_size + val_size:]
+        dates_test = df_sorted['date'].iloc[train_size + val_size:].reset_index(drop=True)
 
-    logger.info(f"📊 Split sizes: Train={len(X_train):,}, Val={len(X_val):,}, Test={len(X_test):,}")
+    logger.info(f"📊 Split sizes: Train={len(X_train):,}, Val={len(X_val):,}, Test={test_size:,}")
 
-    # 6.1 Validate temporal split (check for leakage)
-    logger.info("🔍 Validating temporal split...")
-    train_indices = np.arange(len(X_train))
-    val_indices = np.arange(len(X_train), len(X_train) + len(X_val))
-    test_indices = np.arange(len(X_train) + len(X_val), len(df_sorted))
+    # 6. Leakage guards
+    train_idx = np.arange(train_size)
+    val_idx = np.arange(train_size, train_size + val_size)
+    test_idx = np.arange(train_size + val_size, n) if test_size > 0 else np.array([], dtype=int)
 
-    leakage_check = LeakageGuard.validate_split_ordering(
-        df_sorted,
-        'date',
-        train_indices,
-        val_indices,
-        test_indices
-    )
+    if test_size > 0:
+        leakage_check = LeakageGuard.validate_split_ordering(df_sorted, 'date', train_idx, val_idx, test_idx)
+        if not leakage_check['all_valid']:
+            raise ValueError("Temporal split validation failed")
+    else:
+        # No test split — only train→val ordering matters.
+        train_val = LeakageGuard.validate_temporal_split(df_sorted, 'date', train_idx, val_idx, strict=False)
+        leakage_check = {'all_valid': train_val['is_valid'], 'train_val': train_val}
+        if not leakage_check['all_valid']:
+            raise ValueError("Temporal split validation failed")
 
-    if not leakage_check['all_valid']:
-        logger.error("❌ Temporal leakage detected! Aborting training.")
-        raise ValueError("Temporal split validation failed")
-
-    # 6.2 Check for feature leakage
     feature_check = LeakageGuard.check_feature_leakage(valid_features)
     if not feature_check['is_clean']:
-        logger.warning(f"⚠️  Suspicious features detected: {feature_check['suspicious_features']}")
+        logger.warning(f"⚠️  Suspicious features: {feature_check['suspicious_features']}")
 
-    # 7. Train model
+    # 7. Train
     model = train_mfe_classifier(X_train, y_train, X_val, y_val)
 
-    # 8. Create output directory
+    # 8. Evaluate
     output_dir = Path(__file__).parent.parent / "models"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 9. Comprehensive Evaluation (NEW)
-    logger.info("=" * 80)
-    logger.info("🎯 COMPREHENSIVE EVALUATION")
-    logger.info("=" * 80)
-
     class_names = ['Noise (0-2%)', 'Moderate (2-10%)', 'Strong (10-30%)', 'Home Run (>30%)']
-
     evaluator = ClassificationEvaluator(
-        model_name='M01_baseline',
-        model_version='v1',
+        model_name=args.model_name,
+        model_version=args.model_version,
         output_dir=output_dir,
-        class_names=class_names
+        class_names=class_names,
     )
-
-    results = evaluator.evaluate(
+    eval_results = evaluator.evaluate(
         model=model,
         X_test=X_test,
         y_test=y_test,
@@ -417,53 +305,57 @@ def main():
         y_train=y_train.values,
         X_val=X_val,
         y_val=y_val.values,
+        dates_test=dates_test,
         compute_shap=True,
-        shap_sample_size=1000
+        shap_sample_size=1000,
     )
 
-    # 10. Save model
-    model_dir = output_dir / "M01_baseline" / "v1"
+    # 9. Save model + metadata
+    model_dir = output_dir / args.model_name / args.model_version
     model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / "model.json"
     model.save_model(str(model_path))
     logger.info(f"💾 Model saved to {model_path}")
 
-    # 11. Save metadata
+    # In --no-holdout mode, evaluator metrics are val-set, not test-set.
+    eval_metrics_field = 'val_metrics' if args.no_holdout else 'test_metrics'
+
     metadata = {
-        'model_name': 'M01_MFE_Classifier',
-        'version': 'baseline_v1',
+        'model_name': args.model_name,
+        'model_version': args.model_version,
+        'feature_set_id': args.feature_set,
         'training_date': datetime.now().isoformat(),
-        'feature_version': 'v3.1',
+        'feature_version': args.feature_version,
+        'min_date': args.min_date,
+        'split_mode': 'no_holdout_85_15_0' if args.no_holdout else 'standard_60_20_20',
         'num_features': len(valid_features),
-        'feature_groups': {k: len(v) for k, v in FEATURE_GROUPS.items()},
         'valid_features': valid_features,
         'missing_features': missing_features,
         'train_samples': len(X_train),
         'val_samples': len(X_val),
-        'test_samples': len(X_test),
-        'test_accuracy': results.get('accuracy', 0),
-        'weighted_f1': results.get('weighted_f1', 0),
-        'macro_f1': results.get('macro_f1', 0),
+        'test_samples': test_size,
+        eval_metrics_field: {
+            'accuracy': eval_results.get('accuracy'),
+            'weighted_f1': eval_results.get('weighted_f1'),
+            'macro_f1': eval_results.get('macro_f1'),
+        },
         'temporal_validation': leakage_check,
-        'feature_leakage_check': feature_check
+        'feature_leakage_check': feature_check,
     }
+    (model_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, default=str))
+    logger.info(f"📝 Metadata saved to {model_dir / 'metadata.json'}")
 
-    meta_path = model_dir / "metadata.json"
-    with open(meta_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-
-    logger.info(f"📝 Metadata saved to {meta_path}")
-
-    # 12. Register in model registry
-    registry = ModelRegistry()
-
-    # Use timestamp-based version ID to avoid duplicates
-    version_id = f'M01_baseline_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
-    feature_set_id = f'fs_{version_id}'
+    # 10. Register in model registry
+    registry = ModelRegistry(db_path=args.db)
+    version_id = f'{args.model_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     git_sha = ModelRegistry.get_git_sha()
 
+    # In --no-holdout mode, leave the test-metric columns NULL — they'd be misleading.
+    accuracy = eval_results.get('accuracy') if not args.no_holdout else None
+    weighted_f1 = eval_results.get('weighted_f1') if not args.no_holdout else None
+    macro_f1 = eval_results.get('macro_f1') if not args.no_holdout else None
+
     try:
-        registry.register_feature_set(feature_set_id, valid_features, FEATURE_GROUPS)
         registry.register_version(
             version_id=version_id,
             specs={
@@ -474,27 +366,38 @@ def main():
                     'max_depth': 4,
                     'learning_rate': 0.05,
                     'subsample': 0.8,
-                    'colsample_bytree': 0.8
+                    'colsample_bytree': 0.8,
                 },
                 'training_config': {
                     'train_samples': len(X_train),
                     'val_samples': len(X_val),
-                    'test_samples': len(X_test),
-                    'feature_version': 'v3.1'
-                }
+                    'test_samples': test_size,
+                    'feature_version': args.feature_version,
+                    'min_date': args.min_date,
+                    'split_mode': metadata['split_mode'],
+                },
+                'val_metrics': {
+                    'accuracy': eval_results.get('accuracy'),
+                    'weighted_f1': eval_results.get('weighted_f1'),
+                    'macro_f1': eval_results.get('macro_f1'),
+                } if args.no_holdout else None,
             },
             status='test',
-            feature_version='v3.1',
+            feature_version=args.feature_version,
             training_date=datetime.now().date(),
             dataset_rows=len(df),
-            accuracy=results.get('accuracy'),
-            weighted_f1=results.get('weighted_f1'),
-            macro_f1=results.get('macro_f1'),
-            feature_set_id=feature_set_id,
+            accuracy=accuracy,
+            weighted_f1=weighted_f1,
+            macro_f1=macro_f1,
+            feature_set_id=args.feature_set,
             git_sha=git_sha,
             model_type='classifier',
         )
         logger.info(f"✅ Registered model version: {version_id}")
+
+        if args.promote_prod:
+            registry.set_prod(version_id)
+            logger.info(f"🚀 Promoted {version_id} to PROD")
     except Exception as e:
         logger.warning(f"⚠️  Model registration failed (non-critical): {e}")
         logger.info("Model and evaluation artifacts saved successfully, continuing...")
@@ -503,9 +406,10 @@ def main():
     logger.info("✅ TRAINING COMPLETE")
     logger.info(f"📁 Model: {model_path}")
     logger.info(f"📁 Evaluation: {evaluator.eval_dir}")
-    logger.info(f"🎯 Test Accuracy: {results.get('accuracy', 0):.3f}")
-    logger.info(f"📊 Weighted F1: {results.get('weighted_f1', 0):.3f}")
-    logger.info(f"📊 Macro F1: {results.get('macro_f1', 0):.3f}")
+    metric_label = "Val" if args.no_holdout else "Test"
+    logger.info(f"🎯 {metric_label} Accuracy: {eval_results.get('accuracy', 0):.3f}")
+    logger.info(f"📊 {metric_label} Weighted F1: {eval_results.get('weighted_f1', 0):.3f}")
+    logger.info(f"📊 {metric_label} Macro F1: {eval_results.get('macro_f1', 0):.3f}")
     logger.info("=" * 80)
 
 

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 DB_PATH = ROOT / "data" / "market_data.duckdb"
-MODEL_DIR = ROOT / "models" / "m01_baseline" / "v1"
+MODEL_DIR = ROOT / "models" / "m01_baseline"
 MODEL_PATH = MODEL_DIR / "model.json"
 META_PATH = MODEL_DIR / "metadata.json"
 
@@ -304,7 +304,7 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
         styled = styled.map(style_return, subset=["Return %"])
     for pcol in [f"P({l.split(' ')[0]})" for l in CLASS_LABELS]:
         if pcol in table.columns:
-            styled = styled.format("{:.1%}", subset=[pcol])
+            styled = styled.format("{:.3f}", subset=[pcol])
     for dcol in ["Entry $", "Price $"]:
         if dcol in table.columns:
             styled = styled.format("${:.2f}", subset=[dcol])
