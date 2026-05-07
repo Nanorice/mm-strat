@@ -16,9 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 DB_PATH = ROOT / "data" / "market_data.duckdb"
-MODEL_DIR = ROOT / "models" / "m01_baseline"
-MODEL_PATH = MODEL_DIR / "model.json"
-META_PATH = MODEL_DIR / "metadata.json"
+DB_PATH = ROOT / "data" / "market_data.duckdb"
 
 CLASS_LABELS = ["Noise (0-2%)", "Moderate (2-10%)", "Strong (10-30%)", "Home Run (>30%)"]
 CLASS_COLORS = ["#9e9e9e", "#42a5f5", "#66bb6a", "#ffa726"]
@@ -95,10 +93,31 @@ def load_pipeline_status() -> pd.DataFrame:
 
 @st.cache_resource
 def load_model() -> tuple[xgb.XGBClassifier, list[str]]:
-    meta = json.loads(META_PATH.read_text())
+    # Query the DB for the current PROD model
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        row = con.execute("""
+            SELECT artifacts_path 
+            FROM models 
+            WHERE status_flag = 'prod' AND model_type = 'classifier' 
+            ORDER BY updated_at DESC LIMIT 1
+        """).fetchone()
+    finally:
+        con.close()
+        
+    if row and row[0]:
+        model_dir = ROOT / row[0]
+    else:
+        # Fallback if no prod model is found
+        model_dir = ROOT / "models" / "m01_baseline"
+        
+    model_path = model_dir / "model.json"
+    meta_path = model_dir / "metadata.json"
+    
+    meta = json.loads(meta_path.read_text())
     features = meta["valid_features"]
     model = xgb.XGBClassifier()
-    model.load_model(str(MODEL_PATH))
+    model.load_model(str(model_path))
     return model, features
 
 

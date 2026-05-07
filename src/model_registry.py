@@ -29,6 +29,7 @@ class ModelRegistry:
     def _create_feature_catalog_tables(self) -> None:
         con = duckdb.connect(self.db_path)
         try:
+            self._migrate_models_table(con)
             con.execute("""
                 CREATE TABLE IF NOT EXISTS feature_catalog (
                     feature_name       VARCHAR NOT NULL,
@@ -57,6 +58,41 @@ class ModelRegistry:
         finally:
             con.close()
 
+    @staticmethod
+    def _migrate_models_table(con: duckdb.DuckDBPyConnection) -> None:
+        """Idempotently add model_name/model_version columns to `models` and backfill.
+
+        Backfill rule for existing rows: split version_id on the timestamp suffix
+        `_YYYYMMDD_HHMMSS`. Anything before that is `model_name`, the timestamp is
+        `model_version`. If no timestamp, the whole id becomes `model_name` and
+        `model_version` stays NULL. Existing non-NULL values are not overwritten.
+        """
+        existing_cols = {
+            r[0] for r in con.execute("PRAGMA table_info('models')").fetchall()
+        }
+        if not existing_cols:
+            return  # `models` doesn't exist yet — schema_design.sql owns its creation
+
+        if "model_name" not in existing_cols:
+            con.execute("ALTER TABLE models ADD COLUMN model_name VARCHAR")
+        if "model_version" not in existing_cols:
+            con.execute("ALTER TABLE models ADD COLUMN model_version VARCHAR")
+
+        con.execute(r"""
+            UPDATE models
+            SET model_name = CASE
+                    WHEN regexp_matches(version_id, '_\d{8}_\d{6}$')
+                        THEN regexp_replace(version_id, '_\d{8}_\d{6}$', '')
+                    ELSE version_id
+                END,
+                model_version = CASE
+                    WHEN regexp_matches(version_id, '_\d{8}_\d{6}$')
+                        THEN regexp_extract(version_id, '(\d{8}_\d{6})$', 1)
+                    ELSE NULL
+                END
+            WHERE model_name IS NULL
+        """)
+
     # ------------------------------------------------------------------
     # MODEL VERSIONS
     # ------------------------------------------------------------------
@@ -75,12 +111,18 @@ class ModelRegistry:
         feature_set_id: Optional[str] = None,
         git_sha: Optional[str] = None,
         model_type: str = "classifier",
+        artifacts_path: Optional[str] = None,
+        model_name: Optional[str] = None,
+        model_version: Optional[str] = None,
     ) -> None:
         if status not in ("test", "prod", "archived"):
             raise ValueError(f"Invalid status: {status}. Must be test/prod/archived")
 
-        artifacts_path = str(ARTIFACTS_BASE / version_id)
-        Path(artifacts_path).mkdir(parents=True, exist_ok=True)
+        if artifacts_path is None:
+            artifacts_path = str(ARTIFACTS_BASE / version_id)
+            Path(artifacts_path).mkdir(parents=True, exist_ok=True)
+        else:
+            artifacts_path = str(artifacts_path)
 
         training_date = training_date or date.today()
         specs_json = json.dumps(specs)
@@ -93,14 +135,16 @@ class ModelRegistry:
                     version_id, status_flag, specs_json, feature_version,
                     training_date, dataset_rows, artifacts_path,
                     accuracy, weighted_f1, macro_f1,
-                    feature_set_id, git_sha, model_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    feature_set_id, git_sha, model_type,
+                    model_name, model_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     version_id, status, specs_json, feature_version,
                     training_date, dataset_rows, artifacts_path,
                     accuracy, weighted_f1, macro_f1,
                     feature_set_id, git_sha, model_type,
+                    model_name, model_version,
                 ],
             )
             logger.info(f"[OK] Registered {version_id} (status={status})")

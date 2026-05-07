@@ -392,7 +392,7 @@ class SEPAHybridV1(bt.Strategy):
             # Check targets
             target_hit = self.position_tracker.check_targets(ticker, data.high[0])
 
-            if target_hit == 'target1' and not pos.tranche1_sold and not pos.tranche1_pending:
+            if target_hit == 'target1' and not pos.tranche1_sold and not pos.tranche1_pending and not pos.exit_pending:
                 # Sell tranche 1 (1/3 of initial)
                 sell_size = pos.tranche_size
                 if sell_size > 0 and sell_size <= pos.remaining_shares:
@@ -401,7 +401,7 @@ class SEPAHybridV1(bt.Strategy):
                     pos.tranche1_pending = True  # Prevent duplicate orders
                     logger.info(f"Target 1 hit for {ticker}: selling {sell_size} shares")
 
-            elif target_hit == 'target2' and not pos.tranche2_sold and not pos.tranche2_pending:
+            elif target_hit == 'target2' and not pos.tranche2_sold and not pos.tranche2_pending and not pos.exit_pending:
                 # Sell tranche 2 (1/3 of initial)
                 sell_size = pos.tranche_size
                 if sell_size > 0 and sell_size <= pos.remaining_shares:
@@ -611,6 +611,12 @@ class SEPAHybridV1(bt.Strategy):
         # Position size based on sizing mode
         size_pct = self.calculate_position_size(regime, score, trailing_pct)
         position_value = self.broker.getvalue() * size_pct
+
+        # Cap to available cash (leave 5% buffer for commissions/slippage)
+        available_cash = self.broker.getcash() * 0.95
+        if position_value > available_cash:
+            position_value = available_cash
+
         shares = int(position_value / price)
 
         if shares < 3:  # Need at least 3 for 3 tranches
@@ -702,3 +708,58 @@ class SEPAHybridV1(bt.Strategy):
     def get_equity_curve(self) -> List[tuple]:
         """Return equity curve as list of (date, value) tuples."""
         return [(s.date, s.portfolio_value) for s in self.daily_snapshots]
+
+
+class SEPAFlatV1(SEPAHybridV1):
+    """
+    Flat-sizing variant of the SEPA strategy.
+
+    Differences from SEPAHybridV1:
+        - Equal-weight position sizing (no regime-based scaling)
+        - Flat percentage stop loss (no ATR-based stops)
+        - Uniform position limits across regimes (still liquidates on Strong Bear)
+        - Higher prob_elite threshold (sweep-optimized default)
+
+    All exit mechanics (3-tranche targets, SMA trend break) are inherited.
+    """
+
+    params = (
+        # Override regime to flat: same limits in all non-bear regimes
+        ('regime_sizes', {0: 0.0, 1: 0.10, 2: 0.10, 3: 0.10, 4: 0.10}),
+        ('regime_max_pos', {0: 0, 1: 10, 2: 10, 3: 10, 4: 10}),
+
+        # Entry: sweep-optimized defaults
+        ('min_score', 30),
+        ('entry_percentile_min', 0.0),
+        ('entry_mode', 'percentile'),
+        ('entry_top_n', None),
+        ('rank_by', 'trailing'),
+        ('min_price', 5.0),
+        ('min_dollar_volume', 0),
+        ('cooldown_days', 3),
+        ('min_prob_elite', 0.25),
+
+        # Flat stop: disable ATR, rely on max_stop_pct
+        ('atr_stop_mult', 0.0),
+        ('max_stop_pct', 0.12),
+
+        # Targets (inherited, kept for tranche exits)
+        ('atr_target1_mult', 3.0),
+        ('min_target1_pct', 0.15),
+        ('atr_target2_add', 2.0),
+        ('sma_exit_period', 50),
+
+        # Rank exits
+        ('exit_percentile_max', 0.40),
+        ('exit_use_percentile', False),
+
+        # Equal-weight sizing
+        ('sizing_mode', 'equal_weight'),
+
+        # Score lookup (required by parent)
+        ('scores_df', None),
+
+        # Warmup
+        ('warmup_days', 10),
+    )
+

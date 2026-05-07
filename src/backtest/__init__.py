@@ -22,6 +22,7 @@ from .sepa_strategy import SEPAHybridV1
 from .runner import SEPABacktestRunner, run_backtest
 from .trade_logger import TradeLogger, TradeLog
 from .report import generate_report
+from .vectorized_backtest import VectorizedSEPABacktest
 
 __all__ = [
     'UniverseScorer',
@@ -36,4 +37,5 @@ __all__ = [
     'TradeLogger',
     'TradeLog',
     'generate_report',
+    'VectorizedSEPABacktest',
 ]

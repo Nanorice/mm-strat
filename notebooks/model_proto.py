@@ -42,7 +42,6 @@ df = con.execute(f"""
     SELECT *
     FROM v_d2_training
     WHERE feature_version = '{FEATURE_VERSION}'
-      AND date >= '{MIN_DATE}'
       AND mfe_pct IS NOT NULL
     ORDER BY date, ticker
 """).df()
@@ -245,17 +244,43 @@ plt.show()
 
 
 # ============================================================================
-# CELL 6 — Warm-Up Clipping
+# CELL 6 — Warm-Up Clipping (Per-Ticker)
 # ============================================================================
-# Why 2020: SEPA C11 breakout_ok fix only backfilled to 2019.
-# Pre-2020 data may have inflated vol ratios on breakout days.
-# Also: M03 regime features need ~252 days of warmup.
+# Drop each ticker's leading rows where any sentinel is NULL.
+# Global date clip (MIN_DATE) is applied first as a data-quality floor
+# (C11 breakout_ok fix only backfilled to 2019).
+# Per-ticker clip handles tickers that entered the universe later —
+# a 2022 IPO still has 252-day RS warmup regardless of the global floor.
+
+WARMUP_SENTINELS = ['rs', 'm03_score', 'dist_from_20d_high_delta']
 
 df['date'] = pd.to_datetime(df['date'])
+
+# Step 1: global data-quality floor
 pre_clip = len(df)
 df = df[df['date'] >= MIN_DATE].copy()
-print(f"Warm-up clip: {pre_clip:,} -> {len(df):,} rows (removed {pre_clip - len(df):,})")
-print(f"Date range after clip: {df['date'].min().date()} to {df['date'].max().date()}")
+print(f"Global floor ({MIN_DATE}): {pre_clip:,} -> {len(df):,} rows")
+
+# Step 2: per-ticker warmup clip — drop each ticker's leading NULL rows
+df = df.sort_values(['ticker', 'date'])
+sentinel_null = df[WARMUP_SENTINELS].isnull().any(axis=1)
+
+# cumsum trick: within each ticker, rows before the first valid row have
+# cumsum==0 on the inverted mask — drop those
+is_valid = ~sentinel_null
+df['_cumvalid'] = is_valid.groupby(df['ticker']).cumsum()
+post_clip = len(df)
+df = df[df['_cumvalid'] > 0].drop(columns='_cumvalid').copy()
+print(f"Per-ticker warmup clip: {post_clip:,} -> {len(df):,} rows (removed {post_clip - len(df):,})")
+
+# Verify residual null rate
+residual = df[WARMUP_SENTINELS].isnull().mean()
+print(f"\nResidual null rates after clip:")
+for col, rate in residual.items():
+    status = "✅" if rate < 0.001 else "⚠️"
+    print(f"  {status} {col}: {rate:.4f}")
+print(f"\nDate range: {df['date'].min().date()} to {df['date'].max().date()}")
+print(f"Tickers retained: {df['ticker'].nunique()}")
 
 # Year distribution
 year_dist = df.groupby(df['date'].dt.year).agg(

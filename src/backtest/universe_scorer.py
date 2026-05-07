@@ -237,7 +237,33 @@ class UniverseScorer:
         X = df[self._m01_features].copy()
 
         # Handle categoricals (sector/industry are VARCHAR in DuckDB)
-        for col in ['industry', 'sector', 'industry_id', 'sector_id']:
+        # Ensure categorical features have exactly the same categories as the training set
+        for col in ['industry', 'sector']:
+            if col in X.columns:
+                cats = None
+                
+                # First try to load from the model's categorical_mapping.json
+                if hasattr(self, 'm01_path') and self.m01_path:
+                    cat_map_path = self.m01_path.parent / 'categorical_mapping.json'
+                    if cat_map_path.exists():
+                        import json
+                        with open(cat_map_path, 'r') as f:
+                            cat_map = json.load(f)
+                            if col in cat_map:
+                                cats = cat_map[col]
+                                
+                if cats is None:
+                    # Fallback: query from company_profiles
+                    con_tmp = duckdb.connect(str(db_path), read_only=True)
+                    try:
+                        cats = con_tmp.execute(f"SELECT DISTINCT {col} FROM company_profiles WHERE {col} IS NOT NULL ORDER BY {col}").df()[col].astype(str).tolist()
+                    finally:
+                        con_tmp.close()
+                        
+                X[col] = X[col].astype(str).replace({'nan': np.nan, 'None': np.nan})
+                X[col] = pd.Categorical(X[col], categories=cats)
+
+        for col in ['industry_id', 'sector_id']:
             if col in X.columns:
                 X[col] = X[col].astype('category')
 
@@ -248,21 +274,26 @@ class UniverseScorer:
         # Predict — classifier uses expected MFE, regressor uses raw score
         prob_elite = None
         if self._is_classifier:
-            # MFE class midpoints: 0=Noise(0-2%), 1=Moderate(2-10%), 2=Strong(10-30%), 3=HomeRun(30%+)
+            import xgboost as xgb
+            dtest = xgb.DMatrix(X, enable_categorical=True)
+            proba = self.m01_model.get_booster().predict(dtest)
             midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
-            proba = self.m01_model.predict_proba(X)
             calibrated_scores = (proba * midpoints).sum(axis=1)
-            prob_elite = proba[:, -1]
+            if proba.shape[1] >= 4:
+                prob_elite = proba[:, 3]
+            elif proba.shape[1] == 2:
+                prob_elite = proba[:, 1]
+            else:
+                prob_elite = proba[:, -1]
             logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
         else:
-            raw_scores = self.m01_model.predict(X)
+            import xgboost as xgb
+            dtest = xgb.DMatrix(X, enable_categorical=True)
+            raw_scores = self.m01_model.get_booster().predict(dtest)
             calibrated_scores = self._calibrate_vectorized(raw_scores)
 
-        result = pd.DataFrame({
-            'date': df['date'].values,
-            'ticker': df['ticker'].values,
-            'calibrated_score': calibrated_scores,
-        })
+        result = df.copy()
+        result['calibrated_score'] = calibrated_scores
         if prob_elite is not None:
             result['prob_elite'] = prob_elite
         result = result.dropna(subset=['calibrated_score'])
@@ -339,20 +370,23 @@ class UniverseScorer:
                 SELECT
                     t3.*,
                     cp.sector, cp.industry,
-                    ff.eps_diluted,
+                    ff.revenue, ff.net_income, ff.eps_diluted, ff.total_assets, ff.total_equity,
                     ff.revenue_growth_yoy, ff.eps_growth_yoy, ff.net_income_growth_yoy,
                     ff.revenue_cagr_3y, ff.eps_accel, ff.revenue_accel,
                     ff.eps_stability_score, ff.earnings_quality_score,
-                    ff.debt_to_equity, ff.current_ratio,
-                    ff.gross_margin, ff.operating_margin, ff.gross_margin_trend,
+                    ff.debt_to_equity, ff.current_ratio, ff.quick_ratio,
+                    ff.gross_margin, ff.operating_margin, ff.net_margin, ff.gross_margin_trend,
                     ff.roe, ff.roa, ff.fcf_margin,
+                    ff.inventory_growth_yoy, ff.inventory_vs_sales_spread,
                     CAST(datediff('day', ff.filing_date, t3.date) AS INTEGER) AS days_since_report,
                     CASE WHEN ABS(ff.eps_diluted) > 0.01
                         THEN t3.close / ff.eps_diluted END AS pe_ratio,
                     CASE WHEN ff.revenue > 0 AND {shares_col} > 0
                         THEN (t3.close * {shares_col}) / ff.revenue END AS ps_ratio,
                     CASE WHEN ff.total_equity > 0 AND {shares_col} > 0
-                        THEN (t3.close * {shares_col}) / ff.total_equity END AS pb_ratio
+                        THEN (t3.close * {shares_col}) / ff.total_equity END AS pb_ratio,
+                    CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
+                        THEN (t3.close / ff.eps_diluted) / ff.eps_growth_yoy END AS peg_adjusted
                 FROM t3_sepa_features t3
                 LEFT JOIN company_profiles cp ON t3.ticker = cp.ticker
                 {shares_join}
@@ -412,7 +446,33 @@ class UniverseScorer:
 
         X = df[self._m01_features].copy()
 
-        for col in ['industry', 'sector', 'industry_id', 'sector_id']:
+        # Ensure categorical features have exactly the same categories as the training set
+        for col in ['industry', 'sector']:
+            if col in X.columns:
+                cats = None
+                
+                # First try to load from the model's categorical_mapping.json
+                if hasattr(self, 'm01_path') and self.m01_path:
+                    cat_map_path = self.m01_path.parent / 'categorical_mapping.json'
+                    if cat_map_path.exists():
+                        import json
+                        with open(cat_map_path, 'r') as f:
+                            cat_map = json.load(f)
+                            if col in cat_map:
+                                cats = cat_map[col]
+                                
+                if cats is None:
+                    # Fallback: query from company_profiles
+                    con_tmp = duckdb.connect(str(db_path), read_only=True)
+                    try:
+                        cats = con_tmp.execute(f"SELECT DISTINCT {col} FROM company_profiles WHERE {col} IS NOT NULL ORDER BY {col}").df()[col].astype(str).tolist()
+                    finally:
+                        con_tmp.close()
+                        
+                X[col] = X[col].astype(str).replace({'nan': np.nan, 'None': np.nan})
+                X[col] = pd.Categorical(X[col], categories=cats)
+
+        for col in ['industry_id', 'sector_id']:
             if col in X.columns:
                 X[col] = X[col].astype('category')
 
@@ -422,19 +482,20 @@ class UniverseScorer:
         prob_elite = None
         if self._is_classifier:
             midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
-            proba = self.m01_model.predict_proba(X)
+            import xgboost as xgb
+            dtest = xgb.DMatrix(X, enable_categorical=True)
+            proba = self.m01_model.get_booster().predict(dtest)
             calibrated_scores = (proba * midpoints).sum(axis=1)
             prob_elite = proba[:, -1]
             logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
         else:
-            raw_scores = self.m01_model.predict(X)
+            import xgboost as xgb
+            dtest = xgb.DMatrix(X, enable_categorical=True)
+            raw_scores = self.m01_model.get_booster().predict(dtest)
             calibrated_scores = self._calibrate_vectorized(raw_scores)
 
-        result = pd.DataFrame({
-            'date': df['date'].values,
-            'ticker': df['ticker'].values,
-            'calibrated_score': calibrated_scores,
-        })
+        result = df.copy()
+        result['calibrated_score'] = calibrated_scores
         if prob_elite is not None:
             result['prob_elite'] = prob_elite
         result = result.dropna(subset=['calibrated_score'])

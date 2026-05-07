@@ -67,23 +67,28 @@ class ViewManager:
         self.db_path = str(db_path or DEFAULT_DB_PATH)
         self.feature_version = feature_version
 
-    def create_all(self) -> None:
+    def create_all(self) -> int:
         print(f"[ViewManager] Creating views (feature_version={self.feature_version})...")
+        views = [
+            self._create_models_table,
+            self._create_v_price_combined,
+            self._create_v_shares_combined,
+            self._create_v_sepa_candidates,
+            self._create_v_d1_candidates,
+            self._create_v_d1_trades,
+            self._create_v_d2_features,
+            self._create_v_d2_hydrated,
+            self._create_v_d2_training,
+            self._create_v_d3_deployment,
+            self._create_v_screener_dashboard,
+            self._refresh_screener_watchlist,
+        ]
         con = duckdb.connect(self.db_path)
         try:
-            self._create_models_table(con)
-            self._create_v_price_combined(con)
-            self._create_v_shares_combined(con)
-            self._create_v_sepa_candidates(con)
-            self._create_v_d1_candidates(con)
-            self._create_v_d1_trades(con)  # Alias for standardized naming
-            self._create_v_d2_features(con)
-            self._create_v_d2_hydrated(con)  # Renamed from v_d2r_hydrated
-            self._create_v_d2_training(con)
-            self._create_v_d3_deployment(con)  # New deployment view
-            self._create_v_screener_dashboard(con)
-            self._refresh_screener_watchlist(con)
+            for fn in views:
+                fn(con)
             print("[OK] All views created successfully")
+            return len(views)
         except Exception as e:
             logger.error(f"View creation failed: {e}")
             print(f"[ERROR] View creation failed: {e}")
@@ -545,11 +550,12 @@ class ViewManager:
             WITH outcomes AS (
                 SELECT
                     trade_id,
-                    (MIN(low) / FIRST(close ORDER BY date) - 1.0) * 100.0 AS mae_pct,
+                    -- Exclude entry day (days_in_trade=0): intraday low/high occur before we enter at close
+                    (MIN(CASE WHEN days_in_trade > 0 THEN low END) / FIRST(close ORDER BY date) - 1.0) * 100.0 AS mae_pct,
                     (MAX(high) / FIRST(close ORDER BY date) - 1.0) * 100.0 AS mfe_pct,
                     (LAST(close ORDER BY date) / FIRST(close ORDER BY date) - 1.0) * 100.0 AS return_at_exit,
                     -- MAE/MFE dates: when the extremes occurred
-                    ARG_MIN(date, low) AS mae_date,
+                    ARG_MIN(CASE WHEN days_in_trade > 0 THEN date END, CASE WHEN days_in_trade > 0 THEN low END) AS mae_date,
                     ARG_MAX(date, high) AS mfe_date,
                     MAX(sepa_exit_date) AS sepa_exit_date,
                     MAX(days_in_trade) AS holding_days,

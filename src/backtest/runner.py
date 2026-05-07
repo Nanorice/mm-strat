@@ -390,6 +390,7 @@ class SEPABacktestRunner:
     def get_trade_dataframe(self) -> Optional[pd.DataFrame]:
         """
         Convert closed positions to DataFrame for report generation.
+        Includes max_dd_pct (Maximum Drawdown from peak during trade) and mae_pct (Maximum Adverse Excursion from entry).
 
         Returns:
             DataFrame with trade details or None if no strategy run yet
@@ -401,9 +402,31 @@ class SEPABacktestRunner:
         if not closed:
             return None
 
+        scores_idx = None
+        if hasattr(self, 'scores_df') and self.scores_df is not None:
+            if not isinstance(self.scores_df.index, pd.MultiIndex):
+                scores_idx = self.scores_df.set_index(['ticker', 'date'])
+            else:
+                scores_idx = self.scores_df
+
         records = []
         for pos in closed:
-            records.append({
+            max_dd_pct = 0.0
+            mae_pct = 0.0
+            
+            if pos.entry_date and pos.exit_date:
+                feed = self.cerebro.datasbyname.get(pos.ticker)
+                if feed is not None and hasattr(feed.p, 'dataname'):
+                    df = feed.p.dataname
+                    mask = (df.index >= pd.Timestamp(pos.entry_date)) & (df.index <= pd.Timestamp(pos.exit_date))
+                    trade_df = df[mask]
+                    if not trade_df.empty and pos.entry_price > 0:
+                        cummax = trade_df['high'].cummax()
+                        dd = (trade_df['low'] - cummax) / cummax
+                        max_dd_pct = dd.min() * 100
+                        mae_pct = ((trade_df['low'].min() - pos.entry_price) / pos.entry_price) * 100
+
+            record = {
                 'ticker': pos.ticker,
                 'entry_date': pos.entry_date,
                 'entry_price': pos.entry_price,
@@ -415,9 +438,90 @@ class SEPABacktestRunner:
                 'initial_size': pos.initial_size,
                 'pnl_percent': pos.pnl_percent,
                 'holding_days': (pos.exit_date - pos.entry_date).days if pos.exit_date and pos.entry_date else 0,
-            })
+                'max_dd_pct': max_dd_pct,
+                'mae_pct': mae_pct,
+            }
+            
+            if pos.entry_date and scores_idx is not None:
+                idx_key = (pos.ticker, pd.Timestamp(pos.entry_date))
+                if idx_key in scores_idx.index:
+                    row_series = scores_idx.loc[idx_key]
+                    if isinstance(row_series, pd.DataFrame):
+                        row_series = row_series.iloc[0]
+                    for k, v in row_series.to_dict().items():
+                        if k not in record:  # Do not overwrite calculated trade metrics
+                            record[k] = v
+                            
+            records.append(record)
 
         return pd.DataFrame(records)
+
+    def get_daily_holding_dataframe(self) -> Optional[pd.DataFrame]:
+        """
+        Get time series of price and score changes for every day a position was held.
+        
+        Returns:
+            DataFrame with columns: ticker, entry_date, date, days_held, close, pct_change_from_entry, m01_score, trailing_pct
+        """
+        if self.strategy is None:
+            return None
+
+        closed = self.strategy.position_tracker.closed_positions
+        if not closed:
+            return None
+
+        scores_idx = None
+        if hasattr(self, 'scores_df') and self.scores_df is not None:
+            if not isinstance(self.scores_df.index, pd.MultiIndex):
+                scores_idx = self.scores_df.set_index(['ticker', 'date'])
+            else:
+                scores_idx = self.scores_df
+
+        all_daily_records = []
+        for pos in closed:
+            if not pos.entry_date or not pos.exit_date:
+                continue
+                
+            feed = self.cerebro.datasbyname.get(pos.ticker)
+            if feed is not None and hasattr(feed.p, 'dataname'):
+                df = feed.p.dataname
+                mask = (df.index >= pd.Timestamp(pos.entry_date)) & (df.index <= pd.Timestamp(pos.exit_date))
+                trade_df = df[mask]
+                
+                if trade_df.empty or pos.entry_price == 0:
+                    continue
+                
+                days_held = 0
+                for date, row in trade_df.iterrows():
+                    m01_score = None
+                    trailing_pct = None
+                    if scores_idx is not None:
+                        idx_key = (pos.ticker, pd.Timestamp(date))
+                        if idx_key in scores_idx.index:
+                            score_row = scores_idx.loc[idx_key]
+                            if isinstance(score_row, pd.DataFrame):
+                                score_row = score_row.iloc[0]
+                            m01_score = score_row.get('normalized_score')
+                            trailing_pct = score_row.get('trailing_pct')
+                            
+                    pct_change = (row['close'] - pos.entry_price) / pos.entry_price * 100
+                    
+                    all_daily_records.append({
+                        'ticker': pos.ticker,
+                        'entry_date': pos.entry_date,
+                        'date': date,
+                        'days_held': days_held,
+                        'close': row['close'],
+                        'pct_change_from_entry': pct_change,
+                        'm01_score': m01_score,
+                        'trailing_pct': trailing_pct
+                    })
+                    days_held += 1
+                    
+        if not all_daily_records:
+            return pd.DataFrame()
+            
+        return pd.DataFrame(all_daily_records)
 
     def save_report(self, metrics: Dict[str, Any], run_dir: Path = None) -> str:
         """

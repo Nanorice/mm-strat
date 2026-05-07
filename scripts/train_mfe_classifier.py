@@ -124,34 +124,46 @@ def create_mfe_labels(df: pd.DataFrame, return_col: str = 'mfe_pct') -> pd.Serie
     return pd.Series(labels, index=df.index)
 
 
+DEFAULT_HYPERPARAMS: dict = {
+    'objective': 'multi:softprob',
+    'num_class': 4,
+    'max_depth': 4,
+    'learning_rate': 0.05,
+    'subsample': 0.8,
+    'colsample_bytree': 0.8,
+    'eval_metric': 'mlogloss',
+    'random_state': 42,
+    'tree_method': 'hist',
+    'enable_categorical': True,
+}
+
+NUM_BOOST_ROUND = 100
+EARLY_STOPPING_ROUNDS = 20
+LABEL_THRESHOLDS = [0, 2, 10, 30]  # upper bounds per class (last is open-ended)
+
+
 def train_mfe_classifier(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
     params: dict | None = None,
-) -> xgb.Booster:
-    """Train XGBoost multi-class classifier with early stopping on val."""
+) -> tuple[xgb.Booster, dict]:
+    """Train XGBoost multi-class classifier with early stopping on val.
+
+    Returns:
+        (model, training_info) where training_info contains class weights.
+    """
     logger.info("🚀 Training MFE classifier...")
 
     classes = np.unique(y_train)
     weights = compute_class_weight('balanced', classes=classes, y=y_train)
     sample_weights = y_train.map(dict(zip(classes, weights)))
-    logger.info(f"⚖️  Class weights: {dict(zip(classes, weights))}")
+    class_weights = {int(c): float(w) for c, w in zip(classes, weights)}
+    logger.info(f"⚖️  Class weights: {class_weights}")
 
     if params is None:
-        params = {
-            'objective': 'multi:softprob',
-            'num_class': 4,
-            'max_depth': 4,
-            'learning_rate': 0.05,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'eval_metric': 'mlogloss',
-            'random_state': 42,
-            'tree_method': 'hist',
-            'enable_categorical': True,
-        }
+        params = dict(DEFAULT_HYPERPARAMS)
 
     X_train = X_train.replace([np.inf, -np.inf], np.nan)
     X_val = X_val.replace([np.inf, -np.inf], np.nan)
@@ -162,14 +174,14 @@ def train_mfe_classifier(
     model = xgb.train(
         params=params,
         dtrain=dtrain,
-        num_boost_round=100,
+        num_boost_round=NUM_BOOST_ROUND,
         evals=[(dtrain, 'train'), (dval, 'val')],
-        early_stopping_rounds=20,
+        early_stopping_rounds=EARLY_STOPPING_ROUNDS,
         verbose_eval=10,
     )
 
     logger.info(f"✅ Training complete (best iteration: {model.best_iteration})")
-    return model
+    return model, {'class_weights': class_weights, 'best_iteration': int(model.best_iteration)}
 
 
 def parse_args() -> argparse.Namespace:
@@ -223,8 +235,10 @@ def main() -> None:
     # XGBoost requires `category` dtype for categoricals (object dtype is rejected
     # even with enable_categorical=True). v_d2_training returns sector/industry as
     # VARCHAR → pandas object — cast them here.
+    cat_mapping = {}
     for col in X.select_dtypes(include='object').columns:
         X[col] = X[col].astype('category')
+        cat_mapping[col] = list(X[col].cat.categories)
 
     # 5. Temporal split — snap boundaries to date boundaries so same-day rows for
     # many tickers don't straddle splits (would trigger leakage guard).
@@ -283,7 +297,7 @@ def main() -> None:
         logger.warning(f"⚠️  Suspicious features: {feature_check['suspicious_features']}")
 
     # 7. Train
-    model = train_mfe_classifier(X_train, y_train, X_val, y_val)
+    model, training_info = train_mfe_classifier(X_train, y_train, X_val, y_val)
 
     # 8. Evaluate
     output_dir = Path(__file__).parent.parent / "models"
@@ -345,6 +359,9 @@ def main() -> None:
     (model_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, default=str))
     logger.info(f"📝 Metadata saved to {model_dir / 'metadata.json'}")
 
+    (model_dir / "categorical_mapping.json").write_text(json.dumps(cat_mapping, indent=2, default=str))
+    logger.info(f"📝 Categorical mapping saved to {model_dir / 'categorical_mapping.json'}")
+
     # 10. Register in model registry
     registry = ModelRegistry(db_path=args.db)
     version_id = f'{args.model_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
@@ -355,19 +372,15 @@ def main() -> None:
     weighted_f1 = eval_results.get('weighted_f1') if not args.no_holdout else None
     macro_f1 = eval_results.get('macro_f1') if not args.no_holdout else None
 
+    hyperparams = {k: v for k, v in DEFAULT_HYPERPARAMS.items()
+                   if k not in ('eval_metric', 'random_state', 'tree_method', 'enable_categorical')}
+
     try:
         registry.register_version(
             version_id=version_id,
             specs={
                 'features': valid_features,
-                'hyperparameters': {
-                    'objective': 'multi:softprob',
-                    'num_class': 4,
-                    'max_depth': 4,
-                    'learning_rate': 0.05,
-                    'subsample': 0.8,
-                    'colsample_bytree': 0.8,
-                },
+                'hyperparameters': hyperparams,
                 'training_config': {
                     'train_samples': len(X_train),
                     'val_samples': len(X_val),
@@ -375,6 +388,12 @@ def main() -> None:
                     'feature_version': args.feature_version,
                     'min_date': args.min_date,
                     'split_mode': metadata['split_mode'],
+                    'num_boost_round': NUM_BOOST_ROUND,
+                    'early_stopping_rounds': EARLY_STOPPING_ROUNDS,
+                    'best_iteration': training_info['best_iteration'],
+                    'label_thresholds': LABEL_THRESHOLDS,
+                    'class_weighting': 'balanced',
+                    'class_weights': training_info['class_weights'],
                 },
                 'val_metrics': {
                     'accuracy': eval_results.get('accuracy'),
@@ -392,6 +411,9 @@ def main() -> None:
             feature_set_id=args.feature_set,
             git_sha=git_sha,
             model_type='classifier',
+            artifacts_path=str(model_dir),
+            model_name=args.model_name,
+            model_version=args.model_version,
         )
         logger.info(f"✅ Registered model version: {version_id}")
 

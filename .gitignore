@@ -109,3 +109,11 @@ buy_list_export.csv
 # Temporary documentation (commit finalized docs only)
 # Keep: documented fixes and summaries that are final
 # Ignore: work-in-progress investigation notes
+
+# Auto-generated model artifacts and temp files
+models/m01_baseline_*/
+models/m01_prototype*/
+models/m01_prototyoe*/
+test.json
+test_field/
+error.txt

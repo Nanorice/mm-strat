@@ -412,16 +412,14 @@ class FundamentalEngine:
                 rows = []
                 for dt, row in ed.iterrows():
                     dt_clean = pd.Timestamp(dt).tz_localize(None).date()
-                    # Only keep confirmed (reported) earnings rows
-                    if not pd.notna(row.get('Reported EPS')):
-                        continue
+                    reported = row.get('Reported EPS')
                     rows.append({
                         'ticker':           ticker,
                         'earnings_date':    dt_clean,
                         'eps_estimate':     _nan_to_none(row.get('EPS Estimate')),
-                        'reported_eps':     _nan_to_none(row.get('Reported EPS')),
+                        'reported_eps':     _nan_to_none(reported),
                         'eps_surprise_pct': _nan_to_none(row.get('Surprise(%)')),
-                        'is_confirmed':     True,
+                        'is_confirmed':     bool(pd.notna(reported)),
                         'updated_at':       datetime.utcnow(),
                     })
                 return pd.DataFrame(rows) if rows else None

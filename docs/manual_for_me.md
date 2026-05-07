@@ -1,6 +1,6 @@
 # Conceptual Architecture
 
-> Last updated: 2026-03-29 (session 4) — Dashboard Phase 1 added, open TODOs updated.
+> Last updated: 2026-05-07 (session 5) — Model diff tool added, model registry columns extended.
 
 > Naming convention: t1 is raw data in phase 1. t2 is filtered data for investible universe, with lightweight and alpha (because it uses crossectional features so need a larger universe). t3 is furthered filter for SEPA entry criterias.
 
@@ -666,59 +666,92 @@ These are importable from notebooks/scripts — not just CLI tools.
 
 | Column | Type | Purpose |
 |--------|------|---------|
-| `version_id` | VARCHAR PK | Unique ID (e.g., `M01_baseline_20260315_133129`) |
+| `version_id` | VARCHAR PK | Unique ID (e.g., `m01_prototype_2003_2026_20260506_160054`) |
 | `status_flag` | VARCHAR | `test` / `prod` / `archived` |
-| `specs_json` | JSON | Features list, hyperparameters, training config |
+| `specs_json` | JSON | Features list, hyperparameters, training config (see below) |
 | `feature_version` | VARCHAR | Feature schema (e.g., `v3.1`) |
 | `training_date` | DATE | When the model was trained |
 | `dataset_rows` | INTEGER | Training set size |
-| `artifacts_path` | VARCHAR | Path to model files on disk |
-| `rmse`, `mae`, `r2`, `spearman_corr` | FLOAT | Evaluation metrics |
+| `artifacts_path` | VARCHAR | Actual path to model files on disk |
+| `model_name` | VARCHAR | Base model name (e.g., `m01_prototype_2003_2026`) |
+| `model_version` | VARCHAR | Timestamp suffix (e.g., `20260506_160054`) |
+| `accuracy`, `weighted_f1`, `macro_f1` | FLOAT | Test/val evaluation metrics |
+| `rmse`, `mae`, `r2`, `spearman_corr` | FLOAT | Regression metrics (unused for classifiers) |
 
-**Current production model**: `M01_baseline_20260315_133129` (status=`test`, not yet promoted)
-
-**Artifact layout**:
+**`specs_json` structure** (populated by `train_mfe_classifier.py`):
+```json
+{
+  "features": ["feature1", "feature2", ...],
+  "hyperparameters": {
+    "objective": "multi:softprob",
+    "num_class": 4,
+    "max_depth": 4,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8
+  },
+  "training_config": {
+    "train_samples": 31364,
+    "val_samples": 5551,
+    "test_samples": 0,
+    "feature_version": "v3.1",
+    "min_date": "2003-01-01",
+    "split_mode": "no_holdout_85_15_0",
+    "num_boost_round": 100,
+    "early_stopping_rounds": 20,
+    "best_iteration": 99,
+    "label_thresholds": [0, 2, 10, 30],
+    "class_weighting": "balanced",
+    "class_weights": {"0": 1.2, "1": 0.9, "2": 1.4, "3": 4.1}
+  }
+}
 ```
-models/artifacts/M01_baseline_20260315_133129/
-    model.json              # XGBoost booster (509 KB)
-    metadata.json           # Training config, feature list, metrics, leakage audit
+
+**Current prod model**: `M01_baseline_v0.1` (status=`prod`). Latest prototype: `m01_prototype_2003_2026_20260506_160054`.
+
+**Artifact layout** (written by `train_mfe_classifier.py`):
+```
+models/<model_name>/<model_version>/     ← artifacts_path in registry
+    model.json                           # XGBoost booster
+    metadata.json                        # Training config, feature list, leakage audit
+    categorical_mapping.json             # category dtype mappings
     evaluation/
-        results.json        # Accuracy, F1, confusion matrix
+        results.json                     # Accuracy, F1, per-class, feature importance, SHAP
         confusion_matrix.png
         feature_importance.png
-        roc_curves.png
-        pr_curves.png
+        roc_curves.png / pr_curves.png
         calibration_curves.png
         class_distribution.png
         report_*.md
+        diffs/                           # model_diff.py output (when --save used)
+            vs_<other_version>.json
+            vs_<other_version>.txt
 ```
-
-**Working copy**: `models/m01_baseline/v1/` (same content, used during development)
 
 **CLI:**
 ```python
 from src.model_registry import ModelRegistry
 reg = ModelRegistry()
-reg.list_versions()                      # Show all registered models
-reg.set_prod('M01_baseline_...')         # Promote to production
-reg.get_model_specs('M01_baseline_...')  # Load feature list + hyperparams
+reg.list_versions()                      # All registered models
+reg.set_prod('version_id')               # Promote to production
+reg.get_model_specs('version_id')        # Load specs_json
+reg.get_artifacts_path('version_id')     # Returns Path to artifacts dir
 ```
 
-**All model artifacts** are under `models/` — key subdirectories:
+**All model artifacts** are under `models/`:
 ```
 models/
-    artifacts/              # Registered model artifacts (timestamped)
-    m01_baseline/v1/        # Working copy of current baseline
-    m01_v2/, m01_v3/        # Experimental variants
-    m01_hybrid_floor/       # Hybrid variant with floor constraint
-    m01_rank/               # Ranking variant
-    m03_configs/            # M03 regime config files
-    ablation_study/         # M01 ablation results
+    m01_prototype_2003_2026/v1/   # Prototype trained 2003-2026 (first run)
+    m01_prototype_2003_2026/v2/   # Prototype trained 2003-2026 (second run, current best)
+    m01_baseline/v1/              # Baseline (registered as M01_baseline_v0.1 in prod)
+    artifacts/                    # Legacy registered artifacts (mostly empty dirs — pre-P1 fix)
+    m03_configs/                  # M03 regime config files
+    ablation_study/               # M01 ablation results
     feature_importance_*.csv
-    model_report_*.md       # Timestamped evaluation reports
-    eda_dashboard.json
-    preprocessing_config.json
+    model_report_*.md
 ```
+
+> **Note on `artifacts_path`**: Before 2026-05-07, the registry auto-generated `models/artifacts/<version_id>/` as `artifacts_path`, creating an empty dir that nothing wrote to. This was fixed (P1) — the trainer now passes `artifacts_path=model_dir` explicitly. Existing pre-fix registrations still point to empty dirs; use filesystem paths directly with `model_diff.py` for those models.
 
 ---
 
@@ -745,6 +778,7 @@ v_d2_training (or d2_training_cache)
 | File | Purpose |
 |------|---------|
 | `scripts/train_mfe_classifier.py` | Main training script. Reads `v_d2_training`, trains, evaluates, registers. |
+| `scripts/model_diff.py` | Side-by-side diff of two model versions (see below). |
 | `scripts/run_m01_ablation_study.py` | M01 ablation study (target definitions) |
 | `scripts/run_m01_phase3_integration.py` | Phase 3: M01+M02 integration & crisis simulation |
 | `scripts/run_m01_phase4_deployment.py` | Phase 4: Production deployment |
@@ -754,15 +788,67 @@ v_d2_training (or d2_training_cache)
 | `src/pipeline/m01_trainer.py` | M01 trainer class (used by training scripts) |
 | `src/pipeline/m03_regime.py` | M03 regime model computation |
 
-**CLI:**
+**Training CLI:**
 ```bash
-python scripts/train_mfe_classifier.py    # Train baseline, auto-registers in models table
+# Train with standard 60/20/20 split, auto-registers in models table
+python scripts/train_mfe_classifier.py
+
+# Train no-holdout (85/15 val only — more data for final model)
+python scripts/train_mfe_classifier.py --no-holdout
+
+# Custom feature set, model name, date range
+python scripts/train_mfe_classifier.py \
+    --feature-set fs_m01_prototype \
+    --model-name m01_prototype_2003_2026 \
+    --model-version v3 \
+    --min-date 2003-01-01
 ```
+
+**`train_mfe_classifier.py` output** (per run):
+- `models/<model_name>/<model_version>/model.json` — trained XGBoost booster
+- `models/<model_name>/<model_version>/metadata.json` — split config, features, leakage audit
+- `models/<model_name>/<model_version>/evaluation/results.json` — all metrics
+- Registry row in `models` table with correct `artifacts_path`
+
+### Model Diff Tool
+
+Compare two model versions side-by-side. Resolves identifiers via DuckDB first, then filesystem path as fallback.
+
+**Sections rendered:**
+1. Training Config — split mode, date range, sample sizes, label thresholds, boost rounds
+2. Hyperparameters — param-by-param delta table
+3. Feature Set Diff — added / removed / shared feature counts
+4. Aggregate Metrics — accuracy, F1, brier score deltas
+5. Per-Class Metrics — precision / recall / F1 / ROC-AUC per class
+6. Feature Importance Rank Shift — top-N features by XGBoost gain rank movement
+6b. SHAP Top-5 — top SHAP features per class side-by-side (if available)
+
+```bash
+# Compare two filesystem paths (works even for unregistered models)
+python scripts/model_diff.py \
+    --model-a models/m01_prototype_2003_2026/v1 \
+    --model-b models/m01_prototype_2003_2026/v2
+
+# Compare two registered version_ids (DuckDB lookup)
+python scripts/model_diff.py \
+    --model-a M01_baseline_v0.1 \
+    --model-b m01_prototype_2003_2026_20260506_160054
+
+# Save machine-readable JSON + plain-text tables alongside model B's artifacts
+python scripts/model_diff.py \
+    --model-a models/m01_prototype_2003_2026/v1 \
+    --model-b models/m01_prototype_2003_2026/v2 \
+    --save --save-text
+
+# Limit rank shift table to top 20 features (default 15)
+python scripts/model_diff.py --model-a ... --model-b ... --top-n 20
+```
+
+**Save output**: `models/<model_b_path>/diffs/vs_<model_a>.json` (+ `.txt` with `--save-text`)
 
 **Status**: ⚠️ Functional but needs work
 - [ ] **Class imbalance** — macro_F1=0.25. Needs SMOTE / threshold tuning / cost-sensitive learning.
-- [ ] **Retrain on updated T3 data** — current model trained on 2026-03-15 data. T3 was rebuilt on 2026-03-27.
-- [ ] **Promote to prod** — currently `status=test`. Run `reg.set_prod(version_id)` after validation.
+- [ ] **Promote to prod** — prototype trained 2026-05-06 is status=test. Run `reg.set_prod(version_id)` after validation.
 
 ---
 
@@ -949,3 +1035,7 @@ models/feature_importance_*.csv
 - ~~`screener_members` view~~ → Dropped; `screener_membership` is the source of truth (2026-03-28).
 - ~~`rename_tickers.py` referencing dropped tables~~ → Updated to use `screener_membership` (2026-03-28).
 - ~~Dashboard Phase 1~~ → `scripts/dashboard.py` — screener watchlist + M01 4-class scoring + M03 regime header + analytics (2026-03-29).
+- ~~No model comparison tool~~ → `scripts/model_diff.py` — 7-section CLI diff (training config, hyperparams, feature diff, aggregate metrics, per-class, FI rank shift, SHAP) with `--save`/`--save-text` flags (2026-05-07).
+- ~~Registry `artifacts_path` pointed to empty dirs~~ → P1 fix: `register_version()` now accepts `artifacts_path` param; trainer passes `model_dir` explicitly (2026-05-07).
+- ~~`specs_json` missing training config fields~~ → P2: added `num_boost_round`, `early_stopping_rounds`, `best_iteration`, `label_thresholds`, `class_weighting`, `class_weights` (2026-05-07).
+- ~~No `model_name`/`model_version` columns in `models` table~~ → P4: idempotent migration added + backfilled existing rows by parsing `version_id` timestamp suffix (2026-05-07).

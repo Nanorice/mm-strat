@@ -63,5 +63,8 @@
       "c:\\Users\\Hang\\PycharmProjects\\quantamental",
       "c:\\Users\\Hang\\PycharmProjects\\quantamental\\.claude\\skills\\module-passport"
     ]
+  },
+  "enabledPlugins": {
+    "andrej-karpathy-skills@karpathy-skills": true
   }
 }

@@ -1,0 +1,10 @@
+ticker,earnings_date,eps_estimate,reported_eps,eps_surprise_pct,is_confirmed
+AAPL,2026-07-30,1.89,,,False
+AAL,2026-07-23,-0.04,,,False
+AAMI,2026-07-30,0.99,,,False
+AAT,2026-07-28,0.12,,,False
+AB,2026-07-23,0.82,,,False
+AA,2026-07-15,2.22,,,False
+AAON,2026-05-07,0.29,,,False
+ABCB,2026-07-27,1.66,,,False
+ABBV,2026-07-30,3.76,,,False
