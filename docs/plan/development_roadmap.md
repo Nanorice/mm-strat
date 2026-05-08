@@ -68,6 +68,8 @@ This is a **high-impact, foundational improvement**. The dense dataset directly 
 
 **Infrastructure status**: ✅ Dense T3 pipeline is operational. `v_t3_training` view is created by `UniverseScorer.create_view()` with ASOF JOINs for fundamentals and shares.
 
+**EDA status** *(2026-05-09)*: ✅ `scores_cache.parquet` (4.03M rows × 209 cols) profiled. Signal validated — see item 6 findings. Data quality note: ticker **LIF** removed (3.2M% return on 2024-07-05 — ticker reuse artifact). Policy: do not cap returns; drop confirmed bad tickers by name only.
+
 ---
 
 ## 6. Score Distribution Analysis & Multi-Horizon Target Validation
@@ -85,6 +87,15 @@ This is a **high-impact, foundational improvement**. The dense dataset directly 
 
 **Feasibility**: ✅ Fully doable today with the existing dataset. The scorer already outputs `prob_elite` and `calibrated_score` per (date, ticker). Forward returns (`return_1d`, `return_5d`, `return_20d`, `return_60d`) are pre-computed in T3. This is essentially an EDA notebook exercise.
 
+**EDA findings** *(2026-05-09)*: ✅ Complete.
+- `prob_elite` is right-skewed (0.026–0.826). Model is conservative — never assigns very high probabilities.
+- `breakout_ok=True` rows are 3.5% of universe (141K rows), mean score = 0.306.
+- **Decile 9** (prob_elite ≥ 0.435): Mean 20d return = +13.4%, Median = +12.0%, 402K rows, 1,822 tickers. Broad-based signal — mean and median differ by only 1.4pp.
+- **IC within decile 9 = 0.45** — signal is continuous, not binary. Sub-quintile 4 (score ≥ ~0.65): Median 20d = +29.8%, 86.2% hit rate for +10%.
+- **Effective live threshold: ~0.60** (sub-quintile 3 entry), not 0.50. The model's score range tops out at 0.83.
+- **Regime gate**: IC collapses to −0.01 in Bear regime (m03_score < 40). Gate on `m03_score > 60` improves effective IC from 0.059 → ~0.09. Hard filter only — does not improve in-regime signal quality.
+- **Pending**: Redo decile table with cross-sectional demeaned (excess) returns to strip market beta from deciles 0–8.
+
 ### 6b. Multi-Horizon Target Experiments
 
 **Goal**: Test whether the model trained on a random holding period (lifetime MFE until trend break) generalizes to predict returns over *defined* horizons: 1-day, 3-day, 5-day, 20-day, and "lifetime" (until `trend_ok` flips to False).
@@ -97,6 +108,19 @@ This is a **high-impact, foundational improvement**. The dense dataset directly 
 **Assessment**: This is a **critical validation step** before investing in strategy development. If the current model's score correlates well across multiple horizons, it suggests the signal is structural (quality of setup), not tied to the specific training target. If it only predicts lifetime MFE well but not 5-day returns, then the model is capturing something real but unusable for tactical timing.
 
 **Dependencies**: Dense T3 dataset (item 5 ✅). Minimal new code — mostly notebook analysis.
+
+**EDA findings** *(2026-05-09)*: ✅ Core complete.
+
+| Horizon | Mean IC | t-stat | Verdict |
+|---|---|---|---|
+| 1d | −0.014 | −2.89 | ❌ Inverts — mean reversion on breakout day |
+| 5d | +0.015 | +3.08 | ✅ Weak positive |
+| **20d** | **+0.059** | **+10.54** | ✅✅ Primary horizon |
+| 60d | +0.044 | +8.46 | ✅ Strong |
+
+**Conclusion**: Signal is **structural** — a model trained on lifetime MFE correlates with returns at all positive horizons. The 1d inversion confirms do not enter at breakout-day close. Score momentum (`score_delta_5d`) IC vs return_20d = 0.166 — independent secondary signal.
+
+**Remaining**: `return_3d` and "lifetime until trend break" targets not yet computed. Per-horizon model retraining (M01_5d, M01_20d) deferred pending OOS validation.
 
 ---
 
@@ -127,6 +151,26 @@ Given a model that scores setups daily (enabled by dense T3), analyze how the sc
 This is **the core strategy question** — and it only becomes answerable with the dense dataset. Previously we could only ask "should I buy on breakout day?"; now we can ask "when is the best day to buy?" The risk is overfitting entry rules to historical patterns. Mitigation: use walk-forward validation with strict train/test separation.
 
 **Dependencies**: Items 5 (dense T3 ✅) and 6 (score validation — should be done first to confirm the score is predictive at all).
+
+**EDA findings** *(2026-05-09)*: 🔄 In progress — `notebooks/scores_eda.ipynb`.
+
+**Score trajectory** (Home Run vs Non-event, T−30 to T+30):
+- Score **ramps from T−10** before breakout (0.37 → 0.51) — leading indicator exists
+- Score **peaks at T=0** (breakout day) then decays to ~0.40 by T+30
+- Non-event tickers flat at ~0.18 throughout — structurally different, not just a different moment
+- **Exit signal candidate**: monitor score daily; exit when it drops below 0.435 (decile 9 floor)
+
+**Entry rule comparison** *(in-sample / data leakage — structural ordering only)*:
+
+| Rule | Median 20d | Hit >10% | N | Notes |
+|---|---|---|---|---|
+| Level only (≥0.60) | 39.0% | 93.8% | 27,886 | Baseline |
+| Level + rising score | 39.0% | 94.6% | 20,456 | No improvement; cuts 27% of signals |
+| **Level + 3 consecutive days** | **42.0%** | **94.2%** | **13,654** | ✅ Best rule |
+
+**Top-K daily**: Top-10 (Mean 37.5%, Median 29.1%) is the practical sweet spot. Top-5 is too concentrated.
+
+**Recommended strategy prototype**: `prob_elite ≥ 0.60` for 3+ consecutive days + `m03_score > 60` regime gate + Top-10 daily selection. Requires OOS validation before backtesting.
 
 ---
 
