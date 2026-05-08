@@ -8,5 +8,6 @@ Responsibilities:
 """
 
 from src.managers.view_manager import ViewManager
+from src.managers.sepa_watchlist_manager import SepaWatchlistManager
 
-__all__ = ['ViewManager']
+__all__ = ['ViewManager', 'SepaWatchlistManager']

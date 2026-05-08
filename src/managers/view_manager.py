@@ -232,6 +232,8 @@ class ViewManager:
                 ON f.ticker = c.ticker
             WHERE c.is_active = TRUE
               AND f.feature_version = '{self.feature_version}'
+              AND f.trend_ok = TRUE
+              AND f.breakout_ok = TRUE
         """)
         n = con.execute(
             f"SELECT COUNT(*) FROM v_sepa_candidates "

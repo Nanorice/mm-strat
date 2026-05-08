@@ -25,6 +25,7 @@ from src.regime_pipeline import RegimePipeline
 from src.universe_backfill import UniverseBackfillEngine
 from src.managers.view_manager import ViewManager
 from src.managers.screener_manager import ScreenerManager
+from src.managers.sepa_watchlist_manager import SepaWatchlistManager
 from src.managers.pipeline_run_manager import PipelineRunManager, PipelineRunStatus
 
 # Import config
@@ -37,14 +38,15 @@ class DailyPipelineOrchestrator:
     """
     Orchestrates the daily 8-phase pipeline.
 
-    Phase 1: T1 Ingestion (PARALLEL) - price, fundamentals, shares, macro
-    Phase 2: Screener Membership - evaluate_and_log to screener_membership event log
-    Phase 3: T2 Screener Features - compute full universe features + XS alphas + ranks
-    Phase 4: T2 Regime Scores - compute M03 regime scores
-    Phase 5: T3 SEPA Features - compute per-ticker features + TS alphas for SEPA candidates
-    Phase 6: View Refresh - recreate all views
-    Phase 7: Training Cache Refresh - materialize d2_training_cache
-    Phase 8: Monitoring - log metrics, send alerts
+    Phase 1:  T1 Ingestion (PARALLEL) - price, fundamentals, shares, macro
+    Phase 2:  Screener Membership - evaluate_and_log to screener_membership event log
+    Phase 3:  T2 Screener Features - compute full universe features + XS alphas + ranks
+    Phase 4:  T2 Regime Scores - compute M03 regime scores
+    Phase 4b: SEPA Watchlist Update - open/close sessions in sepa_watchlist (T3 universe gate)
+    Phase 5:  T3 SEPA Features - compute per-ticker features + TS alphas for sepa_watchlist universe
+    Phase 6:  View Refresh - recreate all views
+    Phase 7:  Training Cache Refresh - materialize d2_training_cache
+    Phase 8:  Monitoring - log metrics, send alerts
     """
 
     def __init__(
@@ -76,6 +78,7 @@ class DailyPipelineOrchestrator:
         self.run_manager = PipelineRunManager(self.db_path)
         self.view_manager = ViewManager(self.db_path)
         self.screener_manager = ScreenerManager(self.db_path)
+        self.sepa_watchlist_manager = SepaWatchlistManager(self.db_path)
 
         # Initialize engines (delegate data I/O)
         self.data_repo = DataRepository(db_path=self.db_path)
@@ -211,6 +214,19 @@ class DailyPipelineOrchestrator:
         )
         run_stats['phase_4'] = phase_stats
         # Non-critical, continue even if failed
+
+        # Phase 4b: SEPA Watchlist Update — must run AFTER t2 features are written
+        # (update_daily reads t2_screener_features for the target date) and BEFORE
+        # T3 (compute_t3_features filters universe via sepa_watchlist).
+        phase_success, phase_stats = self._execute_phase(
+            "phase_4b_sepa_watchlist",
+            lambda: self._run_phase_4b_sepa_watchlist(actual_trading_day),
+            target_date
+        )
+        run_stats['phase_4b'] = phase_stats
+        if not phase_success:
+            critical_success = False
+            return False
 
         # Phase 5: T3 SEPA Features (incremental — auto-fills gaps)
         phase_success, phase_stats = self._execute_phase(
@@ -628,6 +644,23 @@ class DailyPipelineOrchestrator:
         rows = self.regime_pipeline.update_incremental()
 
         return {'rows_processed': rows}
+
+    def _run_phase_4b_sepa_watchlist(self, target_date: str) -> Dict:
+        """Phase 4b: Update sepa_watchlist event log for the target date.
+
+        Reads `t2_screener_features` for `target_date` and applies session events
+        (open/close/cooldown→exited) per SepaWatchlistManager.update_daily(). Must
+        run AFTER Phase 3 (t2 features written) and BEFORE Phase 5 (T3 filters
+        universe via SELECT DISTINCT ticker FROM sepa_watchlist).
+        """
+        result = self.sepa_watchlist_manager.update_daily(target_date)
+        return {
+            'rows_processed': result['opened'] + result['closed'],
+            'opened':         result['opened'],
+            'closed':         result['closed'],
+            'cooldown_to_exited': result['cooldown_to_exited'],
+            'active':         result['active'],
+        }
 
     def _run_phase_5_t3_features_incremental(self, last_trading_day: str) -> Dict:
         """Phase 5 incremental: detect gap in t3_sepa_features, compute missing dates only."""

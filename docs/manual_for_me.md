@@ -1,6 +1,6 @@
 # Conceptual Architecture
 
-> Last updated: 2026-05-07 (session 5) — Model diff tool added, model registry columns extended.
+> Last updated: 2026-05-08 — T3 universe gate refactor (Option C). New `sepa_watchlist` event log + Phase 4b in the daily pipeline.
 
 > Naming convention: t1 is raw data in phase 1. t2 is filtered data for investible universe, with lightweight and alpha (because it uses crossectional features so need a larger universe). t3 is furthered filter for SEPA entry criterias.
 
@@ -38,9 +38,13 @@ Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener memb
 │                         [OHLCV, SMAs, EMAs,            [M03 pillars, deltas]
 │                          XS alphas, ranks]
 │                                 │
+│                         Phase 4b (sepa_watchlist) ──CRITICAL
+│                         -> sepa_watchlist
+│                         [open/close SEPA sessions; T3 universe gate]
+│                                 │
 │                         Phase 5 (T3 SEPA features) ──CRITICAL
 │                         -> t3_sepa_features
-│                         [carry-forward T2 + TS alphas + M03 join]
+│                         [filtered by sepa_watchlist universe; carry-forward T2 + TS alphas + M03 join]
 │                                 │
 │                         Phase 6 (views) [non-crit]
 │                         -> SQL views
@@ -204,42 +208,95 @@ python tools/run_all_audits.py --skip t1 t3   # Skip specific audits
 
 ---
 
-### Phase 5 — T3 SEPA Features *(CRITICAL)*
+### Phase 4b — SEPA Watchlist Update *(CRITICAL)*
 
-**Purpose**: Materialize the full feature set for SEPA breakout candidates only. Single source of truth for all downstream ML and views.
+**Purpose**: Maintain the `sepa_watchlist` event log — the universe gate for T3. Each ticker that ever entered a SEPA session has at least one row; T3 then carries that ticker's full price history (Option C design, 2026-05-08).
 
-**Input**: `t2_screener_features` (SEPA filter + carry-forward), `price_data` (per-ticker rolling windows), `t2_regime_scores` (M03 join).
+**Input**: `t2_screener_features` for `target_date` (reads `trend_ok`, `breakout_ok`, `close`, `sma_50/150/200`).
 
-**Process** (2 sub-phases):
-| Sub-phase | What |
-|-----------|------|
-| A — SQL INSERT OR IGNORE | Filters T2 to `trend_ok AND breakout_ok` candidates. Carries forward all T2 columns (OHLCV, SMAs, EMAs, RS, XS alphas, ranks). Computes per-ticker window features: momentum (21/63/126/189/252d), RSI-14, ATR-14, volume depth, velocity features, pattern flags, pct_chg deltas, sma_50_slope, rs_line_lag_delta. Joins M03 regime scores by date. |
-| B — Python UPDATE | 9 TS alphas (alpha006–alpha101) via multiprocessing. Warmup loaded from `t2_screener_features` (broader population) for continuous rolling windows. |
+**Process** (one SQL pass, three operations, in order):
+1. **Close** open sessions whose trend boundary breaks today (`close < sma_50 OR sma_150 OR sma_200`) → `exit_date = today`, `cooldown_end = today + 14 days`, `status = 'COOLDOWN'`.
+2. **Open** new sessions for tickers with `trend_ok AND breakout_ok` today AND no open session AND past prior `cooldown_end` → INSERT `status = 'ACTIVE'`, `session_id = max(prior) + 1`.
+3. **Promote** any `COOLDOWN` row whose `cooldown_end < today` → `status = 'EXITED'`. Refresh `trend_ok`/`breakout_ok` on remaining ACTIVE rows.
 
-**Output**: `t3_sepa_features` (~13–100 rows/day, ~133 columns). Keyed by `(ticker, date, feature_version)`.
+**Output**: `sepa_watchlist` — event log keyed by `(ticker, entry_date)`. Columns: `ticker, entry_date, exit_date, cooldown_end, session_id, trend_ok, breakout_ok, status, updated_at`.
+
+**Session model**:
+- **Entry trigger**: `trend_ok AND breakout_ok` (full SEPA setup).
+- **Exit trigger**: C1+C2+C6 break (close drops below sma_50/150/200). Uses C1+C2+C6 only — *not* full `trend_ok` — to avoid C9 RS-line flicker fragmenting one long session into many short ones.
+- **Cooldown**: 14 calendar days after `exit_date` before a new session can open for the same ticker.
+- **Re-entry**: new `session_id`, new row. Prior session's `exit_date`/`cooldown_end` are preserved.
 
 **Key design notes**:
-- T3 only stores rows where `trend_ok AND breakout_ok` — these flags are NOT stored in T3 (implicit TRUE for all rows).
-- Session detection (trend_ok transitions) is done by views joining back to T2.
-- `dist_from_52w_high_pct_chg` / `dist_from_20d_high_pct_chg`: uses `CASE WHEN cur = prev THEN 0` to handle zero-denominator (breakout stocks at highs).
+- Cooldown is a **session-opening gate**, not a row-inclusion gate. T3 carries full history for every ticker that has ever appeared in `sepa_watchlist`, regardless of cooldown state.
+- `update_daily(date)` is **not idempotent** — re-running it for the same date would attempt to open duplicate sessions on tickers that already entered today. Use the `pipeline_runs` idempotency guard (set by orchestrator) or manually clean up (see Backfill notes below) before re-running.
+- Distinct from `screener_watchlist` (the dashboard trade log). Both coexist.
 
 **Toolkit:**
 | File | Purpose |
 |------|---------|
-| `src/feature_pipeline.py` | `FeaturePipeline.compute_t3_features()` |
-| `scripts/create_t3_schema.py` | Standalone schema creation |
+| `src/managers/sepa_watchlist_manager.py` | `SepaWatchlistManager.backfill()`, `update_daily()`, `get_universe()`, `get_stats()` |
+| `scripts/backfill_sepa_watchlist.py` | One-time full backfill from t2 history (~7s) |
+
+**Incremental:** Runs automatically as Phase 4b in the daily pipeline.
+
+**Backfill (one-time, authoritative — wipes existing rows):**
+```bash
+python scripts/backfill_sepa_watchlist.py                                # full t2 history
+python scripts/backfill_sepa_watchlist.py --start 2010-01-01 --end 2024-12-31  # custom range
+```
+Always run *before* T3 backfill — T3 reads `SELECT DISTINCT ticker FROM sepa_watchlist`.
+
+**Manual rerun of a date** (rare — for fixing a bad daily run):
+```sql
+DELETE FROM sepa_watchlist WHERE entry_date = '<DATE>';
+UPDATE sepa_watchlist
+SET exit_date = NULL, cooldown_end = NULL, status = 'ACTIVE'
+WHERE exit_date = '<DATE>';
+```
+Then call `update_daily('<DATE>')` again.
+
+---
+
+### Phase 5 — T3 SEPA Features *(CRITICAL)*
+
+**Purpose**: Materialize the full feature set for the SEPA universe. Single source of truth for all downstream ML and views.
+
+**Input**: `t2_screener_features` (SEPA filter + carry-forward), `price_data` (per-ticker rolling windows), `t2_regime_scores` (M03 join), **`sepa_watchlist` (universe gate)**.
+
+**Process** (2 sub-phases):
+| Sub-phase | What |
+|-----------|------|
+| A — SQL INSERT | Filters tickers via `WHERE ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)`. Carries forward all T2 columns (OHLCV, SMAs, EMAs, RS, XS alphas, ranks, `trend_ok`, `breakout_ok`). Computes per-ticker window features: momentum (21/63/126/189/252d), RSI-14, ATR-14, volume depth, velocity features, pattern flags, pct_chg deltas, sma_50_slope, rs_line_lag_delta. Joins M03 regime scores by date. |
+| B — Python UPDATE | 9 TS alphas (alpha006–alpha101) + 2 vol-adjusted features via multiprocessing. Warmup loaded from `t2_screener_features` (broader population) for continuous rolling windows. |
+
+**Output**: `t3_sepa_features` (~9.4M rows total over 2,697 SEPA-eligible tickers, **144 columns**). Keyed by `(ticker, date, feature_version)`.
+
+**Key design notes** (Option C, 2026-05-08):
+- **Universe = sepa_watchlist tickers, full history.** A ticker is in T3 iff it has ever opened a SEPA session. T3 carries that ticker's complete history regardless of current SEPA state. The previous design (Option B) gated by `screener_membership.is_active` and produced ~70% non-SEPA noise rows — replaced.
+- Both `trend_ok` and `breakout_ok` are explicit columns. Filter on `trend_ok=TRUE AND breakout_ok=TRUE` for entry candidates; filter on neither for the full SEPA-universe history.
+- T3 is dense over `sepa_watchlist_tickers ∩ has_t2_row`.
+- T3 rows are append-only — once written, permanent.
+- **Fundamentals removed from T3 schema** (2026-05-08): `net_income`, `revenue`, `shares_outstanding`, `peg_adjusted` are no longer stored in T3. They are joined at query time by `v_d2_features` (LEFT JOIN to `fundamental_features` and `shares_history`). Saves ~300MB and eliminates ASOF JOIN cost at insert time.
+- `dist_from_52w_high_pct_chg` / `dist_from_20d_high_pct_chg`: uses `CASE WHEN cur = prev THEN 0` to handle zero-denominator (breakout stocks at highs).
+- `EXPECTED_T3_COLUMN_COUNT = 144` is a tripwire in `feature_pipeline.py`. Update alongside any DDL change.
+
+**Toolkit:**
+| File | Purpose |
+|------|---------|
+| `src/feature_pipeline.py` | `FeaturePipeline.compute_t3_features()`, `_create_t3_table()` |
+| `scripts/backfill_t3_sepa_features.py` | Chunked-resumable T3 backfill |
 | `tools/audit_t3_sepa_features.py` | T3 feature audit |
 
 **Incremental:** `python scripts/run_daily_pipeline.py --phase-5-only` (detects gap from `MAX(date)` to last trading day, plus coverage-aware recompute if breakout tickers missing)
 
-**Backfill:**
+**Backfill (one-time, after sepa_watchlist is populated):**
 ```bash
-python -c "
-from src.feature_pipeline import FeaturePipeline
-fp = FeaturePipeline(db_path='data/market_data.duckdb')
-fp.compute_all(start_date='2020-01-01', skip_t2=True, recreate_t3=True)
-"
+python scripts/backfill_t3_sepa_features.py --restart --from 2001-Q1
 ```
+Expected: ~9.4M rows, 1.5-2.5h wall time. Tail progress: `tail -f logs/t3_backfill_progress.log` (see "Tailing logs" at bottom of doc for the bash equivalent of PowerShell `Get-Content -Wait`).
+
+After completion: `python scripts/create_duckdb_views.py && python scripts/refresh_training_cache.py`.
 
 **Audit:** `python tools/audit_t3_sepa_features.py`
 
@@ -374,7 +431,8 @@ Shows: data freshness, recent trades, per-day C1-C9 trend + B1-B2 breakout pass/
 | `screener_membership` | 2 | ~20K | Event log — one row per entry/exit per ticker |
 | `t2_screener_features` | 3 | ~9.6M | Full universe: OHLCV, SMAs, EMAs, RS, alphas, ranks, SEPA flags |
 | `t2_regime_scores` | 4 | ~1.5K | One row per date: M03 score + pillars + deltas |
-| `t3_sepa_features` | 5 | ~41K | SEPA candidates only: 133 cols, single ML source of truth |
+| `sepa_watchlist` | 4b | ~35K | Event log — one row per SEPA session per ticker. T3 universe gate. |
+| `t3_sepa_features` | 5 | ~9.4M | sepa_watchlist universe, full history per ticker: 144 cols, single ML source of truth |
 | `screener_watchlist` | 6 | ~42K | Materialized `v_screener_dashboard` (all trades, ACTIVE/EXITED, with returns) |
 | `d2_training_cache` | 7 | varies | Materialized `v_d2_training` (trade-level with outcomes) |
 | `pipeline_runs` | 8 | varies | Phase execution tracking + idempotency |
@@ -654,6 +712,7 @@ These are importable from notebooks/scripts — not just CLI tools.
 | `src/evaluation/leakage_guard.py` | `LeakageGuard` | Temporal leakage validation — checks no future data bleeds into training. |
 | `src/managers/view_manager.py` | `ViewManager` | `create_all()` recreates all views + `screener_watchlist`. `refresh_cache()` materializes `d2_training_cache`. Constructor: `ViewManager(feature_version='v3.1')`. |
 | `src/managers/screener_manager.py` | `ScreenerManager` | `evaluate_and_log(date)` — evaluates screener criteria for one date and logs entry/exit events. |
+| `src/managers/sepa_watchlist_manager.py` | `SepaWatchlistManager` | `backfill()` — full rebuild from t2 history. `update_daily(date)` — open/close sessions for one trading day. `get_universe()` — `SELECT DISTINCT ticker FROM sepa_watchlist` (T3 universe gate). `get_stats()` — quick monitoring summary. |
 | `src/managers/pipeline_run_manager.py` | `PipelineRunManager` | Phase execution tracking, idempotency checks, health reports. |
 | `src/regime_pipeline.py` | `RegimePipeline` | `compute_history()` or `compute_incremental()` — M03 regime scores. |
 | `src/feature_pipeline.py` | `FeaturePipeline` | `compute_t2_screener_features()`, `compute_t3_features()`, `compute_all()`. |
@@ -979,6 +1038,25 @@ models/feature_importance_*.csv
 - Data quality failures: `logs/data_quality/YYYY-MM.log`
 - Phase tracking: `pipeline_runs` table in DuckDB
 
+### Tailing logs (live)
+
+The PowerShell idiom `Get-Content <file> -Wait -Tail 5` follows a file as it grows. Equivalents:
+
+| Shell | Command |
+|-------|---------|
+| Git Bash / WSL / Linux | `tail -f -n 5 logs/t3_backfill_progress.log` |
+| PowerShell | `Get-Content logs\t3_backfill_progress.log -Wait -Tail 5` |
+| cmd.exe | (no built-in equivalent — use Git Bash or PowerShell) |
+
+Common log files worth tailing:
+```bash
+tail -f -n 5 logs/daily_pipeline.log              # daily pipeline run
+tail -f -n 5 logs/t3_backfill_progress.log        # T3 backfill progress
+tail -f -n 5 logs/data_quality/$(date +%Y-%m).log # this month's data-quality failures
+```
+
+To stop following: Ctrl+C.
+
 ---
 
 ## Open TODOs
@@ -1000,6 +1078,15 @@ models/feature_importance_*.csv
 - [ ] **Monthly earnings calendar refresh trigger** — where to persist last-refresh timestamp (defer until pipeline automated)
 
 ### Critical Next Stage:
+- [ ] **Run one-time T3 backfill on Option C universe** — `sepa_watchlist` is populated (35,560 sessions / 2,697 tickers, done 2026-05-08). T3 schema rebuilt empty. Run:
+  ```bash
+  python scripts/backfill_t3_sepa_features.py --restart --from 2001-Q1
+  # then:
+  python scripts/create_duckdb_views.py
+  python scripts/refresh_training_cache.py
+  ```
+  Expected: ~9.4M rows, 1.5-2.5h. Tail: `tail -f -n 5 logs/t3_backfill_progress.log`. See `docs/session_logs/2026-05-08_wrapup.md` for full guidance.
+- [ ] **Re-train M01 sanity check** after T3 backfill completes — feature *values* unchanged (fundamentals still reach model via `v_d2_features` JOIN), but verify metrics match `M01_baseline_v0.1` (acc=0.6705, wF1=0.582, macroF1=0.248) within ±0.005. Drift = bug.
 - [ ] Finalise notebook to prototype model. This should include EDA, Feature Engineering, model training (with class imbalance), Model evaluation. Then replicate to prod code and create a new model for registry.
 - [ ] Dashboard Phase 2: data audit, model eval, backtest results, feature time-series pages. See `docs/dashboard_design.md`.
 
@@ -1039,3 +1126,5 @@ models/feature_importance_*.csv
 - ~~Registry `artifacts_path` pointed to empty dirs~~ → P1 fix: `register_version()` now accepts `artifacts_path` param; trainer passes `model_dir` explicitly (2026-05-07).
 - ~~`specs_json` missing training config fields~~ → P2: added `num_boost_round`, `early_stopping_rounds`, `best_iteration`, `label_thresholds`, `class_weighting`, `class_weights` (2026-05-07).
 - ~~No `model_name`/`model_version` columns in `models` table~~ → P4: idempotent migration added + backfilled existing rows by parsing `version_id` timestamp suffix (2026-05-07).
+- ~~T3 ≈ T2 (Option B universe gate produced ~70% non-SEPA noise)~~ → **Option C: `sepa_watchlist` event log + Phase 4b** (2026-05-08). T3 universe = tickers that ever entered a SEPA session, full history. New `SepaWatchlistManager` (backfill + daily incremental). Fundamentals (4 cols) removed from T3 schema — joined at query time in `v_d2_features` instead. `EXPECTED_T3_COLUMN_COUNT`: 148 → 144. Backfill `sepa_watchlist`: 35,560 sessions / 2,697 tickers in 6.8s. T3 backfill on new design pending (see Open TODOs). Wrap-up: `docs/session_logs/2026-05-08_wrapup.md`.
+- ~~T3 per-quarter wall-time grew O(cumulative history)~~ → Date-bound `candidates` CTE (`AND p.date <= '{end_date}'`) + scoped `with_velocity` t2 join (`AND t2.date BETWEEN '{fetch_start}' AND '{end_date}'`) (2026-05-08, morning session). Per-quarter wall time now flat.

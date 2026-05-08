@@ -47,7 +47,7 @@ M03_DERIVED_COLS = ['m03_delta_5d', 'm03_delta_20d', 'm03_regime_vol']
 # Tripwire: must equal the column count produced by _create_t3_table.
 # Update this constant whenever the DDL changes — the post-INSERT guard in
 # compute_t3_features() will fail if DDL and INSERT/SELECT lists drift apart.
-EXPECTED_T3_COLUMN_COUNT = 146
+EXPECTED_T3_COLUMN_COUNT = 144
 
 
 # Module-level function for multiprocessing (must be picklable)
@@ -510,6 +510,7 @@ class FeaturePipeline:
                 vol_avg_20 DOUBLE, vol_avg_50 DOUBLE, vol_ratio DOUBLE, dry_up_volume DOUBLE,
                 atr_20d DOUBLE, natr DOUBLE, volatility_20d DOUBLE,
                 vcp_ratio DOUBLE, consolidation_width DOUBLE,
+                trend_ok BOOLEAN, breakout_ok BOOLEAN,
                 RS_Universe_Rank DOUBLE, RS_Sector_Rank DOUBLE, RS_vs_Sector DOUBLE,
                 Sector_Momentum DOUBLE, RS_Industry_Rank DOUBLE, RS_vs_Industry DOUBLE,
                 Industry_Momentum DOUBLE,
@@ -560,11 +561,10 @@ class FeaturePipeline:
                 price_vs_sma_50_vol_adj DOUBLE,
                 mom_21d_vol_adj DOUBLE,
 
-                -- m01_prototype features: fundamentals point-in-time (Group C)
-                net_income DOUBLE,
-                revenue DOUBLE,
-                shares_outstanding BIGINT,
-                peg_adjusted DOUBLE,
+                -- Fundamentals (net_income, revenue, shares_outstanding, peg_adjusted)
+                -- intentionally NOT stored here — joined at query time via fundamental_features
+                -- and shares_history in v_d2_hydrated / v_d2_training. Storing them per (ticker, date)
+                -- in T3 duplicated quarterly snapshots across thousands of trading days.
 
                 -- TS alpha factors (per-ticker only)
                 alpha006 DOUBLE, alpha009 DOUBLE, alpha012 DOUBLE, alpha041 DOUBLE,
@@ -584,14 +584,27 @@ class FeaturePipeline:
         """)
 
     def compute_t3_features(self, start_date: str = '2020-01-01', end_date: str = None) -> int:
-        """Compute T3 SEPA features directly from t2 + price_data.
+        """Compute T3 features densely over the SEPA-watchlist universe.
 
-        No longer copies from daily_features. Sources:
-        - SEPA candidates: t2_screener_features WHERE trend_ok AND breakout_ok
+        Universe gate (Option C): a ticker is in T3 iff it has ever entered a SEPA
+        session (i.e. appears in `sepa_watchlist`). T3 carries the ticker's full
+        history regardless of current session status; cooldown gates new sessions
+        in `sepa_watchlist`, not row inclusion in T3.
+
+        `trend_ok` and `breakout_ok` are stored as explicit columns — neither is
+        implicit. Filter downstream consumers explicitly:
+          - entry candidates:   WHERE trend_ok = TRUE AND breakout_ok = TRUE
+          - trend-active set:   WHERE trend_ok = TRUE
+          - full universe:      no filter
+
+        Sources:
+        - Universe membership: SELECT DISTINCT ticker FROM sepa_watchlist
         - OHLCV + per-ticker window features: price_data (SQL CTEs, warmup via full history)
-        - XS alphas + ranks: carried from t2
+        - T2 carry-forward (SMAs, RS, ranks, XS alphas, trend_ok, breakout_ok): t2_screener_features
         - M03: joined from t2_regime_scores
         - TS alphas: computed in Python after SQL insert
+        - Fundamentals (net_income, revenue, shares_outstanding, peg_adjusted):
+          NOT stored here. Joined at query time in v_d2_hydrated / v_d2_training.
         """
         from datetime import date as date_cls
         if end_date is None:
@@ -606,8 +619,14 @@ class FeaturePipeline:
         try:
             before_count = con.execute("SELECT COUNT(*) FROM t3_sepa_features").fetchone()[0]
 
+            # Plain INSERT (no OR IGNORE): the caller (backfill wrapper / orchestrator)
+            # is required to ensure the chunk's date range is empty in t3 before this
+            # runs. INSERT OR IGNORE was paying a per-row PK-index probe whose cost grew
+            # with total t3 size — turning per-quarter wall time into a function of
+            # cumulative t3 rows instead of chunk size. With a guaranteed-empty target
+            # window the index probe is wasted work; plain INSERT keeps wall time flat.
             con.execute(f"""
-                INSERT OR IGNORE INTO t3_sepa_features (
+                INSERT INTO t3_sepa_features (
                     ticker, date, feature_version,
                     open, high, low, close, volume,
                     -- t2 carry-forward
@@ -619,6 +638,7 @@ class FeaturePipeline:
                     high_20d, lowest_low_20d, highest_high_20d, dist_from_20d_high, dist_from_20d_low,
                     vol_avg_20, vol_avg_50, vol_ratio, dry_up_volume,
                     atr_20d, natr, volatility_20d, vcp_ratio, consolidation_width,
+                    trend_ok, breakout_ok,
                     RS_Universe_Rank, RS_Sector_Rank, RS_vs_Sector, Sector_Momentum,
                     RS_Industry_Rank, RS_vs_Industry, Industry_Momentum,
                     alpha001, alpha002, alpha004, alpha008, alpha011, alpha013,
@@ -645,21 +665,24 @@ class FeaturePipeline:
                     ema_8_21_ratio, ema_21_50_ratio, ema_50_100_ratio,
                     mom_slope_21_63, mom_slope_63_126,
                     sma_ratio_150_200, gap_risk_ratio,
-                    -- m01_prototype Group C (fundamentals point-in-time)
-                    net_income, revenue, shares_outstanding, peg_adjusted,
                     -- M03
                     m03_score, m03_pillar_trend, m03_pillar_liq, m03_pillar_risk,
                     m03_delta_5d, m03_delta_20d, m03_regime_vol
                 )
                 WITH candidates AS (
-                    -- SEPA candidates: full price history for warmup, filtered to date range later
+                    -- Universe = sepa_watchlist (any ticker that ever entered a SEPA session).
+                    -- Carries full history for those tickers — gating happens at session level
+                    -- inside sepa_watchlist, not via row inclusion in T3.
+                    -- Date upper bound is critical: without it the t2 join below scans all
+                    -- history per ticker (O(cumulative) per-chunk wall time).
                     SELECT p.ticker, p.date,
                         p.open, p.high, p.low, p.close,
                         CAST(p.volume AS BIGINT) as volume,
                         LAG(p.close, 1) OVER w_tk as prev_close
                     FROM {self.price_source} p
                     WHERE p.date >= '{fetch_start}'
-                      AND p.ticker IN (SELECT DISTINCT ticker FROM t2_screener_features)
+                      AND p.date <= '{end_date}'
+                      AND p.ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)
                     WINDOW w_tk AS (PARTITION BY p.ticker ORDER BY p.date)
                 ),
                 per_ticker AS (
@@ -792,6 +815,7 @@ class FeaturePipeline:
                     FROM per_ticker pt
                     INNER JOIN t2_screener_features t2
                         ON pt.ticker = t2.ticker AND pt.date = t2.date
+                       AND t2.date BETWEEN '{fetch_start}' AND '{end_date}'
                     WINDOW w_tk AS (PARTITION BY pt.ticker ORDER BY pt.date)
                 )
                 SELECT
@@ -807,6 +831,7 @@ class FeaturePipeline:
                     t2.high_20d, t2.lowest_low_20d, t2.highest_high_20d, t2.dist_from_20d_high, t2.dist_from_20d_low,
                     t2.vol_avg_20, t2.vol_avg_50, t2.vol_ratio, t2.dry_up_volume,
                     t2.atr_20d, t2.natr, t2.volatility_20d, t2.vcp_ratio, t2.consolidation_width,
+                    t2.trend_ok, t2.breakout_ok,
                     t2.RS_Universe_Rank, t2.RS_Sector_Rank, t2.RS_vs_Sector, t2.Sector_Momentum,
                     t2.RS_Industry_Rank, t2.RS_vs_Industry, t2.Industry_Momentum,
                     t2.alpha001, t2.alpha002, t2.alpha004, t2.alpha008, t2.alpha011,
@@ -834,34 +859,14 @@ class FeaturePipeline:
                     wv.ema_8_21_ratio, wv.ema_21_50_ratio, wv.ema_50_100_ratio,
                     wv.mom_slope_21_63, wv.mom_slope_63_126,
                     wv.sma_ratio_150_200, wv.gap_risk_ratio,
-                    -- m01_prototype Group C: fundamentals point-in-time
-                    ff.net_income,
-                    ff.revenue,
-                    sh.shares_outstanding,
-                    CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
-                        THEN (wv.close / ff.eps_diluted) / ff.eps_growth_yoy
-                        ELSE NULL END as peg_adjusted,
                     -- M03 regime
                     r.m03_score, r.m03_pillar_trend, r.m03_pillar_liq, r.m03_pillar_risk,
                     r.m03_delta_5d, r.m03_delta_20d, r.m03_regime_vol
                 FROM with_velocity wv
-                INNER JOIN t2_screener_features t2
+                LEFT JOIN t2_screener_features t2
                     ON wv.ticker = t2.ticker AND wv.date = t2.date
-                    AND t2.trend_ok = TRUE AND t2.breakout_ok = TRUE
                 LEFT JOIN t2_regime_scores r
                     ON wv.date = r.date
-                LEFT JOIN fundamental_features ff
-                    ON wv.ticker = ff.ticker
-                    AND ff.filing_date = (
-                        SELECT MAX(filing_date) FROM fundamental_features
-                        WHERE ticker = wv.ticker AND filing_date <= wv.date
-                    )
-                LEFT JOIN shares_history sh
-                    ON wv.ticker = sh.ticker
-                    AND sh.date = (
-                        SELECT MAX(date) FROM shares_history
-                        WHERE ticker = wv.ticker AND date <= wv.date
-                    )
                 WHERE wv.date BETWEEN '{start_date}' AND '{end_date}'
             """)
 
@@ -895,9 +900,12 @@ class FeaturePipeline:
         self._compute_vol_adjusted_features(start_date=start_date, end_date=end_date)
 
         # TS alphas — per-ticker rolling windows; load history from t2 (continuous),
-        # but write results back only to t3 rows (via UPDATE WHERE ticker+date match)
+        # but write results back only to t3 rows (via UPDATE WHERE ticker+date match).
+        # Scope the writeback to the chunk window — without end_date, write_df spans
+        # [start_date, MAX(t2.date)] and corrupts every later chunk already in t3.
         self.compute_alpha_features(
             start_date=start_date,
+            end_date=end_date,
             warmup_days=365,
             target_table='t3_sepa_features',
             alpha_cols=ALPHA_COLS_TS,
@@ -1153,37 +1161,28 @@ class FeaturePipeline:
             con.close()
 
     def _write_alpha_columns(self, alpha_df: pd.DataFrame, target_table: str, cols: List[str]) -> None:
+        """Direct UPDATE FROM — scoped by date range so cost is O(chunk).
+
+        Replaces the old DELETE+INSERT-via-temp pattern that risked PK collisions
+        when the source df contained duplicate keys or DuckDB's UPDATE-FROM
+        multiplied chunk rows under specific transaction states.
+        """
+        if alpha_df.empty:
+            return
         con = duckdb.connect(self.db_path)
         try:
-            # Determine date range to scope the operation (avoids full-table scan)
             min_date = alpha_df['date'].min()
             max_date = alpha_df['date'].max()
-
             con.register('alpha_src', alpha_df)
-
-            # Extract chunk, delete, update in temp, re-insert — O(chunk) not O(table)
-            con.execute(f"""
-                CREATE OR REPLACE TEMP TABLE _alpha_chunk AS
-                SELECT * FROM {target_table}
-                WHERE date BETWEEN '{min_date}' AND '{max_date}'
-            """)
-            con.execute(f"""
-                DELETE FROM {target_table}
-                WHERE date BETWEEN '{min_date}' AND '{max_date}'
-            """)
             set_clause = ', '.join(f"{c} = src.{c}" for c in cols)
             con.execute(f"""
-                UPDATE _alpha_chunk t
+                UPDATE {target_table} t
                 SET {set_clause}
                 FROM alpha_src src
-                WHERE t.ticker = src.ticker AND t.date = src.date
+                WHERE t.ticker = src.ticker
+                  AND t.date = src.date
+                  AND t.date BETWEEN '{min_date}' AND '{max_date}'
             """)
-            all_cols = ', '.join(r[0] for r in con.execute("DESCRIBE _alpha_chunk").fetchall())
-            con.execute(f"""
-                INSERT INTO {target_table} ({all_cols})
-                SELECT {all_cols} FROM _alpha_chunk
-            """)
-            con.execute("DROP TABLE IF EXISTS _alpha_chunk")
         finally:
             con.close()
 

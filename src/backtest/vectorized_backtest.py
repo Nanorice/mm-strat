@@ -60,6 +60,8 @@ class VectorizedSEPABacktest:
         initial_cash: float = 100_000.0,
         position_size_pct: float = 0.10,
         max_hold_days: int = 252,
+        precomputed_scores: Optional[pd.DataFrame] = None,
+        precomputed_prices: Optional[pd.DataFrame] = None,
     ):
         self.model_path = model_path
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
@@ -77,8 +79,9 @@ class VectorizedSEPABacktest:
         self.position_size_pct = position_size_pct
         self.max_hold_days = max_hold_days
 
-        self._scores: Optional[pd.DataFrame] = None
-        self._prices: Optional[pd.DataFrame] = None
+        # Injected caches — avoids re-scoring / re-loading on every sweep combo
+        self._scores: Optional[pd.DataFrame] = precomputed_scores
+        self._prices: Optional[pd.DataFrame] = precomputed_prices
 
     def run(self) -> pd.DataFrame:
         """
@@ -96,22 +99,26 @@ class VectorizedSEPABacktest:
                 'exit_reason', 'pnl_pct', 'prob_elite_at_entry', 'holding_days',
             ])
 
-        prices = self._load_prices(entries['ticker'].unique().tolist())
+        prices = self._load_prices(
+            entries['ticker'].unique().tolist(),
+            sma_period=self.sma_exit_period,
+        )
         trades = self._simulate_exits(entries, prices)
         trades = self._apply_costs(trades)
         return trades
 
     def _select_entries(self) -> pd.DataFrame:
-        scorer = UniverseScorer(
-            m01_path=self.model_path,
-            calibration_path=None,
-        )
-        self._scores = scorer.score_from_t3(
-            self.start_date,
-            self.end_date,
-            db_path=self.db_path,
-            ranking_lookback_days=self.ranking_lookback_days,
-        )
+        if self._scores is None:
+            scorer = UniverseScorer(
+                m01_path=self.model_path,
+                calibration_path=None,
+            )
+            self._scores = scorer.score_from_t3(
+                self.start_date,
+                self.end_date,
+                db_path=self.db_path,
+                ranking_lookback_days=self.ranking_lookback_days,
+            )
 
         if 'prob_elite' not in self._scores.columns:
             raise RuntimeError(
@@ -145,29 +152,51 @@ class VectorizedSEPABacktest:
             f"Selected {len(first_entries)} entries from {len(eligible)} eligible "
             f"({eligible['ticker'].nunique()} unique tickers)"
         )
-        return first_entries[['date', 'ticker', 'prob_elite', 'calibrated_score']].rename(
+        cols_to_return = ['date', 'ticker', 'prob_elite', 'calibrated_score']
+        if 'rs_sector_rank' in first_entries.columns:
+            cols_to_return.append('rs_sector_rank')
+        if 'rs_industry_rank' in first_entries.columns:
+            cols_to_return.append('rs_industry_rank')
+            
+        return first_entries[cols_to_return].rename(
             columns={'date': 'entry_date', 'prob_elite': 'prob_elite_at_entry'}
         )
 
-    def _load_prices(self, tickers: list[str]) -> pd.DataFrame:
-        con = duckdb.connect(str(self.db_path), read_only=True)
-        try:
-            df = con.execute(f"""
-                SELECT ticker, date, open, high, low, close
-                FROM price_data
-                WHERE ticker = ANY(?)
-                  AND date >= ? AND date <= ?
-                ORDER BY ticker, date
-            """, [tickers, self.start_date, self.end_date]).fetchdf()
-        finally:
-            con.close()
+    def _load_prices(
+        self,
+        tickers: list[str],
+        sma_period: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """Load OHLC prices and compute SMA exit signal.
 
-        df['date'] = pd.to_datetime(df['date'])
+        If ``self._prices`` was injected (precomputed_prices), the raw frame is
+        reused and only the SMA is (re)computed for the current sma_exit_period.
+        """
+        sma_period = sma_period or self.sma_exit_period
+
+        if self._prices is not None:
+            # Use cached raw prices; filter to requested tickers
+            df = self._prices[self._prices['ticker'].isin(tickers)].copy()
+        else:
+            con = duckdb.connect(str(self.db_path), read_only=True)
+            try:
+                df = con.execute("""
+                    SELECT ticker, date, open, high, low, close
+                    FROM price_data
+                    WHERE ticker = ANY(?)
+                      AND date >= ? AND date <= ?
+                    ORDER BY ticker, date
+                """, [tickers, self.start_date, self.end_date]).fetchdf()
+            finally:
+                con.close()
+            df['date'] = pd.to_datetime(df['date'])
+
+        # (Re)compute SMA for the current sweep period — fast, in-memory
         df['sma'] = (
             df.groupby('ticker')['close']
-            .transform(lambda s: s.rolling(self.sma_exit_period, min_periods=1).mean())
+            .transform(lambda s: s.rolling(sma_period, min_periods=1).mean())
         )
-        logger.info(f"Loaded {len(df)} price rows for {df['ticker'].nunique()} tickers")
+        logger.info(f"Prices ready: {len(df)} rows, {df['ticker'].nunique()} tickers, SMA={sma_period}")
         return df
 
     def _simulate_exits(
@@ -254,6 +283,11 @@ class VectorizedSEPABacktest:
             'ticker', 'entry_date', 'entry_price', 'exit_date', 'exit_price',
             'exit_reason', 'pnl_pct', 'prob_elite_at_entry', 'holding_days',
         ]
+        if 'rs_sector_rank' in trades.columns:
+            cols.append('rs_sector_rank')
+        if 'rs_industry_rank' in trades.columns:
+            cols.append('rs_industry_rank')
+            
         return trades[cols].sort_values('entry_date').reset_index(drop=True)
 
     def _apply_costs(self, trades: pd.DataFrame) -> pd.DataFrame:

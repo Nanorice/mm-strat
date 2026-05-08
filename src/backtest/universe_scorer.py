@@ -129,48 +129,55 @@ class UniverseScorer:
         """
         Compute trailing N-day cohort percentile for each row.
 
-        For each (date, ticker), calculate: what percentile is this score
-        relative to ALL scores from the past N trading days?
+        For each (date, ticker), returns what percentile this score occupies
+        relative to ALL scores from the past N trading days (inclusive).
 
-        This captures persistent strength over a rolling window, not just
-        single-day ranking which can be noisy.
-
-        Args:
-            df: DataFrame with 'date', 'ticker', and `score_col` columns
-            window: Number of trading days to include (default: 10)
-            score_col: Column to compute percentile on
-
-        Returns:
-            Series of trailing percentile ranks (0-1)
+        Vectorized O(N log N) implementation using searchsorted — replaces the
+        original O(N²) nested loop.
         """
-        # Get unique trading dates sorted
-        unique_dates = sorted(df['date'].unique())
-        date_to_idx = {d: i for i, d in enumerate(unique_dates)}
+        # Work on a clean copy with original index preserved
+        work = df[['date', score_col]].copy()
+        unique_dates = sorted(work['date'].unique())
+        n_dates = len(unique_dates)
 
-        # Pre-build lookup: for each date, what are the past N dates?
-        date_to_window_dates = {}
+        # Build a mapping date → integer position
+        date_pos = {d: i for i, d in enumerate(unique_dates)}
+        work['_dpos'] = work['date'].map(date_pos)
+
+        # Sort all scores globally so we can use searchsorted per window
+        # Group by date position to get boundary indices in sorted order
+        # Strategy: for each target date d, collect scores from the window
+        # [d-window+1 .. d] in O(window) date lookups, then searchsorted.
+        #
+        # We pre-sort scores by date so that slicing a date range is O(1).
+        sorted_by_date = work.sort_values('_dpos')
+        scores_arr = sorted_by_date[score_col].values           # all scores sorted by date
+        dpos_arr   = sorted_by_date['_dpos'].values             # corresponding date positions
+
+        # Boundary index for each date position (first occurrence in sorted array)
+        # date_start[i] = index of first row with _dpos == i in sorted_by_date
+        date_start = np.searchsorted(dpos_arr, np.arange(n_dates), side='left')
+        date_end   = np.searchsorted(dpos_arr, np.arange(n_dates), side='right')
+
+        result = np.empty(len(work), dtype=float)
+
         for i, d in enumerate(unique_dates):
-            start_idx = max(0, i - window + 1)
-            date_to_window_dates[d] = unique_dates[start_idx:i + 1]
+            win_start_pos = max(0, i - window + 1)
+            # Slice the sorted array to get window scores
+            lo = date_start[win_start_pos]
+            hi = date_end[i]                  # exclusive end
+            win_scores = scores_arr[lo:hi]
+            win_sorted = np.sort(win_scores)
+            n_win = len(win_sorted)
 
-        # For each date, get all scores in the window
-        results = []
-        for date, group in df.groupby('date'):
-            window_dates = date_to_window_dates[date]
-            # Get all scores in the window (all tickers, all dates in window)
-            window_mask = df['date'].isin(window_dates)
-            window_scores = df.loc[window_mask, score_col].values
+            # Rows belonging to date d in the *original* work frame
+            mask = work['_dpos'] == i
+            row_scores = work.loc[mask, score_col].values
+            # searchsorted gives # of window scores strictly less than each score
+            pcts = (np.searchsorted(win_sorted, row_scores, side='right')) / n_win
+            result[mask.values] = pcts
 
-            # For each ticker today, compute percentile vs window scores
-            for idx, row in group.iterrows():
-                score = row[score_col]
-                # Percentile: proportion of window scores <= this score
-                pct = (window_scores <= score).sum() / len(window_scores)
-                results.append((idx, pct))
-
-        # Convert to Series aligned with original index
-        result_series = pd.Series(dict(results))
-        return result_series.reindex(df.index)
+        return pd.Series(result, index=work.index)
 
     def _calibrate_vectorized(self, raw_scores: np.ndarray) -> np.ndarray:
         """Vectorized calibration using pd.cut."""
@@ -303,10 +310,6 @@ class UniverseScorer:
             lambda x: x.rank(pct=True)
         )
 
-        # Trailing N-day percentile (default 10)
-        result = result.sort_values(['date', 'ticker'])
-        result['trailing_pct'] = self._compute_trailing_percentile(result, window=10)
-
         # Normalized score (0-100)
         cal_min = result['calibrated_score'].min()
         cal_max = result['calibrated_score'].max()
@@ -321,6 +324,73 @@ class UniverseScorer:
         logger.info(f"Scored {len(result)} rows, {result['ticker'].nunique()} tickers, "
                     f"{result['date'].nunique()} dates")
         return result
+
+    @staticmethod
+    def create_view(db_path: Optional[Path] = None) -> None:
+        """
+        Create (or replace) the v_t3_training view in DuckDB.
+
+        This view pre-joins t3_sepa_features with company_profiles,
+        shares_history, and fundamental_features using ASOF JOINs —
+        DuckDB's native "latest record as-of this date" join that is
+        memory-efficient and avoids correlated subqueries.
+
+        Call this once after the feature pipeline runs, or whenever
+        the underlying tables are refreshed.
+        """
+        db_path = db_path or DEFAULT_DB_PATH
+        con = duckdb.connect(str(db_path), read_only=False)
+        try:
+            has_shares = con.execute("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_name = 'shares_history'
+            """).fetchone()[0] > 0
+
+            if has_shares:
+                shares_select = "sh.shares_outstanding"
+                shares_join = """
+                ASOF LEFT JOIN shares_history sh
+                    ON t3.ticker = sh.ticker AND t3.date >= sh.date"""
+            else:
+                shares_select = "cp.shares_outstanding"
+                shares_join = ""
+
+            con.execute(f"""
+                CREATE OR REPLACE VIEW v_t3_training AS
+                SELECT
+                    t3.*,
+                    cp.sector,
+                    cp.industry,
+                    {shares_select}                                          AS shares_outstanding,
+                    ff.revenue, ff.net_income, ff.eps_diluted,
+                    ff.total_assets, ff.total_equity,
+                    ff.revenue_growth_yoy, ff.eps_growth_yoy,
+                    ff.net_income_growth_yoy, ff.revenue_cagr_3y,
+                    ff.eps_accel, ff.revenue_accel,
+                    ff.eps_stability_score, ff.earnings_quality_score,
+                    ff.debt_to_equity, ff.current_ratio, ff.quick_ratio,
+                    ff.gross_margin, ff.operating_margin, ff.net_margin,
+                    ff.gross_margin_trend, ff.roe, ff.roa, ff.fcf_margin,
+                    ff.inventory_growth_yoy, ff.inventory_vs_sales_spread,
+                    CAST(datediff('day', ff.filing_date, t3.date) AS INTEGER) AS days_since_report,
+                    CASE WHEN ABS(ff.eps_diluted) > 0.01
+                        THEN t3.close / ff.eps_diluted END               AS pe_ratio,
+                    CASE WHEN ff.revenue > 0 AND {shares_select} > 0
+                        THEN (t3.close * {shares_select}) / ff.revenue END  AS ps_ratio,
+                    CASE WHEN ff.total_equity > 0 AND {shares_select} > 0
+                        THEN (t3.close * {shares_select}) / ff.total_equity END AS pb_ratio,
+                    CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
+                        THEN (t3.close / ff.eps_diluted) / ff.eps_growth_yoy END AS peg_adjusted
+                FROM t3_sepa_features t3
+                LEFT JOIN company_profiles cp ON t3.ticker = cp.ticker
+                {shares_join}
+                ASOF LEFT JOIN fundamental_features ff
+                    ON t3.ticker = ff.ticker AND t3.date >= ff.filing_date
+                WHERE t3.feature_version = 'v3.1'
+            """)
+            logger.info("Created view v_t3_training")
+        finally:
+            con.close()
 
     def score_from_t3(
         self,
@@ -348,57 +418,22 @@ class UniverseScorer:
 
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            has_shares = con.execute("""
-                SELECT COUNT(*) FROM information_schema.tables
-                WHERE table_name = 'shares_history'
+            # Check v_t3_training view exists — create it if not
+            has_view = con.execute("""
+                SELECT COUNT(*) FROM information_schema.views
+                WHERE table_name = 'v_t3_training'
             """).fetchone()[0] > 0
 
-            if has_shares:
-                shares_col = "sh.shares_outstanding"
-                shares_join = """
-                LEFT JOIN shares_history sh
-                    ON t3.ticker = sh.ticker
-                    AND sh.date = (
-                        SELECT MAX(date) FROM shares_history
-                        WHERE ticker = t3.ticker AND date <= t3.date
-                    )"""
-            else:
-                shares_col = "cp.shares_outstanding"
-                shares_join = ""
+            if not has_view:
+                con.close()
+                logger.info("v_t3_training not found — creating it now...")
+                UniverseScorer.create_view(db_path)
+                con = duckdb.connect(str(db_path), read_only=True)
 
-            df = con.execute(f"""
-                SELECT
-                    t3.*,
-                    cp.sector, cp.industry,
-                    ff.revenue, ff.net_income, ff.eps_diluted, ff.total_assets, ff.total_equity,
-                    ff.revenue_growth_yoy, ff.eps_growth_yoy, ff.net_income_growth_yoy,
-                    ff.revenue_cagr_3y, ff.eps_accel, ff.revenue_accel,
-                    ff.eps_stability_score, ff.earnings_quality_score,
-                    ff.debt_to_equity, ff.current_ratio, ff.quick_ratio,
-                    ff.gross_margin, ff.operating_margin, ff.net_margin, ff.gross_margin_trend,
-                    ff.roe, ff.roa, ff.fcf_margin,
-                    ff.inventory_growth_yoy, ff.inventory_vs_sales_spread,
-                    CAST(datediff('day', ff.filing_date, t3.date) AS INTEGER) AS days_since_report,
-                    CASE WHEN ABS(ff.eps_diluted) > 0.01
-                        THEN t3.close / ff.eps_diluted END AS pe_ratio,
-                    CASE WHEN ff.revenue > 0 AND {shares_col} > 0
-                        THEN (t3.close * {shares_col}) / ff.revenue END AS ps_ratio,
-                    CASE WHEN ff.total_equity > 0 AND {shares_col} > 0
-                        THEN (t3.close * {shares_col}) / ff.total_equity END AS pb_ratio,
-                    CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
-                        THEN (t3.close / ff.eps_diluted) / ff.eps_growth_yoy END AS peg_adjusted
-                FROM t3_sepa_features t3
-                LEFT JOIN company_profiles cp ON t3.ticker = cp.ticker
-                {shares_join}
-                LEFT JOIN fundamental_features ff
-                    ON t3.ticker = ff.ticker
-                    AND ff.filing_date = (
-                        SELECT MAX(filing_date) FROM fundamental_features
-                        WHERE ticker = t3.ticker AND filing_date <= t3.date
-                    )
-                WHERE t3.date >= ? AND t3.date <= ?
-                  AND t3.feature_version = 'v3.1'
-                ORDER BY t3.date, t3.ticker
+            df = con.execute("""
+                SELECT * FROM v_t3_training
+                WHERE date >= ? AND date <= ?
+                ORDER BY date, ticker
             """, [start_date, end_date]).fetchdf()
         finally:
             con.close()
