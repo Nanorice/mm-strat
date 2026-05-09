@@ -264,3 +264,78 @@ The 5-factor risk model (`test_field/risk_5_factor/risk_5_factor_model.py`) take
 This is a **well-motivated enhancement**. The M03 features are currently the weakest link in the feature set — they are simple math formulas without distributional awareness. The 5-factor model already demonstrates the z-score approach works for risk scoring. The key question is whether rolling z-scores improve M01's predictions (testable via SHAP analysis in step 9d). The risk is adding redundant features that the model can't exploit — mitigated by running 9d before committing to a full rollout.
 
 **Dependencies**: None — M03 and the 5-factor model are both operational. Steps 9a–9c can be done independently of the other roadmap items.
+
+### EDA Findings (2026-05-09): M03 Pillar Decomposition
+
+Tested each M03 pillar as a standalone gate vs the composite:
+
+| Gate | IC | Rows | Verdict |
+|------|-----|------|---------|
+| No gate | 0.065 | 100% | Baseline |
+| **Trend pillar > 60** | **0.118** | 70% | ✅ Best single filter |
+| **Trend + Liq > 60** | **0.126** | 38% | ✅ Best combo |
+| Composite > 60 | 0.116 | 58% | Suboptimal weighting |
+| Liquidity pillar > 60 | 0.080 | 52% | Marginal standalone value |
+| Risk pillar > 60 | 0.066 | 58% | ❌ No value — same as no gate |
+| All 3 pillars > 60 | 0.082 | 27% | ❌ Risk pillar dilutes signal |
+
+**Key conclusions:**
+1. **Trend pillar is doing all the work.** Use `m03_pillar_trend > 60` instead of `m03_score > 60` for gating.
+2. **Liquidity pillar adds marginal value.** Trend + Liq (IC=0.126) beats Trend alone (IC=0.118).
+3. **Risk pillar is useless or harmful.** Adding it to any combination reduces IC. The VIX/HY thresholds are poorly calibrated.
+4. **Composite weighting is suboptimal.** The 40/30/30 split dilutes the trend signal.
+
+**Revised recommendations:**
+- **9a (z-score variants)**: Still valuable, but prioritize `m03_pillar_liq_z` — liquidity is the only pillar worth enhancing. Trend already works well with fixed thresholds (SPY vs SMA-200 is inherently normalized).
+- **9c (veto flag)**: Deprioritize — the risk pillar's failure suggests VIX/HY-based veto would not add value.
+- **9e (merge 5F into M03)**: The liquidity pillar (net liquidity slope) is the only M03 component to consider adding to 5-factor — it's not captured by VIX/HY/term spread.
+
+### M03 vs 5-Factor Comparison (2026-05-09)
+
+Tested both models as regime gates on `prob_elite` IC vs `return_20d`:
+
+| Gate | IC | Rows | Notes |
+|------|-----|------|-------|
+| No gate | 0.059 | 100% | Baseline |
+| M03 > 60 | 0.094 | 58% | +60% IC lift |
+| 5F exposure ≥ 0.75 | 0.097 | 55% | +65% IC lift |
+| **M03>60 AND 5F≥0.75** | **0.105** | 45% | ✅ Best — models are additive |
+| Both reduce (agree bad) | −0.005 | 32% | Correct to avoid |
+| Disagree (M03 bull / 5F cautious) | 0.059 | 13% | Neither dominates |
+| Disagree (M03 bear / 5F low-risk) | 0.064 | 11% | Neither dominates |
+
+**Key conclusions:**
+1. **Both models work, and they're additive.** Combined gate (IC=0.105) beats either alone.
+2. **5F veto is not useful.** "No veto" gate has lower IC than no gate (0.058 vs 0.059).
+3. **Neither model dominates in disagreement zones.** When they conflict, IC is weaker but still positive.
+4. **5F's advantage is marginal.** 0.097 vs 0.094 — not a clear winner on its own.
+
+---
+
+## 10. Data Quality: Return Calculation Validation
+
+> *Added 2026-05-09*
+
+### Issue Identified
+
+During EDA on `scores_cache.parquet`, discovered inconsistent `return_1d` calculations for certain tickers:
+- **CUE** (2026-04-24): `return_1d = 30.93` (3093%) but actual close prices show ~6% move (16.63 → 17.70)
+- **LIF**: 3.2M% return on 2024-07-05 — ticker reuse / near-zero denominator artifact
+
+Other tickers (GME, KODK) have correct return calculations for their known spike dates.
+
+### Suspected Cause
+
+Misaligned price join in T3 pipeline — possibly stale previous-day close being used for return calculation, or adjusted/unadjusted price mismatch.
+
+### Path Forward
+
+| Step | Description | Effort |
+|---|---|---|
+| **10a** | Add validation check in T3 pipeline: flag rows where `return_1d` implies a previous close inconsistent with actual data | Low |
+| **10b** | Cross-check `return_Xd` columns against raw price series for a sample of high-return rows | Low |
+| **10c** | Investigate root cause — check ASOF join logic for price lookups, especially around ticker changes or missing dates | Medium |
+
+### Current Workaround
+
+Maintain `BAD_TICKERS` exclusion list: `{'LIF', 'CUE'}`. Remove all rows for these tickers from analysis. This is a temporary fix — root cause should be addressed in the pipeline.
