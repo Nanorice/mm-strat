@@ -211,12 +211,13 @@ class MacroEngine:
         self._save_cache(series_id, combined)
         return combined
 
-    def update_macro_cache(self, force: bool = False) -> Dict[str, int]:
+    def update_macro_cache(self, force: bool = False, write_db: bool = True) -> Dict[str, int]:
         """
         Update all macro series (FRED + VIX).
 
         Args:
             force: If True, re-download all data
+            write_db: If True, also write to macro_data DuckDB table
 
         Returns:
             Dict mapping series_id to row count
@@ -228,14 +229,77 @@ class MacroEngine:
             logger.info(f"Updating {series_id}...")
             df = self.update_series(series_id, force=force)
             results[series_id] = len(df)
+            if write_db and not df.empty:
+                self.write_to_macro_data(series_id, df)
 
         # Update VIX
         logger.info("Updating VIX...")
         df = self.update_series('VIX', force=force)
         results['VIX'] = len(df)
+        if write_db and not df.empty:
+            self.write_to_macro_data('VIX', df)
 
         logger.info(f"Macro cache update complete: {results}")
         return results
+
+    def write_to_macro_data(self, series_id: str, df: pd.DataFrame) -> int:
+        """
+        Write a single FRED/VIX series into the macro_data table (long format).
+
+        Schema: (date, symbol, close, volume, value, unit) with PK (date, symbol).
+        Uses INSERT OR IGNORE for idempotency. Existing rows untouched.
+
+        Args:
+            series_id: Series symbol (e.g. 'WALCL', 'DGS10', 'VIX')
+            df: DataFrame with DatetimeIndex and one value column
+
+        Returns:
+            Number of rows inserted
+        """
+        if df.empty:
+            return 0
+
+        # Normalize: DatetimeIndex + single value column
+        value_col = series_id if series_id in df.columns else df.columns[0]
+        feed = pd.DataFrame({
+            'date': pd.to_datetime(df.index).date,
+            'symbol': series_id,
+            'close': pd.to_numeric(df[value_col], errors='coerce'),
+        }).dropna(subset=['close'])
+
+        if feed.empty:
+            return 0
+
+        with duckdb.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS macro_data (
+                    date    DATE     NOT NULL,
+                    symbol  VARCHAR  NOT NULL,
+                    close   DOUBLE,
+                    volume  UBIGINT,
+                    value   DOUBLE,
+                    unit    VARCHAR,
+                    PRIMARY KEY (date, symbol)
+                )
+            """)
+
+            before = conn.execute(
+                "SELECT COUNT(*) FROM macro_data WHERE symbol = ?", [series_id]
+            ).fetchone()[0]
+
+            conn.register('macro_feed', feed)
+            conn.execute("""
+                INSERT OR IGNORE INTO macro_data (date, symbol, close)
+                SELECT date, symbol, close FROM macro_feed
+            """)
+
+            after = conn.execute(
+                "SELECT COUNT(*) FROM macro_data WHERE symbol = ?", [series_id]
+            ).fetchone()[0]
+
+        inserted = after - before
+        logger.info(f"  [macro_data] {series_id}: +{inserted} rows (total {after})")
+        return inserted
 
     def get_series(self, series_id: str, use_cache: bool = True) -> pd.DataFrame:
         """

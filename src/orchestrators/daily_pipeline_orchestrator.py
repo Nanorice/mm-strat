@@ -22,6 +22,7 @@ from src.shares_engine import SharesEngine
 from src.macro_engine import MacroEngine
 from src.feature_pipeline import FeaturePipeline
 from src.regime_pipeline import RegimePipeline
+from src.pipeline.risk_5_factor import RiskFiveFactorCalculator
 from src.universe_backfill import UniverseBackfillEngine
 from src.managers.view_manager import ViewManager
 from src.managers.screener_manager import ScreenerManager
@@ -89,6 +90,7 @@ class DailyPipelineOrchestrator:
         # Initialize pipelines (delegate computation)
         self.feature_pipeline = FeaturePipeline(self.db_path)
         self.regime_pipeline = RegimePipeline(self.db_path)
+        self.risk_calculator = RiskFiveFactorCalculator(self.db_path)
 
         # Universe backfill (only used when run_pipeline(universe_refresh=True))
         self.universe_backfill = UniverseBackfillEngine(self.db_path)
@@ -438,10 +440,17 @@ class DailyPipelineOrchestrator:
             {'rows_processed': N, 'sub_phases': {...}}
         """
         # Resolve active tickers (blacklisted tickers already purged from company_profiles)
+        # equity_tickers excludes ETF/INDEX/UNKNOWN — used for fundamentals/earnings
+        # which yfinance cannot provide for non-equity instruments.
         conn = duckdb.connect(self.db_path, read_only=True)
         try:
             active_tickers = [t[0] for t in conn.execute(
                 "SELECT ticker FROM company_profiles WHERE is_active = TRUE ORDER BY ticker"
+            ).fetchall()]
+            equity_tickers = [t[0] for t in conn.execute(
+                "SELECT ticker FROM company_profiles "
+                "WHERE is_active = TRUE AND COALESCE(ticker_type, 'EQUITY') = 'EQUITY' "
+                "ORDER BY ticker"
             ).fetchall()]
         finally:
             conn.close()
@@ -491,21 +500,21 @@ class DailyPipelineOrchestrator:
             logger.info("[Phase 1] Price: all fresh, skipped")
             results['price'] = {'success': True, 'ok': 0, 'failed': 0}
 
-        # Earnings Calendar (monthly)
-        if active_tickers and self._should_refresh_earnings_calendar(latest_trading_day):
+        # Earnings Calendar (monthly) — equities only (ETFs/indices have no earnings)
+        if equity_tickers and self._should_refresh_earnings_calendar(latest_trading_day):
             try:
-                rows = self.fund_engine.refresh_earnings_calendar(active_tickers)
+                rows = self.fund_engine.refresh_earnings_calendar(equity_tickers)
                 results['earnings_calendar'] = {'success': True, 'rows_written': rows}
                 logger.info(f"[Phase 1] Earnings calendar: {rows} rows refreshed")
             except Exception as e:
                 results['earnings_calendar'] = {'success': False, 'error': str(e)}
                 logger.warning(f"[Phase 1] Earnings calendar FAILED (non-critical): {e}")
 
-        # Fundamentals
-        if active_tickers:
+        # Fundamentals — equities only (ETFs/indices have no IS/BS/CF)
+        if equity_tickers:
             try:
                 result = self.fund_engine.update_fundamentals(
-                    tickers=active_tickers,
+                    tickers=equity_tickers,
                     target_date=target_date,
                     force=False,
                 )
@@ -520,16 +529,16 @@ class DailyPipelineOrchestrator:
                     self.run_manager.record_errors(
                         self._current_run_id, 'phase_1_t1_fundamentals', self.fund_engine.last_errors
                     )
-                self._check_filing_date_quality(active_tickers)
+                self._check_filing_date_quality(equity_tickers)
             except Exception as e:
                 results['fundamentals'] = {'success': False, 'error': str(e)}
                 logger.error(f"[Phase 1] Fundamentals FAILED: {e}", exc_info=True)
 
-        # Shares
-        if active_tickers:
+        # Shares — equities only (ETFs report AUM, not shares outstanding)
+        if equity_tickers:
             try:
                 result = self.shares_engine.update(
-                    tickers=active_tickers, latest_trading_day=latest_trading_day, max_workers=8
+                    tickers=equity_tickers, latest_trading_day=latest_trading_day, max_workers=8
                 )
                 results['shares'] = {'success': True, 'rows_written': result}
                 logger.info(f"[Phase 1] Shares: {result} rows")
@@ -639,11 +648,17 @@ class DailyPipelineOrchestrator:
             con.close()
 
     def _run_phase_4_t2_regime(self, target_date: str) -> Dict:
-        """Phase 4: Compute M03 regime scores."""
+        """Phase 4: Compute M03 regime scores + 5-factor risk scores."""
+        m03_rows = self.regime_pipeline.update_incremental()
 
-        rows = self.regime_pipeline.update_incremental()
+        try:
+            risk_rows = self.risk_calculator.update_incremental()
+            logger.info(f"[Phase 4] 5F Risk: {risk_rows} new rows")
+        except Exception as e:
+            logger.warning(f"[Phase 4] 5F Risk update FAILED (non-critical): {e}")
+            risk_rows = 0
 
-        return {'rows_processed': rows}
+        return {'rows_processed': m03_rows + risk_rows, 'm03_rows': m03_rows, 'risk_rows': risk_rows}
 
     def _run_phase_4b_sepa_watchlist(self, target_date: str) -> Dict:
         """Phase 4b: Update sepa_watchlist event log for the target date.

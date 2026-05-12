@@ -12,7 +12,7 @@
     *   Alternatively, we could run the current model for a few days post-breakout to identify the best timing to enter. This approach might also naturally expand our dataset.
 
 ## 2. Risk Management: 5-Factor Regime Model
-*   **Concept**: We have a prototype risk management model located at `test_field/risk_5_factor/risk_5_factor_model.py` which computes a 5-factor regime-switching risk score (VIX, HY OAS, Term spread, Trend, Slope) with target exposure bands.
+*   **Concept**: We have a prototype risk management model located at `ideas/risk_5_factor/risk_5_factor_model.py` which computes a 5-factor regime-switching risk score (VIX, HY OAS, Term spread, Trend, Slope) with target exposure bands.
 *   **Path Forward**:
     *   **Dashboard Integration**: Add this risk model output to the Streamlit dashboard to visualize the current market risk regime.
     *   **Backtest Integration**: Integrate the risk exposure bands into the backtest for dynamic position sizing or vetoing trades (e.g., using the veto flag or target exposure).

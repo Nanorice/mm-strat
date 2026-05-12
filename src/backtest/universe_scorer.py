@@ -179,6 +179,30 @@ class UniverseScorer:
 
         return pd.Series(result, index=work.index)
 
+    def _filter_equities_only(self, df: pd.DataFrame, db_path: Path) -> pd.DataFrame:
+        """
+        Exclude ETF/INDEX rows from scoring. They have no fundamentals
+        (pe_ratio, ps_ratio, eps_growth_yoy, etc.) and the model would
+        impute medians across a structurally different population.
+
+        Uses the `ticker_type` column from v_t3_training if present;
+        otherwise queries company_profiles directly.
+        """
+        if 'ticker_type' in df.columns:
+            mask = df['ticker_type'] == 'EQUITY'
+        else:
+            with duckdb.connect(str(db_path), read_only=True) as con:
+                non_eq = {r[0] for r in con.execute("""
+                    SELECT ticker FROM company_profiles
+                    WHERE ticker_type IN ('ETF', 'INDEX', 'UNKNOWN')
+                """).fetchall()}
+            mask = ~df['ticker'].isin(non_eq)
+
+        n_excluded = (~mask).sum()
+        if n_excluded > 0:
+            logger.info(f"Excluded {n_excluded} non-equity rows (ETF/INDEX) from scoring")
+        return df[mask].copy()
+
     def _calibrate_vectorized(self, raw_scores: np.ndarray) -> np.ndarray:
         """Vectorized calibration using pd.cut."""
         if self.calibration_bins is None:
@@ -225,6 +249,8 @@ class UniverseScorer:
 
         if df.empty:
             raise ValueError(f"No data in d2_training_cache for {start_date} to {end_date}")
+
+        df = self._filter_equities_only(df, db_path)
 
         # Generate missing log_* features inline
         missing_features = [f for f in self._m01_features if f not in df.columns]
@@ -361,6 +387,7 @@ class UniverseScorer:
                     t3.*,
                     cp.sector,
                     cp.industry,
+                    COALESCE(cp.ticker_type, 'EQUITY')                       AS ticker_type,
                     {shares_select}                                          AS shares_outstanding,
                     ff.revenue, ff.net_income, ff.eps_diluted,
                     ff.total_assets, ff.total_equity,
@@ -442,6 +469,8 @@ class UniverseScorer:
 
         if df.empty:
             raise ValueError(f"No data in t3_sepa_features for {start_date} to {end_date}")
+
+        df = self._filter_equities_only(df, db_path)
 
         # Derive *_delta features from existing *_pct_chg columns (pct_chg / 100 = delta ratio)
         for col in list(df.columns):

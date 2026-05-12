@@ -354,14 +354,20 @@ class DuckDBDataLoader:
                 """).fetchone()[0]
 
             # Pivot macro data to wide format
+            # NOTE: macro_data columns are (date, symbol, close, volume, value, unit).
+            # FRED/VIX series store the observation in `close`. `value`/`unit` are
+            # legacy and unused. Symbol column is `symbol`, not `series_id`.
             query = f"""
                 SELECT
                     date,
-                    MAX(CASE WHEN series_id = 'WALCL' THEN value END) as WALCL,
-                    MAX(CASE WHEN series_id = 'WTREGEN' THEN value END) as WTREGEN,
-                    MAX(CASE WHEN series_id = 'RRPONTSYD' THEN value END) as RRPONTSYD,
-                    MAX(CASE WHEN series_id = 'BAMLH0A0HYM2' THEN value END) as BAMLH0A0HYM2,
-                    MAX(CASE WHEN series_id = 'VIX' THEN value END) as VIX
+                    MAX(CASE WHEN symbol = 'WALCL' THEN close END) as WALCL,
+                    MAX(CASE WHEN symbol = 'WTREGEN' THEN close END) as WTREGEN,
+                    MAX(CASE WHEN symbol = 'RRPONTSYD' THEN close END) as RRPONTSYD,
+                    MAX(CASE WHEN symbol = 'BAMLH0A0HYM2' THEN close END) as BAMLH0A0HYM2,
+                    MAX(CASE WHEN symbol = 'VIX' THEN close END) as VIX,
+                    MAX(CASE WHEN symbol = 'DGS10' THEN close END) as DGS10,
+                    MAX(CASE WHEN symbol = 'DGS2' THEN close END) as DGS2,
+                    MAX(CASE WHEN symbol = 'WBAA' THEN close END) as WBAA
                 FROM macro_data
                 WHERE date >= '{start_date}' AND date <= '{end_date}'
                 GROUP BY date

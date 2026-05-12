@@ -140,6 +140,8 @@ class ScreenerManager:
             -- Full history up to end_date so vol/streak windows are warm at start_date.
             -- Event filtering to [start_date, end_date] happens in the final SELECT.
             -- ASOF JOIN forward-fills shares_outstanding from quarterly reports to every trading day.
+            -- Non-equity tickers (ETF/INDEX) are excluded — they have no shares_outstanding
+            -- and are enrolled separately by auto_enroll_non_equity().
             SELECT
                 p.ticker,
                 p.date,
@@ -158,6 +160,9 @@ class ScreenerManager:
                     AND p.close * COALESCE(s.shares_outstanding, 0) >= {mc}
                 ) AS passes
             FROM price_data p
+            INNER JOIN company_profiles cp
+                ON p.ticker = cp.ticker
+                AND COALESCE(cp.ticker_type, 'EQUITY') = 'EQUITY'
             ASOF LEFT JOIN shares_history s ON p.ticker = s.ticker AND p.date >= s.date
             WHERE p.date <= '{end_date}'
         ),
@@ -396,6 +401,57 @@ class ScreenerManager:
             'active':           active,
             'criteria_version': version_id,
         }
+
+    # ------------------------------------------------------------------
+    # Non-equity auto-enrollment (ETF / INDEX)
+    # ------------------------------------------------------------------
+
+    def auto_enroll_non_equity(self) -> dict:
+        """
+        Insert one is_active=TRUE entry per ETF/INDEX ticker into
+        screener_membership, using criteria_version=0 (bypass marker).
+
+        effective_date = MIN(price_data.date) for that ticker.
+        No exit event is ever generated — ETFs are evergreen in the screener.
+
+        Idempotent: skips tickers that already have any membership row.
+        """
+        with duckdb.connect(self.db_path) as conn:
+            existing_in_screener = {r[0] for r in conn.execute(
+                "SELECT DISTINCT ticker FROM screener_membership"
+            ).fetchall()}
+
+            candidates = conn.execute("""
+                SELECT
+                    cp.ticker,
+                    MIN(p.date) AS first_date,
+                    LAST(p.close ORDER BY p.date) AS last_close
+                FROM company_profiles cp
+                JOIN price_data p ON cp.ticker = p.ticker
+                WHERE cp.ticker_type IN ('ETF', 'INDEX')
+                GROUP BY cp.ticker
+                ORDER BY cp.ticker
+            """).fetchall()
+
+            inserted = 0
+            skipped = 0
+            for ticker, first_date, last_close in candidates:
+                if ticker in existing_in_screener:
+                    skipped += 1
+                    continue
+                conn.execute("""
+                    INSERT OR IGNORE INTO screener_membership
+                        (ticker, effective_date, is_active, criteria_version,
+                         last_price, avg_volume_20d, market_cap, consec_fail_days)
+                    VALUES (?, ?, TRUE, 0, ?, NULL, NULL, 0)
+                """, [ticker, first_date, last_close])
+                inserted += 1
+
+        logger.info(
+            f"[ScreenerManager] auto_enroll_non_equity: {inserted} enrolled, "
+            f"{skipped} already present"
+        )
+        return {'enrolled': inserted, 'skipped': skipped, 'total': len(candidates)}
 
     # ------------------------------------------------------------------
     # Point-in-time lookup

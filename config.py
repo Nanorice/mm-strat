@@ -88,7 +88,71 @@ FRED_SERIES = {
     'WTREGEN': {'name': 'Treasury General Account', 'freq': 'W', 'unit': 'billions'},
     'RRPONTSYD': {'name': 'Reverse Repo (Overnight)', 'freq': 'D', 'unit': 'billions'},
     'BAMLH0A0HYM2': {'name': 'HY Credit Spread (OAS)', 'freq': 'D', 'unit': 'percent'},
+    'DGS10': {'name': '10Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
+    'DGS2': {'name': '2Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
+    'WBAA': {'name': "Moody's Baa Corporate Yield", 'freq': 'W', 'unit': 'percent'},
 }
+
+# ==============================================================================
+# BENCHMARK / ETF / INDEX UNIVERSE
+# ==============================================================================
+# Non-equity tradeable instruments added to price_data and company_profiles.
+# - ticker_type drives ScreenerManager bypass and UniverseScorer exclusion.
+# - sector uses 'ETF:<GICS>' namespace to avoid polluting equity cross-sectional ranks.
+# - INDEX tickers retain '^' prefix (e.g. '^GSPC') — DuckDB stores as-is.
+
+BENCHMARK_TICKERS = [
+    {'ticker': 'SPY',   'name': 'SPDR S&P 500 ETF',                  'ticker_type': 'ETF',   'sector': 'ETF:Benchmark'},
+    {'ticker': 'QQQ',   'name': 'Invesco QQQ Trust (Nasdaq-100)',    'ticker_type': 'ETF',   'sector': 'ETF:Benchmark'},
+    {'ticker': '^GSPC', 'name': 'S&P 500 Index',                     'ticker_type': 'INDEX', 'sector': 'ETF:Benchmark'},
+    {'ticker': '^DJI',  'name': 'Dow Jones Industrial Average',      'ticker_type': 'INDEX', 'sector': 'ETF:Benchmark'},
+    {'ticker': '^IXIC', 'name': 'Nasdaq Composite',                  'ticker_type': 'INDEX', 'sector': 'ETF:Benchmark'},
+    {'ticker': 'IWM',   'name': 'iShares Russell 2000 ETF',          'ticker_type': 'ETF',   'sector': 'ETF:Benchmark'},
+    {'ticker': 'EFA',   'name': 'iShares MSCI EAFE (Developed ex-US)','ticker_type': 'ETF',  'sector': 'ETF:Benchmark'},
+    {'ticker': 'EEM',   'name': 'iShares MSCI Emerging Markets',     'ticker_type': 'ETF',   'sector': 'ETF:Benchmark'},
+]
+
+SECTOR_ETFS = [
+    {'ticker': 'XLE',  'name': 'Energy Select Sector SPDR',          'ticker_type': 'ETF', 'sector': 'ETF:Energy'},
+    {'ticker': 'XLF',  'name': 'Financial Select Sector SPDR',       'ticker_type': 'ETF', 'sector': 'ETF:Financials'},
+    {'ticker': 'XLK',  'name': 'Technology Select Sector SPDR',      'ticker_type': 'ETF', 'sector': 'ETF:Technology'},
+    {'ticker': 'XLV',  'name': 'Health Care Select Sector SPDR',     'ticker_type': 'ETF', 'sector': 'ETF:Healthcare'},
+    {'ticker': 'XLI',  'name': 'Industrial Select Sector SPDR',      'ticker_type': 'ETF', 'sector': 'ETF:Industrials'},
+    {'ticker': 'XLY',  'name': 'Consumer Discretionary Select SPDR', 'ticker_type': 'ETF', 'sector': 'ETF:ConsumerCyclical'},
+    {'ticker': 'XLP',  'name': 'Consumer Staples Select SPDR',       'ticker_type': 'ETF', 'sector': 'ETF:ConsumerDefensive'},
+    {'ticker': 'XLU',  'name': 'Utilities Select Sector SPDR',       'ticker_type': 'ETF', 'sector': 'ETF:Utilities'},
+    {'ticker': 'XLB',  'name': 'Materials Select Sector SPDR',       'ticker_type': 'ETF', 'sector': 'ETF:Materials'},
+    {'ticker': 'XLRE', 'name': 'Real Estate Select Sector SPDR',     'ticker_type': 'ETF', 'sector': 'ETF:RealEstate'},
+    {'ticker': 'SOXX', 'name': 'iShares Semiconductor ETF',          'ticker_type': 'ETF', 'sector': 'ETF:Semiconductors'},
+    {'ticker': 'IBB',  'name': 'iShares Biotechnology ETF',          'ticker_type': 'ETF', 'sector': 'ETF:Biotech'},
+    {'ticker': 'KRE',  'name': 'SPDR S&P Regional Banking',          'ticker_type': 'ETF', 'sector': 'ETF:RegionalBanks'},
+    {'ticker': 'XOP',  'name': 'SPDR S&P Oil & Gas E&P',             'ticker_type': 'ETF', 'sector': 'ETF:OilGasEP'},
+]
+
+COMMODITY_ETFS = [
+    {'ticker': 'GLD',  'name': 'SPDR Gold Shares',                   'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'SLV',  'name': 'iShares Silver Trust',               'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'CPER', 'name': 'United States Copper Index Fund',    'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'USO',  'name': 'United States Oil Fund',             'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'BNO',  'name': 'United States Brent Oil Fund',       'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'UNG',  'name': 'United States Natural Gas Fund',     'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'SOYB', 'name': 'Teucrium Soybean Fund',              'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'WEAT', 'name': 'Teucrium Wheat Fund',                'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'CORN', 'name': 'Teucrium Corn Fund',                 'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'VEGI', 'name': 'iShares MSCI Agriculture Producers', 'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'DBA',  'name': 'Invesco DB Agriculture Fund',        'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'PDBC', 'name': 'Invesco Optimum Yield Diversified Commodity', 'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+    {'ticker': 'URA',  'name': 'Global X Uranium ETF',               'ticker_type': 'ETF', 'sector': 'ETF:Commodity'},
+]
+
+FIXED_INCOME_ETFS = [
+    {'ticker': 'TLT', 'name': 'iShares 20+ Year Treasury Bond ETF',  'ticker_type': 'ETF', 'sector': 'ETF:FixedIncome'},
+    {'ticker': 'HYG', 'name': 'iShares iBoxx High Yield Corporate',  'ticker_type': 'ETF', 'sector': 'ETF:FixedIncome'},
+    {'ticker': 'LQD', 'name': 'iShares iBoxx Investment Grade Corp', 'ticker_type': 'ETF', 'sector': 'ETF:FixedIncome'},
+    {'ticker': 'UUP', 'name': 'Invesco DB US Dollar Index Bullish',  'ticker_type': 'ETF', 'sector': 'ETF:FixedIncome'},
+]
+
+NON_EQUITY_UNIVERSE = BENCHMARK_TICKERS + SECTOR_ETFS + COMMODITY_ETFS + FIXED_INCOME_ETFS
 
 # M03 Regime Score Thresholds (0-100 scale)
 M03_REGIME_THRESHOLDS = {
