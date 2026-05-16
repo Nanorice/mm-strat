@@ -68,7 +68,7 @@ class ModelRegistry:
         `model_version` stays NULL. Existing non-NULL values are not overwritten.
         """
         existing_cols = {
-            r[0] for r in con.execute("PRAGMA table_info('models')").fetchall()
+            r[1] for r in con.execute("PRAGMA table_info('models')").fetchall()
         }
         if not existing_cols:
             return  # `models` doesn't exist yet — schema_design.sql owns its creation

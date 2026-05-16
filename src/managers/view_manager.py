@@ -577,19 +577,24 @@ class ViewManager:
                   AND h.days_in_trade > 0  -- skip entry day itself
                 GROUP BY h.trade_id, h.ticker, h.entry_price
             ),
+            -- Precompute next trading day per ticker (one O(n) pass, replaces two correlated subqueries per trade)
+            price_with_next AS (
+                SELECT
+                    ticker, date,
+                    LEAD(date)  OVER (PARTITION BY ticker ORDER BY date) AS next_date,
+                    LEAD(close) OVER (PARTITION BY ticker ORDER BY date) AS next_close
+                FROM price_data
+            ),
             sl_exits AS (
                 SELECT
                     s.trade_id,
                     s.sl_date,
                     s.entry_price,
-                    -- Exit at next trading day's close after SL trigger
-                    (SELECT p.date FROM price_data p
-                     WHERE p.ticker = s.ticker AND p.date > s.sl_date
-                     ORDER BY p.date LIMIT 1) AS sl_exit_date,
-                    (SELECT p.close FROM price_data p
-                     WHERE p.ticker = s.ticker AND p.date > s.sl_date
-                     ORDER BY p.date LIMIT 1) AS sl_exit_price
+                    px.next_date  AS sl_exit_date,
+                    px.next_close AS sl_exit_price
                 FROM sl_events s
+                LEFT JOIN price_with_next px
+                    ON s.ticker = px.ticker AND s.sl_date = px.date
             )
             SELECT
                 f.*,
@@ -614,8 +619,7 @@ class ViewManager:
             LEFT JOIN outcomes o ON f.trade_id = o.trade_id
             LEFT JOIN sl_exits sl ON f.trade_id = sl.trade_id
         """)
-        n = con.execute("SELECT COUNT(*) FROM v_d2_training").fetchone()[0]
-        print(f"   [OK] v_d2_training: features + outcomes ({n:,} rows)")
+        print("   [OK] v_d2_training: features + outcomes (deferred — query to check row count)")
 
     # ------------------------------------------------------------------
     # VIEW 6: v_d1_trades — Alias for v_d1_candidates (Standardized Naming)
@@ -647,8 +651,7 @@ class ViewManager:
             )
             ORDER BY d2.date DESC, d2.ticker
         """)
-        n = con.execute("SELECT COUNT(*), COUNT(DISTINCT ticker) FROM v_d3_deployment").fetchone()
-        print(f"   [OK] v_d3_deployment: Last 252 days ({n[0]:,} rows, {n[1]} tickers)")
+        print(f"   [OK] v_d3_deployment: Last 252 days (deferred — query to check row count)")
 
     # ------------------------------------------------------------------
     # VIEW 8: v_screener_dashboard — SEPA Screener Tracker

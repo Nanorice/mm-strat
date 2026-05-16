@@ -30,7 +30,7 @@
 Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener members)
 │ -> price_data                                  │ -> screener_membership
 │   fundamentals                                 │   [criteria from screener_criteria_versions]
-│   shares_outstanding                           │
+│   shares_history                               │
 │   macro_data                    ┌──────────────┴──────────────┐
 │                                 ▼                              ▼
 │                         Phase 3 (T2 features)         Phase 4 (regime) [non-crit]
@@ -85,7 +85,7 @@ python scripts/run_daily_pipeline.py --dry-run          # Validate only
 |------|---------|--------|
 | 1.1 Price | `price_data` | yfinance (stale tickers only) |
 | 1.2 Fundamentals | `fundamentals`, `earnings_calendar` | yfinance (due tickers only) |
-| 1.3 Shares | `shares_outstanding` | yfinance (7-day staleness check) |
+| 1.3 Shares | `shares_history` (column: `shares_outstanding`) | yfinance (7-day staleness check) |
 | 1.4 Macro | `macro_data`, `t1_macro` | FRED + VIX + SPY/QQQ OHLCV |
 
 **Output**: Raw OHLCV, fundamentals, shares, macro data in DuckDB.
@@ -308,27 +308,39 @@ After completion: `python scripts/create_duckdb_views.py && python scripts/refre
 
 **Input**: `t3_sepa_features`, `price_data`, `fundamentals`, `company_profiles`.
 
+**Observed timing (2026-05-13, 38K trades):**
+- Phase 6 (DDL only — `CREATE OR REPLACE VIEW`): ~16 min
+- Phase 7 (materialise `d2_training_cache`): **~592s (~10 min)** — STALE, see note below
+- Combined Phase 6+7: ~26 min out of ~38 min total pipeline
+
+**Performance bottleneck (RESOLVED in code, timing not re-measured)**: The `sl_exits` CTE in `v_d2_training` previously ran a correlated subquery — `SELECT p.date FROM price_data WHERE p.ticker = s.ticker AND p.date > s.sl_date ORDER BY p.date LIMIT 1` — once per SL-triggered trade. This has been rewritten using the `price_with_next` CTE with `LEAD(date) OVER (PARTITION BY ticker ORDER BY date)` (see `src/managers/view_manager.py:580-597`). The 592s timing above predates this fix. **Action: re-time Phase 7 to determine current bottleneck (if any).**
+
 **Process**: The view chain progressively transforms daily SEPA observations into trade-level rows with outcomes:
 
-| View | Row represents | Key logic |
-|------|---------------|-----------|
-| `v_sepa_candidates` | 1 day per ticker (while in trend) | All T3 rows (SEPA candidates by definition) |
-| `v_d1_candidates` | **1 trade** (session) | Detects `trend_ok` transitions in **T2** → sessions. Entry = first `breakout_ok` day. Exit = last `trend_ok` day. Features from T3. |
-| `v_d1_trades` | Alias for `v_d1_candidates` | |
-| `v_d2_features` | 1 trade + fundamentals | Point-in-time PE/PS/PB/margins join |
-| `v_d2_hydrated` | **N days per trade** | Expands entry→exit to daily rows. Adds adaptive stop-loss (`max(-15%, -2×ATR)`), `sl_hit` flag |
-| `v_d2r_hydrated` | Alias for `v_d2_hydrated` | |
-| `v_d2_training` | **1 trade + outcomes** | Aggregates hydrated days → MAE, MFE, SL date/price, holding days, return. Adds 39 log-transforms. **This is the training dataset.** |
-| `v_d3_deployment` | Last 252 days of SEPA candidates | For model scoring |
-| `v_screener_dashboard` | **1 trade** (session) | Entry date, entry price, current close, pct_return, company name/sector/industry/market_cap, ACTIVE/EXITED status |
+| View | Row represents | Status | Downstream consumers |
+|------|---------------|--------|----------------------|
+| `v_sepa_candidates` | 1 day per ticker (while in trend) | **Active** | Diagnostic queries, notebooks |
+| `v_d1_candidates` | **1 trade** (session) | **Active** | `v_d2_features`, `v_d2_hydrated`, `v_screener_dashboard` |
+| `v_d1_trades` | Alias for `v_d1_candidates` | Alias (low use) | Notebooks only — prefer `v_d1_candidates` |
+| `v_d2_features` | 1 trade + fundamentals | **Active** | `v_d2_training`, `v_d3_deployment`, `v_d2_hydrated` |
+| `v_d2_hydrated` | **N days per trade** (entry→exit daily rows) | **Active — ML only** | `v_d2_training` only. Backtest no longer uses this — backtest reads `t3_sepa_features` + `price_data` directly via `DuckDBCandidateFeed`. |
+| `v_d2r_hydrated` | Alias for `v_d2_hydrated` | **Backward-compat alias** | Old scripts/notebooks. Migrate to `v_d2_hydrated`. |
+| `v_d2_training` | **1 trade + outcomes** | **Active — ML hub** | `train_mfe_classifier.py`, `d2_training_cache`, ablation, validation scripts |
+| `v_d3_deployment` | Last 252 days of SEPA candidates | **Active** | `dashboard.py` (live M01 scoring) |
+| `v_screener_dashboard` | **1 trade** (session) | **Active — duplicates session logic** | Source for `screener_watchlist`. Re-implements `v_d1_candidates` session detection on T2 — same full LAG/window pass. |
 
 **Output**: 9 production views + 2 backward-compat aliases + 2 materialised tables.
 
 **Materialised tables:**
-| Table | Source | Rows | Refresh |
-|-------|--------|------|---------|
-| `screener_watchlist` | `v_screener_dashboard` | ~42K (all trades ever) | ~7s via `CREATE OR REPLACE TABLE` in `create_all()` |
-| `d2_training_cache` | `v_d2_training` | ~15K | ~7s via `refresh_cache()` |
+| Table | Source | Rows (2026-05-13) | Refresh wall time |
+|-------|--------|-------------------|-------------------|
+| `screener_watchlist` | `v_screener_dashboard` | ~38K (all trades ever) | ~7s (DDL only — view is cheap to materialise) |
+| `d2_training_cache` | `v_d2_training` | ~38K | ~592s (pre-2026-05-14; correlated subquery resolved — re-time needed) |
+
+**Known tech debt in Phase 6+7:**
+- `v_screener_dashboard` duplicates the full session-detection CTE block (`trend_c8_base` → `trend_sessions` → `sessions` → `entries` → `session_bounds`) that `v_d1_candidates` already computes. These could share a materialised intermediate, halving T2 scan work.
+- `v_d2_hydrated` exists solely to feed `v_d2_training`. If `v_d2_training` were rewritten to compute MAE/MFE/SL directly against `price_data` (pre-joined), `v_d2_hydrated` could be dropped.
+- ~~The `sl_exits` correlated subquery is the primary Phase 7 bottleneck.~~ RESOLVED 2026-05-14: rewritten using a `price_with_next` CTE with `LEAD(date/close) OVER (PARTITION BY ticker ORDER BY date)` (see session log). Re-time Phase 7 to find the new bottleneck (if any).
 
 **Toolkit:**
 | File | Purpose |
@@ -433,8 +445,8 @@ Shows: data freshness, recent trades, per-day C1-C9 trend + B1-B2 breakout pass/
 | `t2_regime_scores` | 4 | ~1.5K | One row per date: M03 score + pillars + deltas |
 | `sepa_watchlist` | 4b | ~35K | Event log — one row per SEPA session per ticker. T3 universe gate. |
 | `t3_sepa_features` | 5 | ~9.4M | sepa_watchlist universe, full history per ticker: 144 cols, single ML source of truth |
-| `screener_watchlist` | 6 | ~42K | Materialized `v_screener_dashboard` (all trades, ACTIVE/EXITED, with returns) |
-| `d2_training_cache` | 7 | varies | Materialized `v_d2_training` (trade-level with outcomes) |
+| `screener_watchlist` | 6 | ~38K | Materialized `v_screener_dashboard` (all trades, ACTIVE/EXITED, with returns) |
+| `d2_training_cache` | 7 | ~38K | Materialized `v_d2_training` (trade-level with outcomes, ~592s to refresh) |
 | `pipeline_runs` | 8 | varies | Phase execution tracking + idempotency |
 | `models` | ML | varies | Model registry — versions, metrics, artifact paths |
 
@@ -920,7 +932,7 @@ python scripts/model_diff.py --model-a ... --model-b ... --top-n 20
 **Data flow (DuckDB — default)**:
 ```
 d2_training_cache                   → UniverseScorer.score_from_duckdb() → M01 scoring (vectorized)
-t2_regime_scores                    → regime feed (regime_cat 0-4 from m03_score thresholds)
+t2_regime_scores                    → regime feed (regime_cat 0-4 from m03_score thresholds: <20 strong_bear, <40 bear, <60 neutral, <80 bull, >=80 strong_bull — defaults in src/pipeline/m03_regime.py)
 price_data                          → OHLCV feeds + inline ATR-14
     → SEPABacktestRunner.setup_from_duckdb() + run()
     → report + equity curve + trade log

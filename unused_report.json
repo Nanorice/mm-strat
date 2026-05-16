@@ -1,0 +1,373 @@
+{
+  "unused": [
+    "src.backtester",
+    "src.buy_list_manager",
+    "src.dashboard_reports",
+    "src.dataset_merger",
+    "src.evaluate_model",
+    "src.features_stub",
+    "src.feature_rehydrator",
+    "src.model_preparation",
+    "src.reporting",
+    "src.temporal_validator",
+    "src.ticker_filter",
+    "src.train_model",
+    "src.backtest.feeds",
+    "src.backtest.position_tracker",
+    "src.backtest.report",
+    "src.backtest.score_lookup",
+    "src.backtest.trade_logger",
+    "src.backtest.vectorized_backtest",
+    "src.backtest.__init__",
+    "src.evaluation.base_evaluator",
+    "src.evaluation.classification_report",
+    "src.evaluation.errors",
+    "src.evaluation.feature_analyzer",
+    "src.evaluation.feature_screener",
+    "src.evaluation.m01_evaluator",
+    "src.evaluation.m03_grid_search",
+    "src.evaluation.metrics",
+    "src.evaluation.plotting",
+    "src.evaluation.ranking",
+    "src.evaluation.reports",
+    "src.evaluation.targets",
+    "src.evaluation.__init__",
+    "src.managers.__init__",
+    "src.orchestrators.__init__",
+    "src.pipeline.base_trainer",
+    "src.pipeline.data_pipeline_test",
+    "src.pipeline.__init__",
+    "src.backtest.archive.feeds",
+    "src.backtest.archive.price_feed",
+    "src.backtest.archive.regime_feed",
+    "src.backtest.archive.run_pipeline"
+  ],
+  "used_by": {
+    "src.alpha_factors": [
+      "src.features",
+      "scripts.validate_alpha_parity",
+      "daily_scanner_duckdb"
+    ],
+    "src.backtester": [],
+    "src.buy_list_manager": [],
+    "src.company_profile_engine": [
+      "src.features",
+      "src.features_stub",
+      "src.utils",
+      "data_curator_duckdb"
+    ],
+    "src.cross_sectional_features": [
+      "src.dataset_rehydrator",
+      "src.universe_engine",
+      "src.pipeline.data_pipeline"
+    ],
+    "src.dashboard_reports": [],
+    "src.database": [
+      "tools.compare_outputs"
+    ],
+    "src.database_duckdb": [
+      "tools.compare_outputs",
+      "daily_scanner_duckdb"
+    ],
+    "src.dataset_merger": [],
+    "src.dataset_rehydrator": [
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline"
+    ],
+    "src.data_engine": [
+      "src.dataset_rehydrator",
+      "src.feature_rehydrator",
+      "src.temporal_validator",
+      "src.trade_simulator",
+      "src.trade_simulator_fast",
+      "src.universe_backfill",
+      "src.universe_engine",
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test",
+      "src.pipeline.data_pipeline_test",
+      "src.pipeline.m03_regime",
+      "src.backtest.archive.price_feed",
+      "scripts.verify_sepa_rs_fix",
+      "data_curator_duckdb",
+      "data_curator_duckdb"
+    ],
+    "src.data_loader_duckdb": [
+      "scripts.validate_alpha_parity",
+      "tools.compare_outputs",
+      "daily_scanner_duckdb"
+    ],
+    "src.earnings_engine": [
+      "src.fundamental_engine"
+    ],
+    "src.eda_utils": [
+      "src.evaluation.feature_screener"
+    ],
+    "src.evaluate_model": [],
+    "src.features": [
+      "src.dataset_rehydrator",
+      "src.dataset_rehydrator",
+      "src.feature_rehydrator",
+      "src.trade_simulator",
+      "src.trade_simulator_fast",
+      "src.universe_engine",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test",
+      "daily_scanner_duckdb"
+    ],
+    "src.features_stub": [],
+    "src.feature_config": [
+      "src.features",
+      "src.features_stub",
+      "src.feature_preprocessor",
+      "src.backtest.universe_scorer",
+      "src.evaluation.feature_screener"
+    ],
+    "src.feature_pipeline": [
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "scripts.backfill_t2_screener_features",
+      "scripts.backfill_t3_sepa_features",
+      "scripts.test_t3_integration",
+      "scripts.validate_m03_integration",
+      "data_curator_duckdb"
+    ],
+    "src.feature_preprocessor": [
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test",
+      "daily_scanner_duckdb"
+    ],
+    "src.feature_rehydrator": [],
+    "src.fundamental_column_mapping": [
+      "src.fundamental_merger",
+      "src.fundamental_processor"
+    ],
+    "src.fundamental_edgar_engine": [
+      "scripts.backfill_fundamentals"
+    ],
+    "src.fundamental_engine": [
+      "src.features_stub",
+      "src.fundamental_fmp_engine",
+      "src.fundamental_merger",
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "scripts.backfill_fundamentals",
+      "tools.backfill_earnings_calendar",
+      "data_curator_duckdb"
+    ],
+    "src.fundamental_fmp_engine": [
+      "scripts.backfill_fundamentals"
+    ],
+    "src.fundamental_merger": [
+      "src.dataset_rehydrator",
+      "src.dataset_rehydrator",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test"
+    ],
+    "src.fundamental_processor": [
+      "src.fundamental_merger"
+    ],
+    "src.indicators": [
+      "src.buy_list_manager",
+      "src.features",
+      "src.features_stub",
+      "src.strategy",
+      "scripts.verify_sepa_rs_fix"
+    ],
+    "src.macro_engine": [
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "src.pipeline.m03_regime",
+      "scripts.backfill_macro_rates",
+      "scripts.backfill_t1_macro",
+      "scripts.ingest_t1_macro",
+      "data_curator_duckdb"
+    ],
+    "src.ml_scorer": [
+      "daily_scanner_duckdb"
+    ],
+    "src.model_preparation": [],
+    "src.model_registry": [
+      "scripts.migrate_model_registry",
+      "scripts.populate_feature_catalog",
+      "scripts.train_mfe_classifier"
+    ],
+    "src.regime_pipeline": [
+      "src.orchestrators.daily_pipeline_orchestrator"
+    ],
+    "src.reporting": [],
+    "src.screener_diagnostics": [
+      "scripts.diagnose_ticker"
+    ],
+    "src.shares_engine": [
+      "src.universe_backfill",
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "data_curator_duckdb"
+    ],
+    "src.strategy": [
+      "src.backtester",
+      "src.trade_simulator",
+      "src.trade_simulator_fast",
+      "src.pipeline.data_pipeline"
+    ],
+    "src.temporal_validator": [],
+    "src.ticker_filter": [],
+    "src.trade_simulator": [
+      "src.trade_simulator_fast",
+      "src.trading_config"
+    ],
+    "src.trade_simulator_fast": [
+      "src.pipeline.data_pipeline"
+    ],
+    "src.trading_config": [
+      "src.trade_simulator",
+      "src.trade_simulator_fast",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test"
+    ],
+    "src.train_model": [],
+    "src.triple_barrier_labeler": [
+      "src.pipeline.data_pipeline"
+    ],
+    "src.universe_backfill": [
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "scripts.backfill_benchmark_prices",
+      "scripts.run_universe_backfill"
+    ],
+    "src.universe_engine": [
+      "src.pipeline.data_pipeline_test",
+      "src.pipeline.data_pipeline_test"
+    ],
+    "src.utils": [
+      "src.data_engine",
+      "src.macro_engine",
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test",
+      "daily_scanner_duckdb",
+      "data_curator_duckdb"
+    ],
+    "src.vectorized_screening": [
+      "src.strategy",
+      "src.trade_simulator_fast",
+      "src.pipeline.data_pipeline_test",
+      "scripts.verify_sepa_rs_fix"
+    ],
+    "src.viz_library": [
+      "src.dashboard_reports",
+      "src.dashboard_reports",
+      "src.dashboard_reports",
+      "src.dashboard_reports"
+    ],
+    "src.__init__": [],
+    "src.backtest.analyzers": [
+      "scripts.test_backtest_enhancements",
+      "scripts.test_backtest_enhancements"
+    ],
+    "src.backtest.feeds": [],
+    "src.backtest.position_tracker": [],
+    "src.backtest.report": [],
+    "src.backtest.runner": [
+      "src.backtest.archive.run_pipeline",
+      "scripts.run_backtest",
+      "scripts.test_backtest_enhancements",
+      "scripts.test_backtest_enhancements"
+    ],
+    "src.backtest.score_lookup": [],
+    "src.backtest.sepa_strategy": [
+      "scripts.test_backtest_enhancements",
+      "scripts.test_backtest_enhancements"
+    ],
+    "src.backtest.trade_logger": [],
+    "src.backtest.universe_scorer": [
+      "src.backtest.score_lookup",
+      "src.backtest.vectorized_backtest",
+      "src.backtest.archive.run_pipeline",
+      "scripts.run_backtest"
+    ],
+    "src.backtest.vectorized_backtest": [],
+    "src.backtest.__init__": [],
+    "src.evaluation.base_evaluator": [],
+    "src.evaluation.classification_evaluator": [
+      "scripts.test_evaluation_framework",
+      "scripts.train_mfe_classifier"
+    ],
+    "src.evaluation.classification_report": [],
+    "src.evaluation.errors": [],
+    "src.evaluation.feature_analyzer": [],
+    "src.evaluation.feature_screener": [],
+    "src.evaluation.leakage_guard": [
+      "scripts.test_evaluation_framework",
+      "scripts.train_mfe_classifier"
+    ],
+    "src.evaluation.m01_evaluator": [],
+    "src.evaluation.m03_evaluator": [
+      "src.evaluation.m03_grid_search"
+    ],
+    "src.evaluation.m03_grid_search": [],
+    "src.evaluation.m03_ground_truth": [
+      "src.evaluation.m03_evaluator"
+    ],
+    "src.evaluation.metrics": [],
+    "src.evaluation.plotting": [],
+    "src.evaluation.ranking": [],
+    "src.evaluation.reports": [],
+    "src.evaluation.targets": [],
+    "src.evaluation.__init__": [],
+    "src.managers.pipeline_run_manager": [
+      "src.orchestrators.daily_pipeline_orchestrator"
+    ],
+    "src.managers.screener_manager": [
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "scripts.add_benchmark_tickers",
+      "scripts.backfill_screener_membership"
+    ],
+    "src.managers.sepa_watchlist_manager": [
+      "src.managers.__init__",
+      "src.orchestrators.daily_pipeline_orchestrator"
+    ],
+    "src.managers.view_manager": [
+      "src.feature_pipeline",
+      "src.managers.__init__",
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "src.pipeline.data_pipeline",
+      "scripts.create_duckdb_views",
+      "scripts.refresh_training_cache",
+      "data_curator_duckdb"
+    ],
+    "src.managers.__init__": [],
+    "src.orchestrators.daily_pipeline_orchestrator": [
+      "src.orchestrators.__init__",
+      "scripts.run_daily_pipeline"
+    ],
+    "src.orchestrators.__init__": [],
+    "src.pipeline.base_trainer": [],
+    "src.pipeline.data_pipeline": [
+      "scripts.benchmark_training_cache"
+    ],
+    "src.pipeline.data_pipeline_test": [],
+    "src.pipeline.m03_regime": [
+      "src.regime_pipeline",
+      "src.evaluation.m03_evaluator",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline",
+      "src.pipeline.data_pipeline_test",
+      "src.backtest.archive.regime_feed"
+    ],
+    "src.pipeline.risk_5_factor": [
+      "src.orchestrators.daily_pipeline_orchestrator",
+      "scripts.backfill_risk_scores"
+    ],
+    "src.pipeline.__init__": [],
+    "src.backtest.archive.feeds": [],
+    "src.backtest.archive.price_feed": [],
+    "src.backtest.archive.regime_feed": [],
+    "src.backtest.archive.run_pipeline": []
+  }
+}

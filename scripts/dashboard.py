@@ -171,9 +171,13 @@ def score_active_trades(
             X[f] = np.nan
     X = X[features]
 
-    # pandas merge can upcast bool columns to object — cast back to int
+    # pandas merge can upcast bool columns to object — cast back to int.
+    # Skip string categoricals (sector/industry) which XGBoost handles natively.
     for col in X.select_dtypes(include="object").columns:
-        X[col] = X[col].astype(float)
+        try:
+            X[col] = X[col].astype(float)
+        except (ValueError, TypeError):
+            X[col] = X[col].astype("category")
 
     probas = model.predict_proba(X)
     preds = np.argmax(probas, axis=1)
