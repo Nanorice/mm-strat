@@ -117,6 +117,14 @@ Methodology updated:
 - **§9.5** (new) → **§9.6** — `ScoreLookup` documented as in-memory O(1) daily candidate gate
 - **§15** — Renamed from §14; "Planned Future Work" replaced with "Operational Roadmap" pointing to plan doc
 
+#### ~~T0.3 · Legacy Repository Cleanup & Refactoring~~ — ✅ DONE 2026-05-16
+
+Executed the surgical cleanup plan.
+- **Dependency chain broken**: Archived `src/pipeline/data_pipeline.py` and `src/universe_engine.py` orchestrators, which acted as an import funnel for legacy modules.
+- **Refactoring**: Safely extracted `get_model_features()` from `src/feature_config.py` into `src/utils.py`.
+- **Archiving**: Safely moved 47 deprecated legacy files (from Phase 1-5 Parquet pipeline era) into `archive/archive May26/`.
+- **Verification**: Confirmed `scripts/run_daily_pipeline.py` and `scripts/train_mfe_classifier.py` remain fully functional without import errors.
+
 ---
 
 ### Tier 1 — Data Quality & Reliability (P1)
@@ -269,8 +277,9 @@ Methodology updated:
 ```
 T0.1 (re-time Phase 7) ──┐
                          ├──▶ T1.x (quality gate, trend_exit_ok, invariants)
-T0.2 (doc cleanup) ──────┘                          │
-                                                    ▼
+T0.2 (doc cleanup) ──────┤                          │
+                         │                          ▼
+T0.3 (repo cleanup) ─────┘
                                 T2.1 (regime v2 design doc) ──▶ T2.2 (impl) ──▶ T2.3 (retrain)
                                                     │
                                                     ▼
@@ -295,7 +304,7 @@ T0.2 (doc cleanup) ──────┘                          │
 
 | Day | Work |
 |---|---|
-| 1 | T0.1 (re-time Phase 7) + T0.2 (doc cleanup) |
+| 1 | T0.1 (re-time Phase 7) + T0.2 (doc cleanup) + T0.3 (repo cleanup) |
 | 2-3 | T1.2 (`trend_exit_ok` materialisation) |
 | 4-5 | T1.3 (invariant audits) |
 | 6-7 | T1.1 (Phase 1.5 quality gate) |

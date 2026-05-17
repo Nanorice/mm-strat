@@ -24,7 +24,7 @@ import pandas as pd
 import duckdb
 
 import config
-from src.feature_config import get_model_features
+from src.utils import get_model_features
 
 logger = logging.getLogger(__name__)
 
