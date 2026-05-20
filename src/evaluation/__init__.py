@@ -22,6 +22,18 @@ from .base_evaluator import BaseEvaluator
 from .classification_evaluator import ClassificationEvaluator
 from .plotting import EvaluationPlotter
 from .leakage_guard import LeakageGuard
+from .training_data_loader import (
+    load_pretrain_data,
+    derive_target_class,
+    DEFAULT_MFE_BINS,
+)
+from .feature_signal import (
+    return_horizon_stats,
+    weekly_ticker_activity,
+    days_active_by_class,
+)
+from .html_report import build_html_report
+from .pretrain_report import run_pretrain_audit, PretrainReport
 
 __all__ = [
     # M03
@@ -33,4 +45,14 @@ __all__ = [
     'ClassificationEvaluator',
     'EvaluationPlotter',
     'LeakageGuard',
+    # Phase 1 — Pre-training data analytics
+    'load_pretrain_data',
+    'derive_target_class',
+    'DEFAULT_MFE_BINS',
+    'return_horizon_stats',
+    'weekly_ticker_activity',
+    'days_active_by_class',
+    'build_html_report',
+    'run_pretrain_audit',
+    'PretrainReport',
 ]

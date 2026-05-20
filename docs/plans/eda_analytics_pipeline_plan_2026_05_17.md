@@ -1,9 +1,42 @@
 # EDA & Analytics Pipeline — Implementation Plan
 
-> **Date**: 2026-05-17
-> **Source**: `docs/analytics_pipeline_design.md` (fact-checked against `notebooks/model_proto.ipynb` + `notebooks/scores_eda.ipynb`)
-> **Objective**: Define `src/evaluation/` as a standalone analytics library for training data auditing and model performance evaluation. Not wired into the daily pipeline — called explicitly during model development and promotion decisions.
-> **Status**: Draft — awaiting approval before any code changes.
+> **Date**: 2026-05-17 (revised after codebase fact-check)
+> **Source**: Fact-checked against `notebooks/model_proto.ipynb`, `notebooks/scores_eda.ipynb`, `src/managers/view_manager.py`, existing `src/evaluation/`.
+> **Objective**: Add the **missing** pre-training analytics layer to `src/evaluation/`. Standalone — called explicitly during model development, not wired into the daily pipeline.
+> **Status**: ✅ Phase 1 COMPLETE (2026-05-17). Phases 2+ remain draft.
+
+---
+
+## Reality Check (must read before implementing)
+
+Three corrections to the original draft, verified against source:
+
+1. **`src/evaluation/` already exists** (~4,700 lines): `ClassificationEvaluator`, `ClassificationReportGenerator`, `EvaluationPlotter`, `LeakageGuard`, `M03Evaluator`. The original plan's Modules C/D/E (model eval, calibration, SHAP, confusion matrix) **already exist** inside `ClassificationEvaluator`. **Do not rebuild them.** The genuine gap is **pre-training data audit + feature analysis** — that does not exist.
+
+2. **Verified data lineage** (from `view_manager.py` + live DB counts 2026-05-17):
+   ```
+   t3_sepa_features        dense, 9,298,701 rows, daily, 144 cols, NO outcome/target   ← TRUE DENSE input
+     └─ v_d1_candidates    C1–C11 SEPA signal, ONE ROW PER TRADE (entry_date only, Step 4)
+         └─ v_d2_features  + fundamentals/valuation, SPARSE ~38K (same grain as trades!)
+             ├─ v_d3_deployment   last 252d slice (scoring input)
+             └─ v_d2_training     + MFE/MAE/SL outcomes, 1 row per trade, SPARSE ~38K   ← SPARSE input
+                 └─ d2_training_cache   materialized v_d2_training (70× faster load)
+   ```
+   ⚠️ **CORRECTION vs. original draft**: `v_d2_features` is **NOT** a dense daily table. `v_d1_candidates` Step 4 explicitly keeps "only entry_date row (one row per trade)", so `v_d2_features` = **38,248 rows** — sparse, same grain as `v_d2_training`, just without outcome columns. The genuine dense daily table is `t3_sepa_features` (9.3M rows). `v_d2_training` is correct: sparse ~38K, trade-level, with outcomes. `d2_training_cache` mirrors it exactly (refreshed by `scripts/refresh_training_cache.py`, Phase 7 of daily pipeline).
+
+3. **The notebooks use two different inputs, never reconciled**:
+   - `model_proto.ipynb`: `SELECT * FROM v_d2_training ORDER BY date, ticker` → all audit/IC/MI/CV runs here. Target = **`target_class`** (NOT `mfe_class`), derived in-notebook from `mfe_pct` bins: `<=2→0, (2,10]→1, (10,30]→2, >30→3`.
+   - `scores_eda.ipynb`: `pq.read_table("scores_cache.parquet")` — a pre-baked `prob_elite` parquet, **not** `t3_sepa_features`, no DB, no model applied in-notebook.
+
+### Phase 1 scope decisions (locked + implemented)
+
+- **Build only the missing gap.** Reuse `LeakageGuard` and `EvaluationPlotter` as-is. Do not touch model-eval code. ✅
+- **Phase 1 input = two modes (`dense` / `trades`):**
+  - `dense` → `t3_sepa_features WHERE feature_version='v3.1'` (~9.3M rows). Audits feature hygiene *before* trade aggregation, no target column. ✅ (**corrected** from original plan's `v_d2_features`)
+  - `trades` → `v_d2_training` (prefers `d2_training_cache` when fresh). 38K sparse trade rows + outcomes. ✅
+- **Target binning = function parameter, default = notebook bins.** `derive_target_class(df, bins=DEFAULT_MFE_BINS)` with `DEFAULT_MFE_BINS` in `training_data_loader.py`. ✅
+- **Columns lowercased on load** via `df.columns.str.lower()` — matches `model_proto.ipynb` and is stable against DuckDB's TitleCase cross-sectional rank columns. ✅
+- **`detect_bad_tickers` thresholds scale-corrected**: `return_*` columns are fractional (1.0=100%), so defaults are `5.0` (=500% 1d) / `10.0` (=1000% 20d), not the notebook's bare `500`/`1000` which never fired. ✅
 
 ---
 
@@ -60,115 +93,165 @@ The handoff between the two is the **held-out cutoff date** (proposed: 2024-01-0
 
 ---
 
-## 1. Module Map
+# PHASE 1 — Pre-Training Data Analytics (runnable now)
 
-All modules live under `src/evaluation/`. Standalone — not imported by the daily pipeline. Only imports from `src/model_registry.py`, `src/feature_config.py`, and standard libraries.
+> **Phase 1 goal**: a working pipeline the user can run *today* to prepare for the next model-development cycle. Answers two questions on the pre-training data: **(a) is it clean?** and **(b) what does the target look like and which features carry signal?**
+>
+> Out of scope for Phase 1: model evaluation, walk-forward CV, calibration, SHAP, promotion gates, strategy/score analytics. Those either already exist (`ClassificationEvaluator`) or belong to later phases.
+
+## P1.1 Module Map (new files only)
+
+New files under `src/evaluation/` — small, single-responsibility, frequently-reused functions. **No god function.** Reuse existing `LeakageGuard` and `EvaluationPlotter`.
 
 ```
 src/evaluation/
-├── __init__.py             # exports: audit_training_data, evaluate_model_performance, run_full_evaluation
-├── data_quality.py         # Category A — training data audit (null, leakage, bad tickers, warm-up)
-├── feature_analysis.py     # Category B — IC, MI, multicollinearity, feature selection
-├── model_eval.py           # Category C — walk-forward CV, calibration, SHAP
-├── model_comparison.py     # Category D — held-out eval, compare_models (apple-to-apple)
-├── strategy_analytics.py   # Category F — decile, rolling IC, score trajectory, entry rules, regime gating
-└── report.py               # Assembly: audit_training_data(), evaluate_model_performance(), run_full_evaluation()
+├── training_data_loader.py   # NEW — load + mode switch (dense / trades) + target derivation
+├── data_quality.py           # NEW — null/variance/inf audit, bad-ticker detection, warm-up clip
+├── feature_signal.py         # NEW — IC, MI, correlation/redundancy (the 3 most-reused funcs)
+└── pretrain_report.py        # NEW — thin assembler: calls the above, emits Markdown + figures
 ```
 
-Supporting scripts (standalone, not imported by daily pipeline):
+Reused as-is (do **not** modify):
+- `LeakageGuard.check_feature_leakage()` — already has the exact notebook forbidden-pattern list (`mfe`, `mae`, `return_at_exit`, `final_`, `outcome_`, `exit_`, `result_`).
+- `EvaluationPlotter` — bar charts, distributions.
 
+Supporting script:
 ```
-scripts/
-├── run_training_data_audit.py    # Category A+B: data quality + feature analysis report
-└── run_model_evaluation.py       # Category C+D+E+F: full model validation + comparison report
+scripts/run_pretrain_audit.py   # CLI: --mode {dense,trades} [--mfe-bins ...] → report
 ```
 
----
-
-## 2. Module A — Data Quality (`data_quality.py`)
-
-**Purpose**: Block downstream analysis on dirty data. Must run before IC or SHAP.
-
-This addresses the gap in `analytics_pipeline_design.md §3.2`: the notebooks *do* perform these checks but they're ad-hoc. This module makes them mandatory and automated.
-
-### Functions
+## P1.2 `training_data_loader.py` — one loader, two modes ✅ IMPLEMENTED
 
 ```python
-def audit_feature_matrix(df: pd.DataFrame) -> DataQualityReport:
+DEFAULT_MFE_BINS = [(-inf, 2.0, 0), (2.0, 10.0, 1), (10.0, 30.0, 2), (30.0, inf, 3)]
+
+def load_pretrain_data(
+    mode: Literal["dense", "trades"] = "trades",
+    db_path: str = DB_PATH,
+) -> pd.DataFrame:
     """
-    Returns a structured report; raises DataQualityError if any P0 gate fails.
+    mode="dense"  -> SELECT * FROM t3_sepa_features WHERE feature_version='v3.1'
+                     (~9.3M rows, daily, NO target — true dense feature hygiene audit)
+                     ⚠️ NOT v_d2_features (which is sparse ~38K, same grain as trades)
+    mode="trades" -> d2_training_cache if fresh, else v_d2_training
+                     ORDER BY date, ticker (matches model_proto.ipynb exactly)
+    Columns lowercased on load (df.columns.str.lower()).
+    Cache freshness: cache max(date) >= t3_sepa_features max(date).
     """
+
+def derive_target_class(
+    df: pd.DataFrame,
+    source_col: str = "mfe_pct",
+    bins=DEFAULT_MFE_BINS,
+) -> pd.Series:
+    """np.select on mfe_pct -> target_class (0..3). NaN source -> default=0 (class Dud).
+    Only valid in mode='trades' (dense has no mfe_pct)."""
 ```
 
-**P0 gates (HALT pipeline if triggered)**:
-- Any column with null rate > 50%
-- Any column with zero variance (constant)
-- Any column with >10% infinite values
-- Target column (`mfe_class`) is null for >1% of rows
+Why two modes matter: `dense` audits feature hygiene *before* sparse aggregation (9.3M rows catch broken features at the `t3_sepa_features` source); `trades` audits the actual training matrix + target distribution. Same functions, different input — no logic duplicated.
 
-**Warnings (log but continue)**:
-- Null rate 1–50% per column (bar chart in report)
-- Extreme values: single-period return >500%, 20d return >1000%
-- Warm-up rows: first N rows per ticker with >30% nulls (clip to `warmup_cutoff`)
-
-**Bad ticker detection** (from `scores_eda.ipynb`):
-- Flag tickers where any single return exceeds economic limit (300% for 20d, 500% for 60d)
-- Output: `bad_tickers` list for caller to decide on exclusion
-
-**Leakage guard**:
-- Reject columns matching: `exit_*`, `return_*`, `mfe_*`, `mae_*`, `breakout_ok` — these were confirmed as leakage candidates in `scores_eda.ipynb`
-
-**Output**: `DataQualityReport` dataclass with `passed: bool`, `null_rates: pd.Series`, `bad_tickers: list[str]`, `warnings: list[str]`.
-
----
-
-## 3. Module B — Feature Analysis (`feature_analysis.py`)
-
-**Purpose**: Understand individual feature predictiveness before training. Source: `model_proto.ipynb` cells 1-4.
-
-### Functions
+## P1.3 `data_quality.py` — small functions, not one auditor ✅ IMPLEMENTED
 
 ```python
-def compute_ic(
-    df: pd.DataFrame,
-    features: list[str],
-    target: str,
-    method: Literal["spearman", "pearson"] = "spearman"
-) -> pd.Series:
-    """Rank IC of each feature vs target. Returns Series sorted by abs(IC)."""
+def null_audit(df, feature_cols) -> NullReport:
+    """Per-column null rate. P0: >50%. WARN: 1–50%."""
 
-def compute_mutual_information(
-    df: pd.DataFrame,
-    features: list[str],
-    target: str
-) -> pd.Series:
-    """Sklearn mutual_info_classif. Returns Series sorted by MI score."""
+def variance_audit(df, feature_cols) -> list[str]:
+    """Zero-variance / constant columns (P0). Skips non-numeric."""
 
-def rank_scatter(ic: pd.Series, mi: pd.Series) -> plt.Figure:
-    """IC rank vs MI rank scatter — surfaces features where IC and MI disagree."""
+def infinite_audit(df, feature_cols) -> dict[str, float]:
+    """Columns with >10% inf (P0).
+    ⚠️ Uses to_numpy(dtype='float64', na_value=np.nan) — np.isinf fails on pandas
+    nullable integer/boolean types without this cast."""
 
-def compute_correlation_matrix(
-    df: pd.DataFrame,
-    features: list[str],
-    threshold: float = 0.75
-) -> tuple[pd.DataFrame, list[tuple[str, str]]]:
+def detect_bad_tickers(
+    df,
+    return_1d_thresh: float = 5.0,    # ⚠️ CORRECTED: fractional scale (5.0=500%), NOT 500
+    return_20d_thresh: float = 10.0,  # ⚠️ CORRECTED: fractional scale (10.0=1000%), NOT 1000
+    dominance_ratio: float = 0.8,
+) -> list[str]:
+    """scores_eda.ipynb logic, scale-corrected: any 1d>5.0 (=500%), OR 20d>10.0 (=1000%)
+    AND return_1d/return_20d > 0.8. Reported, never auto-dropped.
+    The notebook's bare 500/1000 never fired because return_* is fractional."""
+
+def warmup_clip(df, sentinels=("rs","m03_score","dist_from_20d_high_delta")) -> pd.DataFrame:
+    """Per-ticker cumsum drop of leading-NULL rows (model_proto cell 18).
+    Interior NULLs kept — only leading rows before first fully-valid sentinel row dropped."""
+
+def check_leakage(feature_cols) -> dict:
+    """Thin wrapper over LeakageGuard.check_feature_leakage() — do not reimplement."""
+
+def run_quality_gate(df, feature_cols, mode) -> DataQualityReport:
+    """Composes the above. raises DataQualityError on any P0. WARN logged + in report.
+    In mode='dense' the target-null P0 is skipped (no target column)."""
+```
+
+`DataQualityReport`: `passed: bool`, `null_rates: pd.Series`, `null_p0_cols`, `zero_variance_cols`, `infinite_cols`, `bad_tickers: list[str]`, `leakage_cols: list[str]`, `warnings: list[str]`, `action_required: list[str]`.
+
+## P1.4 `feature_signal.py` — the 3 reused functions + target distribution ✅ IMPLEMENTED
+
+```python
+def target_distribution(y: pd.Series, class_names=("Dud","Noise","Solid","Elite")) -> TargetDist:
+    """Class counts, proportions, imbalance ratio. trades-mode only.
+    Actual result: Dud 18%, Noise 42%, Solid 29%, Elite 11%, imbalance 3.65×."""
+
+def compute_ic(df, features, target, method="spearman", min_obs=100) -> pd.DataFrame:
+    """Per-feature rank IC vs target, ≥min_obs non-null (model_proto cell 42).
+    Skips non-numeric columns (sector/industry handled by MI, not IC).
+    Returns DataFrame with [feature, spearman_ic, pval, abs_ic, low_signal]."""
+
+def compute_mutual_information(df, features, target, sample_n=20000, seed=42) -> pd.DataFrame:
+    """mutual_info_classif on ≤sample_n sample (model_proto cell 44 params exactly).
+    sector/industry label-encoded with fresh LabelEncoder per column.
+    discrete_features=False (matches notebook, treats encoded categoricals as continuous)."""
+
+def compute_redundancy(df, features, threshold=0.80) -> tuple[pd.DataFrame, list[tuple]]:
+    """Spearman corr matrix + pairs |r|>threshold (strict >).
+    Default 0.80 = notebook cell 47 actual value (a code comment said 0.85 — wrong).
+    Returns (corr_matrix, [(feat_a, feat_b, abs_corr), ...] sorted desc).
+    Actual result on current data: 285 redundant pairs."""
+```
+
+⚠️ **`rank_scatter` and clustermap** are plotting concerns → delegate to `EvaluationPlotter`. Not added (plan said don't).
+⚠️ **IC is trades-mode only in practice** — dense mode has no target column, so `compute_ic`/`compute_mi`/`compute_redundancy` are skipped in the dense assembler path.
+
+## P1.5 `pretrain_report.py` — thin assembler ✅ IMPLEMENTED
+
+```python
+def run_pretrain_audit(
+    mode: Literal["dense","trades"] = "trades",
+    mfe_bins=DEFAULT_MFE_BINS,
+    output_path: Path | None = None,
+) -> PretrainReport:
     """
-    Returns (corr_matrix, redundant_pairs).
-    redundant_pairs: feature pairs with abs(corr) > threshold.
-    Used upstream by caller to prune before SHAP.
+    1. load_pretrain_data(mode)
+    2. trades only: warmup_clip + derive_target_class
+    3. _select_feature_cols (excludes METADATA + RAW_PRICE + LEAKAGE + TARGET cols)
+    4. run_quality_gate(...)           # raises DataQualityError on any P0
+    5. trades only: target_distribution + compute_ic + compute_mi + compute_redundancy
+    6. assemble Markdown to output_path (default: docs/reports/pretrain_audit_<mode>_<ts>.md)
+    7. save IC/MI bar charts to docs/reports/figures/ via EvaluationPlotter
     """
 ```
 
-**Notebook finding to encode as default thresholds**:
-- `threshold=0.75` for multicollinearity — matches the `model_proto.ipynb` TODO note on hierarchical clustering cutoff
-- IC bar chart: show top-30 by abs(IC); flag features with IC < 0.01 as "low signal"
-- MI tiebreaking: within correlated clusters, keep feature with higher MI (not IC)
+Feature exclusion sets in `_select_feature_cols` (all lowercased):
+- `METADATA_COLS`: ticker, date, feature_version, trade_id, is_new_trigger, company_name, fundamental_filing_date, fiscal_period, entry_date, ingested_at, updated_at, **cached_at** (cache artifact)
+- `RAW_PRICE_COLS`: open, high, low, close, volume, entry_price, exit_price
+- `LEAKAGE_COLS`: mfe_pct, mfe_date, mae_pct, mae_date, return_at_exit, return_pct, exit_date, exit_price, sepa_exit_date, holding_days, days_observed, sl_triggered, sl_date, sl_exit_date, sl_pct
+- `TARGET_COLS`: target_class, target_label (**added during implementation** — derive_target_class adds this column, which would appear as IC=1.0 if not excluded)
+- `FORBIDDEN_PATTERNS`: mfe, mae, return_at_exit, final\_, outcome\_, exit\_, result\_
 
-**Output**: `FeatureAnalysisReport` dataclass containing all series + figures. Figures included in final report.
+Report sections: Data Quality (null table, bad tickers, leakage, **Action Required**), Target Distribution (trades only), Feature Signal (IC top-30, MI top-30, redundant pairs > 0.80).
 
 ---
 
-## 4. Module C — Model Evaluation (`model_eval.py`)
+# PHASE 2+ — Model & Strategy Analytics (DRAFT — re-scope before starting)
+
+> ⚠️ **Most of Phase 2 already exists.** `src/evaluation/ClassificationEvaluator` already implements confusion matrix, per-class metrics, temporal stability, top-K precision, threshold sweep, ROC/PR/Brier, SHAP, feature importance, and calibration. `ClassificationReportGenerator` already assembles the report. **Before implementing anything below, audit `ClassificationEvaluator` and treat these sections as a gap-list against it, not a greenfield build.** Sections 4–9 below are the *original* draft, retained for reference only — their data-source and target-column claims are wrong (see Reality Check at top). Walk-forward CV is the one genuine gap (notebook has rolling + expanding variants, codebase has none).
+
+---
+
+## 4. Module C — Model Evaluation (`model_eval.py`) — *mostly exists in ClassificationEvaluator*
 
 **Purpose**: Validate the trained model with strict temporal discipline. Source: `model_proto.ipynb` walk-forward cells.
 
@@ -443,56 +526,57 @@ SHAP (Module C stub) is explicitly deferred to sprint 2 — it is not on the cri
 
 ---
 
-## 8. Implementation Sprints
+## 8. Implementation Plan
 
-### Sprint 1 — Training data audit + feature analysis — ~3 days
+### Phase 1 — Pre-training data analytics ✅ COMPLETE (2026-05-17)
 
-| File | Content | Day |
-|---|---|---|
-| `src/evaluation/__init__.py` | exports only | 1 |
-| `src/evaluation/data_quality.py` | Category A complete: null audit, warm-up clip, leakage guard, bad ticker detection (1d return + dominance ratio) | 1-2 |
-| `src/evaluation/feature_analysis.py` | Category B: IC, MI, corr matrix, rank scatter, MI tiebreaking | 2-3 |
-| `scripts/run_training_data_audit.py` | CLI: `python scripts/run_training_data_audit.py` → prints DataQualityReport + saves FeatureAnalysisReport | 3 |
+The deliverable: `python scripts/run_pretrain_audit.py --mode trades` produces a Markdown report + figures you can act on before the next training cycle.
 
-**Sprint 1 acceptance**: audit run on current `t3_sepa_features` produces a report flagging `dist_from_20d_high_delta` nulls and the `breakout_ok` leakage column. Findings are reported only — no auto-fix.
+| Order | File | Status | Content |
+|---|---|---|---|
+| 1 | `src/evaluation/training_data_loader.py` | ✅ | `load_pretrain_data(mode)` (dense=`t3_sepa_features`, trades=`v_d2_training`/cache), `derive_target_class(df, bins=DEFAULT_MFE_BINS)` |
+| 2 | `src/evaluation/data_quality.py` | ✅ | `null_audit`, `variance_audit`, `infinite_audit`, `detect_bad_tickers`, `warmup_clip`, `check_leakage` (wraps `LeakageGuard`), `run_quality_gate` |
+| 3 | `src/evaluation/feature_signal.py` | ✅ | `target_distribution`, `compute_ic`, `compute_mutual_information`, `compute_redundancy` |
+| 4 | `src/evaluation/pretrain_report.py` | ✅ | `run_pretrain_audit()` — sequences the above, emits Markdown + `figures/` (plots via existing `EvaluationPlotter`) |
+| 5 | `src/evaluation/__init__.py` | ✅ | exports: `load_pretrain_data`, `derive_target_class`, `DEFAULT_MFE_BINS`, `run_pretrain_audit`, `PretrainReport` |
+| 6 | `scripts/run_pretrain_audit.py` | ✅ | CLI: `--mode {dense,trades}`, `--mfe-bins`, `--out PATH` |
 
-**Data quality feedback convention**: findings from this report go back to the pipeline manually. The report includes a dedicated "Action Required" section listing columns/tickers that need upstream fixes, formatted so they can be copy-pasted into a `feature_pipeline.py` ticket.
+**Phase 1 acceptance (all verified 2026-05-17)**:
+1. ✅ `run_pretrain_audit(mode="trades")` runs end-to-end: 35,656 rows (after warmup clip), 187 features, quality PASS.
+2. ✅ Leakage design: `_select_feature_cols` pre-strips `mfe_*`/`exit_*`/`mae_*`/`sl_*` columns before `LeakageGuard` runs (exclude-then-verify). Guard reports 0 leakage (correct — backstop confirms no stragglers). Note: the report does not separately list *what was stripped* — if explicit listing of stripped leakage columns is wanted, add a "Excluded from feature set" section to `pretrain_report.py`.
+3. ✅ Report contains target distribution (Dud 18%, Noise 42%, Solid 29%, Elite 11%), IC top-30, MI top-30, 285 redundant pairs > 0.80.
+4. ✅ `run_pretrain_audit(mode="dense")` runs on 9,298,701 rows, skips target/IC/MI sections, quality PASS, 8 bad tickers detected.
+5. ✅ "Action Required" section present (empty when no P0 violations; populated with copy-pasteable fix lines on P0 failures).
 
-### Sprint 2 — Model validation + promotion gate — ~3 days
+**Implementation bugs found and fixed during build** (not in original plan):
+- `v_d2_features` is sparse ~38K, not dense (see corrected lineage above). `dense` mode points at `t3_sepa_features`.
+- `target_class` column (added by `derive_target_class`) must be excluded from the feature set — fixed in `_select_feature_cols` via `TARGET_COLS`.
+- `cached_at` TIMESTAMP (cache artifact, absent from `v_d2_training`) must be excluded — fixed in `METADATA_COLS`.
+- `np.isinf` fails on pandas nullable types — fixed via `to_numpy(dtype="float64", na_value=np.nan)`.
+- `compute_ic` must skip non-numeric (object) columns — fixed with `is_numeric_dtype` guard.
+- Bad-ticker thresholds `500`/`1000` are percentage-scale but `return_*` columns are fractional — corrected to `5.0`/`10.0`.
 
-| File | Content | Day |
-|---|---|---|
-| `src/evaluation/model_eval.py` | Category C: walk-forward CV, per-class calibration, SHAP stub | 4-5 |
-| `src/evaluation/model_comparison.py` | Category D: `held_out_eval()`, `compare_models()` with frozen 2024+ test window | 5-6 |
-| `src/evaluation/report.py` | Assembly: `audit_training_data()`, `evaluate_model_performance()`, `run_full_evaluation()` | 6 |
-| `scripts/run_model_evaluation.py` | CLI: `python scripts/run_model_evaluation.py --model M01_baseline_v0.1` | 6 |
+No auto-fix. Findings are surfaced; the user decides what goes back upstream.
 
-**Held-out protocol**: cutoff date `2024-01-01` set in `config.py`. Both prod and dev models retrained on pre-2024 data, evaluated on the same 2024-2026 window. `compare_models()` produces a side-by-side table of all P0 gate metrics.
+### Phase 2 — Walk-forward CV + close the gap vs ClassificationEvaluator — DRAFT
 
-**Sprint 2 acceptance**: `ModelRegistry.set_prod()` refuses promotion with "macro F1 below threshold" on a deliberately degraded model. `compare_models(baseline, candidate)` produces a valid side-by-side report.
+**First task is an audit, not code**: enumerate what `ClassificationEvaluator` already covers vs. the original Modules C/D/E/F. Only walk-forward CV (rolling + expanding, from `model_proto.ipynb` cells 59/60) is a confirmed gap. Re-scope this phase against that audit before writing anything. Original sections 4–7 are reference-only and contain known data-source errors.
 
-### Sprint 3 — Strategy analytics + SHAP — ~3 days
+### Phase 3 — Strategy/score analytics — DRAFT
 
-| File | Content | Day |
-|---|---|---|
-| `src/evaluation/strategy_analytics.py` | Category F: decile analysis (with excess return / SPY demean), rolling IC, score trajectory, entry rule analysis, score momentum IC, regime-gated IC | 7-9 |
-| `src/evaluation/model_eval.py` | SHAP implementation replaces stub (Category C) | 8 |
+Source is `scores_eda.ipynb`, which reads `notebooks/scores_cache.parquet` (pre-baked `prob_elite`), **not** `t3`. Decide the canonical score input (regenerate the parquet via `UniverseScorer.score_from_t3`, or read `v_d3_deployment`) before designing. Defer.
 
-**Excess return dependency**: `decile_analysis(excess=True)` requires SPY daily returns loaded from `macro_data` table. Flag as blocked if SPY data is missing — do not silently fall back to raw returns.
+### Phase 4 — T3.2 label generators — DRAFT (after Phase 2 approved)
 
-**Sprint 3 acceptance**: score trajectory reproduces the T-30→T+30 ramp/decay shape from `scores_eda.ipynb`. Entry rule analysis confirms Rule 3 finding. These are regression tests against known notebook results.
-
-### Sprint 4 — T3.2 label generators — ~1 day (after T3.1 approved)
-
-| File | Content |
-|---|---|
-| `src/evaluation/label_generators.py` | `breakout_within_5d()`, `sl_hit_within_K_days()` |
-
-These feed M01-Watch and M01-Hold training data prep. Not needed for Sprints 1-3.
+`breakout_within_5d()`, `sl_hit_within_K_days()` for M01-Watch/Hold. Not needed for Phases 1–3.
 
 ---
 
-## 9. Open Questions (resolve before Sprint 2)
+## 9. Open Questions
+
+**Phase 1 (none blocking)** — scope is locked; proceed.
+
+**Phase 2+ (resolve before that phase)**
 
 1. **Score trajectory definition**: What is the `is_home_run_event` flag — trades that hit MFE > 30% (Class 3), or trades where `prob_elite` at entry was > threshold? The two populations may not overlap.
 2. **Return horizon for entry rules**: `scores_eda` tested against `return_20d`. For M01-Hold, should entry rule IC be measured against a continuation return (T+5 to T+20) rather than absolute return from entry?
