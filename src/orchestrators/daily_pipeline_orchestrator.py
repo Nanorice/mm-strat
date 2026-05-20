@@ -12,7 +12,7 @@ Responsibilities:
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 import duckdb
 
 # Import layers
@@ -176,6 +176,12 @@ class DailyPipelineOrchestrator:
             if not phase_success and PIPELINE_FAILURE_MODES.get("phase_1_t1_price") == PipelineFailureMode.HALT:
                 critical_success = False
                 return False
+
+            # Phase 1.5: T1 Price Quality Gate (read + conditional same-run retry).
+            # Non-blocking by construction (never raises). Placed BEFORE the
+            # phase_1_only early-return so --phase-1-only runs the gate too.
+            stats_1_5 = self._run_phase_1_5_quality_gate(target_date, actual_trading_day)
+            run_stats['phase_1_5'] = stats_1_5
 
             if phase_1_only:
                 return critical_success
@@ -425,6 +431,98 @@ class DailyPipelineOrchestrator:
     # ========================================================================
     # PHASE EXECUTION METHODS (Delegate to Engines/Pipelines/Managers)
     # ========================================================================
+
+    def _compute_price_coverage(self, trading_day: str) -> float:
+        """
+        % of active tickers with a price row EXACTLY ON trading_day.
+
+        Deliberately stricter than audit_t1_data_quality.py's STALE_PRICE_DAYS=5
+        business-day window. A same-run gate wants *today's* prices, not "traded
+        sometime this week" — a ticker last seen 3 days ago passes the audit's
+        staleness check but is exactly what Phase 1.5 must re-ingest. The two
+        definitions differ by design; only the THRESHOLD numbers are centralised.
+        """
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            total, covered = conn.execute("""
+                SELECT
+                    (SELECT COUNT(*) FROM company_profiles WHERE is_active = TRUE),
+                    COUNT(DISTINCT p.ticker)
+                FROM price_data p
+                INNER JOIN company_profiles cp ON p.ticker = cp.ticker
+                WHERE cp.is_active = TRUE AND p.date = ?
+            """, [trading_day]).fetchone()
+        finally:
+            conn.close()
+        return (covered / total * 100) if total else 100.0
+
+    def _get_missing_price_tickers(self, trading_day: str) -> List[str]:
+        """Active tickers with no price row on trading_day."""
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            rows = conn.execute("""
+                SELECT cp.ticker
+                FROM company_profiles cp
+                LEFT JOIN price_data p
+                  ON p.ticker = cp.ticker AND p.date = ?
+                WHERE cp.is_active = TRUE AND p.ticker IS NULL
+                ORDER BY cp.ticker
+            """, [trading_day]).fetchall()
+        finally:
+            conn.close()
+        return [r[0] for r in rows]
+
+    def _run_phase_1_5_quality_gate(
+        self,
+        target_date: str,
+        latest_trading_day: str,
+    ) -> Dict:
+        """
+        Phase 1.5: T1 price coverage gate + same-run retry for partial failures.
+
+        Read-only check + targeted re-ingest. NEVER halts — warns and records.
+        The HALT mode on phase_1_t1_price already covers catastrophic failure;
+        this handles partial failures that don't raise (e.g. a yfinance batch
+        timing out and marking ~150 tickers stale without an exception).
+        """
+        from config import PIPELINE_ALERT_THRESHOLDS
+        retry_threshold = PIPELINE_ALERT_THRESHOLDS['t1_price_coverage_retry_pct']
+        warn_threshold = PIPELINE_ALERT_THRESHOLDS['t1_price_coverage_warn_pct']
+
+        coverage_pct = self._compute_price_coverage(latest_trading_day)
+        logger.info(f"[Phase 1.5] Price coverage: {coverage_pct:.1f}%")
+
+        if coverage_pct >= retry_threshold:
+            return {'coverage_pct': coverage_pct, 'retry': False, 'status': 'ok'}
+
+        missing = self._get_missing_price_tickers(latest_trading_day)
+        logger.warning(
+            f"[Phase 1.5] Coverage {coverage_pct:.1f}% < {retry_threshold}% — "
+            f"retrying {len(missing)} tickers"
+        )
+
+        if missing:
+            self.data_repo.update_cache(
+                tickers=missing,
+                source='yfinance',
+                latest_trading_day=latest_trading_day,
+            )
+
+        coverage_pct_after = self._compute_price_coverage(latest_trading_day)
+        logger.info(f"[Phase 1.5] Coverage after retry: {coverage_pct_after:.1f}%")
+
+        if coverage_pct_after < warn_threshold:
+            logger.warning(
+                f"[Phase 1.5] Coverage still {coverage_pct_after:.1f}% after retry — "
+                f"downstream features will use stale prices for {len(missing)} tickers"
+            )
+
+        return {
+            'coverage_pct': coverage_pct_after,
+            'retry': True,
+            'missing_count': len(missing),
+            'status': 'warned' if coverage_pct_after < warn_threshold else 'recovered',
+        }
 
     def _run_phase_1_t1_ingestion(self, target_date: str, latest_trading_day: str) -> Dict:
         """

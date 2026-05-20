@@ -34,6 +34,9 @@ logging.basicConfig(
         logging.StreamHandler(stream=open(1, 'w', encoding='utf-8', closefd=False))
     ]
 )
+for _noisy in ("yfinance", "urllib3", "requests", "peewee"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +125,9 @@ def main():
     # Set log level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+        # Lift the default library suppression so --verbose shows full detail
+        for _noisy in ("yfinance", "urllib3", "requests", "peewee"):
+            logging.getLogger(_noisy).setLevel(logging.DEBUG)
 
     # Validate date format
     if args.date:

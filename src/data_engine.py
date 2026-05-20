@@ -1198,41 +1198,75 @@ class DataRepository:
         else:
             end_date = (pd.Timestamp.now() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
-        logger.debug(f"yfinance bulk download: {len(tickers)} tickers, {from_date} to {end_date}")
+        # Per-ticker isolation: a single bulk yf.download() for all stale tickers
+        # marks EVERY ticker False on one 429/timeout. Batch the call so one bad
+        # batch can't sink the rest, then retry the failed subset once.
+        BATCH_SIZE = 200
+        RETRY_BATCH_SIZE = 50
+        RETRY_SLEEP_S = 15
 
-        try:
-            data = yf.download(
-                tickers,
-                start=from_date,
-                end=end_date,
-                group_by='ticker',
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
-        except Exception as e:
-            logger.error(f"[Phase 1] yfinance download failed: {e}", exc_info=True)
-            for ticker in tickers:
-                results[ticker] = False
-            return results, buffer
-
-        no_data = []
-        for ticker in tickers:
+        def _download_and_extract(batch: List[str]) -> List[str]:
+            """Download + extract one batch. Returns tickers that yielded no data.
+            On success appends to buffer and sets results[ticker]=True; on any
+            failure sets results[ticker]=False. Identical for first + retry pass."""
             try:
-                ticker_data = self._extract_ticker_from_batch(data, ticker)
-                if ticker_data is not None and not ticker_data.empty:
-                    buffer.append((ticker, ticker_data))
-                    results[ticker] = True
-                else:
-                    results[ticker] = False
-                    no_data.append(ticker)
+                data = yf.download(
+                    batch,
+                    start=from_date,
+                    end=end_date,
+                    group_by='ticker',
+                    auto_adjust=True,
+                    progress=False,
+                    threads=True,
+                )
             except Exception as e:
-                logger.debug(f"Failed to extract {ticker}: {e}")
-                results[ticker] = False
-                no_data.append(ticker)
+                logger.warning(f"[Phase 1] yfinance batch ({len(batch)} tickers) failed: {e}")
+                for ticker in batch:
+                    results[ticker] = False
+                return list(batch)
+
+            failed: List[str] = []
+            for ticker in batch:
+                try:
+                    ticker_data = self._extract_ticker_from_batch(data, ticker)
+                    if ticker_data is not None and not ticker_data.empty:
+                        buffer.append((ticker, ticker_data))
+                        results[ticker] = True
+                    else:
+                        results[ticker] = False
+                        failed.append(ticker)
+                except Exception as e:
+                    logger.debug(f"Failed to extract {ticker}: {e}")
+                    results[ticker] = False
+                    failed.append(ticker)
+            return failed
+
+        logger.debug(
+            f"yfinance batched download: {len(tickers)} tickers, "
+            f"{from_date} to {end_date}, batch={BATCH_SIZE}"
+        )
+
+        all_failed: List[str] = []
+        for i in range(0, len(tickers), BATCH_SIZE):
+            batch = tickers[i : i + BATCH_SIZE]
+            all_failed.extend(_download_and_extract(batch))
+
+        # Retry pass — once, smaller batches, after a cooldown.
+        if all_failed:
+            logger.info(
+                f"yfinance retry: {len(all_failed)} tickers "
+                f"({RETRY_SLEEP_S}s cooldown, batch={RETRY_BATCH_SIZE})"
+            )
+            time.sleep(RETRY_SLEEP_S)
+            for i in range(0, len(all_failed), RETRY_BATCH_SIZE):
+                batch = all_failed[i : i + RETRY_BATCH_SIZE]
+                # Recovered tickers flip results[ticker]=True inside the closure,
+                # so update_cache() will no longer count them in last_errors.
+                _download_and_extract(batch)
 
         ok = sum(1 for v in results.values() if v)
-        logger.debug(f"yfinance done: {ok}/{len(tickers)} OK, {len(no_data)} no data")
+        no_data = len(tickers) - ok
+        logger.debug(f"yfinance done: {ok}/{len(tickers)} OK, {no_data} no data")
 
         return results, buffer
 

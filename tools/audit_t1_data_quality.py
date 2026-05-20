@@ -19,7 +19,7 @@ from typing import Any
 import duckdb
 
 sys.path.insert(0, ".")
-from config import DUCKDB_PATH
+from config import DUCKDB_PATH, PIPELINE_ALERT_THRESHOLDS
 
 # ---------------------------------------------------------------------------
 # Config
@@ -28,7 +28,7 @@ STALE_PRICE_DAYS = 5          # flag tickers with no price data in last N busine
 STALE_SHARES_DAYS = 30        # flag tickers with no shares data in last N days
 FUNDAMENTAL_NULL_WARN_PCT = 15.0   # warn if key column is >15% null
 FUNDAMENTAL_NULL_FAIL_PCT = 50.0   # fail if key column is >50% null
-MIN_PRICE_COVERAGE_PCT = 80.0      # warn if price coverage drops below this
+MIN_PRICE_COVERAGE_PCT = PIPELINE_ALERT_THRESHOLDS['t1_price_coverage_warn_pct']  # warn threshold (centralised)
 MIN_SHARES_COVERAGE_PCT = 60.0     # warn if shares coverage drops below this
 MIN_FUND_COVERAGE_PCT = 60.0       # warn if fundamentals coverage drops below this
 

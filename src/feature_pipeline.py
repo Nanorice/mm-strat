@@ -103,7 +103,7 @@ class FeaturePipeline:
             self.compute_t2_screener_features(start_date, warmup_days=warmup_days)
 
         if skip_t3:
-            print("   [T3] Skipped (skip_t3=True)")
+            logger.info("[T3] Skipped (skip_t3=True)")
             return
 
         # Ensure t3 table exists (create if missing, recreate if requested)
@@ -111,7 +111,7 @@ class FeaturePipeline:
         try:
             tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
             if recreate_t3 or 't3_sepa_features' not in tables:
-                print("   [T3] Creating t3_sepa_features table...")
+                logger.info("[T3] Creating t3_sepa_features table...")
                 self._create_t3_table(con)
         finally:
             con.close()
@@ -141,7 +141,7 @@ class FeaturePipeline:
         if end_date is None:
             end_date = date_cls.today().strftime('%Y-%m-%d')
 
-        print(f"   [T2] Computing screener features (full universe, {start_date} -> {end_date}, warmup={warmup_days}d)...")
+        logger.info(f"[T2] Computing screener features (full universe, {start_date} -> {end_date}, warmup={warmup_days}d)...")
         con = duckdb.connect(self.db_path)
 
         fetch_start_date = (pd.to_datetime(start_date) - pd.Timedelta(days=warmup_days)).strftime('%Y-%m-%d')
@@ -262,7 +262,7 @@ class FeaturePipeline:
             for col_name, col_type in new_cols:
                 if col_name not in existing_cols:
                     con.execute(f"ALTER TABLE t2_screener_features ADD COLUMN {col_name} {col_type}")
-                    print(f"   [T2] Added column: {col_name}")
+                    logger.info(f"[T2] Added column: {col_name}")
 
             # Delete existing rows in target range, then insert (avoids PK check against full table)
             con.execute(f"DELETE FROM t2_screener_features WHERE date BETWEEN '{start_date}' AND '{end_date}'")
@@ -447,7 +447,7 @@ class FeaturePipeline:
 
             row_count = con.execute(f"SELECT COUNT(*) FROM t2_screener_features WHERE date BETWEEN '{start_date}' AND '{end_date}'").fetchone()[0]
             ticker_count = con.execute("SELECT COUNT(DISTINCT ticker) FROM t2_screener_features").fetchone()[0]
-            print(f"   [T2] Inserted {row_count:,} rows for {ticker_count:,} tickers")
+            logger.info(f"[T2] Inserted {row_count:,} rows for {ticker_count:,} tickers")
 
         except Exception as e:
             logger.error(f"T2 feature computation failed: {e}")
@@ -613,7 +613,7 @@ class FeaturePipeline:
         # Warmup: fetch 365d before start for rolling windows
         fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=365)).strftime('%Y-%m-%d')
 
-        print(f"   [T3] Computing SEPA features for {start_date} to {end_date}...")
+        logger.info(f"[T3] Computing SEPA features for {start_date} to {end_date}...")
         con = duckdb.connect(self.db_path)
 
         try:
@@ -875,7 +875,7 @@ class FeaturePipeline:
             ticker_count = con.execute(
                 f"SELECT COUNT(DISTINCT ticker) FROM t3_sepa_features WHERE date BETWEEN '{start_date}' AND '{end_date}'"
             ).fetchone()[0]
-            print(f"   [T3] Inserted {inserted:,} SEPA rows ({ticker_count} tickers)")
+            logger.info(f"[T3] Inserted {inserted:,} SEPA rows ({ticker_count} tickers)")
 
             # Tripwire: catch INSERT/SELECT column-list drift early. The DDL, INSERT list,
             # and SELECT list must all align — a silent shift would corrupt every column
@@ -925,7 +925,7 @@ class FeaturePipeline:
         rows that exist in t3 via the existing UPDATE pattern.
         """
         VOL_ADJ_COLS = ['price_vs_sma_50_vol_adj', 'mom_21d_vol_adj']
-        print(f"   [B-VolAdj] Computing {VOL_ADJ_COLS} for {start_date}..{end_date}")
+        logger.info(f"[B-VolAdj] Computing {VOL_ADJ_COLS} for {start_date}..{end_date}")
 
         # 90-day warmup is plenty for 50d rolling std (need ~50 trading days = ~70 calendar days)
         fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=90)).strftime('%Y-%m-%d')
@@ -949,7 +949,7 @@ class FeaturePipeline:
             con.close()
 
         if df.empty:
-            print("   [WARN] [B-VolAdj] No data loaded — skipping")
+            logger.warning("[B-VolAdj] No data loaded — skipping")
             return
 
         ret_groups = df.groupby('ticker')['return_1d']
@@ -964,11 +964,11 @@ class FeaturePipeline:
         start_dt = pd.to_datetime(start_date)
         write_df = df[df['date'] >= start_dt][['ticker', 'date'] + VOL_ADJ_COLS]
         if write_df.empty:
-            print("   [WARN] [B-VolAdj] No rows in target window — skipping write")
+            logger.warning("[B-VolAdj] No rows in target window — skipping write")
             return
 
         self._write_alpha_columns(write_df, 't3_sepa_features', VOL_ADJ_COLS)
-        print(f"   [OK] [B-VolAdj] Wrote {len(write_df):,} rows")
+        logger.info(f"[OK] [B-VolAdj] Wrote {len(write_df):,} rows")
 
     # ------------------------------------------------------------------
     # Phase B: Python alpha factors (kept for reference — called from compute_t2 and compute_t3)
@@ -992,7 +992,7 @@ class FeaturePipeline:
 
         Uses the same load/write pattern as compute_alpha_features.
         """
-        print(f"   [B-EMA] Computing EMAs ({EMA_SPANS}) -> {target_table} (start={start_date}, warmup={warmup_days}d)...")
+        logger.info(f"[B-EMA] Computing EMAs ({EMA_SPANS}) -> {target_table} (start={start_date}, warmup={warmup_days}d)...")
 
         self._ensure_alpha_columns_exist(target_table, EMA_COLS)
 
@@ -1011,7 +1011,7 @@ class FeaturePipeline:
             con.close()
 
         if df.empty:
-            print("   [WARN] No data loaded for EMA computation")
+            logger.warning("[B-EMA] No data loaded for EMA computation")
             return
 
         for span in EMA_SPANS:
@@ -1026,7 +1026,7 @@ class FeaturePipeline:
             write_df = write_df[write_df['date'] <= pd.to_datetime(end_date)]
 
         self._write_alpha_columns(write_df, target_table, EMA_COLS)
-        print(f"   [OK] [B-EMA] Computed {len(EMA_COLS)} EMAs ({len(write_df):,} rows written)")
+        logger.info(f"[OK] [B-EMA] Computed {len(EMA_COLS)} EMAs ({len(write_df):,} rows written)")
 
     # ------------------------------------------------------------------
     # Phase B: Python alpha factors
@@ -1047,12 +1047,12 @@ class FeaturePipeline:
         from tqdm import tqdm
 
         warmup_table = warmup_table or target_table
-        print(f"   [B] Computing alpha factors -> {target_table} (start={start_date}, warmup={warmup_days}d)...")
+        logger.info(f"[B] Computing alpha factors -> {target_table} (start={start_date}, warmup={warmup_days}d)...")
 
         # 1. Load data — ticker filter from warmup_table (broader set for TS alphas on t3)
         df = self._load_data_for_alphas(start_date, warmup_days=warmup_days, end_date=end_date, target_table=warmup_table)
         if df.empty:
-            print("   [WARN] No data loaded for alpha computation")
+            logger.warning("[B] No data loaded for alpha computation")
             return
 
         self._ensure_alpha_columns_exist(target_table, alpha_cols or ALPHA_COLS)
@@ -1099,7 +1099,7 @@ class FeaturePipeline:
 
         # 5. Parallel or sequential execution
         if use_parallel and n_workers > 1:
-            print(f"   [B] Running {len(alphas_to_run)} alphas on {n_workers} workers...")
+            logger.info(f"[B] Running {len(alphas_to_run)} alphas on {n_workers} workers...")
             with Pool(processes=n_workers) as pool:
                 # Use partial to pass df to all workers
                 compute_func = partial(_compute_single_alpha_wrapper, df=df)
@@ -1111,7 +1111,7 @@ class FeaturePipeline:
                         pbar.update(1)
         else:
             # Sequential fallback (for debugging or single-core machines)
-            print(f"   [B] Running {len(alphas_to_run)} alphas sequentially (USE_PARALLEL_ALPHAS=0 or n_workers=1)...")
+            logger.info(f"[B] Running {len(alphas_to_run)} alphas sequentially (USE_PARALLEL_ALPHAS=0 or n_workers=1)...")
             with tqdm(total=len(alphas_to_run), desc="   [B] Alphas", unit="fact") as pbar:
                 for name, func in alphas_to_run:
                     alpha_results[name] = func(df)
@@ -1128,7 +1128,7 @@ class FeaturePipeline:
         if end_date:
             write_df = write_df[write_df['date'] <= pd.to_datetime(end_date)]
         self._write_alpha_columns(write_df, target_table, cols_computed)
-        print(f"   [OK] [B] Computed {len(cols_computed)} alpha factors ({len(write_df):,} rows written, {len(alpha_results):,} computed)")
+        logger.info(f"[OK] [B] Computed {len(cols_computed)} alpha factors ({len(write_df):,} rows written, {len(alpha_results):,} computed)")
 
     def _load_data_for_alphas(
         self, start_date: str, warmup_days: int = 365, end_date: str = None, target_table: str = 't2_screener_features'
@@ -1408,7 +1408,7 @@ class FeaturePipeline:
     # ------------------------------------------------------------------
 
     def compute_cross_sectional_ranks(self, target_table: str = 't2_screener_features', start_date: str = None, end_date: str = None) -> None:
-        print(f"   [C] Computing cross-sectional ranks -> {target_table}...")
+        logger.info(f"[C] Computing cross-sectional ranks -> {target_table}...")
         con = duckdb.connect(self.db_path)
 
         try:
@@ -1494,11 +1494,11 @@ class FeaturePipeline:
                 f"SELECT COUNT(*) FROM _rank_chunk WHERE RS_Universe_Rank IS NOT NULL"
             ).fetchone()[0]
             con.execute("DROP TABLE IF EXISTS _rank_chunk")
-            print(f"   [OK] [C] Cross-sectional ranks: {cs_count:,} rows (8 columns)")
+            logger.info(f"[OK] [C] Cross-sectional ranks: {cs_count:,} rows (8 columns)")
 
         except Exception as e:
             logger.error(f"Phase C (cross-sectional ranks) failed: {e}")
-            print(f"   [ERROR] Phase C failed: {e}")
+            logger.error(f"[C] Phase C failed: {e}")
             raise
         finally:
             con.close()
@@ -1520,6 +1520,6 @@ class FeaturePipeline:
             vm.refresh_cache(verbose=True)
         except Exception as e:
             logger.warning(f"Cache refresh failed (non-critical): {e}")
-            print(f"   [WARN] Cache refresh failed: {e}")
+            logger.warning(f"Cache refresh failed: {e}")
             # Don't raise - cache is a performance optimization, not critical
 

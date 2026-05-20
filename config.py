@@ -340,6 +340,8 @@ PIPELINE_FAILURE_MODES = {
 PIPELINE_ALERT_THRESHOLDS = {
     'breakout_drought_days': 5,      # Alert if 0 breakouts for N days
     'failure_rate_threshold': 0.1,    # Alert if failure rate >10%
+    't1_price_coverage_warn_pct': 80.0,   # Audit warn threshold (audit_t1_data_quality.py)
+    't1_price_coverage_retry_pct': 90.0,  # Phase 1.5 same-run retry trigger
 }
 
 # ==============================================================================
