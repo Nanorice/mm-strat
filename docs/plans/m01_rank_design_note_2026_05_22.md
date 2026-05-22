@@ -9,6 +9,38 @@ fixes intent before the t3 rebuild.
 
 ---
 
+## HIGH-LEVEL GOAL (anchor — do not deviate)
+
+We are refining a two-model trading system. **m01_prototype** is the prod
+**selection** model; **m01_rank** is the **timing/execution** model we are now
+building to sit on top of it.
+
+- **m01_prototype (prod, event-grain) answers:** *"Today this ticker — already in
+  a SEPA uptrend — has a breakout and qualifies for SEPA. Given the information
+  available on the breakout day, will this trade achieve good MFE before the
+  trend breaks?"* It works well: a high home-run probability reliably precedes a
+  good trade. It is a good SELECTION signal.
+- **The gap m01_prototype leaves:** it is trained ONLY on breakout-day rows, so
+  it cannot manage the trade once selected. After a breakout, a name typically
+  **pulls back for a few days** before continuing — so even when we are confident
+  the trade is good, we still need to know *when to enter, whether to hold,
+  whether to rebalance, when to exit*.
+- **m01_rank (dense-grain) answers those TIMING questions** by evaluating the
+  setup **every day** through the life of the trade — conditional on
+  m01_prototype already having flagged the name as a good trade.
+
+**Key reframe (2026-05-22):** m01_rank is a **timing/execution layer on top of
+m01_prototype's selection**, NOT a standalone return predictor. The Phase 2
+verdict below tested it as its own top-K return strategy — which may have been
+the wrong test for its actual mandate (see §0 caveat and §8).
+
+**Open verification debt:** m01_prototype's own backtest "should be on dense data
+and performance is OK" — but this has NOT been double-checked. Confirm
+m01_prototype's dense-data backtest before leaning further on it as the selection
+layer.
+
+---
+
 ## 0. VERDICT (2026-05-22) — signal is NOT durable at its trained horizon
 
 After removing every measurement artifact (gappy-panel `shift`, NULL `adj_close`,
@@ -41,22 +73,34 @@ that correlates with high `prob` in up-markets.
 NOT mean m01_rank is unbuildable; it means the current target/feature combination
 does not yield 20d alpha. See §8 for what to revisit.
 
+**CAVEAT — the test may not match the mandate (see HIGH-LEVEL GOAL).** This
+backtest evaluated m01_rank as a *standalone selection* strategy (rank ALL names,
+trade the top-K). But m01_rank's actual job is **timing/execution on names
+m01_prototype already selected** — the universe should be m01_prototype's
+home-run candidates, and the question is entry/exit *timing within those trades*,
+not which names to pick. A standalone-rank negative does not refute the timing
+mandate; it just says m01_rank is not itself a stock-picker. The right next test
+conditions on m01_prototype's selection (§8).
+
 ---
 
 ## 1. What m01_rank is (and what it is NOT)
 
-| | **M01_prototype** (exists) | **m01_rank** (this work) |
+| | **m01_prototype** (prod) | **m01_rank** (this work) |
 |---|---|---|
-| Grain | **Event** — 1 row per trade | **Dense** — 1 row per (ticker, trading-day) |
-| Row taken on | the day the name qualifies SEPA | every day the name is in the panel |
-| Question | "On qualify day, how good is this setup?" | "Right now, what's this name's conviction, and is it decaying?" |
-| Target | MFE over a (random) holding period | forward continuation, recomputed each day |
-| Role | **screening / entry** | **monitoring / hold-duration** |
-| Decision it informs | *should I enter?* | *should I keep holding, and for how long?* |
+| Grain | **Event** — 1 row per breakout day | **Dense** — 1 row per (ticker, trading-day) |
+| Row taken on | the breakout day (qualifies SEPA) | every day the trade is live |
+| Question | "Given breakout-day info, will this trade reach good MFE before trend break?" | "Given this is a good trade, is TODAY a good day to enter / hold / rebalance / exit?" |
+| Target | MFE before trend break | timing of entry/exit within the trade life |
+| Role | **SELECTION** (which names) | **TIMING / EXECUTION** (when to act on a selected name) |
+| Decision it informs | *is this a good trade?* | *when do I enter it, and when do I get out?* |
+| Status | works well (high prob → good trade); dense backtest unverified | under construction; standalone-return test was negative (§0) |
 
-m01_rank **complements** M01_prototype; it does not replace it. The prototype
-picks the door; m01_rank watches the room. They are intentionally different
-grains because they answer different questions.
+m01_rank **complements** m01_prototype — it does NOT replace it and is NOT meant
+to pick names on its own. m01_prototype says *which* door; m01_rank says *when to
+walk through it and when to leave*. The breakout-day pullback is the canonical
+case: m01_prototype flags the name, m01_rank's job is to wait out the pullback and
+time the entry, then signal the exit before the trend breaks.
 
 ## 2. Substrate status — RESOLVED 2026-05-22: t3 is already correct
 
@@ -143,27 +187,36 @@ handled by the price_data-sourced P&L already drafted in the Phase 2 artifact.
 - Do NOT retrain M01_prototype.
 - Notebook edits remain artifact-only (paste manually).
 
-## 8. Given the negative verdict — what to revisit (not yet decided)
+## 8. Next directions (reframed around the timing mandate)
 
-The substrate and infra are sound, so the lever is the **target / horizon /
-feature** combination, not the plumbing. Candidate directions, roughly ordered:
+The substrate and infra are sound. Per the HIGH-LEVEL GOAL, m01_rank is a TIMING
+layer on m01_prototype's selection — so the FIRST test must match that mandate,
+not the standalone-rank test that produced §0.
 
-1. **Target horizon vs hold horizon mismatch.** The model predicts 20d but the
-   *daily* engine (which works) harvests ~1–5d drift. Test training the target
-   at a SHORTER horizon (5–10d) — maybe the real, tradeable signal is
-   short-horizon continuation, and 20d is too far out.
-2. **Target definition.** `>20% in 20d` is a rare, fat-tailed event (~5–8% base
-   rate). A regression on forward return, or a relative (cross-sectional rank)
-   target, may carry more usable signal than the binary home-run.
+**0. (NEW — do first) Condition on m01_prototype's selection.** Restrict the
+   universe to names m01_prototype flagged as home-run candidates, then ask:
+   does m01_rank's daily score time the entry/exit *within those trades* better
+   than naive "enter on breakout day, hold fixed"? Metric: MFE captured / drawdown
+   avoided vs the naive baseline — NOT top-K portfolio Sharpe. This directly tests
+   the breakout-pullback timing use case. If m01_rank improves entry timing here,
+   it succeeds at its real job even though §0 (standalone picker) was negative.
+
+Then, if a standalone signal is still wanted, the levers are target/horizon:
+
+1. **Shorter target horizon (5–10d).** The daily engine that "worked" harvested
+   ~1–5d drift; the 20d target may be too far out for a timing model. Cheap rerun.
+2. **Target definition.** `>20% in 20d` is rare/fat-tailed (~5–8% base). A
+   forward-return regression or cross-sectional-rank target may carry more signal.
 3. **Long-short to strip beta.** Daily Sharpe dies in 2022 because it's long-only
-   momentum. A long-top-K / short-bottom-K book would test whether there is
-   *relative* rank alpha once market beta is removed. If L/S survives 2022,
-   m01_rank has real cross-sectional signal even if outright long does not.
-4. **Accept the daily momentum result as a beta sleeve**, not alpha — only if a
-   regime filter (e.g. M03) gates it off in drawdowns. Lower ambition.
+   momentum. Long-top-K / short-bottom-K tests for *relative* rank alpha; if L/S
+   survives 2022 there is cross-sectional signal even if outright-long lacks it.
+4. **Daily momentum as a beta sleeve**, gated off in drawdowns by a regime filter
+   (M03). Lower ambition; only if 0–3 don't yield alpha.
 
-Recommend testing (1) and (3) first — both are cheap notebook reruns and they
-disambiguate "wrong horizon" from "no alpha, only beta."
+**Recommend (0) first** — it is the test that matches what m01_rank is FOR. (1)
+and (3) follow if a standalone signal is still desired. Separately, **verify
+m01_prototype's own dense-data backtest** (open debt noted in HIGH-LEVEL GOAL)
+before relying on it as the selection layer for test (0).
 
 ---
 
