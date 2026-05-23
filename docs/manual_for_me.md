@@ -978,45 +978,134 @@ python scripts/run_backtest.py --full                          # Legacy: prepare
 
 ## Dashboard
 
-**Purpose**: Streamlit dashboard to visualise pipeline output. Design doc: `docs/dashboard_design.md`.
+**Purpose**: Multi-page Streamlit UI to expose pipeline output. Localhost-only, single-user, no auth. Never bind to `0.0.0.0`.
 
-**Run:** `streamlit run scripts/dashboard.py`
+**Run:** `streamlit run scripts/dashboard.py`  → opens at http://localhost:8501
 
-### Phase 1 — Screener Watchlist (implemented 2026-03-29)
+**Plan / spec:** `docs/plans/dashboard_implementation_plan_2026_05_23.md`. The dashboard's philosophy is *expose existing work, do not recompute*: DuckDB tables + registered models + pre-generated HTML reports are the canonical artifacts; pages render them.
 
-Single page with 4 sections:
+### Page map (MVP — 2026-05-23)
 
-1. **M03 Regime Header** — composite score + category badge (Strong Bull / Bull / Neutral / Bear / Strong Bear), 3 pillar metrics with formula tooltips. Reads latest row from `t2_regime_scores`.
+| # | Page | File | Purpose |
+|---|------|------|---------|
+| 1 | Today | `scripts/dashboard.py` (`page_today`) | Default landing — M03 + 5F regime cards, screener watchlist with M01 probabilities, pre-breakout cohort, sector heat, analytics |
+| — | Feature Time Series | `scripts/pages/1_Feature_Time_Series.py` | Pre-existing per-ticker chart page (kept; rename pending Page 2 build) |
+| 3 | Model Lab | `scripts/pages/3_Model_Lab.py` | Registry browser — read-only; embeds pretrain HTML, PNG plots, report MD, specs JSON, diff |
+| 4 | Backtest Studio | `scripts/pages/4_Backtest_Studio.py` | Browse v1 backtest runs — equity / DD / per-year / per-regime / trade table / 2-run compare |
+| 5 | Pipeline Health | `scripts/pages/5_Pipeline_Health.py` | Ops view — runs heatmap, freshness, universe trend, audit history, storage |
 
-2. **M01 Signal Summary** — class distribution histogram across active trades, high-conviction count (Strong + Home Run). M01 is a 4-class XGBoost MFE classifier (`multi:softprob`):
-   - Class 0: Noise (0–2%)
-   - Class 1: Moderate (2–10%)
-   - Class 2: Strong (10–30%)
-   - Class 3: Home Run (>30%)
+Page 2 (Ticker Deep Dive) is specified in the plan §Page 2 but not yet built.
 
-3. **Screener Watchlist Table** — filterable by Status / Sector / Date range. Columns: ticker, company, sector, entry date, entry/current price, return %, days held, M01 class, all 4 class probabilities, status. Return % color-coded green/red.
+### Page 1 — Today
 
-4. **Analytics** — quick stats (active count, avg return, win rate, avg holding period), trade age bar chart (flags aging trades >60d with <5% return), sector concentration, exited trade return distribution.
+Sections, in order:
 
-**Data flow**: Active trades from `screener_watchlist` are joined to latest `v_d3_deployment` features by ticker → M01 `predict_proba()` → 4-class softmax probabilities displayed per trade.
+1. **Pipeline status bar** — `pipeline_runs` latest row (icon + phase + timestamp).
+2. **Regime cards (side-by-side)** —
+   - **M03** (left): composite score, label band (Strong Bull / Bull / Neutral / Bear / Strong Bear), 3 pillar metrics with formula tooltips. Source: `t2_regime_scores`.
+   - **5F** (right): `target_exposure` mapped to band label (Full / Reduced / Cautious / Defensive / Heavy Defensive / Veto), worst factor with σ, weighted z, expander for all 5 z-scores. Source: `t2_risk_scores`.
+3. **Screener Watchlist** — filterable (status / sector / date range / ticker) inside an `st.form` so typing doesn't retrigger the page. Default sort: Entry Date desc. Other sorts: P(HR), P(Strong+HR), Return %, Days Held. Columns: ticker / company / sector / entry date / entry $ / price $ / return % / days / M01 class / all 4 P(class) / status.
+4. **Pre-Breakout Watch** — `trend_ok=TRUE AND breakout_ok=FALSE` cohort joined to t3 features and **live-scored by prod M01**. Sort: P(HR) desc. Shows close, dist-from-20d-high, vol ratio, VCP, days_in_setup, class + probs.
+5. **Sector Heat** — bar chart of `trend_ok` + `breakout_ok` counts per sector, with window selector (Today / 5d avg / 20d avg). ETF pseudo-sectors filtered. Y-axis floored at 150, `cliponaxis=False`.
+6. **Analytics** —
+   - Quick stats: active count, avg return active, win rate exited, avg holding period.
+   - **Days Held × Return scatter** with 4 quadrants (Hot / Mature / Young / Aging) split at 60d × 5%. Tickers labeled on points. Expander below lets you filter by quadrant and see the ticker list.
+   - Active sector concentration: single-color bar chart.
+   - Exited-trade return distribution (symlog histogram).
 
-**Toolkit:**
+**M01 class taxonomy** (used everywhere): 4-class XGBoost MFE classifier (`multi:softprob`).
+- 0 Noise (0–2%), 1 Moderate (2–10%), 2 Strong (10–30%), 3 Home Run (>30%).
+
+**Data flow for the screener table:** `screener_watchlist` (active rows) → joined to latest `v_d3_deployment` by ticker → `score_features_df` → 4-class probabilities + class label.
+
+### Page 3 — Model Lab
+
+Registry list (`models` table) with status / feature-version filters. Selecting a row opens 6 tabs:
+
+| Tab | Source | Notes |
+|---|---|---|
+| Overview | `models` row | Metric cards + artifact path diagnostic |
+| Pretrain Report (HTML) | most recent `docs/reports/pretrain_audit_*.html` | Iframed via `st.components.v1.html`. Self-contained (Plotly inlined). **Not version-pinned to the selected model yet** — see plan Open Q #5. |
+| Plots | `<artifacts_path>/evaluation/*.png` | `st.image` per PNG. Only the prod model (`m01_prototype_2003_2026/v2/`) has populated artifacts today; older rows render a "no artifacts" warning. |
+| Report (MD) | `<artifacts_path>/evaluation/report_*.md` | Newest first |
+| Specs | `specs_json` from registry row | Pretty-printed JSON viewer |
+| Diff | `<artifacts_path>/diffs/*.txt` if present | Otherwise: placeholder with CLI hint (`python scripts/model_diff.py <A> <B>`). Subprocess wiring deferred. |
+
+**Read-only.** No "Promote to prod" / "Archive" buttons in v1 — promotion remains `ModelRegistry().set_prod(version_id)` from a shell.
+
+### Page 4 — Backtest Studio
+
+Scans `data/backtest/*/manifest.json` and **shows only runs with `manifest_version == "v1"`**. Stale runs (pre-2026-05-23 schema, or hand-named experimental dirs) remain on disk but are silently hidden.
+
+Per run:
+- 4 metric cards (total return, Sharpe, max DD, trades) + model version + window.
+- Equity curve (NAV from start=1.0).
+- Drawdown chart with max-DD annotation.
+- Per-year breakdown (trades, avg/median PnL, win rate).
+- Per-regime breakdown (trades, avg PnL, win rate) using `entry_regime`.
+- Trade table with outcome / sector / exit_reason filters.
+- 2-run compare: overlay equity curves (absolute date OR days-from-start axis) + side-by-side summary.
+
+Manifest schema (v1), written by `src/backtest/runner.py:_build_manifest`:
+```json
+{
+  "manifest_version": "v1",
+  "run_id": "...",
+  "created_at": "...",
+  "model": {"name": "...", "version_id": "...", "path": "models/.../model.json"},
+  "params": {"start_date": "...", "end_date": "...", "initial_cash": 100000, ...},
+  "summary_metrics": {"total_return": ..., "sharpe_ratio": ..., ...}
+}
+```
+
+`model.version_id` is resolved from `models.artifacts_path` when the on-disk model dir is registered; otherwise it falls back to `<name>/<version-dir>` (e.g. `m01_prototype_2003_2026/v1`).
+
+### Page 5 — Pipeline Health
+
+- **Runs heatmap (last 30d)** — `pipeline_runs` pivoted to phase × date. Cells colored success (green) / running (yellow) / failed (red); hover shows runtime + error message. Failed runs in window are expanded in a drill-down panel.
+- **Data freshness** — `MAX(date)` per key table + lag-day status badge (🟢 fresh / 🟡 stale / 🔴 very stale). Per-table tolerances configured in `FRESHNESS_TOLERANCE_DAYS`.
+- **Universe & breakout trend (60d)** — daily counts of `trend_ok` and `breakout_ok` from `t2_screener_features`.
+- **Audit history** — scans `data/audit_reports/audit_report_*.json` and plots pass/warn/fail counts. **Currently single point** (only 2026-03-28 on disk); a "history accumulating" banner shows when there's ≤ 1 file.
+- **Storage** — file sizes for the DuckDB DB, `models/`, `data/backtest/`, `docs/reports/`, `logs/`.
+
+### Toolkit
+
 | File | Purpose |
 |------|---------|
-| `scripts/dashboard.py` | Streamlit entrypoint (Phase 1) |
-| `models/m01_baseline/v1/model.json` | XGBoost 4-class classifier |
-| `models/m01_baseline/v1/metadata.json` | 105 valid_features, training metrics |
-| `src/dashboard_reports.py` | Existing ML report viewer (Phase 2 integration) |
-| `docs/dashboard_design.md` | Full design doc with Phase 2 roadmap |
+| `scripts/dashboard.py` | Page 1 entrypoint + `st.navigation` wiring |
+| `scripts/dashboard_utils.py` | Shared loaders (`load_regime`, `load_risk_5f`, `load_watchlist`, `load_pre_breakout`, `load_sector_heat(window_days)`, `load_data_freshness`, `load_pipeline_runs_window`, `load_universe_trend`, `load_models_table`, `load_prod_model`), constants (`CLASS_LABELS`, `EXPOSURE_BANDS`, `PILLAR_FORMULAS`), helpers (`classify_regime`, `exposure_band_label`, `score_features_df`) |
+| `scripts/pages/3_Model_Lab.py` | Model registry browser |
+| `scripts/pages/4_Backtest_Studio.py` | v1-manifest backtest viewer |
+| `scripts/pages/5_Pipeline_Health.py` | Ops dashboard |
+| `models/m01_prototype_2003_2026/v2/model.json` | Current prod XGBoost classifier (auto-discovered via `status_flag='prod'`) |
+| `docs/reports/pretrain_audit_*.html` | Pre-generated pretrain HTML reports — Model Lab iframes the newest |
 
-### Phase 2 (planned)
+### Generating a fresh pretrain HTML report
 
-| Page | Data Source |
-|------|------------|
-| Data Audit Report | `pipeline_runs`, `data/audit_reports/` |
-| Model Evaluation | `models/m01_baseline/v1/evaluation/` artifacts |
-| Backtest Results | `data/backtest/` |
-| Feature Time Series | `t3_sepa_features` JOIN `screener_watchlist` |
+```bash
+python scripts/run_pretrain_audit.py --mode trades
+# writes docs/reports/pretrain_audit_trades_<timestamp>.html (5+ MB, Plotly inlined)
+```
+
+Model Lab's "Pretrain Report (HTML)" tab picks up the newest file by mtime.
+
+### Streamlit gotchas (learned 2026-05-23)
+- **Page rerun is whole-page, not component-local.** Filter controls above an
+  expensive widget should be wrapped in `st.form(...)` so the rerun only fires
+  on submit. Was making Page 1's search box feel laggy (each keystroke re-ran
+  M01 `predict_proba` on the pre-breakout cohort).
+- **`@st.cache_data(ttl=300)`** on every read-path loader in `dashboard_utils.py`.
+  `@st.cache_resource` for the XGBoost model.
+- **Page-1 pre-breakout cohort scoring is live**, not cached to a snapshot
+  table. ~50 tickers, acceptable for MVP. If load gets painful, the plan's
+  `dashboard_snapshot` table (deferred) is the lever.
+- **Lookback windows: use `LIMIT N` on DISTINCT dates**, not `INTERVAL N DAY`.
+  The latter counts calendar days incl. weekends, so 1-day windows after a
+  Monday return Friday+Monday. See `load_sector_heat`.
+- **5F `EXPOSURE_BANDS` mirrored.** Duplicated between
+  `src/pipeline/risk_5_factor.py` and `scripts/dashboard_utils.py` rather than
+  imported, to avoid a `src.*` import chain inside Streamlit's hot reload. Keep
+  both in sync if bands change.
 
 ---
 

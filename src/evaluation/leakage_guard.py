@@ -7,13 +7,19 @@ Key validations:
 - No test data appears before train data
 - No overlap in date ranges
 - Proper chronological ordering
+- Label horizon respected (audit_label)
+- Train-vs-deploy feature parity (feature_parity_check)
 """
 
 import logging
-from typing import Dict, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+from .gate import GateResult
+from .label_registry import LabelDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -284,3 +290,466 @@ class LeakageGuard:
             logger.error("❌ Created split failed validation - this should never happen!")
 
         return train_indices, val_indices, test_indices
+
+    # ------------------------------------------------------------------
+    # §2.1.2 — Label-side leakage audit
+    # ------------------------------------------------------------------
+    @staticmethod
+    def audit_label(
+        labels_df: pd.DataFrame,
+        price_data_view: str,
+        label_def: LabelDefinition,
+        db_path: Path,
+        max_horizon_days: Optional[int] = None,
+        recompute_fn: Optional[Callable[[pd.DataFrame, "LabelDefinition"], Any]] = None,
+        price_table: str = "price_data",
+    ) -> Dict[str, Any]:
+        """Verify every (ticker, date) label uses only price_data within horizon.
+
+        Parameters
+        ----------
+        labels_df
+            Must contain `ticker`, `date`, and `label_def.target_col`.
+        price_data_view
+            Name of view/table to read prices from (kept for parity with the
+            plan; the audit currently joins against `price_table` directly to
+            avoid needing a deployment-style view).
+        label_def
+            The `LabelDefinition` describing the label semantics.
+        db_path
+            DuckDB path.
+        max_horizon_days
+            Overrides `label_def.horizon_days` if provided.
+        recompute_fn
+            Optional reference implementation; called as
+            `recompute_fn(window_prices_df, label_def)` and expected to return
+            the recomputed label value. When supplied, value-mismatches are
+            recorded as `horizon_violations` entries with `kind='value_mismatch'`.
+        price_table
+            Where to fetch prices from. Defaults to `price_data`.
+        """
+        import duckdb
+
+        required = {"ticker", "date", label_def.target_col}
+        missing_cols = required - set(labels_df.columns)
+        if missing_cols:
+            raise ValueError(f"labels_df missing required columns: {sorted(missing_cols)}")
+
+        horizon = int(max_horizon_days if max_horizon_days is not None else label_def.horizon_days)
+        if horizon <= 0:
+            raise ValueError(f"horizon must be positive, got {horizon}")
+
+        horizon_violations: List[Dict[str, Any]] = []
+        missing_price_rows: List[Dict[str, Any]] = []
+        max_observed_horizon = 0
+
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            for row in labels_df.itertuples(index=False):
+                ticker = getattr(row, "ticker")
+                label_date = pd.Timestamp(getattr(row, "date"))
+                stored_label = getattr(row, label_def.target_col)
+
+                # Pull the horizon window from price_table. We deliberately
+                # query *more* than the horizon (horizon + 5 trading days) so
+                # we can detect labels that secretly used bars beyond the
+                # declared horizon.
+                window_end = label_date + pd.Timedelta(days=int(horizon * 1.5) + 5)
+                window = con.execute(
+                    f"""
+                    SELECT date, close
+                    FROM {price_table}
+                    WHERE ticker = ?
+                      AND date > ?
+                      AND date <= ?
+                    ORDER BY date
+                    """,
+                    [ticker, str(label_date.date()), str(window_end.date())],
+                ).df()
+
+                if window.empty:
+                    missing_price_rows.append(
+                        {"ticker": ticker, "date": str(label_date.date())}
+                    )
+                    continue
+
+                window_dates = pd.to_datetime(window["date"])
+                # Calendar-day horizon: a bar is "in horizon" if its date is
+                # within `horizon_days` calendar days of label_date. The label
+                # itself can reference at most that bar.
+                horizon_cutoff = label_date + pd.Timedelta(days=horizon)
+                in_horizon = window_dates <= horizon_cutoff
+                if in_horizon.any():
+                    observed = (window_dates[in_horizon].max() - label_date).days
+                    max_observed_horizon = max(max_observed_horizon, int(observed))
+
+                if recompute_fn is None:
+                    # Structural-only check: at minimum, *some* prices must
+                    # exist within the declared horizon, otherwise the label
+                    # is unbacked.
+                    if not in_horizon.any():
+                        horizon_violations.append(
+                            {
+                                "ticker": ticker,
+                                "date": str(label_date.date()),
+                                "kind": "no_in_horizon_prices",
+                                "stored_label": _to_py(stored_label),
+                            }
+                        )
+                    continue
+
+                # Reference-recompute check: drive the label off the
+                # in-horizon window, compare to stored label.
+                window_in = window.loc[in_horizon].reset_index(drop=True)
+                try:
+                    recomputed = recompute_fn(window_in, label_def)
+                except Exception as exc:  # pragma: no cover — fixture errors
+                    horizon_violations.append(
+                        {
+                            "ticker": ticker,
+                            "date": str(label_date.date()),
+                            "kind": "recompute_error",
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+
+                if not _labels_equal(recomputed, stored_label):
+                    horizon_violations.append(
+                        {
+                            "ticker": ticker,
+                            "date": str(label_date.date()),
+                            "kind": "value_mismatch",
+                            "stored_label": _to_py(stored_label),
+                            "recomputed_label": _to_py(recomputed),
+                        }
+                    )
+
+                # Also check whether the stored label could only be reproduced
+                # using bars beyond the horizon — i.e. if recompute on the
+                # in-horizon window disagrees but recompute on the wider window
+                # agrees. That's strong evidence of a horizon overrun.
+                if recompute_fn is not None and horizon_violations and horizon_violations[-1].get("kind") == "value_mismatch":
+                    try:
+                        recomputed_wide = recompute_fn(window, label_def)
+                        if _labels_equal(recomputed_wide, stored_label):
+                            horizon_violations[-1]["kind"] = "horizon_overrun"
+                    except Exception:  # pragma: no cover
+                        pass
+        finally:
+            con.close()
+
+        n_violations = len(horizon_violations) + len(missing_price_rows)
+        passed = n_violations == 0
+        gate = GateResult(
+            name="label_horizon",
+            status="pass" if passed else "fail",
+            value=float(n_violations),
+            threshold=0.0,
+            detail=(
+                f"checked={len(labels_df)} violations={len(horizon_violations)} "
+                f"missing_price={len(missing_price_rows)} "
+                f"max_observed_horizon_days={max_observed_horizon}"
+            ),
+            blocking=True,
+        )
+
+        return {
+            "checked_n": int(len(labels_df)),
+            "horizon_violations": horizon_violations,
+            "missing_price_rows": missing_price_rows,
+            "max_observed_horizon_days": max_observed_horizon,
+            "passed": passed,
+            "gate": gate.to_dict(),
+        }
+
+    # ------------------------------------------------------------------
+    # §2.1.3 — Training vs deployment feature parity
+    # ------------------------------------------------------------------
+    @staticmethod
+    def feature_parity_check(
+        train_view: str,
+        deploy_view: str,
+        feature_set_id: str,
+        db_path: Path,
+        sample_n: int = 100,
+        rtol: float = 1e-6,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        """Sample (ticker, date) pairs present in both views and assert that
+        their feature vectors are numerically equal.
+
+        Catches the m01_rank class of bug where deployment encodes categoricals
+        differently from training.
+        """
+        import duckdb
+        import time
+
+        t0 = time.perf_counter()
+        logger.info(
+            "feature_parity_check: starting (train_view=%s deploy_view=%s "
+            "feature_set=%s sample_n=%d)",
+            train_view, deploy_view, feature_set_id, sample_n,
+        )
+
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            feature_rows = con.execute(
+                """
+                SELECT feature_name
+                FROM model_feature_sets
+                WHERE feature_set_id = ?
+                ORDER BY ordinal
+                """,
+                [feature_set_id],
+            ).fetchall()
+            if not feature_rows:
+                raise ValueError(
+                    f"feature_set_id '{feature_set_id}' empty or unknown — "
+                    f"populate model_feature_sets first."
+                )
+            feature_cols = [r[0] for r in feature_rows]
+            logger.info("feature_parity_check: loaded %d features in %.1fs",
+                        len(feature_cols), time.perf_counter() - t0)
+
+            # Pull DISTINCT (ticker, date) keys that exist in both views.
+            # The DISTINCT wrappers are load-bearing: v_d2_training and
+            # v_d3_deployment can have multiple rows per (ticker, date) when
+            # joined against historical filings (multiple fundamental rows per
+            # period). Without DISTINCT, the inner join is a Cartesian product
+            # and the sample draws duplicate keys.
+            sample_sql = f"""
+                WITH common AS (
+                    SELECT DISTINCT t.ticker AS ticker, t.date AS date
+                    FROM (SELECT DISTINCT ticker, date FROM {train_view}) t
+                    INNER JOIN (SELECT DISTINCT ticker, date FROM {deploy_view}) d
+                      ON t.ticker = d.ticker AND t.date = d.date
+                )
+                SELECT ticker, date
+                FROM common
+                USING SAMPLE {int(sample_n)} ROWS (RESERVOIR, {int(seed)})
+            """
+            t_sample = time.perf_counter()
+            logger.info("feature_parity_check: sampling %d common keys "
+                        "(may take 1-3 min on large views — DISTINCT scan)...",
+                        sample_n)
+            keys_df = con.execute(sample_sql).df()
+            logger.info("feature_parity_check: sampled %d keys in %.1fs",
+                        len(keys_df), time.perf_counter() - t_sample)
+            if keys_df.empty:
+                return {
+                    "sampled_pairs": 0,
+                    "matched": 0,
+                    "mismatches": [],
+                    "dtype_mismatches": [],
+                    "passed": True,
+                    "gate": GateResult(
+                        name="feature_parity",
+                        status="n/a",
+                        value=0.0,
+                        threshold=0.0,
+                        detail="no overlapping (ticker, date) rows to sample",
+                        blocking=True,
+                    ).to_dict(),
+                }
+
+            # Wide-load both sides for the sampled keys, picking a single
+            # representative row per (ticker, date) via ROW_NUMBER() = 1.
+            # See the note above on multi-row views. We also record how many
+            # keys had >1 row on either side so we can warn separately —
+            # internal disagreement within one view is a real signal but
+            # different in kind from a train-vs-deploy mismatch.
+            quoted_cols = ", ".join(_quote_ident(c) for c in feature_cols)
+            keys_list = list(zip(keys_df["ticker"].astype(str), pd.to_datetime(keys_df["date"]).dt.strftime("%Y-%m-%d")))
+            keys_sql = "(" + ",".join(f"('{t}','{d}')" for t, d in keys_list) + ")"
+
+            def _load_one_side(view: str) -> tuple[pd.DataFrame, int]:
+                """Return (deduped df, n_keys_with_multiple_rows) for view."""
+                # Count multi-row keys (cheap — scoped by keys_sql).
+                multi = con.execute(
+                    f"""
+                    SELECT COUNT(*) FROM (
+                        SELECT ticker, date, COUNT(*) AS c
+                        FROM {view}
+                        WHERE (ticker, CAST(date AS VARCHAR)) IN {keys_sql}
+                        GROUP BY ticker, date
+                        HAVING COUNT(*) > 1
+                    )
+                    """
+                ).fetchone()[0]
+                # Pull one representative row per key.
+                deduped = con.execute(
+                    f"""
+                    WITH ranked AS (
+                        SELECT ticker, date, {quoted_cols},
+                               ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY ticker) AS rn
+                        FROM {view}
+                        WHERE (ticker, CAST(date AS VARCHAR)) IN {keys_sql}
+                    )
+                    SELECT ticker, date, {quoted_cols}
+                    FROM ranked
+                    WHERE rn = 1
+                    """
+                ).df()
+                return deduped, int(multi)
+
+            t_load = time.perf_counter()
+            logger.info("feature_parity_check: loading train_view rows...")
+            train_df, train_multi = _load_one_side(train_view)
+            logger.info(
+                "feature_parity_check: loaded train_view %d rows in %.1fs "
+                "(multi_row_keys=%d)",
+                len(train_df), time.perf_counter() - t_load, train_multi,
+            )
+            t_load2 = time.perf_counter()
+            logger.info("feature_parity_check: loading deploy_view rows...")
+            deploy_df, deploy_multi = _load_one_side(deploy_view)
+            logger.info(
+                "feature_parity_check: loaded deploy_view %d rows in %.1fs "
+                "(multi_row_keys=%d)",
+                len(deploy_df), time.perf_counter() - t_load2, deploy_multi,
+            )
+        finally:
+            con.close()
+
+        logger.info("feature_parity_check: comparing %d features across %d keys...",
+                    len(feature_cols), len(train_df))
+
+        # Join on (ticker, date) to align rows. Use a string-date join key to
+        # avoid timezone/dtype confusion.
+        for df in (train_df, deploy_df):
+            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+
+        merged = train_df.merge(
+            deploy_df, on=["ticker", "date"], suffixes=("__train", "__deploy"), how="inner"
+        )
+
+        mismatches: List[Dict[str, Any]] = []
+        dtype_mismatches: List[Dict[str, Any]] = []
+
+        for col in feature_cols:
+            tcol = f"{col}__train"
+            dcol = f"{col}__deploy"
+            if tcol not in merged.columns or dcol not in merged.columns:
+                # Column missing on one side entirely.
+                dtype_mismatches.append(
+                    {"feature": col, "kind": "missing_column"}
+                )
+                continue
+
+            t_series = merged[tcol]
+            d_series = merged[dcol]
+
+            if str(t_series.dtype) != str(d_series.dtype):
+                dtype_mismatches.append(
+                    {"feature": col, "train_dtype": str(t_series.dtype),
+                     "deploy_dtype": str(d_series.dtype)}
+                )
+
+            # Numerical comparison — NaN considered equal to NaN.
+            try:
+                t_num = pd.to_numeric(t_series, errors="coerce")
+                d_num = pd.to_numeric(d_series, errors="coerce")
+            except Exception:
+                t_num, d_num = None, None
+
+            if t_num is not None and not (t_num.isna().all() and d_num.isna().all()):
+                close = np.isclose(t_num.fillna(0).values, d_num.fillna(0).values, rtol=rtol, atol=rtol)
+                both_nan = t_num.isna().values & d_num.isna().values
+                ok = close | both_nan
+                if not ok.all():
+                    bad_idx = np.where(~ok)[0]
+                    for i in bad_idx[:5]:  # cap noise
+                        mismatches.append(
+                            {
+                                "ticker": merged.iloc[i]["ticker"],
+                                "date": merged.iloc[i]["date"],
+                                "feature": col,
+                                "train_val": _to_py(t_series.iloc[i]),
+                                "deploy_val": _to_py(d_series.iloc[i]),
+                            }
+                        )
+            else:
+                # Categorical / string comparison: exact equality, NaN==NaN.
+                t_vals = t_series.where(t_series.notna(), other="__NA__").astype(str)
+                d_vals = d_series.where(d_series.notna(), other="__NA__").astype(str)
+                bad = t_vals.values != d_vals.values
+                if bad.any():
+                    bad_idx = np.where(bad)[0]
+                    for i in bad_idx[:5]:
+                        mismatches.append(
+                            {
+                                "ticker": merged.iloc[i]["ticker"],
+                                "date": merged.iloc[i]["date"],
+                                "feature": col,
+                                "train_val": _to_py(t_series.iloc[i]),
+                                "deploy_val": _to_py(d_series.iloc[i]),
+                            }
+                        )
+
+        passed = not mismatches and not dtype_mismatches
+        multi_row_warning = ""
+        if train_multi or deploy_multi:
+            multi_row_warning = (
+                f" [warn: train_view has {train_multi} multi-row keys, "
+                f"deploy_view has {deploy_multi}; deduped via ROW_NUMBER()=1 — "
+                f"investigate if these views should be (ticker, date)-unique]"
+            )
+        gate = GateResult(
+            name="feature_parity",
+            status="pass" if passed else "fail",
+            value=float(len(mismatches) + len(dtype_mismatches)),
+            threshold=0.0,
+            detail=(
+                f"sampled={len(merged)} mismatches={len(mismatches)} "
+                f"dtype_mismatches={len(dtype_mismatches)}"
+                f"{multi_row_warning}"
+            ),
+            blocking=True,
+        )
+
+        logger.info(
+            "feature_parity_check: done in %.1fs — passed=%s mismatches=%d "
+            "dtype_mismatches=%d (train_multi=%d deploy_multi=%d)",
+            time.perf_counter() - t0, passed, len(mismatches),
+            len(dtype_mismatches), train_multi, deploy_multi,
+        )
+
+        return {
+            "sampled_pairs": int(len(merged)),
+            "matched": int(len(merged) - len(mismatches)),
+            "mismatches": mismatches,
+            "dtype_mismatches": dtype_mismatches,
+            "train_multi_row_keys": int(train_multi),
+            "deploy_multi_row_keys": int(deploy_multi),
+            "passed": passed,
+            "gate": gate.to_dict(),
+        }
+
+
+# ----------------------------------------------------------------------
+# Module-level helpers
+# ----------------------------------------------------------------------
+def _labels_equal(a: Any, b: Any) -> bool:
+    """Equality that survives numpy/pandas scalar wrappers and NaN-vs-NaN."""
+    try:
+        if pd.isna(a) and pd.isna(b):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _to_py(a) == _to_py(b)
+
+
+def _to_py(value: Any) -> Any:
+    """Coerce numpy/pandas scalars to vanilla python types for JSON output."""
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        try:
+            return value.item()
+        except (ValueError, AttributeError):
+            return value
+    return value
+
+
+def _quote_ident(name: str) -> str:
+    """Quote an SQL identifier for DuckDB."""
+    return '"' + name.replace('"', '""') + '"'

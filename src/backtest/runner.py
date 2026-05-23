@@ -54,6 +54,8 @@ class SEPABacktestRunner:
         commission: float = 0.001,
         slippage_pct: float = 0.001,
         db_path: Optional[str] = None,
+        model_path: Optional[str] = None,
+        model_version_id: Optional[str] = None,
     ):
         self.start_date = pd.to_datetime(start_date)
         self.end_date = pd.to_datetime(end_date)
@@ -61,6 +63,13 @@ class SEPABacktestRunner:
         self.commission = commission
         self.slippage_pct = slippage_pct
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self.model_path = str(model_path) if model_path else None
+        self.model_name = self._derive_model_name(model_path) if model_path else None
+        self.model_version_id = (
+            model_version_id
+            if model_version_id is not None
+            else self._lookup_model_version_id(model_path) if model_path else None
+        )
 
         self.scores_df: Optional[pd.DataFrame] = None
 
@@ -722,6 +731,50 @@ class SEPABacktestRunner:
             })
         return records
 
+    @staticmethod
+    def _derive_model_name(model_path: str) -> Optional[str]:
+        """Extract model family name from a path like models/<name>/<version>/model.json."""
+        parts = Path(model_path).parts
+        if 'models' in parts:
+            i = parts.index('models')
+            if i + 1 < len(parts):
+                return parts[i + 1]
+        return None
+
+    def _lookup_model_version_id(self, model_path: str) -> Optional[str]:
+        """Resolve model_version_id from the registry by matching the parent dir
+        of model_path against models.artifacts_path. Falls back to <name>/<version-dir>
+        derived from the path when no registry row matches."""
+        parent_dir = Path(model_path).parent
+        try:
+            con = duckdb.connect(str(self.db_path), read_only=True)
+            try:
+                rows = con.execute(
+                    "SELECT version_id, artifacts_path FROM models"
+                ).fetchall()
+            finally:
+                con.close()
+        except Exception as e:
+            logger.warning(f"Registry lookup failed ({e}); using path-derived id")
+            rows = []
+
+        parent_resolved = parent_dir.resolve()
+        for version_id, artifacts_path in rows:
+            if not artifacts_path:
+                continue
+            try:
+                if Path(artifacts_path).resolve() == parent_resolved:
+                    return version_id
+            except OSError:
+                continue
+
+        # Fallback: <name>/<version-dir>, e.g. "m01_prototype_2003_2026/v1"
+        if self.model_name and parent_dir.name:
+            fallback = f"{self.model_name}/{parent_dir.name}"
+            logger.info(f"No registry match for {model_path}; using {fallback}")
+            return fallback
+        return None
+
     def _build_manifest(self, run_id: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
         """Build manifest with parameters, artifact links, and summary metrics."""
         # Extract strategy params
@@ -737,8 +790,14 @@ class SEPABacktestRunner:
             }
 
         return {
+            'manifest_version': 'v1',
             'run_id': run_id,
             'created_at': pd.Timestamp.now().isoformat(),
+            'model': {
+                'name': self.model_name,
+                'version_id': self.model_version_id,
+                'path': self.model_path,
+            },
             'params': {
                 'start_date': str(self.start_date.date()),
                 'end_date': str(self.end_date.date()),

@@ -886,12 +886,139 @@ class DailyPipelineOrchestrator:
         logger.info(f"[Phase 8] Data freshness: {health['max_dates']}")
         logger.info(f"[Phase 8] Breakout drought: {health['breakout_drought_days']} days")
 
+        # Paper-trade prediction logging (best-effort; failures don't break Phase 8).
+        predictions_written = 0
+        try:
+            predictions_written = self._log_prod_model_predictions(target_date)
+        except Exception as e:
+            logger.warning(f"[Phase 8] Prediction logging skipped: {e}")
+
         return {
-            'rows_processed': 0,
+            'rows_processed': predictions_written,
             'alerts': alerts,
             'health': health,
             'coverage': coverage,
+            'predictions_written': predictions_written,
         }
+
+    def _log_prod_model_predictions(self, target_date: str) -> int:
+        """Score `target_date` SEPA candidates with the prod model and log predictions.
+
+        Skips silently (returns 0) if:
+        - no prod model is registered
+        - no candidates exist for target_date in v_d3_deployment
+        - the model artifact dir is missing
+        """
+        # Late import — keep model_registry/evaluation off the orchestrator's
+        # required-import path so older deployments don't break.
+        from pathlib import Path as _Path
+        from src.evaluation.prediction_logger import log_daily_predictions
+        from src.model_registry import ModelRegistry
+
+        registry = ModelRegistry(db_path=self.db_path)
+        prod_version_id = registry.get_prod_version()
+        if not prod_version_id:
+            logger.info("[Phase 8] No prod model registered — skipping prediction log.")
+            return 0
+
+        try:
+            artifacts_path = registry.get_artifacts_path(prod_version_id)
+        except ValueError:
+            logger.warning(f"[Phase 8] Prod model {prod_version_id} has no artifacts_path.")
+            return 0
+
+        model_path = _Path(artifacts_path) / "model.json"
+        if not model_path.exists():
+            logger.warning(f"[Phase 8] Model artifact missing: {model_path}")
+            return 0
+
+        # Pull today's deployment candidates. v_d3_deployment is the last 252d
+        # of SEPA breakouts; we want only the row dated target_date.
+        con = duckdb.connect(self.db_path, read_only=True)
+        try:
+            candidates = con.execute(
+                "SELECT * FROM v_d3_deployment WHERE date = ?",
+                [target_date],
+            ).df()
+        except duckdb.Error as e:
+            logger.warning(f"[Phase 8] Could not query v_d3_deployment: {e}")
+            con.close()
+            return 0
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+        if candidates.empty:
+            logger.info(f"[Phase 8] No SEPA candidates on {target_date} — nothing to log.")
+            return 0
+
+        # Score with prod model.
+        try:
+            import xgboost as xgb
+            booster = xgb.Booster()
+            booster.load_model(str(model_path))
+            feature_cols = self._resolve_prod_feature_cols(registry, prod_version_id, candidates)
+            if not feature_cols:
+                logger.warning("[Phase 8] Could not resolve prod feature columns.")
+                return 0
+            X = candidates[feature_cols].replace([float('inf'), float('-inf')], None)
+            # Cast object columns to category (XGBoost requirement).
+            for col in X.select_dtypes(include='object').columns:
+                X[col] = X[col].astype('category')
+            dmatrix = xgb.DMatrix(X, enable_categorical=True)
+            proba = booster.predict(dmatrix)
+        except Exception as e:
+            logger.warning(f"[Phase 8] Scoring failed: {e}")
+            return 0
+
+        import numpy as np
+        import pandas as pd
+        proba = np.asarray(proba)
+        if proba.ndim == 1:
+            proba = np.column_stack([1 - proba, proba])
+
+        n_classes = proba.shape[1]
+        pred_df = candidates[["ticker"]].copy()
+        for i in range(n_classes):
+            pred_df[f"prob_class_{i}"] = proba[:, i]
+        pred_df["predicted_class"] = proba.argmax(axis=1)
+
+        production_class_idx = n_classes - 1  # last actionable class
+        target_dt = pd.to_datetime(target_date).date() if isinstance(target_date, str) else target_date
+        n = log_daily_predictions(
+            db_path=Path(self.db_path),
+            prediction_date=target_dt,
+            model_version_id=prod_version_id,
+            predictions=pred_df,
+            production_class_idx=production_class_idx,
+        )
+        logger.info(f"[Phase 8] Logged {n} predictions for {prod_version_id} on {target_date}")
+        return n
+
+    def _resolve_prod_feature_cols(self, registry, version_id: str, candidates_df) -> list[str]:
+        """Find which v_d3_deployment columns to feed the prod model.
+
+        Prefer the model's recorded feature_set_id from the models table;
+        intersect with columns actually present in candidates_df. Falls back to
+        an empty list (caller logs and skips).
+        """
+        try:
+            specs = registry.get_model_specs(version_id) or {}
+        except Exception:
+            specs = {}
+        feature_names = specs.get("features") or []
+        if not feature_names:
+            return []
+        # case-insensitive match
+        cols_lower = {c.lower(): c for c in candidates_df.columns}
+        resolved = []
+        for f in feature_names:
+            actual = cols_lower.get(f.lower())
+            if actual is not None:
+                resolved.append(actual)
+        return resolved
 
     def _check_filing_date_quality(self, tickers: list) -> None:
         """Warn if any fundamental rows have filing_date <= 7 days after period_end.

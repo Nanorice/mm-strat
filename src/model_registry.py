@@ -14,6 +14,10 @@ DEFAULT_DB_PATH = Path("data/market_data.duckdb")
 ARTIFACTS_BASE = Path("models/artifacts")
 
 
+class PromotionError(RuntimeError):
+    """Raised when ModelRegistry.set_prod refuses to promote a version."""
+
+
 class ModelRegistry:
     """Manages model versions, specs, metrics, and feature catalog in DuckDB."""
 
@@ -21,6 +25,24 @@ class ModelRegistry:
         self.db_path = str(db_path or DEFAULT_DB_PATH)
         ARTIFACTS_BASE.mkdir(parents=True, exist_ok=True)
         self._create_feature_catalog_tables()
+        self._create_forced_promotions_table()
+
+    def _create_forced_promotions_table(self) -> None:
+        con = duckdb.connect(self.db_path)
+        try:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS forced_promotions (
+                    version_id   VARCHAR PRIMARY KEY,
+                    reason       VARCHAR NOT NULL,
+                    failed_gates JSON    NOT NULL,
+                    promoted_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    promoted_by  VARCHAR
+                )
+                """
+            )
+        finally:
+            con.close()
 
     # ------------------------------------------------------------------
     # SCHEMA SETUP
@@ -207,7 +229,21 @@ class ModelRegistry:
         finally:
             con.close()
 
-    def set_prod(self, version_id: str) -> None:
+    def set_prod(
+        self,
+        version_id: str,
+        force: bool = False,
+        force_reason: str = "",
+        promoted_by: Optional[str] = None,
+    ) -> None:
+        """Promote a version to prod, enforcing blocking evaluation gates.
+
+        Reads `evaluation/results.json` from the version's artifacts dir and
+        refuses to promote if any gate with `blocking=True` has `status='fail'`,
+        unless `force=True` and `force_reason` is non-empty. Forced promotions
+        are logged to the `forced_promotions` table.
+        """
+        # 1. Existence check first — fail fast on typos.
         con = duckdb.connect(self.db_path)
         try:
             exists = con.execute(
@@ -215,6 +251,75 @@ class ModelRegistry:
             ).fetchone()[0]
             if not exists:
                 raise ValueError(f"Model version not found: {version_id}")
+        finally:
+            con.close()
+
+        # 2. Locate results.json. Two layouts exist in the wild:
+        #    - artifacts_path/evaluation/results.json (ClassificationEvaluator default)
+        #    - artifacts_path/results.json (legacy)
+        artifacts_path = self.get_artifacts_path(version_id)
+        candidate_paths = [
+            artifacts_path / "evaluation" / "results.json",
+            artifacts_path / "results.json",
+        ]
+        results_path = next((p for p in candidate_paths if p.exists()), None)
+
+        blocking_failures: List[Dict[str, Any]] = []
+        if results_path is None:
+            if not force:
+                raise PromotionError(
+                    f"No evaluation results.json found for {version_id} under "
+                    f"{artifacts_path}. Promote with force=True if this is "
+                    f"intentional (e.g., legacy model from before the gate "
+                    f"framework)."
+                )
+            logger.warning(
+                f"[Promote] No results.json for {version_id}; force=True — proceeding."
+            )
+        else:
+            try:
+                results = json.loads(results_path.read_text())
+            except Exception as e:
+                raise PromotionError(
+                    f"Could not parse {results_path}: {e}"
+                ) from e
+            gates = results.get("gates", []) or []
+            blocking_failures = [
+                g for g in gates
+                if bool(g.get("blocking")) and g.get("status") == "fail"
+            ]
+
+        # 3. Enforce.
+        if blocking_failures and not force:
+            lines = [
+                f"Promotion blocked for {version_id} — failing blocking gates:"
+            ]
+            for g in blocking_failures:
+                lines.append(
+                    f"  - {g.get('name')}: observed={g.get('value')} "
+                    f"threshold={g.get('threshold')} — {g.get('detail', '')}"
+                )
+            lines.append(
+                "Override with set_prod(..., force=True, force_reason='...')."
+            )
+            raise PromotionError("\n".join(lines))
+
+        if blocking_failures and force:
+            if not force_reason.strip():
+                raise PromotionError(
+                    "force=True requires a non-empty force_reason. The reason is "
+                    "permanently logged to the forced_promotions table."
+                )
+            self._log_forced_promotion(
+                version_id=version_id,
+                reason=force_reason,
+                failed_gates=blocking_failures,
+                promoted_by=promoted_by,
+            )
+
+        # 4. Proceed with original promotion logic.
+        con = duckdb.connect(self.db_path)
+        try:
             con.execute(
                 "UPDATE models SET status_flag = 'archived' WHERE status_flag = 'prod'"
             )
@@ -224,6 +329,30 @@ class ModelRegistry:
             )
             logger.info(f"[OK] Promoted {version_id} to production")
             print(f"[OK] {version_id} is now PRODUCTION")
+        finally:
+            con.close()
+
+    def _log_forced_promotion(
+        self,
+        version_id: str,
+        reason: str,
+        failed_gates: List[Dict[str, Any]],
+        promoted_by: Optional[str],
+    ) -> None:
+        con = duckdb.connect(self.db_path)
+        try:
+            con.execute(
+                """
+                INSERT OR REPLACE INTO forced_promotions
+                    (version_id, reason, failed_gates, promoted_by)
+                VALUES (?, ?, ?, ?)
+                """,
+                [version_id, reason, json.dumps(failed_gates), promoted_by],
+            )
+            logger.warning(
+                f"[Promote] FORCED promotion of {version_id} logged "
+                f"(reason: {reason!r}, {len(failed_gates)} failing gates)"
+            )
         finally:
             con.close()
 

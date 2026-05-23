@@ -10,6 +10,8 @@ Supports both regression and classification models with consistent:
 
 import json
 import logging
+import platform
+import subprocess
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,19 @@ import pandas as pd
 from ..model_registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_git_sha() -> Optional[str]:
+    """Return the current HEAD SHA, or None if git is unavailable."""
+    try:
+        out = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        return out.decode('ascii', errors='ignore').strip() or None
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return None
 
 
 class BaseEvaluator(ABC):
@@ -68,6 +83,14 @@ class BaseEvaluator(ABC):
         # Metrics storage
         self.metrics: Dict[str, Any] = {}
         self.plots: Dict[str, Path] = {}
+
+        # Reproducibility context. Subclasses or callers may set these before
+        # invoking save_results(); _save_metrics_json reads them into the
+        # evaluator_run metadata block.
+        self.label_registry_id: Optional[str] = None
+        self.feature_set_id: Optional[str] = None
+        self.pipeline_run_id: Optional[int] = None
+        self.db_path = db_path
 
         logger.info(f"✅ Initialized {self.__class__.__name__} for {model_name}/{model_version}")
         logger.info(f"📁 Output directory: {self.output_dir}")
@@ -154,7 +177,8 @@ class BaseEvaluator(ABC):
             'model_name': self.model_name,
             'model_version': self.model_version,
             'evaluation_timestamp': datetime.now().isoformat(),
-            'evaluator_class': self.__class__.__name__
+            'evaluator_class': self.__class__.__name__,
+            'evaluator_run': self._build_evaluator_run_metadata(),
         }
 
         with open(path, 'w') as f:
@@ -181,6 +205,42 @@ class BaseEvaluator(ABC):
         """
         self.plots[plot_name] = plot_path
         logger.debug(f"📊 Registered plot: {plot_name} -> {plot_path}")
+
+    def _build_evaluator_run_metadata(self) -> Dict[str, Any]:
+        """Build the evaluator_run reproducibility block.
+
+        Captures git SHA, python version, and identifiers needed to reconstruct
+        which labels/features/pipeline-run were used. Any field that can't be
+        resolved degrades to None rather than failing the evaluation.
+        """
+        return {
+            'git_sha': _safe_git_sha(),
+            'python_version': platform.python_version(),
+            'platform': platform.platform(),
+            'label_registry_id': self.label_registry_id,
+            'feature_set_id': self.feature_set_id,
+            'pipeline_run_id': self._resolve_pipeline_run_id(),
+        }
+
+    def _resolve_pipeline_run_id(self) -> Optional[int]:
+        """Return self.pipeline_run_id if set, else latest completed run from DB."""
+        if self.pipeline_run_id is not None:
+            return self.pipeline_run_id
+        if self.db_path is None:
+            return None
+        try:
+            import duckdb
+            con = duckdb.connect(str(self.db_path), read_only=True)
+            try:
+                row = con.execute(
+                    "SELECT MAX(run_id) FROM pipeline_runs WHERE status = 'COMPLETED'"
+                ).fetchone()
+                return int(row[0]) if row and row[0] is not None else None
+            finally:
+                con.close()
+        except Exception as e:  # pragma: no cover — best-effort
+            logger.debug(f"pipeline_run_id lookup skipped: {e}")
+            return None
 
     def get_output_path(self, filename: str, subdir: Optional[str] = None) -> Path:
         """Get path for output file in evaluation directory.

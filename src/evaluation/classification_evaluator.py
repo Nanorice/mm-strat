@@ -30,6 +30,7 @@ from sklearn.metrics import (
 )
 
 from .base_evaluator import BaseEvaluator
+from .calibration import calibration_audit
 from .plotting import EvaluationPlotter
 from .leakage_guard import LeakageGuard
 
@@ -73,7 +74,11 @@ class ClassificationEvaluator(BaseEvaluator):
         dates_test: Optional[pd.Series] = None,
         actionable_classes: Optional[List[int]] = None,
         compute_shap: bool = True,
-        shap_sample_size: int = 1000
+        shap_sample_size: int = 1000,
+        compute_permutation_importance: bool = False,
+        permutation_n_repeats: int = 5,
+        permutation_sample_size: int = 2000,
+        regimes_test: Optional[pd.Series] = None,
     ) -> Dict[str, Any]:
         """Execute comprehensive classification evaluation.
 
@@ -136,10 +141,33 @@ class ClassificationEvaluator(BaseEvaluator):
         metrics['roc_auc_per_class'] = roc_auc
         metrics['pr_auc_per_class'] = pr_auc
 
-        # 7. Calibration (Brier score)
+        # 7. Calibration (Brier score + ECE gate)
         logger.info("🎯 Computing calibration metrics...")
         brier = self._compute_brier_score(y_test, y_pred_proba)
         metrics['brier_score'] = brier
+
+        # ECE per class, with a blocking gate on the production class. Convention:
+        # production_class = last actionable class (matches threshold_sweep).
+        actionable_for_calib = (
+            actionable_classes if actionable_classes is not None
+            else self._default_actionable_classes()
+        )
+        production_class_idx = actionable_for_calib[-1]
+        try:
+            calib = calibration_audit(
+                y_true=np.asarray(y_test),
+                y_pred_proba=y_pred_proba,
+                class_names=self.class_names or [f"Class_{i}" for i in range(y_pred_proba.shape[1])],
+                production_class_idx=int(production_class_idx),
+                ece_threshold=0.05,
+            )
+            metrics['ece_per_class'] = {
+                name: d["ece"] for name, d in calib["ece_per_class"].items()
+            }
+            metrics['production_class_ece'] = calib["production_class_ece"]
+            metrics.setdefault('gates', []).append(calib['gate'])
+        except Exception as e:  # pragma: no cover — best-effort
+            logger.warning(f"calibration_audit skipped: {e}")
 
         # 8. Class distribution (train/val/test)
         logger.info("📊 Computing class distribution...")
@@ -182,6 +210,52 @@ class ClassificationEvaluator(BaseEvaluator):
         else:
             logger.info("⏭️  Skipping SHAP computation (compute_shap=False)")
             metrics['shap_summary'] = None
+
+        # 13b. Permutation importance (§3.3.1). Diagnostic, no gate.
+        if compute_permutation_importance:
+            logger.info(f"🔀 Computing permutation importance "
+                        f"(n_repeats={permutation_n_repeats}, sample_size={permutation_sample_size})...")
+            try:
+                perm_df = self._compute_permutation_importance(
+                    model=model,
+                    X_test=X_test_clean,
+                    y_test=np.asarray(y_test),
+                    n_repeats=permutation_n_repeats,
+                    sample_size=permutation_sample_size,
+                )
+                metrics['permutation_importance'] = perm_df.to_dict(orient='records')
+            except Exception as e:
+                logger.warning(f"permutation_importance skipped: {e}")
+                metrics['permutation_importance'] = None
+        else:
+            metrics['permutation_importance'] = None
+
+        # 13c. Regime decomposition (§3.2). Blocking gate on production class.
+        if regimes_test is not None:
+            try:
+                from .regime_decomposition import metrics_by_regime, regime_decomposition_gate
+                regime_df = pd.DataFrame({
+                    "regime_cat": np.asarray(regimes_test).astype(int),
+                    "y": np.asarray(y_test).astype(int),
+                    "y_pred": y_pred,
+                    "y_prob": y_pred_proba[:, int(production_class_idx)],
+                })
+                by_regime = metrics_by_regime(
+                    df=regime_df,
+                    y_col="y", y_pred_col="y_pred", y_prob_col="y_prob",
+                    production_class_idx=int(production_class_idx),
+                )
+                gate = regime_decomposition_gate(by_regime)
+                metrics['regime_decomposition'] = {
+                    "by_regime": by_regime,
+                    "gate": gate.to_dict(),
+                }
+                metrics.setdefault('gates', []).append(gate.to_dict())
+            except Exception as e:
+                logger.warning(f"regime_decomposition skipped: {e}")
+                metrics['regime_decomposition'] = None
+        else:
+            metrics['regime_decomposition'] = None
 
         # 14. Generate visualizations
         logger.info("🎨 Generating visualizations...")
@@ -575,6 +649,72 @@ class ClassificationEvaluator(BaseEvaluator):
             'sample_size': len(X_sample),
             'shap_values_shape': [len(shap_values), len(X_sample), len(X_sample.columns)]
         }
+
+    def _compute_permutation_importance(
+        self,
+        model: xgb.Booster,
+        X_test: pd.DataFrame,
+        y_test: np.ndarray,
+        n_repeats: int = 5,
+        sample_size: int = 2000,
+        random_state: int = 42,
+    ) -> pd.DataFrame:
+        """Permutation importance using log-loss as the scorer (§3.3.1).
+
+        Wraps `sklearn.inspection.permutation_importance` with an XGBoost adapter.
+        Returns DataFrame[feature, mean_importance, std_importance] sorted
+        descending by mean_importance.
+        """
+        from sklearn.inspection import permutation_importance
+        from sklearn.base import BaseEstimator, ClassifierMixin
+
+        y_arr = np.asarray(y_test)
+        if len(X_test) > sample_size:
+            rng = np.random.default_rng(random_state)
+            idx = rng.choice(len(X_test), size=sample_size, replace=False)
+            X_use = X_test.iloc[idx].reset_index(drop=True)
+            y_use = y_arr[idx]
+        else:
+            X_use = X_test
+            y_use = y_arr
+
+        n_classes = len(self.class_names) if self.class_names else int(np.max(y_use)) + 1
+
+        class _XGBAdapter(BaseEstimator, ClassifierMixin):
+            """Adapter so sklearn.permutation_importance can call predict_proba on a Booster."""
+            def __init__(self, booster, n_classes: int):
+                self.booster = booster
+                self.classes_ = np.arange(n_classes)
+
+            def fit(self, X, y):
+                return self  # already trained
+
+            def predict_proba(self, X):
+                X_clean = X.replace([np.inf, -np.inf], np.nan) if hasattr(X, "replace") else X
+                dmat = xgb.DMatrix(X_clean, enable_categorical=True)
+                return self.booster.predict(dmat)
+
+            def predict(self, X):
+                proba = self.predict_proba(X)
+                return np.argmax(proba, axis=1)
+
+        adapter = _XGBAdapter(model, n_classes)
+        result = permutation_importance(
+            adapter,
+            X_use,
+            y_use,
+            n_repeats=n_repeats,
+            random_state=random_state,
+            scoring="neg_log_loss",
+            n_jobs=1,  # XGBoost predict is already parallel
+        )
+
+        df = pd.DataFrame({
+            "feature": list(X_use.columns),
+            "mean_importance": result.importances_mean,
+            "std_importance": result.importances_std,
+        })
+        return df.sort_values("mean_importance", ascending=False).reset_index(drop=True)
 
     def _generate_plots(
         self,

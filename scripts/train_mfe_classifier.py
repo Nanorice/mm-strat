@@ -28,13 +28,20 @@ from sklearn.utils.class_weight import compute_class_weight
 
 sys.path.append(str(Path(__file__).parent.parent))
 from src.evaluation.classification_evaluator import ClassificationEvaluator
+from src.evaluation.label_registry import LabelDefinition
 from src.evaluation.leakage_guard import LeakageGuard
+from src.evaluation.walk_forward import (
+    aggregate_walk_forward,
+    anchored_walk_forward,
+    run_walk_forward,
+)
 from src.model_registry import ModelRegistry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent.parent / "data" / "market_data.duckdb"
+LABEL_REGISTRY_DIR = Path(__file__).parent.parent / "label_registry"
 
 
 def get_feature_set(db_path: Path, feature_set_id: str) -> tuple[list[str], dict[str, list[str]]]:
@@ -184,6 +191,36 @@ def train_mfe_classifier(
     return model, {'class_weights': class_weights, 'best_iteration': int(model.best_iteration)}
 
 
+def _load_regime_cat_for_dates(db_path: Path, dates: pd.Series) -> pd.Series:
+    """Fetch regime_cat from t2_regime_scores for the given dates (aligned to dates index).
+
+    Mirrors the SQL in `src/backtest/runner.py::_load_regime_from_duckdb`.
+    Missing dates get NaN; metrics_by_regime drops those slices when n < threshold.
+    """
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        df = con.execute(
+            """
+            SELECT
+                date,
+                CASE
+                    WHEN m03_score >= 75 THEN 4
+                    WHEN m03_score >= 55 THEN 3
+                    WHEN m03_score >= 35 THEN 2
+                    WHEN m03_score >= 15 THEN 1
+                    ELSE 0
+                END AS regime_cat
+            FROM t2_regime_scores
+            """
+        ).fetchdf()
+    finally:
+        con.close()
+    df["date"] = pd.to_datetime(df["date"])
+    lookup = dict(zip(df["date"], df["regime_cat"]))
+    aligned = pd.to_datetime(pd.Series(dates).reset_index(drop=True))
+    return aligned.map(lookup)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train MFE classifier from a catalog feature set")
     parser.add_argument("--feature-set", default="fs_m01_prototype",
@@ -199,6 +236,27 @@ def parse_args() -> argparse.Namespace:
                              "metrics reported are validation-set, not unbiased test metrics.")
     parser.add_argument("--promote-prod", action="store_true",
                         help="After registration, mark this version as prod (archives previous prod).")
+    parser.add_argument("--label-id", default="mfe_4class_30d_v1",
+                        help="Label registry id (file label_registry/<id>.json must exist).")
+    parser.add_argument("--skip-parity", action="store_true",
+                        help="Skip the train-vs-deploy feature parity check (emergency override).")
+    parser.add_argument("--deploy-view", default="v_d3_deployment",
+                        help="View used as the deployment side of the parity check.")
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="Run anchored walk-forward training in addition to the standard split. "
+                             "Per-fold artifacts + walk_forward_summary.json written to models/<name>/<version>/folds/.")
+    parser.add_argument("--wf-step", default="1Y",
+                        help="Walk-forward step size (1Y, 6M, 1Q, etc.).")
+    parser.add_argument("--wf-test-start", default=None,
+                        help="First fold's test_start date (YYYY-MM-DD). Defaults to 3y before max(date).")
+    parser.add_argument("--wf-min-train-years", type=int, default=3,
+                        help="Skip folds whose train window is shorter than this many years.")
+    parser.add_argument("--with-perm-importance", action="store_true",
+                        help="Compute permutation importance during evaluation (§3.3.1, diagnostic).")
+    parser.add_argument("--perm-repeats", type=int, default=5)
+    parser.add_argument("--perm-sample-size", type=int, default=2000)
+    parser.add_argument("--with-regime-decomp", action="store_true",
+                        help="Compute per-regime metrics via regime_cat from t2_regime_scores (§3.2 gate).")
     parser.add_argument("--db", type=Path, default=DB_PATH)
     return parser.parse_args()
 
@@ -210,6 +268,49 @@ def main() -> None:
     logger.info(f"MFE CLASSIFIER TRAINING — feature_set={args.feature_set}, model={args.model_name}")
     logger.info(f"Mode: {'NO-HOLDOUT (85/15/0)' if args.no_holdout else 'STANDARD (60/20/20)'}")
     logger.info("=" * 80)
+
+    # 0. Load label definition (frozen at training time).
+    label_def_path = LABEL_REGISTRY_DIR / f"{args.label_id}.json"
+    if not label_def_path.exists():
+        raise FileNotFoundError(
+            f"Label '{args.label_id}' not found at {label_def_path}. "
+            f"Authoring guide: docs/plans/evaluation_implementation_plan_2026_05_23.md §2.1.1."
+        )
+    label_def = LabelDefinition.from_json(label_def_path)
+    logger.info(
+        f"🏷️  Label: {label_def.label_id} (horizon={label_def.horizon_days}d, "
+        f"fingerprint={label_def.fingerprint()[:12]})"
+    )
+
+    # 0b. Feature parity check (training-view vs deployment-view). Catches the
+    # m01_rank-class bug where categorical encoding differs across views.
+    if not args.skip_parity:
+        try:
+            parity = LeakageGuard.feature_parity_check(
+                train_view="v_d2_training",
+                deploy_view=args.deploy_view,
+                feature_set_id=args.feature_set,
+                db_path=args.db,
+                sample_n=200,
+            )
+            status = parity["gate"]["status"]
+            logger.info(
+                f"🔁 feature_parity: {status} "
+                f"(sampled={parity['sampled_pairs']}, mismatches={len(parity['mismatches'])}, "
+                f"dtype_mismatches={len(parity['dtype_mismatches'])})"
+            )
+            if not parity["passed"] and status != "n/a":
+                raise SystemExit(
+                    "Feature parity check failed. Use --skip-parity to override "
+                    "(then expect to debug your deployment view). Mismatches: "
+                    f"{parity['mismatches'][:3]}"
+                )
+        except ValueError as e:
+            # e.g., feature_set_id not in catalog — log and continue rather
+            # than crash a training run that pre-dates catalog population.
+            logger.warning(f"⚠️  feature_parity_check skipped: {e}")
+    else:
+        logger.warning("⚠️  feature_parity_check skipped via --skip-parity")
 
     # 1. Load feature set from catalog
     requested_features, feature_groups = get_feature_set(args.db, args.feature_set)
@@ -310,6 +411,19 @@ def main() -> None:
         output_dir=output_dir,
         class_names=class_names,
     )
+    # Carry reproducibility identifiers into the results.json _metadata block.
+    evaluator.label_registry_id = label_def.label_id
+    evaluator.feature_set_id = args.feature_set
+    # Optionally fetch regime_cat aligned to X_test dates for regime decomposition.
+    regimes_test = None
+    if args.with_regime_decomp:
+        try:
+            regimes_test = _load_regime_cat_for_dates(args.db, dates_test)
+            logger.info(f"📡 Loaded regime_cat for {regimes_test.notna().sum()} of {len(regimes_test)} test rows")
+        except Exception as e:
+            logger.warning(f"⚠️  --with-regime-decomp could not fetch regime_cat: {e}")
+            regimes_test = None
+
     eval_results = evaluator.evaluate(
         model=model,
         X_test=X_test,
@@ -322,6 +436,10 @@ def main() -> None:
         dates_test=dates_test,
         compute_shap=True,
         shap_sample_size=1000,
+        compute_permutation_importance=args.with_perm_importance,
+        permutation_n_repeats=args.perm_repeats,
+        permutation_sample_size=args.perm_sample_size,
+        regimes_test=regimes_test,
     )
 
     # 9. Save model + metadata
@@ -330,6 +448,10 @@ def main() -> None:
     model_path = model_dir / "model.json"
     model.save_model(str(model_path))
     logger.info(f"💾 Model saved to {model_path}")
+
+    # Freeze the label definition into the artifact dir.
+    label_def.to_json(model_dir / "label_definition.json")
+    logger.info(f"🏷️  Label definition frozen at {model_dir / 'label_definition.json'}")
 
     # In --no-holdout mode, evaluator metrics are val-set, not test-set.
     eval_metrics_field = 'val_metrics' if args.no_holdout else 'test_metrics'
@@ -424,6 +546,37 @@ def main() -> None:
         logger.warning(f"⚠️  Model registration failed (non-critical): {e}")
         logger.info("Model and evaluation artifacts saved successfully, continuing...")
 
+    # 11. Walk-forward (additive — only runs when --walk-forward is set).
+    if args.walk_forward:
+        logger.info("=" * 80)
+        logger.info("🔁 WALK-FORWARD MODE — anchored, step=%s, min_train_years=%d",
+                    args.wf_step, args.wf_min_train_years)
+        logger.info("=" * 80)
+        wf_results = _run_walk_forward_block(
+            df_sorted=df_sorted,
+            X_sorted=X_sorted,
+            y_sorted=y_sorted,
+            valid_features=valid_features,
+            class_names=class_names,
+            model_dir=model_dir,
+            train_params=DEFAULT_HYPERPARAMS,
+            wf_step=args.wf_step,
+            wf_test_start=args.wf_test_start,
+            wf_min_train_years=args.wf_min_train_years,
+        )
+        # Merge WF gates into the model's evaluation results.json so the
+        # promotion gate (§6) sees them.
+        results_json_path = evaluator.eval_dir / "results.json"
+        if results_json_path.exists():
+            try:
+                existing = json.loads(results_json_path.read_text())
+                existing.setdefault("gates", []).extend(wf_results.get("gates", []))
+                existing["walk_forward_summary"] = wf_results.get("summary", {})
+                results_json_path.write_text(json.dumps(existing, indent=2, default=str))
+                logger.info(f"📝 Walk-forward gates merged into {results_json_path}")
+            except Exception as e:
+                logger.warning(f"Could not merge WF gates into results.json: {e}")
+
     logger.info("=" * 80)
     logger.info("✅ TRAINING COMPLETE")
     logger.info(f"📁 Model: {model_path}")
@@ -433,6 +586,87 @@ def main() -> None:
     logger.info(f"📊 {metric_label} Weighted F1: {eval_results.get('weighted_f1', 0):.3f}")
     logger.info(f"📊 {metric_label} Macro F1: {eval_results.get('macro_f1', 0):.3f}")
     logger.info("=" * 80)
+
+
+def _run_walk_forward_block(
+    df_sorted: pd.DataFrame,
+    X_sorted: pd.DataFrame,
+    y_sorted: pd.Series,
+    valid_features: list[str],
+    class_names: list[str],
+    model_dir: Path,
+    train_params: dict,
+    wf_step: str,
+    wf_test_start: str | None,
+    wf_min_train_years: int,
+) -> dict:
+    """Run anchored walk-forward over `df_sorted` and write per-fold artifacts."""
+    panel = X_sorted.copy()
+    panel["date"] = pd.to_datetime(df_sorted["date"]).values
+    panel["__y__"] = y_sorted.values
+
+    min_date = panel["date"].min().date()
+    max_date = panel["date"].max().date()
+    train_start = min_date
+    if wf_test_start:
+        test_start = pd.to_datetime(wf_test_start).date()
+    else:
+        # Default: leave the last 3 calendar years as the test window.
+        from datetime import date as _date
+        test_start = _date(max_date.year - 3, max_date.month, 1)
+    test_end = max_date
+
+    specs = list(
+        anchored_walk_forward(
+            panel,
+            date_col="date",
+            train_start=train_start,
+            test_start=test_start,
+            test_end=test_end,
+            step=wf_step,
+            min_train_years=wf_min_train_years,
+        )
+    )
+    logger.info(f"📐 Generated {len(specs)} walk-forward folds")
+    if not specs:
+        logger.warning("No walk-forward folds produced — check --wf-min-train-years.")
+        return {"per_fold": [], "summary": {}, "gates": []}
+
+    def train_fn(X: pd.DataFrame, y: pd.Series) -> xgb.Booster:
+        Xc = X.replace([np.inf, -np.inf], np.nan)
+        classes = np.unique(y)
+        weights = compute_class_weight('balanced', classes=classes, y=y)
+        sample_weights = y.map(dict(zip(classes, weights)))
+        dtrain = xgb.DMatrix(Xc, label=y, weight=sample_weights, enable_categorical=True)
+        return xgb.train(train_params, dtrain, num_boost_round=NUM_BOOST_ROUND)
+
+    folds_dir = model_dir / "folds"
+    folds_dir.mkdir(parents=True, exist_ok=True)
+    fold_results = run_walk_forward(
+        df=panel,
+        date_col="date",
+        feature_cols=valid_features,
+        target_col="__y__",
+        fold_specs=specs,
+        train_fn=train_fn,
+        output_dir=folds_dir,
+    )
+
+    # Production class = last actionable class (Home Run for MFE 4-class).
+    production_class_idx = len(class_names) - 1
+    agg = aggregate_walk_forward(
+        fold_results,
+        class_names=class_names,
+        production_class_idx=production_class_idx,
+        worst_fold_auc_threshold=0.65,
+    )
+    summary_path = model_dir / "evaluation" / "walk_forward_summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(agg, indent=2, default=str))
+    logger.info(f"📊 Walk-forward summary: {summary_path}")
+    for g in agg.get("gates", []):
+        logger.info(f"   gate {g['name']}: {g['status']} (value={g.get('value')})")
+    return agg
 
 
 if __name__ == "__main__":
