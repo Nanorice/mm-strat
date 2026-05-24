@@ -28,13 +28,20 @@ from sklearn.utils.class_weight import compute_class_weight
 
 sys.path.append(str(Path(__file__).parent.parent))
 from src.evaluation.classification_evaluator import ClassificationEvaluator
+from src.evaluation.data_quality import DataQualityError
 from src.evaluation.label_registry import LabelDefinition
 from src.evaluation.leakage_guard import LeakageGuard
+from src.evaluation.pretrain_report import run_pretrain_audit
 from src.evaluation.walk_forward import (
     aggregate_walk_forward,
     anchored_walk_forward,
     run_walk_forward,
 )
+from src.evaluation.walk_forward_backtest import (
+    aggregate_walk_forward_backtest,
+    run_walk_forward_backtest,
+)
+from src.evaluation.drift import reference_snapshot
 from src.model_registry import ModelRegistry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -257,6 +264,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perm-sample-size", type=int, default=2000)
     parser.add_argument("--with-regime-decomp", action="store_true",
                         help="Compute per-regime metrics via regime_cat from t2_regime_scores (§3.2 gate).")
+    parser.add_argument("--skip-pretrain-audit", action="store_true",
+                        help="Skip the pretrain data audit HTML report (§5.3). Default: audit runs.")
+    parser.add_argument("--with-wf-backtest", action="store_true",
+                        help="Run per-fold backtest on walk-forward folds (§3.1 gates). Requires --walk-forward.")
+    parser.add_argument("--wf-backtest-output", default=None,
+                        help="Output dir for per-fold backtest artifacts (default: models/<name>/<version>/wf_backtest/).")
+    parser.add_argument("--wf-backtest-initial-cash", type=float, default=100_000.0,
+                        help="Initial cash for each fold's SEPABacktestRunner.")
     parser.add_argument("--db", type=Path, default=DB_PATH)
     return parser.parse_args()
 
@@ -318,6 +333,28 @@ def main() -> None:
 
     # 2. Load training data
     df = load_training_data(args.db, feature_version=args.feature_version, min_date=args.min_date)
+
+    # 2b. Pre-training data audit (§5.3) — diagnostic HTML report co-located with model artifacts.
+    # Warn-only: a P0 DataQualityError logs but does not abort training.
+    if not args.skip_pretrain_audit:
+        model_dir_early = Path(__file__).parent.parent / "models" / args.model_name / args.model_version
+        model_dir_early.mkdir(parents=True, exist_ok=True)
+        audit_path = model_dir_early / "pretrain_audit.html"
+        logger.info(f"🔎 Running pretrain audit → {audit_path}")
+        try:
+            rep = run_pretrain_audit(mode="trades", output_path=audit_path)
+            logger.info(
+                f"✅ Pretrain audit: {rep.n_rows:,} rows, {rep.n_features} features, "
+                f"quality={'PASS' if rep.quality.passed else 'FAIL'}"
+            )
+            if rep.quality.bad_tickers:
+                logger.warning(f"   ⚠️  Bad tickers: {len(rep.quality.bad_tickers)}")
+            if rep.quality.leakage_cols:
+                logger.warning(f"   ⚠️  Leakage cols: {rep.quality.leakage_cols}")
+        except DataQualityError as e:
+            logger.warning(f"⚠️  Pretrain audit P0 quality failure (continuing training): {e}")
+        except Exception as e:
+            logger.warning(f"⚠️  Pretrain audit raised non-DQ exception (continuing): {e}")
 
     # 3. Validate features
     valid_features, missing_features = validate_features(df, requested_features)
@@ -484,6 +521,22 @@ def main() -> None:
     (model_dir / "categorical_mapping.json").write_text(json.dumps(cat_mapping, indent=2, default=str))
     logger.info(f"📝 Categorical mapping saved to {model_dir / 'categorical_mapping.json'}")
 
+    # 9b. Freeze PSI reference snapshot (numeric features only — categoricals
+    # are skipped by `reference_snapshot` when not coercible to numeric).
+    try:
+        snapshot_path = model_dir / "reference_snapshot.json"
+        # Use the training slice as the immutable baseline.
+        psi_features = [c for c in valid_features if c not in cat_mapping]
+        reference_snapshot(
+            train_df=X_train,
+            feature_cols=psi_features,
+            output_path=snapshot_path,
+            bins=10,
+            model_version_id=None,  # version_id is assigned later in step 10
+        )
+    except Exception as e:
+        logger.warning(f"⚠️  PSI reference snapshot failed (non-blocking): {e}")
+
     # 10. Register in model registry
     registry = ModelRegistry(db_path=args.db)
     version_id = f'{args.model_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
@@ -552,7 +605,7 @@ def main() -> None:
         logger.info("🔁 WALK-FORWARD MODE — anchored, step=%s, min_train_years=%d",
                     args.wf_step, args.wf_min_train_years)
         logger.info("=" * 80)
-        wf_results = _run_walk_forward_block(
+        wf_results, fold_results = _run_walk_forward_block(
             df_sorted=df_sorted,
             X_sorted=X_sorted,
             y_sorted=y_sorted,
@@ -577,6 +630,39 @@ def main() -> None:
             except Exception as e:
                 logger.warning(f"Could not merge WF gates into results.json: {e}")
 
+        # 11b. Walk-forward backtest (§3.1) — only when --with-wf-backtest is set.
+        if args.with_wf_backtest and fold_results:
+            logger.info("=" * 80)
+            logger.info("🪙 WALK-FORWARD BACKTEST — %d folds via SEPABacktestRunner",
+                        len(fold_results))
+            logger.info("=" * 80)
+            wf_bt_dir = (
+                Path(args.wf_backtest_output) if args.wf_backtest_output
+                else model_dir / "wf_backtest"
+            )
+            try:
+                wf_bt_agg = _run_walk_forward_backtest_block(
+                    fold_results=fold_results,
+                    output_dir=wf_bt_dir,
+                    production_class_idx=len(class_names) - 1,
+                    db_path=args.db,
+                    initial_cash=args.wf_backtest_initial_cash,
+                )
+                # Merge into results.json so the §6 promotion gate sees these too.
+                if results_json_path.exists():
+                    try:
+                        existing = json.loads(results_json_path.read_text())
+                        existing.setdefault("gates", []).extend(wf_bt_agg.get("gates", []))
+                        existing["wf_backtest_summary"] = wf_bt_agg.get("summary", {})
+                        results_json_path.write_text(json.dumps(existing, indent=2, default=str))
+                        logger.info(f"📝 WF-backtest gates merged into {results_json_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not merge WF-backtest gates: {e}")
+            except Exception as e:
+                logger.warning(f"⚠️  WF-backtest failed (non-blocking): {e}")
+        elif args.with_wf_backtest and not fold_results:
+            logger.warning("--with-wf-backtest set but no folds were produced; skipping.")
+
     logger.info("=" * 80)
     logger.info("✅ TRAINING COMPLETE")
     logger.info(f"📁 Model: {model_path}")
@@ -599,11 +685,20 @@ def _run_walk_forward_block(
     wf_step: str,
     wf_test_start: str | None,
     wf_min_train_years: int,
-) -> dict:
-    """Run anchored walk-forward over `df_sorted` and write per-fold artifacts."""
+) -> tuple[dict, list]:
+    """Run anchored walk-forward over `df_sorted` and write per-fold artifacts.
+
+    Returns:
+        (aggregate_dict, fold_results) — fold_results is needed for an optional
+        WF-backtest pass; agg is the classification aggregation written to
+        walk_forward_summary.json.
+    """
     panel = X_sorted.copy()
     panel["date"] = pd.to_datetime(df_sorted["date"]).values
     panel["__y__"] = y_sorted.values
+    # Stash ticker on the panel so we can re-attach it to each fold's X_test
+    # post-hoc (run_walk_forward strips non-feature cols from X_test).
+    panel["__ticker__"] = df_sorted["ticker"].astype(str).values
 
     min_date = panel["date"].min().date()
     max_date = panel["date"].max().date()
@@ -652,6 +747,16 @@ def _run_walk_forward_block(
         output_dir=folds_dir,
     )
 
+    # Re-attach `date` + `ticker` to each fold's X_test. run_walk_forward
+    # strips them since they aren't in feature_cols, but the WF-backtest
+    # signal builder needs them. FoldResult.X_test preserves the panel's
+    # row index, so we can map back through `panel`.
+    for fr in fold_results:
+        idx = fr.X_test.index
+        fr.X_test = fr.X_test.copy()
+        fr.X_test["date"] = panel.loc[idx, "date"].values
+        fr.X_test["ticker"] = panel.loc[idx, "__ticker__"].values
+
     # Production class = last actionable class (Home Run for MFE 4-class).
     production_class_idx = len(class_names) - 1
     agg = aggregate_walk_forward(
@@ -664,6 +769,83 @@ def _run_walk_forward_block(
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(agg, indent=2, default=str))
     logger.info(f"📊 Walk-forward summary: {summary_path}")
+    for g in agg.get("gates", []):
+        logger.info(f"   gate {g['name']}: {g['status']} (value={g.get('value')})")
+    return agg, fold_results
+
+
+def _run_walk_forward_backtest_block(
+    fold_results: list,
+    output_dir: Path,
+    production_class_idx: int,
+    db_path: Path,
+    initial_cash: float = 100_000.0,
+) -> dict:
+    """Run a SEPA backtest per fold and emit aggregated gates.
+
+    Each fold's `X_test` must already carry `date` + `ticker` columns —
+    the caller (_run_walk_forward_block) re-attaches them before invoking.
+
+    Args:
+        fold_results: from `run_walk_forward`. X_test must have date + ticker.
+        output_dir: per-fold artifacts (trades, equity, metrics) go under here.
+        production_class_idx: which proba column the strategy treats as elite.
+        db_path: DuckDB path passed to SEPABacktestRunner.
+        initial_cash: starting cash for each fold's runner.
+
+    Returns:
+        Aggregate dict from `aggregate_walk_forward_backtest` (per_fold,
+        summary, gates).
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    from src.backtest.runner import SEPABacktestRunner
+
+    def backtest_fn(scores_df: pd.DataFrame, fold_dir: Path) -> dict:
+        # Date range = the span of this fold's scores.
+        if scores_df.empty:
+            return {"sharpe_ratio": None, "max_drawdown": None,
+                    "win_rate": None, "total_return": None,
+                    "trades_df": pd.DataFrame(), "equity_df": pd.DataFrame()}
+        start = pd.to_datetime(scores_df["date"]).min().strftime("%Y-%m-%d")
+        end = pd.to_datetime(scores_df["date"]).max().strftime("%Y-%m-%d")
+
+        runner = SEPABacktestRunner(
+            start_date=start,
+            end_date=end,
+            initial_cash=initial_cash,
+            db_path=str(db_path),
+            # model_path/version intentionally None — scores_df is already built
+            # from this fold's classifier; runner does not re-score.
+            model_path=None,
+            model_version_id=None,
+        )
+        runner.setup(scores_df=scores_df)
+        metrics = runner.run()
+        equity = runner.get_equity_curve_dataframe()
+        trades = runner.get_trade_dataframe()
+        if equity is None:
+            equity = pd.DataFrame()
+        if trades is None:
+            trades = pd.DataFrame()
+        # Flatten — drop nested dicts so JSON dumps cleanly.
+        flat = {k: v for k, v in metrics.items()
+                if not isinstance(v, (dict, list))}
+        flat["trades_df"] = trades
+        flat["equity_df"] = equity if isinstance(equity, pd.DataFrame) else pd.DataFrame()
+        return flat
+
+    bt_results = run_walk_forward_backtest(
+        fold_results=fold_results,
+        production_class_idx=production_class_idx,
+        backtest_fn=backtest_fn,
+        output_dir=output_dir,
+    )
+    agg = aggregate_walk_forward_backtest(bt_results)
+    summary_path = output_dir / "summary.json"
+    summary_path.write_text(json.dumps(agg, indent=2, default=str))
+    logger.info(f"📊 WF-backtest summary: {summary_path}")
     for g in agg.get("gates", []):
         logger.info(f"   gate {g['name']}: {g['status']} (value={g.get('value')})")
     return agg

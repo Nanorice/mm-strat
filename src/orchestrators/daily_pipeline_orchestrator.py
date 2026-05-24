@@ -893,12 +893,20 @@ class DailyPipelineOrchestrator:
         except Exception as e:
             logger.warning(f"[Phase 8] Prediction logging skipped: {e}")
 
+        # Quarterly feature-drift report (best-effort; only fires on 1st of Jan/Apr/Jul/Oct).
+        drift_report = None
+        try:
+            drift_report = self._maybe_run_quarterly_drift(target_date)
+        except Exception as e:
+            logger.warning(f"[Phase 8] Quarterly drift report skipped: {e}")
+
         return {
             'rows_processed': predictions_written,
             'alerts': alerts,
             'health': health,
             'coverage': coverage,
             'predictions_written': predictions_written,
+            'drift_report': drift_report,
         }
 
     def _log_prod_model_predictions(self, target_date: str) -> int:
@@ -996,6 +1004,70 @@ class DailyPipelineOrchestrator:
         )
         logger.info(f"[Phase 8] Logged {n} predictions for {prod_version_id} on {target_date}")
         return n
+
+    def _maybe_run_quarterly_drift(self, target_date: str) -> Optional[dict]:
+        """Quarterly PSI drift report against the prod model's frozen baseline.
+
+        Fires only when `target_date.day == 1` AND `month in (1, 4, 7, 10)`.
+        Output → logs/drift/<YYYY>Q<N>.json. Returns None on any silent skip.
+        """
+        from datetime import date as _date
+        from pathlib import Path as _Path
+
+        from src.evaluation.drift import quarterly_drift_report
+        from src.model_registry import ModelRegistry
+
+        target_dt = (
+            _date.fromisoformat(target_date) if isinstance(target_date, str)
+            else target_date
+        )
+        if target_dt.day != 1 or target_dt.month not in (1, 4, 7, 10):
+            return None
+
+        registry = ModelRegistry(db_path=self.db_path)
+        prod_version_id = registry.get_prod_version()
+        if not prod_version_id:
+            logger.info("[Phase 8] No prod model — skipping drift report.")
+            return None
+
+        try:
+            artifacts_path = registry.get_artifacts_path(prod_version_id)
+        except ValueError:
+            logger.warning(f"[Phase 8] Prod model {prod_version_id} has no artifacts_path; skipping drift.")
+            return None
+
+        snapshot_path = _Path(artifacts_path) / "reference_snapshot.json"
+        if not snapshot_path.exists():
+            logger.info(
+                f"[Phase 8] No reference_snapshot.json under {artifacts_path} "
+                f"— skipping drift (model pre-dates §2.2 wiring)."
+            )
+            return None
+
+        quarter = f"{target_dt.year}Q{(target_dt.month - 1) // 3 + 1}"
+        out_dir = _Path("logs") / "drift"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{quarter}.json"
+
+        report = quarterly_drift_report(
+            reference_snapshot_path=snapshot_path,
+            current_view="v_d3_deployment",
+            db_path=_Path(self.db_path),
+            quarter=quarter,
+        )
+        import json as _json
+        out_path.write_text(_json.dumps(report, indent=2, default=str))
+        gate = report["gates"][0]
+        logger.info(
+            f"[Phase 8] Drift report {quarter}: {gate['status']} — "
+            f"{report['n_features_drifted']} drifted, "
+            f"{report['n_features_warned']} warned, "
+            f"{report['n_features_skipped']} skipped → {out_path}"
+        )
+        if report["drifted_features"]:
+            sample = report["drifted_features"][:5]
+            logger.warning(f"[Phase 8] Drifted features (top {len(sample)}): {sample}")
+        return report
 
     def _resolve_prod_feature_cols(self, registry, version_id: str, candidates_df) -> list[str]:
         """Find which v_d3_deployment columns to feed the prod model.
