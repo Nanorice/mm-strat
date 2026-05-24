@@ -30,14 +30,18 @@ from dashboard_utils import (
     VETO_THRESHOLD,
     classify_regime,
     exposure_band_label,
+    load_daily_predictions_today,
     load_deployment_features,
+    load_past_decisions,
     load_pipeline_status,
     load_pre_breakout,
+    load_prod_model_version_id,
     load_regime,
     load_risk_5f,
     load_sector_heat,
     load_watchlist,
     score_features_df,
+    update_decision_taken,
 )
 
 
@@ -517,6 +521,148 @@ def render_analytics(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
             st.info("No active trades.")
 
 
+# ── Daily decision log (Phase D §5.1) ────────────────────────────────────────
+
+DECISION_OPTIONS = ["—", "Taken", "Skipped"]
+_DECISION_TO_DB = {"—": None, "Taken": "taken", "Skipped": "skipped"}
+_DB_TO_DECISION = {v: k for k, v in _DECISION_TO_DB.items()}
+
+
+def render_decision_log() -> None:
+    st.subheader("Today's Predictions — Decision Log")
+    st.caption("Logged from the daily pipeline. Toggle Decision per ticker to record "
+               "paper-trade actions; updates persist to `daily_predictions`.")
+
+    version_id = load_prod_model_version_id()
+    if not version_id:
+        st.info("No prod model registered — nothing to log.")
+        return
+
+    preds = load_daily_predictions_today(version_id)
+    if preds.empty:
+        st.info(
+            "No predictions logged yet for the latest pipeline run. "
+            "Run the daily pipeline (`scripts/run_daily_pipeline.py`) to populate."
+        )
+        return
+
+    pred_date = preds["prediction_date"].iloc[0]
+    st.caption(f"Model: `{version_id}` · prediction_date = {pred_date} · {len(preds)} tickers")
+
+    display = preds[[
+        "ticker", "rank_within_day", "predicted_class",
+        "prob_class_3", "prob_class_2", "decision_taken", "notes",
+    ]].copy()
+    display["Decision"] = display["decision_taken"].map(lambda v: _DB_TO_DECISION.get(v, "—"))
+    display = display.drop(columns=["decision_taken"]).rename(columns={
+        "ticker": "Ticker",
+        "rank_within_day": "Rank",
+        "predicted_class": "Pred Class",
+        "prob_class_3": "P(Home Run)",
+        "prob_class_2": "P(Strong)",
+        "notes": "Notes",
+    })
+
+    edited = st.data_editor(
+        display,
+        column_config={
+            "Decision": st.column_config.SelectboxColumn(
+                "Decision", options=DECISION_OPTIONS, required=True,
+                help="Taken = entered position · Skipped = passed · — = undecided",
+            ),
+            "Notes": st.column_config.TextColumn("Notes", help="Optional free text"),
+            "Ticker": st.column_config.TextColumn("Ticker", disabled=True),
+            "Rank": st.column_config.NumberColumn("Rank", disabled=True),
+            "Pred Class": st.column_config.NumberColumn("Pred Class", disabled=True),
+            "P(Home Run)": st.column_config.NumberColumn(
+                "P(Home Run)", format="%.3f", disabled=True,
+            ),
+            "P(Strong)": st.column_config.NumberColumn(
+                "P(Strong)", format="%.3f", disabled=True,
+            ),
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="decision_editor",
+    )
+
+    # Diff editor output vs source, apply only the changed rows.
+    changed = 0
+    for i, row in edited.iterrows():
+        orig_dec = display.loc[i, "Decision"]
+        orig_notes = display.loc[i, "Notes"]
+        new_dec = row["Decision"]
+        new_notes = row.get("Notes")
+        if new_dec != orig_dec or (pd.notna(new_notes) and new_notes != orig_notes):
+            update_decision_taken(
+                prediction_date=pred_date,
+                ticker=row["Ticker"],
+                model_version_id=version_id,
+                decision=_DECISION_TO_DB[new_dec],
+                notes=new_notes if pd.notna(new_notes) and new_notes else None,
+            )
+            changed += 1
+
+    if changed > 0:
+        load_daily_predictions_today.clear()
+        load_past_decisions.clear()
+        st.success(f"Updated {changed} decision{'s' if changed != 1 else ''}.")
+        st.rerun()
+
+
+def render_past_decisions() -> None:
+    st.subheader("Performance of Past Decisions")
+    st.caption("Joins `daily_predictions` (decision_taken IS NOT NULL) against "
+               "`screener_watchlist` for realized outcomes.")
+
+    version_id = load_prod_model_version_id()
+    if not version_id:
+        return
+
+    past = load_past_decisions(version_id, limit=200)
+    if past.empty:
+        st.info("No past decisions yet. Toggle Decision above to start logging.")
+        return
+
+    show = past[[
+        "prediction_date", "ticker", "decision_taken", "p_home_run",
+        "predicted_class", "entry_date", "exit_date", "status",
+        "pct_return", "days_held", "notes",
+    ]].rename(columns={
+        "prediction_date": "Predicted",
+        "ticker": "Ticker",
+        "decision_taken": "Decision",
+        "p_home_run": "P(HR)",
+        "predicted_class": "Pred Class",
+        "entry_date": "Entered",
+        "exit_date": "Exited",
+        "status": "Status",
+        "pct_return": "Return %",
+        "days_held": "Days",
+        "notes": "Notes",
+    })
+
+    styled = show.style
+    if "P(HR)" in show.columns:
+        styled = styled.format("{:.3f}", subset=["P(HR)"])
+    if "Return %" in show.columns:
+        styled = styled.format("{:+.2f}%", subset=["Return %"], na_rep="—")
+
+    st.dataframe(styled, use_container_width=True, height=400)
+
+    # Aggregate stats: hit-rate of "taken" decisions
+    taken = past[past["decision_taken"] == "taken"]
+    if not taken.empty and taken["pct_return"].notna().any():
+        wins = (taken["pct_return"] > 0).sum()
+        n_with_outcome = taken["pct_return"].notna().sum()
+        avg_ret = taken["pct_return"].mean()
+        st.metric(
+            "Taken hit-rate",
+            f"{wins}/{n_with_outcome} ({wins / n_with_outcome:.0%})" if n_with_outcome else "—",
+            delta=f"avg {avg_ret:+.2f}%" if pd.notna(avg_ret) else None,
+        )
+
+
 # ── Page entrypoint ──────────────────────────────────────────────────────────
 
 def page_today() -> None:
@@ -546,6 +692,16 @@ def page_today() -> None:
 
     # Pre-breakout watch
     render_pre_breakout(load_pre_breakout(limit=100))
+
+    st.markdown("---")
+
+    # Daily decision log (Phase D §5.1)
+    render_decision_log()
+
+    st.markdown("---")
+
+    # Past decisions performance
+    render_past_decisions()
 
     st.markdown("---")
 

@@ -325,6 +325,101 @@ def load_sector_heat(window_days: int = 1) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def load_prod_model_version_id() -> str | None:
+    """version_id of the currently-promoted prod classifier, or None if none registered."""
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        row = con.execute("""
+            SELECT version_id FROM models
+            WHERE status_flag = 'prod' AND model_type = 'classifier'
+            ORDER BY updated_at DESC LIMIT 1
+        """).fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=60)
+def load_daily_predictions_today(model_version_id: str) -> pd.DataFrame:
+    """Latest-date daily_predictions for a given model. Empty df if none logged yet."""
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute("""
+            SELECT prediction_date, ticker, model_version_id,
+                   prob_class_0, prob_class_1, prob_class_2, prob_class_3,
+                   predicted_class, rank_within_day,
+                   decision_taken, taken_at, notes
+            FROM daily_predictions
+            WHERE model_version_id = ?
+              AND prediction_date = (
+                  SELECT MAX(prediction_date) FROM daily_predictions
+                  WHERE model_version_id = ?
+              )
+            ORDER BY rank_within_day NULLS LAST, ticker
+        """, [model_version_id, model_version_id]).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=60)
+def load_past_decisions(model_version_id: str, limit: int = 200) -> pd.DataFrame:
+    """Past decisions joined against screener_watchlist for realized outcomes.
+
+    Used by the "Performance of past decisions" view on Page 1. Only rows where
+    the user has actually toggled `decision_taken` (NULL rows are excluded).
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute("""
+            SELECT
+                dp.prediction_date, dp.ticker, dp.predicted_class,
+                dp.prob_class_3 AS p_home_run,
+                dp.rank_within_day,
+                dp.decision_taken, dp.taken_at, dp.notes,
+                sw.entry_date, sw.exit_date, sw.status,
+                sw.pct_return, sw.days_held
+            FROM daily_predictions dp
+            LEFT JOIN screener_watchlist sw
+                ON sw.ticker = dp.ticker AND sw.entry_date >= dp.prediction_date
+            WHERE dp.model_version_id = ?
+              AND dp.decision_taken IS NOT NULL
+            ORDER BY dp.prediction_date DESC, dp.rank_within_day NULLS LAST
+            LIMIT ?
+        """, [model_version_id, int(limit)]).fetchdf()
+    finally:
+        con.close()
+
+
+def update_decision_taken(
+    prediction_date,
+    ticker: str,
+    model_version_id: str,
+    decision: str | None,
+    notes: str | None = None,
+) -> None:
+    """Flip decision_taken / taken_at for one (date, ticker, model) row.
+
+    `decision` is one of 'taken' | 'skipped' | None (clears the decision).
+    Writer is uncached — caller should clear `load_daily_predictions_today` and
+    `load_past_decisions` after invoking.
+    """
+    if decision not in (None, "taken", "skipped"):
+        raise ValueError(f"decision must be 'taken' | 'skipped' | None, got {decision!r}")
+
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        con.execute("""
+            UPDATE daily_predictions
+            SET decision_taken = ?,
+                taken_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
+                notes = COALESCE(?, notes)
+            WHERE prediction_date = ? AND ticker = ? AND model_version_id = ?
+        """, [decision, decision, notes, prediction_date, ticker, model_version_id])
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_models_table() -> pd.DataFrame:
     """For Model Lab — registry list."""
     con = duckdb.connect(str(DB_PATH), read_only=True)
