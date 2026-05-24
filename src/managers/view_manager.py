@@ -424,11 +424,29 @@ class ViewManager:
             shares_col = "cp.shares_outstanding"
             shares_join = ""
 
+        # ff_dedup collapses same-day amended filings via fiscal_period tiebreaker
+        # (e.g. UNH 2007-03-06 had Q2/Q3/Q4 stamped on the same filing_date).
+        # Without it, the as-of join fans out one d1 row into N rows downstream.
         con.execute(f"""
             CREATE OR REPLACE VIEW v_d2_features AS
+            WITH ff_dedup AS (
+                SELECT
+                    ticker, filing_date, fiscal_period,
+                    revenue, net_income, eps_diluted, total_assets, total_equity,
+                    revenue_growth_yoy, eps_growth_yoy, net_income_growth_yoy,
+                    eps_accel, revenue_accel, revenue_cagr_3y, eps_stability_score,
+                    debt_to_equity, current_ratio, quick_ratio,
+                    gross_margin, operating_margin, net_margin, roe, roa, fcf_margin,
+                    earnings_quality_score, inventory_growth_yoy,
+                    inventory_vs_sales_spread, gross_margin_trend
+                FROM fundamental_features
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, filing_date
+                    ORDER BY fiscal_period DESC NULLS LAST
+                ) = 1
+            )
             SELECT
                 d1.*,
-                -- Fundamental features (most recent as of d1.date)
                 ff.revenue,
                 ff.net_income,
                 ff.eps_diluted,
@@ -456,12 +474,9 @@ class ViewManager:
                 ff.gross_margin_trend,
                 ff.filing_date AS fundamental_filing_date,
                 ff.fiscal_period,
-                -- Days since last fundamental filing
                 CAST(datediff('day', ff.filing_date, d1.date) AS INTEGER) AS days_since_report,
-                -- Company profile
                 cp.market_cap,
                 {shares_col} AS shares_outstanding,
-                -- Valuation ratios (price + fundamentals + shares)
                 CASE WHEN ABS(ff.eps_diluted) > 0.01
                     THEN d1.close / ff.eps_diluted END AS pe_ratio,
                 CASE WHEN ff.revenue > 0 AND {shares_col} > 0
@@ -474,11 +489,11 @@ class ViewManager:
             LEFT JOIN company_profiles cp
                 ON d1.ticker = cp.ticker
             {shares_join}
-            LEFT JOIN fundamental_features ff
+            LEFT JOIN ff_dedup ff
                 ON d1.ticker = ff.ticker
                 AND ff.filing_date = (
                     SELECT MAX(filing_date)
-                    FROM fundamental_features
+                    FROM ff_dedup
                     WHERE ticker = d1.ticker
                     AND filing_date <= d1.date
                 )

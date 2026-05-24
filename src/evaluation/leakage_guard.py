@@ -512,6 +512,23 @@ class LeakageGuard:
             logger.info("feature_parity_check: loaded %d features in %.1fs",
                         len(feature_cols), time.perf_counter() - t0)
 
+            # If a caller passes v_d2_training, swap to the materialized
+            # d2_training_cache when available — same data, ~100x faster scan.
+            # The cache is refreshed by FeaturePipeline.compute_all() after every
+            # Phase E run, so it tracks the view content.
+            effective_train_view = train_view
+            if train_view == "v_d2_training":
+                cache_exists = con.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables "
+                    "WHERE table_name = 'd2_training_cache'"
+                ).fetchone()[0] > 0
+                if cache_exists:
+                    effective_train_view = "d2_training_cache"
+                    logger.info(
+                        "feature_parity_check: using materialized "
+                        "d2_training_cache for train side (was v_d2_training)"
+                    )
+
             # Pull DISTINCT (ticker, date) keys that exist in both views.
             # The DISTINCT wrappers are load-bearing: v_d2_training and
             # v_d3_deployment can have multiple rows per (ticker, date) when
@@ -521,7 +538,7 @@ class LeakageGuard:
             sample_sql = f"""
                 WITH common AS (
                     SELECT DISTINCT t.ticker AS ticker, t.date AS date
-                    FROM (SELECT DISTINCT ticker, date FROM {train_view}) t
+                    FROM (SELECT DISTINCT ticker, date FROM {effective_train_view}) t
                     INNER JOIN (SELECT DISTINCT ticker, date FROM {deploy_view}) d
                       ON t.ticker = d.ticker AND t.date = d.date
                 )
@@ -555,24 +572,59 @@ class LeakageGuard:
 
             # Wide-load both sides for the sampled keys, picking a single
             # representative row per (ticker, date) via ROW_NUMBER() = 1.
-            # See the note above on multi-row views. We also record how many
-            # keys had >1 row on either side so we can warn separately —
-            # internal disagreement within one view is a real signal but
-            # different in kind from a train-vs-deploy mismatch.
-            quoted_cols = ", ".join(_quote_ident(c) for c in feature_cols)
-            keys_list = list(zip(keys_df["ticker"].astype(str), pd.to_datetime(keys_df["date"]).dt.strftime("%Y-%m-%d")))
-            keys_sql = "(" + ",".join(f"('{t}','{d}')" for t, d in keys_list) + ")"
+            # We register `keys_df` as a temp relation and INNER JOIN against
+            # it — this lets DuckDB push the filter down through the view's
+            # CTEs, vs the `IN (...tuple list)` form which forced a full
+            # view materialization (~12min per side on v_d2_training).
+            keys_for_join = pd.DataFrame({
+                "ticker": keys_df["ticker"].astype(str),
+                "date": pd.to_datetime(keys_df["date"]).dt.strftime("%Y-%m-%d"),
+            })
+            con.register("parity_keys", keys_for_join)
 
-            def _load_one_side(view: str) -> tuple[pd.DataFrame, int]:
-                """Return (deduped df, n_keys_with_multiple_rows) for view."""
-                # Count multi-row keys (cheap — scoped by keys_sql).
+            def _resolve_columns(view: str) -> tuple[list[str], list[str]]:
+                """Match catalog names to actual view columns (case-insensitive).
+
+                Mirrors what train_mfe_classifier.validate_features does — views
+                materialize columns as TitleCase (e.g. RS_Sector_Rank) from
+                UPDATE statements while the catalog stores them lowercase.
+
+                Returns (missing_names, select_terms) where select_terms is
+                'actual_col AS catalog_name' so the output DF keys match the
+                catalog ordering used downstream.
+                """
+                actual_cols = con.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = ?",
+                    [view],
+                ).fetchall()
+                lookup = {c[0].lower(): c[0] for c in actual_cols}
+                missing = []
+                select_terms = []
+                for name in feature_cols:
+                    real = lookup.get(name.lower())
+                    if real is None:
+                        missing.append(name)
+                    else:
+                        select_terms.append(
+                            f"{_quote_ident(real)} AS {_quote_ident(name)}"
+                        )
+                return missing, select_terms
+
+            def _load_one_side(view: str) -> tuple[pd.DataFrame, int, list[str]]:
+                """Return (deduped df, n_keys_with_multiple_rows, missing_cols) for view."""
+                missing, select_terms = _resolve_columns(view)
+                quoted_cols = ", ".join(select_terms)
+                # Count multi-row keys (cheap — scoped by the JOIN).
                 multi = con.execute(
                     f"""
                     SELECT COUNT(*) FROM (
-                        SELECT ticker, date, COUNT(*) AS c
-                        FROM {view}
-                        WHERE (ticker, CAST(date AS VARCHAR)) IN {keys_sql}
-                        GROUP BY ticker, date
+                        SELECT v.ticker, v.date, COUNT(*) AS c
+                        FROM {view} v
+                        INNER JOIN parity_keys k
+                          ON v.ticker = k.ticker
+                         AND CAST(v.date AS VARCHAR) = k.date
+                        GROUP BY v.ticker, v.date
                         HAVING COUNT(*) > 1
                     )
                     """
@@ -581,33 +633,38 @@ class LeakageGuard:
                 deduped = con.execute(
                     f"""
                     WITH ranked AS (
-                        SELECT ticker, date, {quoted_cols},
-                               ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY ticker) AS rn
-                        FROM {view}
-                        WHERE (ticker, CAST(date AS VARCHAR)) IN {keys_sql}
+                        SELECT v.ticker, v.date, {quoted_cols},
+                               ROW_NUMBER() OVER (PARTITION BY v.ticker, v.date ORDER BY v.ticker) AS rn
+                        FROM {view} v
+                        INNER JOIN parity_keys k
+                          ON v.ticker = k.ticker
+                         AND CAST(v.date AS VARCHAR) = k.date
                     )
                     SELECT ticker, date, {quoted_cols}
                     FROM ranked
                     WHERE rn = 1
                     """
                 ).df()
-                return deduped, int(multi)
+                return deduped, int(multi), missing
 
             t_load = time.perf_counter()
-            logger.info("feature_parity_check: loading train_view rows...")
-            train_df, train_multi = _load_one_side(train_view)
+            logger.info("feature_parity_check: loading train_view rows (%s)...",
+                        effective_train_view)
+            train_df, train_multi, train_missing = _load_one_side(effective_train_view)
             logger.info(
                 "feature_parity_check: loaded train_view %d rows in %.1fs "
-                "(multi_row_keys=%d)",
+                "(multi_row_keys=%d missing_cols=%d)",
                 len(train_df), time.perf_counter() - t_load, train_multi,
+                len(train_missing),
             )
             t_load2 = time.perf_counter()
             logger.info("feature_parity_check: loading deploy_view rows...")
-            deploy_df, deploy_multi = _load_one_side(deploy_view)
+            deploy_df, deploy_multi, deploy_missing = _load_one_side(deploy_view)
             logger.info(
                 "feature_parity_check: loaded deploy_view %d rows in %.1fs "
-                "(multi_row_keys=%d)",
+                "(multi_row_keys=%d missing_cols=%d)",
                 len(deploy_df), time.perf_counter() - t_load2, deploy_multi,
+                len(deploy_missing),
             )
         finally:
             con.close()
@@ -627,11 +684,26 @@ class LeakageGuard:
         mismatches: List[Dict[str, Any]] = []
         dtype_mismatches: List[Dict[str, Any]] = []
 
+        train_missing_set = set(train_missing)
+        deploy_missing_set = set(deploy_missing)
+
         for col in feature_cols:
+            # A feature missing on either side is a real catalog-vs-view drift —
+            # surface which side and skip further comparison.
+            if col in train_missing_set or col in deploy_missing_set:
+                dtype_mismatches.append({
+                    "feature": col,
+                    "kind": "missing_column",
+                    "missing_in_train": col in train_missing_set,
+                    "missing_in_deploy": col in deploy_missing_set,
+                })
+                continue
+
             tcol = f"{col}__train"
             dcol = f"{col}__deploy"
             if tcol not in merged.columns or dcol not in merged.columns:
-                # Column missing on one side entirely.
+                # Both sides resolved but merge dropped them — should not happen,
+                # but record defensively.
                 dtype_mismatches.append(
                     {"feature": col, "kind": "missing_column"}
                 )
