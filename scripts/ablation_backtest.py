@@ -189,7 +189,7 @@ def main() -> int:
 
     # Lazy imports so dry-run / tests don't pay for DuckDB.
     from scripts.train_mfe_classifier import (
-        DEFAULT_HYPERPARAMS,
+        _xgb_params_for_n_classes,
         create_mfe_labels,
         load_training_data,
     )
@@ -197,13 +197,33 @@ def main() -> int:
     from src.backtest.universe_scorer import UniverseScorer
 
     features, groups = load_feature_set_with_groups(args.db, args.feature_set)
+
+    # Cross-sectional rank columns come out of DuckDB in TitleCase via the
+    # daily_features pipeline (UPDATE ... SET RS_Sector_Rank = ...). The
+    # `model_feature_sets` catalog has them lowercase. Bridge here so training
+    # downstream finds them in df.
+    _titlecase_map = {
+        "rs_sector_rank": "RS_Sector_Rank",
+        "rs_vs_sector": "RS_vs_Sector",
+        "sector_momentum": "Sector_Momentum",
+        "rs_industry_rank": "RS_Industry_Rank",
+        "rs_vs_industry": "RS_vs_Industry",
+        "industry_momentum": "Industry_Momentum",
+        "rs_universe_rank": "RS_Universe_Rank",
+    }
+    features = [_titlecase_map.get(f, f) for f in features]
+    for group_name, members in list(groups.items()):
+        groups[group_name] = [_titlecase_map.get(f, f) for f in members]
+
     requested = [g.strip() for g in args.feature_groups.split(",") if g.strip()]
     unknown = [g for g in requested if g not in groups]
     if unknown:
         raise ValueError(f"Unknown feature group(s): {unknown}. Known: {sorted(groups)}")
 
     df = load_training_data(args.db, feature_version=args.feature_version, min_date=args.min_date)
-    y = create_mfe_labels(df, return_col="mfe_pct")
+    # 4-class boundaries from the frozen label_definition.json (mfe_4class_30d_v1):
+    # Dud (<=2), Noise (2-10], Solid (10-30], Elite (>30).
+    y = create_mfe_labels(df, bins=[2.0, 10.0, 30.0], return_col="mfe_pct")
     df = df.copy()
     df["__y__"] = y
 
@@ -211,17 +231,39 @@ def main() -> int:
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype("category")
 
-    train_params = dict(DEFAULT_HYPERPARAMS)
+    # 4-class MFE classifier (Dud/Noise/Solid/Elite) — matches m01_prototype_may baseline.
+    train_params = _xgb_params_for_n_classes(4)
+
+    # Copy the original model's categorical_mapping.json next to tmp models so
+    # UniverseScorer (which reads m01_path.parent/categorical_mapping.json)
+    # finds consistent sector/industry encodings.
+    import shutil
+    src_cat_map = REPO_ROOT / "models" / args.model_name / args.model_version / "categorical_mapping.json"
+    if src_cat_map.exists():
+        shutil.copy(src_cat_map, args.output / "categorical_mapping.json")
+        logger.info("Copied categorical_mapping.json into ablation output dir")
 
     # The backtest closure trains a model, scores the universe with it, then
     # runs a backtest. Kept in a closure so feature_cols can change per call.
     def backtest_fn(model: xgb.Booster, feature_cols: List[str], label: str) -> dict:
         # Save the model so UniverseScorer can load it (it expects a file path).
-        tmp_model_path = args.output / f"{label}.model.json"
+        # Each tmp model lives in its own subdir so a sibling metadata.json
+        # carries the correct feature list (UniverseScorer.load_model() reads
+        # metadata.json next to model.json and would otherwise reach into
+        # model_feature_sets, which has stale group data).
+        tmp_dir = args.output / label
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_model_path = tmp_dir / "model.json"
         model.save_model(str(tmp_model_path))
+        (tmp_dir / "metadata.json").write_text(json.dumps({
+            "valid_features": feature_cols,
+            "feature_version": args.feature_version,
+        }, indent=2))
+        # Sibling categorical_mapping.json so sector/industry decode identically.
+        if src_cat_map.exists():
+            shutil.copy(src_cat_map, tmp_dir / "categorical_mapping.json")
         scorer = UniverseScorer(m01_path=str(tmp_model_path), calibration_path=None)
         scorer.load_model()
-        scorer._m01_features = feature_cols  # explicit feature order
         scores_df = scorer.score_from_t3(args.backtest_start, args.backtest_end)
         runner = SEPABacktestRunner(
             start_date=args.backtest_start,
