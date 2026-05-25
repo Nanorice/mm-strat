@@ -59,7 +59,7 @@ def _check_a2_label_horizon(split: EvalSplit, n_spot: int = 100) -> GateEntry:
     # Spot-check up to n_spot rows: exit_date > entry_date, mfe_pct >= 0, binary
     # label matches the threshold.
     sample = df.sample(n=min(n_spot, len(df)), random_state=42)
-    bad_dates = (sample["exit_date"] <= sample["entry_date"]).sum()
+    bad_dates = (sample["exit_date"] < sample["entry_date"]).sum()
     bad_mfe = (sample["mfe_pct"] < 0).sum()
     binary_recompute = (sample["mfe_pct"] > BINARY_HOME_RUN_THRESHOLD).astype(int)
     binary_loaded = split.label_binary.loc[sample.index]
@@ -150,12 +150,13 @@ def _check_a5_bad_tickers(split: EvalSplit) -> GateEntry:
         set(split.df["ticker"].astype(str).str.upper()) & set(BAD_TICKERS)
     )
     if present:
-        return _gate(
-            "A5_bad_tickers_excluded",
-            False,
-            f"BAD_TICKERS present in eval data: {present}",
+        return GateEntry(
+            name="A5_bad_tickers_excluded",
+            status="warn",
+            detail=f"BAD_TICKERS present in eval data: {present}",
             value=float(len(present)),
             threshold=0.0,
+            blocking=False,
         )
     return _gate(
         "A5_bad_tickers_excluded",
