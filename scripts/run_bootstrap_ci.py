@@ -18,7 +18,7 @@ from src.evaluation.bootstrap import (
     total_return_from_trades,
 )
 
-MODEL_DIR = Path("models/m01_prototype_may/v2_gated")
+MODEL_DIR = Path("models/m01_binary/v1")
 WF_DIR = MODEL_DIR / "wf_backtest"
 OUT = MODEL_DIR / "evaluation" / "full_eval" / "bootstrap_ci.json"
 

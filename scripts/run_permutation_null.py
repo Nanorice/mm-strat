@@ -35,7 +35,7 @@ from src.backtest.vectorized_backtest import VectorizedSEPABacktest
 from src.evaluation.bootstrap import sharpe_from_trades
 
 
-MODEL_DIR = ROOT / "models" / "m01_prototype_may" / "v2_gated"
+MODEL_DIR = Path("models/m01_binary/v1")
 DB_PATH = config.DUCKDB_PATH
 OUT = MODEL_DIR / "evaluation" / "full_eval" / "permutation_null.json"
 
@@ -44,7 +44,7 @@ OUT = MODEL_DIR / "evaluation" / "full_eval" / "permutation_null.json"
 # ~30 min while still giving us 0.5 pct-point resolution on the null.
 N_PERMS = int(__import__("os").environ.get("N_PERMS", "200"))
 
-PRODUCTION_CLASS_IDX = 3  # 4-class Home Run = last bucket
+PRODUCTION_CLASS_IDX = 1  # binary Home Run = positive class
 
 # Mirror VectorizedSEPABacktest defaults so observed and null share an engine.
 BACKTEST_KW = dict(
@@ -126,11 +126,15 @@ def _build_fold_signals(con: duckdb.DuckDBPyConnection,
 
     dmat = xgb.DMatrix(X, enable_categorical=True)
     proba = np.asarray(booster.predict(dmat))
-    if proba.ndim != 2 or proba.shape[1] <= PRODUCTION_CLASS_IDX:
+    # Binary XGBoost returns 1-D P(positive); multi-class returns 2-D (n, n_class).
+    if proba.ndim == 1:
+        prob_elite = proba
+    elif proba.ndim == 2 and proba.shape[1] > PRODUCTION_CLASS_IDX:
+        prob_elite = proba[:, PRODUCTION_CLASS_IDX]
+    else:
         raise RuntimeError(
             f"Unexpected proba shape {proba.shape} for fold {spec['fold_idx']}"
         )
-    prob_elite = proba[:, PRODUCTION_CLASS_IDX]
 
     out = pd.DataFrame(
         {

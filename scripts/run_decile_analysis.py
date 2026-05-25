@@ -31,7 +31,7 @@ from scipy.stats import spearmanr
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-MODEL_DIR = ROOT / "models" / "m01_prototype_may" / "v2_gated"
+MODEL_DIR = Path("models/m01_binary/v1")
 WF_DIR = MODEL_DIR / "wf_backtest"
 OUT = MODEL_DIR / "evaluation" / "full_eval" / "decile_analysis.json"
 

@@ -57,8 +57,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-date", default="2003-01-01")
     parser.add_argument("--backtest-start", default="2020-01-01")
     parser.add_argument("--backtest-end", default="2025-01-01")
+    parser.add_argument("--label-id", default=None,
+                        help="Label registry id (e.g., mfe_binary_homerun_v1). If omitted, "
+                             "reads label_definition.json from the source model dir; if that "
+                             "is also missing, falls back to 4-class bins=[2,10,30] for back-compat.")
     parser.add_argument("--db", type=Path,
                         default=Path(__file__).resolve().parent.parent / "data" / "market_data.duckdb")
+    parser.add_argument("--no-backtest", action="store_true",
+                        help="Skip Backtrader execution; measure ablation impact via classification "
+                             "metrics only (ROC-AUC, weighted-F1, positive-class precision). "
+                             "Use this to isolate model quality from strategy effects.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Skip retraining + backtest; emit a placeholder summary.")
     return parser.parse_args()
@@ -112,9 +120,10 @@ def run_baseline_and_ablations(
     """Pure orchestrator — kept narrow so the I/O-heavy bits are testable
     by injecting `backtest_fn`.
 
-    `backtest_fn(model, feature_cols, label) -> metrics_dict` runs scoring +
-    backtest for one model and returns at minimum `sharpe_ratio` (and ideally
-    `total_return`, `max_drawdown`, `win_rate`).
+    `backtest_fn(model, feature_cols, label) -> metrics_dict` evaluates one
+    model and returns a metrics dict.  In backtest mode it must contain at
+    minimum `sharpe_ratio`; in --no-backtest mode it contains `roc_auc`,
+    `weighted_f1`, and `pos_class_precision`.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -178,11 +187,15 @@ def main() -> int:
 
     if args.dry_run:
         logger.info("🟡 --dry-run: emitting placeholder summary")
+        if args.no_backtest:
+            baseline_placeholder = {"roc_auc": 0.0, "weighted_f1": 0.0, "pos_class_precision": 0.0}
+        else:
+            baseline_placeholder = {"sharpe_ratio": 0.0, "total_return": 0.0,
+                                     "max_drawdown": 0.0, "win_rate": 0.0}
         payload = {
-            "baseline": {"sharpe_ratio": 0.0, "total_return": 0.0,
-                         "max_drawdown": 0.0, "win_rate": 0.0},
+            "baseline": baseline_placeholder,
             "ablations": [],
-            "note": "dry run — no training or backtest executed",
+            "note": "dry run — no training or evaluation executed",
         }
         (args.output / "ablation_summary.json").write_text(json.dumps(payload, indent=2))
         return 0
@@ -193,8 +206,9 @@ def main() -> int:
         create_mfe_labels,
         load_training_data,
     )
-    from src.backtest.runner import SEPABacktestRunner
-    from src.backtest.universe_scorer import UniverseScorer
+    if not args.no_backtest:
+        from src.backtest.runner import SEPABacktestRunner
+        from src.backtest.universe_scorer import UniverseScorer
 
     features, groups = load_feature_set_with_groups(args.db, args.feature_set)
 
@@ -220,10 +234,35 @@ def main() -> int:
     if unknown:
         raise ValueError(f"Unknown feature group(s): {unknown}. Known: {sorted(groups)}")
 
+    # Resolve label bins from --label-id, the source model's label_definition.json, or the
+    # 4-class fallback. The number of classes drives the XGBoost objective; ablation deltas
+    # must be measured under the same objective as the source model, not a hardcoded one.
+    from src.evaluation.label_registry import LabelDefinition
+    LABEL_REGISTRY_DIR = REPO_ROOT / "label_registry"
+    src_model_dir = REPO_ROOT / "models" / args.model_name / args.model_version
+
+    label_bins: List[float]
+    label_id: str
+    if args.label_id:
+        label_path = LABEL_REGISTRY_DIR / f"{args.label_id}.json"
+        if not label_path.exists():
+            raise FileNotFoundError(f"--label-id '{args.label_id}' not found at {label_path}")
+        label_def = LabelDefinition.from_json(label_path)
+        label_bins = list(label_def.bins) if label_def.bins else [2.0, 10.0, 30.0]
+        label_id = label_def.label_id
+        logger.info(f"📛 Label from --label-id: {label_id} (bins={label_bins})")
+    elif (src_model_dir / "label_definition.json").exists():
+        label_def = LabelDefinition.from_json(src_model_dir / "label_definition.json")
+        label_bins = list(label_def.bins) if label_def.bins else [2.0, 10.0, 30.0]
+        label_id = label_def.label_id
+        logger.info(f"📛 Label from source model: {label_id} (bins={label_bins})")
+    else:
+        label_bins = [2.0, 10.0, 30.0]
+        label_id = "fallback_4class"
+        logger.warning("📛 No --label-id or source label_definition.json — falling back to 4-class bins=[2,10,30]")
+
     df = load_training_data(args.db, feature_version=args.feature_version, min_date=args.min_date)
-    # 4-class boundaries from the frozen label_definition.json (mfe_4class_30d_v1):
-    # Dud (<=2), Noise (2-10], Solid (10-30], Elite (>30).
-    y = create_mfe_labels(df, bins=[2.0, 10.0, 30.0], return_col="mfe_pct")
+    y = create_mfe_labels(df, bins=label_bins, return_col="mfe_pct")
     df = df.copy()
     df["__y__"] = y
 
@@ -231,8 +270,9 @@ def main() -> int:
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype("category")
 
-    # 4-class MFE classifier (Dud/Noise/Solid/Elite) — matches m01_prototype_may baseline.
-    train_params = _xgb_params_for_n_classes(4)
+    n_classes = len(label_bins) + 1
+    train_params = _xgb_params_for_n_classes(n_classes)
+    logger.info(f"🧪 Ablation objective: {train_params.get('objective')} (n_classes={n_classes})")
 
     # Copy the original model's categorical_mapping.json next to tmp models so
     # UniverseScorer (which reads m01_path.parent/categorical_mapping.json)
@@ -243,42 +283,92 @@ def main() -> int:
         shutil.copy(src_cat_map, args.output / "categorical_mapping.json")
         logger.info("Copied categorical_mapping.json into ablation output dir")
 
-    # The backtest closure trains a model, scores the universe with it, then
-    # runs a backtest. Kept in a closure so feature_cols can change per call.
-    def backtest_fn(model: xgb.Booster, feature_cols: List[str], label: str) -> dict:
-        # Save the model so UniverseScorer can load it (it expects a file path).
-        # Each tmp model lives in its own subdir so a sibling metadata.json
-        # carries the correct feature list (UniverseScorer.load_model() reads
-        # metadata.json next to model.json and would otherwise reach into
-        # model_feature_sets, which has stale group data).
-        tmp_dir = args.output / label
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_model_path = tmp_dir / "model.json"
-        model.save_model(str(tmp_model_path))
-        (tmp_dir / "metadata.json").write_text(json.dumps({
-            "valid_features": feature_cols,
-            "feature_version": args.feature_version,
-        }, indent=2))
-        # Sibling categorical_mapping.json so sector/industry decode identically.
-        if src_cat_map.exists():
-            shutil.copy(src_cat_map, tmp_dir / "categorical_mapping.json")
-        scorer = UniverseScorer(m01_path=str(tmp_model_path), calibration_path=None)
-        scorer.load_model()
-        scores_df = scorer.score_from_t3(args.backtest_start, args.backtest_end)
-        runner = SEPABacktestRunner(
-            start_date=args.backtest_start,
-            end_date=args.backtest_end,
-            model_path=str(tmp_model_path),
-        )
-        runner.setup(scores_df=scores_df)
-        return runner.run()
+    if args.no_backtest:
+        # Pure classification evaluation — no Backtrader, no strategy effects.
+        # Splits df by backtest_start to give an out-of-sample hold-out; uses
+        # the full pre-start window for training (mirrors how backtest_fn works).
+        from sklearn.metrics import roc_auc_score, f1_score, precision_score
+
+        y_all = df["__y__"].values
+        in_sample_mask = pd.to_datetime(df["date"]) < pd.Timestamp(args.backtest_start)
+        oos_mask = ~in_sample_mask
+
+        if oos_mask.sum() == 0:
+            raise ValueError(
+                f"--backtest-start={args.backtest_start} leaves no out-of-sample rows. "
+                "Lower --backtest-start or widen --min-date."
+            )
+
+        def eval_fn(model: xgb.Booster, feature_cols: List[str], label: str) -> dict:
+            Xc = df.loc[oos_mask, feature_cols].replace([np.inf, -np.inf], np.nan)
+            dmat = xgb.DMatrix(Xc, enable_categorical=True)
+            proba = model.predict(dmat)           # shape (n,) binary or (n, k) multiclass
+            y_oos = y_all[oos_mask]
+            n_classes = len(np.unique(y_all))
+
+            if proba.ndim == 1 or (proba.ndim == 2 and proba.shape[1] == 1):
+                # Binary: proba is positive-class probability
+                p1d = proba.ravel()
+                try:
+                    auc = roc_auc_score(y_oos, p1d)
+                except ValueError:
+                    auc = float("nan")
+                pred = (p1d >= 0.5).astype(int)
+                wf1 = f1_score(y_oos, pred, average="weighted", zero_division=0)
+                prec = precision_score(y_oos, pred, pos_label=1, zero_division=0)
+            else:
+                # Multiclass: use last class (highest MFE bin) as "positive"
+                pos_idx = proba.shape[1] - 1
+                try:
+                    auc = roc_auc_score(y_oos, proba, multi_class="ovr", average="weighted")
+                except ValueError:
+                    auc = float("nan")
+                pred = proba.argmax(axis=1)
+                wf1 = f1_score(y_oos, pred, average="weighted", zero_division=0)
+                prec = precision_score(y_oos, pred, labels=[pos_idx],
+                                       average="micro", zero_division=0)
+
+            logger.info("  [%s] roc_auc=%.4f  weighted_f1=%.4f  pos_precision=%.4f  oos_n=%d",
+                        label, auc, wf1, prec, oos_mask.sum())
+            return {"roc_auc": round(float(auc), 4),
+                    "weighted_f1": round(float(wf1), 4),
+                    "pos_class_precision": round(float(prec), 4)}
+
+        eval_closure = eval_fn
+        logger.info("⚙️  --no-backtest: ablation measured via classification metrics on %d OOS rows "
+                    "(%s → %s)", oos_mask.sum(), args.backtest_start, args.backtest_end)
+    else:
+        # Full Backtrader path — strategy metrics drive ablation deltas.
+        def backtest_fn(model: xgb.Booster, feature_cols: List[str], label: str) -> dict:
+            tmp_dir = args.output / label
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_model_path = tmp_dir / "model.json"
+            model.save_model(str(tmp_model_path))
+            (tmp_dir / "metadata.json").write_text(json.dumps({
+                "valid_features": feature_cols,
+                "feature_version": args.feature_version,
+            }, indent=2))
+            if src_cat_map.exists():
+                shutil.copy(src_cat_map, tmp_dir / "categorical_mapping.json")
+            scorer = UniverseScorer(m01_path=str(tmp_model_path), calibration_path=None)
+            scorer.load_model()
+            scores_df = scorer.score_from_t3(args.backtest_start, args.backtest_end)
+            runner = SEPABacktestRunner(
+                start_date=args.backtest_start,
+                end_date=args.backtest_end,
+                model_path=str(tmp_model_path),
+            )
+            runner.setup(scores_df=scores_df)
+            return runner.run()
+
+        eval_closure = backtest_fn
 
     payload = run_baseline_and_ablations(
         df=df,
         features_all=features,
         feature_groups=groups,
         groups_to_ablate=requested,
-        backtest_fn=backtest_fn,
+        backtest_fn=eval_closure,
         train_params=train_params,
         output_dir=args.output,
     )
