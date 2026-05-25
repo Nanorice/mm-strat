@@ -1,0 +1,73 @@
+{
+  "baseline": {
+    "sharpe_ratio": 1.0454962716657463,
+    "total_return": 197.98104613813535,
+    "max_drawdown": 34.48375058032258,
+    "win_rate": 35.68075117370892
+  },
+  "ablations": [
+    {
+      "group_dropped": "Core_Volume",
+      "sharpe_ratio": 0.4767834599632578,
+      "delta_sharpe": -0.5687128117024884,
+      "total_return": 44.37142734305165,
+      "delta_return": -153.6096187950837
+    },
+    {
+      "group_dropped": "Fundamentals",
+      "sharpe_ratio": 0.5341652517508118,
+      "delta_sharpe": -0.5113310199149346,
+      "total_return": 54.03325999534735,
+      "delta_return": -143.947786142788
+    },
+    {
+      "group_dropped": "Momentum_RS",
+      "sharpe_ratio": 0.6333945369481787,
+      "delta_sharpe": -0.4121017347175676,
+      "total_return": 72.73162081397295,
+      "delta_return": -125.2494253241624
+    },
+    {
+      "group_dropped": "Moving_Averages",
+      "sharpe_ratio": 0.7807600274638836,
+      "delta_sharpe": -0.2647362442018627,
+      "total_return": 102.40620238037646,
+      "delta_return": -95.5748437577589
+    },
+    {
+      "group_dropped": "Categoricals",
+      "sharpe_ratio": 0.8059469536721106,
+      "delta_sharpe": -0.23954931799363577,
+      "total_return": 109.31662974781784,
+      "delta_return": -88.66441639031751
+    },
+    {
+      "group_dropped": "M03_Regime",
+      "sharpe_ratio": 0.8225738440944612,
+      "delta_sharpe": -0.2229224275712851,
+      "total_return": 113.70081966764351,
+      "delta_return": -84.28022647049184
+    },
+    {
+      "group_dropped": "Fast_Alphas",
+      "sharpe_ratio": 0.9247753471126284,
+      "delta_sharpe": -0.12072092455311789,
+      "total_return": 131.65998257550586,
+      "delta_return": -66.32106356262949
+    },
+    {
+      "group_dropped": "Technical_Oscillators",
+      "sharpe_ratio": 1.047317927451589,
+      "delta_sharpe": 0.0018216557858425908,
+      "total_return": 200.84352961850865,
+      "delta_return": 2.8624834803732995
+    },
+    {
+      "group_dropped": "Volatility_Ranges",
+      "sharpe_ratio": 1.176480009231536,
+      "delta_sharpe": 0.13098373756578963,
+      "total_return": 211.9719505241679,
+      "delta_return": 13.990904386032554
+    }
+  ]
+}

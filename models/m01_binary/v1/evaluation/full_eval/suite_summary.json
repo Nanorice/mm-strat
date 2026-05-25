@@ -1,0 +1,38 @@
+{
+  "model_name": "m01_binary",
+  "model_version": "v1",
+  "label_id": "mfe_binary_homerun_v1",
+  "production_class_idx": 1,
+  "started_at": "2026-05-25T13:17:43.516706+00:00",
+  "steps": [
+    {
+      "step": "bootstrap_ci",
+      "exit_code": 0,
+      "log_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\logs\\deep_rigor\\bootstrap_m01_binary_v1.log",
+      "output_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\models\\m01_binary\\v1\\evaluation\\full_eval\\bootstrap_ci.json",
+      "output_exists": true
+    },
+    {
+      "step": "decile_analysis",
+      "exit_code": 0,
+      "log_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\logs\\deep_rigor\\decile_m01_binary_v1.log",
+      "output_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\models\\m01_binary\\v1\\evaluation\\full_eval\\decile_analysis.json",
+      "output_exists": true
+    },
+    {
+      "step": "permutation_null",
+      "exit_code": 0,
+      "log_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\logs\\deep_rigor\\permutation_m01_binary_v1.log",
+      "output_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\models\\m01_binary\\v1\\evaluation\\full_eval\\permutation_null.json",
+      "output_exists": true
+    },
+    {
+      "step": "ablation",
+      "exit_code": 0,
+      "log_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\logs\\deep_rigor\\ablation_m01_binary_v1.log",
+      "output_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\models\\m01_binary\\v1\\evaluation\\full_eval\\ablation\\ablation_summary.json",
+      "output_exists": true
+    }
+  ],
+  "finished_at": "2026-05-25T13:17:44.721084+00:00"
+}
