@@ -636,12 +636,19 @@ built; the heatmap reads `pipeline_runs` directly instead.
 
 ## 5. Evaluation rigour — what "academic" actually means here
 
+> **Status update (2026-05-24):** the framework specified below is now **operational**.
+> Library modules in `src/evaluation/`, deep-rigor scripts in `scripts/`, gates
+> auto-merged into `results.json` per training run. Operational reference lives
+> in [`docs/manual_for_me.md`](../manual_for_me.md) §Evaluation Framework. What
+> remains is **applying** it — running the deep-rigor battery against each
+> candidate model and recording a verdict. Per-subsection status flags below.
+
 This is the section the project is most under-invested in. Two backtests and an
 IC table is not a body of evidence; it is a starting point. Below is the
 minimum-credible evaluation regime we should aim for before claiming
 m01_prototype is "production-ready" in the institutional sense.
 
-### 5.1 Walk-forward cross-validation (mandatory before any model promotion)
+### 5.1 Walk-forward cross-validation (mandatory before any model promotion) — ✅ SHIPPED
 
 The current Case 1 backtest is a single train/eval split: trained through
 2024-02, backtested 2020–2024 (with overlap on the train window — explicit
@@ -660,7 +667,15 @@ overlap training.
 **Acceptance bar.** Mean Sharpe > 0.5, worst-fold Sharpe > 0, worst-fold max DD
 < 35%. Mean top-3 Home Run lift > 5×.
 
-### 5.2 Regime-conditional metrics
+**Shipped.** `src/evaluation/walk_forward.py` (`WalkForwardSplitter`, anchored
+expanding folds, 1Y default) + `src/evaluation/walk_forward_backtest.py`
+(`run_walk_forward_backtest`, `aggregate_walk_forward_backtest`,
+`default_signals_to_scores` with calibrator + trailing-rank support). Trainer
+flags `--walk-forward` + `--with-wf-backtest`. Four blocking gates emitted:
+`wf_backtest_mean_sharpe`, `wf_backtest_worst_sharpe`,
+`wf_backtest_worst_max_drawdown`, `wf_backtest_mean_top_3_home_run_lift`.
+
+### 5.2 Regime-conditional metrics — ✅ SHIPPED
 
 Decompose every metric by M03 regime category at the time of entry:
 
@@ -676,7 +691,16 @@ We already know IC collapses in Bear. The question is: does the strategy
 positions exit cleanly) or does it *bleed* (because the exits trigger too late)?
 Answer: unknown. Compute it.
 
-### 5.3 Calibration audit
+**Shipped.** `src/evaluation/regime_decomposition.py` splits per-regime AUC, F1,
+top-3 lift, calibration ECE. Trainer flag `--with-regime-decomp`. Blocking gate
+`regime_decomposition` passes if ≥ 3/5 regimes have AUC ≥ 0.55 with no
+catastrophic regime (< 0.50). Results land in `results.json::regime_decomposition`.
+**Empirical result (`m01_binary/v1`):** Bear 0.62, Neutral 0.72, Bull 0.72,
+Strong Bull 0.72 — 4/4 evaluable pass; Strong Bear had 0 test samples. Same
+gate also computed for `m01_prototype_may/v2_gated` (4/4 pass) — encouraging,
+but does not survive the §5.6 permutation null test.
+
+### 5.3 Calibration audit — ✅ SHIPPED + isotonic remediation
 
 Reliability diagrams per class. Pseudo-code:
 1. Bin predicted probabilities into deciles (or finer for class 3).
@@ -688,13 +712,43 @@ The model is used by the backtest as if `predict_proba` were calibrated (the
 midpoint-weighted expected MFE in `score_from_duckdb`). If it isn't, the
 backtest is using miscalibrated weights. We should know whether this matters.
 
-### 5.4 Feature stability (PSI / KL drift)
+**Shipped.** ECE / reliability primitives in `src/evaluation/calibration.py`.
+Per-class ECE + Brier emitted in `results.json` always. **Remediation layer:**
+`src/evaluation/calibrator.py::IsotonicCalibrator` — fits on val slice after
+training, persists to `<model_dir>/calibrator.joblib` + sidecar `.meta.json`,
+monotone with out-of-bounds clip. Enabled via trainer flag `--with-calibration`.
+`UniverseScorer` auto-loads the calibrator if present. Two gates:
+`calibration_ece` (raw, threshold 0.05 on production class) and
+`calibration_ece_post` (post-isotonic, threshold 0.10).
+**Empirical result (`m01_binary/v1`):** raw ECE 0.316 (fail) → post-isotonic ECE
+1e-17 (pass). Isotonic compression is a tail-flattener — see §5 caveat in the
+strategy-array result, where calibration *hurts* PnL for ranker strategies but
+*helps* for threshold-gated strategies.
+
+### 5.4 Feature stability (PSI / KL drift) — 🟡 LIBRARY SHIPPED, QUARTERLY WIRING OPEN
 
 Population Stability Index, computed quarter-over-quarter for the top 20
 features by SHAP gain. PSI > 0.25 on any feature = drift alert. Run quarterly
 in the pipeline; surface on Pipeline Health page.
 
-### 5.5 SHAP audit (already partially done) — extend it
+**Shipped.** `src/evaluation/drift.py` with three primitives:
+- `compute_psi(reference, current, bins=10)` — fixed-edge bins from reference
+  quantiles, ε-clamped for empty current bins.
+- `reference_snapshot(train_df, feature_cols, output_path)` — saves per-feature
+  bin edges + ref counts as JSON. Called by trainer at promotion time, written
+  to `<model_dir>/reference_snapshot.json`.
+- `quarterly_drift_report(reference_path, current_view, quarter)` — computes PSI
+  per feature for a date range, returns drift verdict + gate.
+
+8 unit tests in `tests/test_drift.py`. **Reference snapshot already written for
+`m01_binary/v1`.**
+
+**Open.** Quarterly auto-trigger inside `daily_pipeline_orchestrator.py` Phase 8
+(fire on Jan/Apr/Jul/Oct 1st), writing to `logs/drift/<quarter>.json`, and the
+Pipeline Health dashboard widget that surfaces drifted features. Estimated 0.5d.
+Tracked in `docs/plans/evaluation_remaining_implementation_plan_2026_05_24.md` §2.2.
+
+### 5.5 SHAP audit (already partially done) — extend it — ✅ SHIPPED + EMPIRICAL VERDICT
 
 The known SHAP-vs-Gain disagreement (volatility/VCP features by gain vs
 momentum/RS features by SHAP) is unresolved. Two specific tests:
@@ -706,7 +760,28 @@ momentum/RS features by SHAP) is unresolved. Two specific tests:
    collapses, it's load-bearing. SHAP says decorative; gain says load-bearing.
    The backtest settles it.
 
-### 5.6 Statistical significance of returns
+**Shipped.**
+1. **Permutation importance** wired into trainer via `--with-perm-importance`
+   (5 repeats × 2000 sample default). Adapter handles sklearn ≥1.6 (sets
+   `_estimator_type = "classifier"` + `__sklearn_tags__()`).
+2. **Ablation backtest** via `scripts/ablation_backtest.py` — per-feature-group
+   dropout, retrains a sibling model, runs backtest, emits `metrics.json` per
+   group.
+
+**Empirical verdict (from `m01_prototype_may/v2_gated` §1.4(c) deep-rigor pass):**
+SHAP and permutation importance *agree* — top features by gain (`natr`,
+`consolidation_width`, `adr_20d`) have **negative** permutation importance
+(shuffling them improves log-loss). Ablation triangulates: dropping
+`Volatility_Ranges` *improves* Sharpe by +0.131 and total return by +14pp.
+Dropping `Technical_Oscillators` is neutral. Load-bearing groups (Sharpe drop
+≥ 0.4 when dropped): Core_Volume, Fundamentals, Momentum_RS. Result confirmed
+on `m01_binary/v1` permutation importances (same three groups dominate negative
+tail). Carries to the binary reformulation:
+- Drop `Volatility_Ranges` (14 features)
+- Drop `Technical_Oscillators` (4 features)
+- Protect Core_Volume, Fundamentals, Momentum_RS in any selection step
+
+### 5.6 Statistical significance of returns — ✅ SHIPPED + EMPIRICAL VERDICT
 
 The Case 1 +201% looks good. But over 1500 trades in a 4.5-year sample with a
 heavy-tailed return distribution, what is the 95% CI? Two protocols:
@@ -720,7 +795,48 @@ heavy-tailed return distribution, what is the 95% CI? Two protocols:
 Both are 1-day notebook exercises; they should be standard before any model
 promotion.
 
-### 5.7 Forward paper-trade (the only ground truth)
+**Shipped.**
+1. `src/evaluation/bootstrap.py::circular_block_bootstrap()` (default block=60d)
+   + `sharpe_from_trades`, `total_return_from_trades` reducers. Driver:
+   `scripts/run_bootstrap_ci.py`.
+2. `src/evaluation/permutation_null.py::permutation_null_backtest()` — shuffles
+   signal within each date, recomputes metric, returns observed percentile in
+   null distribution. Vectorised against `d2_training_cache` (was hanging at
+   18GB on `v_d2_training` — JOIN bomb). Driver: `scripts/run_permutation_null.py`.
+
+**Empirical verdict (from `m01_prototype_may/v2_gated` §1.4(c)):**
+- Bootstrap CI: observed Sharpe 0.334, **95% CI [-1.29, +1.85]** — straddles
+  zero. Total-return CI similarly diffuse.
+- Permutation null: observed Sharpe **-0.42**, null median +0.43, observed at
+  **percentile 2.0** (worse than random 98% of the time). Catastrophic fail.
+
+These two gates flipped the v2_gated verdict from "ambiguous" to a hard DEMOTE.
+Same battery has not yet been run against `m01_binary/v1` — recorded as an open
+operational task.
+
+### 5.6b Decile analysis / Information Coefficient — ✅ SHIPPED (new addition)
+
+Added during the §1.4(c) deep-rigor pass — not in the original §5 spec but a
+necessary companion to bootstrap CI. Bucket WF OOS predictions into deciles by
+`prob_elite`, compute mean realised PnL per decile, and the Spearman rank
+correlation (Information Coefficient) between predicted probability and outcome.
+
+A working ranker has monotone decile means and Spearman IC > 0.05 with p < 0.01.
+A *broken* ranker has top-decile PnL below middle deciles, or negative IC — the
+diagnostic that revealed v2_gated's pathology.
+
+**Shipped.** `scripts/run_decile_analysis.py`. Reads `trades.parquet` from each
+WF fold, computes decile stats + Spearman IC + p-value, writes
+`evaluation/full_eval/decile_analysis.json`.
+
+**Empirical verdict (`m01_prototype_may/v2_gated`, 348 WF trades):**
+**Spearman IC = -0.135, p = 0.012** — negative and statistically significant.
+Top decile P(HR) = 8.6% vs bottom 0%, but middle deciles (3-4) carry the only
+positive mean PnL. Non-monotone. This is the finding the model can't ranker its
+own picks usefully — and it's *what the strategy array S3 result quietly works
+around* by using probability as a threshold, not a ranker.
+
+### 5.7 Forward paper-trade (the only ground truth) — 🟡 HARNESS SHIPPED, DATA COLLECTING
 
 Six months of paper trading from today — same signals, same exits, same regime
 gating, but real-time data. Compared against the backtest predictions for the
@@ -728,21 +844,59 @@ same period. This is the only evaluation that doesn't suffer from a hindsight
 bias. The dashboard work in §4 enables this directly: Page 1 + a manual
 "taken / skipped" toggle + a trade log = paper-trading harness.
 
+**Shipped.** Phase D §5.1 of dashboard (commit `a2bb79a`):
+- `src/evaluation/prediction_logger.py` writes daily M01 scores to
+  `daily_predictions` table.
+- Dashboard Page 1 "Today's Predictions — Decision Log" renders today's picks
+  with a `taken/skipped` toggle per ticker, persisted across refreshes.
+- Past Decisions view shows historical taken/skipped flag joined to realised
+  outcome from `screener_watchlist`.
+
+**Open.**
+- The prediction logger was silently broken pre-2026-05-24; `daily_predictions`
+  is empty for the historical period of the prod model. `scripts/backfill_daily_predictions.py`
+  not yet written. Plan §3.2.
+- "Six months of data" is six months of writes. Started 2026-05-24; meaningful
+  performance comparison ETA Q4 2026.
+
 ### 5.8 What "understanding the model" means, in concrete deliverables
 
 A model is understood when we can answer:
 
-| Question | Deliverable |
-|---|---|
-| When does it work? | Regime-conditional table (§5.2) |
-| When does it break? | Worst-fold walk-forward analysis (§5.1) |
-| Why does it work? | SHAP + permutation + ablation agreement (§5.5) |
-| Are its outputs trustworthy at face value? | Calibration audit (§5.3) |
-| Is the edge statistically real, or sample noise? | Bootstrap CI + permutation null (§5.6) |
-| Will it keep working? | PSI drift + paper trade (§5.4, §5.7) |
+| Question | Deliverable | Tool | Status |
+|---|---|---|---|
+| When does it work? | Regime-conditional table (§5.2) | `regime_decomposition.py` + `--with-regime-decomp` | ✅ shipped |
+| When does it break? | Worst-fold walk-forward analysis (§5.1) | `walk_forward.py` + `--walk-forward` + `--with-wf-backtest` | ✅ shipped |
+| Why does it work? | SHAP + permutation + ablation agreement (§5.5) | `--with-perm-importance` + `ablation_backtest.py` + SHAP in evaluator | ✅ shipped |
+| Are its outputs trustworthy at face value? | Calibration audit (§5.3) | `calibration.py` + `calibrator.py` (isotonic) + `--with-calibration` | ✅ shipped |
+| Is the edge statistically real, or sample noise? | Bootstrap CI + permutation null (§5.6) | `bootstrap.py` + `run_bootstrap_ci.py` + `permutation_null.py` + `run_permutation_null.py` | ✅ shipped |
+| Does the ranker actually rank? | Decile / Spearman IC (§5.6b) | `run_decile_analysis.py` | ✅ shipped (new) |
+| Will it keep working? | PSI drift + paper trade (§5.4, §5.7) | `drift.py` + dashboard Decision Log | 🟡 library shipped, ops wiring open |
 
-We currently have partial answers to (1) and (3). Everything else is open. **This
-is the work, more than building a new model.**
+~~We currently have partial answers to (1) and (3). Everything else is open. **This
+is the work, more than building a new model.**~~
+
+**Updated 2026-05-24.** Six of seven rows are shipped end-to-end. Only PSI
+quarterly auto-trigger + paper-trade data accumulation remain. What's left is
+**applying** the framework — running the deep-rigor battery against each
+candidate model and recording verdicts — not building it.
+
+### 5.9 Verdicts on record
+
+| Model | Verdict | Source | Notes |
+|---|---|---|---|
+| `m01_prototype_may/v2_gated` (4-class) | **DEMOTE** | `models/m01_prototype_may/v2_gated/evaluation/full_eval/full_eval_report.md` (2026-05-24) | Permutation null at percentile 2.0 (catastrophic), Spearman IC -0.135 (anti-skilled within operating zone), bootstrap CI straddles zero. Per-regime AUC and ablation findings drove the binary reformulation. |
+| `m01_binary/v1` (binary, calibrated) | **PENDING** | trainer gates only (`results.json`) | 4/8 blocking gates pass: calibration_ece_post, regime_decomp, WF_worst_AUC, WF_worst_DD. 4 fail: calibration_ece (raw), WF_mean_Sharpe (0.476 vs 0.5), WF_worst_Sharpe (-0.263, 2/4 positive folds), WF_top3_lift (1.55× vs 5×). **Strategy array S3 (P≥0.30 gate, 5-pos cap): Sharpe 1.59, DD 11.1%.** Deep-rigor battery not yet run. |
+
+### 5.10 Operational reference
+
+Day-to-day commands, gate thresholds, file locations, library inventory, and
+known gotchas live in [`docs/manual_for_me.md`](../manual_for_me.md) §Evaluation
+Framework. This section sets the *why*; the manual is the *how*. The
+implementation plan that produced the framework is
+[`evaluation_remaining_implementation_plan_2026_05_24.md`](evaluation_remaining_implementation_plan_2026_05_24.md) —
+its §1.1-§1.4 / §2.1 / §2.2 are now closed; §3.1 / §3.2 + the quarterly drift
+wiring remain.
 
 ---
 
@@ -756,10 +910,10 @@ A prioritized list of things that are *small enough to ship in 1–5 days* and
 | 1 | `BAD_TICKERS` wired into loader | 0.5d | open | Closes a known data-quality hole that has bit us twice |
 | 2 | Phase 1.5 quality gate in orchestrator | 1d | open | Stops bad-data days from propagating |
 | 3 | Backtest with TX costs + slippage | 2d | open | Realism floor before any number is quotable |
-| 4 | Walk-forward CV harness (anchored, 1y folds) | 3d | open | Unlocks §5.1; required before any promotion |
+| 4 | Walk-forward CV harness (anchored, 1y folds) | 3d | ✅ shipped 2026-05-24 (`walk_forward.py` + `walk_forward_backtest.py` + `--with-wf-backtest` trainer flag, 4 blocking gates) | Unlocks §5.1; required before any promotion |
 | 5 | Sector-heat dashboard widget | 1d | ✅ shipped (Page 1) | Highest-ROI dashboard add per §4; with 1d/5d/20d window selector |
-| 6 | Calibration audit notebook + plots | 1d | open | Tests whether `expected_MFE` is meaningful |
-| 7 | Permutation null backtest | 1d | open | Sanity-checks the +201% |
+| 6 | Calibration audit notebook + plots | 1d | ✅ shipped 2026-05-24 (`calibration.py` + `calibrator.py` isotonic, `--with-calibration` flag, 2 gates) | Tests whether `expected_MFE` is meaningful |
+| 7 | Permutation null backtest | 1d | ✅ shipped 2026-05-24 (`permutation_null.py` + `run_permutation_null.py`, vectorised against `d2_training_cache`) | Sanity-checks the +201% |
 | 8 | Pipeline JSONL logging | 1d | open (Page 5 reads `pipeline_runs` instead) | Foundation for richer Page-5 drill-downs |
 | 9 | Adj_close populated OR removed | 2d | open | Closes the NULL-column attractor that caused the 28× artifact |
 | 10 | Ticker Deep Dive dashboard page | 3d | open (only Page 2 not yet built; others shipped) | Hugely useful for daily decisions |

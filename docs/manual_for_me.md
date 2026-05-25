@@ -18,9 +18,10 @@
 8. [Model Training](#model-training)
 9. [Backtesting](#backtesting)
 10. [Dashboard](#dashboard)
-11. [Cache & Report Locations](#cache--report-locations)
-12. [Open TODOs](#open-todos)
-13. [Resolved](#resolved)
+11. [Evaluation Framework](#evaluation-framework)
+12. [Cache & Report Locations](#cache--report-locations)
+13. [Open TODOs](#open-todos)
+14. [Resolved](#resolved)
 
 ---
 
@@ -923,6 +924,221 @@ python scripts/model_diff.py --model-a ... --model-b ... --top-n 20
 
 ---
 
+## Evaluation Framework
+
+> Built out 2026-05-23 → 2026-05-24 to deliver the rigour spec in `docs/plans/whitepaper_path_forward_2026_05_23.md` §5. The framework is **operational**: every gate has a script, every script writes a JSON artifact, the trainer can wire them all into one run.
+
+**Philosophy.** A trained model is not "done" until it has passed the gate battery. Each library module returns a JSON-serialisable `dict` containing a `gates` list — every gate has `name`, `status` (`pass`/`fail`/`skipped`), `value`, `threshold`, and `blocking` (bool). Blocking failures block prod promotion via `ModelRegistry.set_prod()`.
+
+**Two layers:**
+
+1. **Built into the trainer** (single command, all gates merged into `results.json`):
+   ```powershell
+   .\.venv\Scripts\python.exe .\scripts\train_mfe_classifier.py `
+     --feature-set fs_m01_prototype `
+     --model-name m01_binary --model-version v1 `
+     --label-id mfe_binary_homerun_v1 `
+     --no-holdout --walk-forward `
+     --with-wf-backtest --with-regime-decomp `
+     --with-perm-importance --with-calibration
+   ```
+2. **Deep-rigor scripts** (run post-hoc against an already-trained model, write to `evaluation/full_eval/`):
+   - `scripts/run_bootstrap_ci.py` — circular-block bootstrap CI on WF trades (10K iter, ~30 min)
+   - `scripts/run_permutation_null.py` — per-date signal shuffle null test (200-1000 perms, ~3 min vectorised)
+   - `scripts/run_decile_analysis.py` — Spearman IC + decile bucketing on `prob_elite` vs realised PnL
+   - `scripts/ablation_backtest.py` — per-feature-group dropout backtest (~70 min for 9 groups)
+
+### Library modules (`src/evaluation/`)
+
+| Module | Purpose | Tests |
+|--------|---------|-------|
+| `base_evaluator.py` | `BaseEvaluator` ABC + `_metadata` block (git SHA, label_registry_id, feature_set_id) | `tests/test_base_evaluator_metadata.py` |
+| `classification_evaluator.py` | `ClassificationEvaluator` — confusion matrix, ROC/PR, SHAP, permutation importance, top-K lift, calibration ECE, regime decomp, walk-forward integration. Auto-handles binary via `_one_hot()` helper + `_BinaryProbaShim`. | — |
+| `label_registry.py` | Pluggable label definitions in `label_registry/*.json` — bins, class names, MFE column. `mfe_binary_homerun_v1` and `mfe_4class_v1` are the active ones. | `tests/test_label_registry.py` |
+| `calibrator.py` | `IsotonicCalibrator` — fit on val slice, persist to `calibrator.joblib` + sidecar `.meta.json`, monotone + out-of-bounds clip. Wired via `--with-calibration` trainer flag. | `tests/test_calibrator.py` |
+| `calibration.py` | ECE / reliability-diagram primitives (pre-calibrator infra). | `tests/test_calibration.py` |
+| `walk_forward.py` | `WalkForwardSplitter` — anchored expanding folds (1Y default), `walk_forward_evaluate()`. Used by `--walk-forward`. | — |
+| `walk_forward_backtest.py` | `run_walk_forward_backtest()` + `aggregate_walk_forward_backtest()`. `default_signals_to_scores()` applies calibrator + populates `trailing_pct` from rolling daily ranks. | `tests/test_walk_forward_backtest.py` |
+| `bootstrap.py` | `circular_block_bootstrap()` (default block=60d) + helpers (`sharpe_from_trades`, `total_return_from_trades`). | `tests/test_bootstrap.py` |
+| `permutation_null.py` | `permutation_null_backtest()` — shuffle signal within each date, recompute metric, return percentile of observed in null. | `tests/test_permutation_null.py` |
+| `ablation.py` | Feature-group dropout backtest helpers — drives `scripts/ablation_backtest.py`. | — |
+| `regime_decomposition.py` | Per-regime AUC/F1/lift split using `m03_score`-derived regime band. | — |
+| `drift.py` | `compute_psi()`, `reference_snapshot()`, `quarterly_drift_report()`. Snapshot written next to each model (`reference_snapshot.json`) at training time; quarterly reports go to `logs/drift/<quarter>.json`. **Library shipped; quarterly wiring deferred.** | `tests/test_drift.py` |
+| `pretrain_report.py` | Driver for `scripts/run_pretrain_audit.py` (5+ MB self-contained Plotly HTML embedded in Model Lab). | — |
+| `prediction_logger.py` | Logs daily M01 scores to `daily_predictions` table (consumed by dashboard Decision Log). | — |
+| `feature_signal.py` | Per-feature signal strength / decay diagnostics. | — |
+| `data_quality.py` | Pre-train data audit — fundamentals coverage, null rates, outliers. | — |
+| `gate.py` | Shared `Gate` dataclass — every evaluator emits these. | — |
+| `html_report.py`, `plotting.py`, `thresholding.py`, `training_data_loader.py`, `leakage_guard.py`, `m03_evaluator.py`, `m03_ground_truth.py`, `classification_report.py` | Supporting infra (plot, report, IO helpers). | — |
+
+### Gate catalogue
+
+Active gates emitted into `results.json` (blocking = blocks prod promotion):
+
+| Gate | Threshold | Source | Blocking |
+|------|-----------|--------|----------|
+| `calibration_ece` | < 0.05 on production class | `classification_evaluator.py` | yes |
+| `calibration_ece_post` | < 0.10 after isotonic | `--with-calibration` | yes |
+| `regime_decomposition` | ≥ 3/5 regimes with AUC ≥ 0.55, no catastrophic regime (< 0.50) | `--with-regime-decomp` | yes |
+| `walk_forward_worst_auc` | ≥ 0.65 on production class | `--walk-forward` | yes |
+| `wf_backtest_mean_sharpe` | > 0.5 | `--with-wf-backtest` | yes |
+| `wf_backtest_worst_sharpe` | > -0.3 AND ≥ ceil(N·7/9) positive folds | `--with-wf-backtest` | yes |
+| `wf_backtest_worst_max_drawdown` | < 35% | `--with-wf-backtest` | yes |
+| `wf_backtest_mean_top_3_home_run_lift` | > 5× | `--with-wf-backtest` | yes |
+
+Non-blocking diagnostics also in `results.json`: `permutation_importance` (top features by mean importance delta), `shap_summary` (top-10 by mean |SHAP|), `temporal_stability` (per-quarter accuracy/F1), `topk_precision` (precision@K and lift for K∈{10,50,100,250,500,1000}), `threshold_sweep` (precision/recall at thresholds 0.3-0.7).
+
+### Label registry
+
+JSON files in `label_registry/` define class binning. Trainer reads via `--label-id`.
+
+```json
+// label_registry/mfe_binary_homerun_v1.json
+{
+  "label_id": "mfe_binary_homerun_v1",
+  "mfe_column": "mfe_pct",
+  "bins": [30.0],                    // single boundary → binary
+  "class_names": ["Not Home Run (<=30%)", "Home Run (>30%)"],
+  "production_class": "Home Run (>30%)",
+  "horizon_days": null,              // measured over SEPA holding period, not fixed horizon
+  "objective": "binary:logistic"
+}
+```
+
+The trainer derives `num_class`, XGBoost `objective`, class names, and label thresholds from `label_def.bins` — no hardcoded constants. `_BinaryProbaShim` adapts the 1-D binary `predict()` output to the 2-D shape sklearn/SHAP/the evaluator expect.
+
+Active labels:
+- `mfe_4class_v1` — Noise (0-2%), Moderate (2-10%), Strong (10-30%), Home Run (>30%). Originally `mfe_4class_30d_v1` — `_30d` suffix dropped because MFE is measured over the SEPA holding period (capped at 120 days for trades still open at EOD), not a fixed 30-day horizon.
+- `mfe_binary_homerun_v1` — single boundary at 30% MFE. Used by `m01_binary/v1`.
+
+### Strategy array — head-to-head backtester
+
+`scripts/run_strategy_array.py` runs five `SEPAHybridV1` variants on a single window with one shared scored-universe:
+
+| ID | Description |
+|----|-------------|
+| S1 | Baseline: top-3 daily, regime caps, default exits |
+| S2 | 10-day trailing percentile, up to 5 entries/day, regime caps |
+| S3 | Calibrated P(>30%) ≥ 0.30 entry gate, fixed 5-position cap |
+| S4 | 20-day trailing percentile + `min_prob_elite=0.25` |
+| S5 | Persistence-gated entry (top-30% trailing rank, 3 of last 5 days), fixed 8-position cap, 10-day min hold |
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_strategy_array.py `
+  --model-name m01_binary --model-version v1 `
+  --start 2024-11-01 --end 2026-05-22 `
+  --strategies S1,S2,S3,S4,S5 --include-uncalibrated
+```
+
+Output per strategy: `models/<m>/<v>/backtests/<S>/{trades.parquet,equity.parquet,metrics.json,config.json}`. Top-level: `comparison.md` (ranked by Sharpe) + `summary.json`. `--include-uncalibrated` runs each strategy twice (with `_raw` suffix), so calibration effect is read directly off the comparison table.
+
+### Deep-rigor scripts (post-hoc, per-model)
+
+These read an already-trained model's WF artifacts. Each writes one JSON next to `model.json` under `evaluation/full_eval/`. Edit the `MODEL_DIR` constant at the top of each script (or pass via env var); they were originally hard-coded to `m01_prototype_may/v2_gated`.
+
+```powershell
+# Bootstrap CI on WF trades (10K iter, circular block, default block=60d)
+.\.venv\Scripts\python.exe .\scripts\run_bootstrap_ci.py
+# → evaluation/full_eval/bootstrap_ci.json: {observed, median, ci_lo_95, ci_hi_95}
+
+# Permutation null on signal (200-1000 perms; vectorised, ~3 min for 200)
+.\.venv\Scripts\python.exe .\scripts\run_permutation_null.py
+# → evaluation/full_eval/permutation_null.json: {observed_metric, null_median, percentile}
+# Gate passes if observed percentile > 95
+
+# Spearman IC + decile bucketing on prob_elite vs realised PnL
+.\.venv\Scripts\python.exe .\scripts\run_decile_analysis.py
+# → evaluation/full_eval/decile_analysis.json: {decile_stats[], spearman_ic, p_value}
+
+# Per-feature-group ablation (drop one group, retrain, backtest, compare)
+.\.venv\Scripts\python.exe .\scripts\ablation_backtest.py `
+  --model-name <name> --model-version <ver> `
+  --feature-set fs_m01_prototype `
+  --feature-groups "Core_Volume,Fundamentals,Momentum_RS,Moving_Averages,Categoricals,M03_Regime,Fast_Alphas,Technical_Oscillators,Volatility_Ranges" `
+  --output models\<name>\<ver>\evaluation\full_eval\ablation\
+# → evaluation/full_eval/ablation/<group>/{model.json,metadata.json,categorical_mapping.json,metrics.json}
+```
+
+**Permutation null performance note.** Initial implementation hung at 18GB memory because `v_d2_training` is a JOIN bomb on `t3_sepa_features` (~9M rows). Rewritten to use `d2_training_cache` (materialised, ~38K rows): runtime dropped from "hangs at 25 min" to ~3 min for 200 perms.
+
+**DuckDB lock surprise.** A running `streamlit run scripts/dashboard.py` holds a write-mode connection and blocks these scripts. Kill it before running:
+```powershell
+Get-Process python | Where-Object { $_.CommandLine -like "*streamlit*" } | Stop-Process
+```
+
+### Feature catalog & pruned sets
+
+The `model_feature_sets` table in DuckDB is keyed by `feature_set_id` and tags each feature with a `feature_group`. Trainer reads dynamically via `--feature-set`.
+
+Current sets (registered by `scripts/populate_feature_catalog.py`):
+- `fs_m01_baseline` — original 106 features (used by `M01_baseline_v0.1`)
+- `fs_m01_prototype` — 97 features (baseline minus REMOVED, plus PROTOTYPE_ADDED)
+
+To register a pruned set (e.g., for the §1.4(c) drop-Volatility/Oscillators experiment), insert rows directly:
+
+```python
+# scripts/register_pruned_feature_set.py (write this when needed)
+import duckdb
+con = duckdb.connect("data/market_data.duckdb")
+con.execute("DELETE FROM model_feature_sets WHERE feature_set_id = 'fs_m01_prototype_pruned'")
+rows = con.execute("""
+  SELECT feature_name, feature_group FROM model_feature_sets
+  WHERE feature_set_id = 'fs_m01_prototype'
+    AND feature_group NOT IN ('Volatility_Ranges', 'Technical_Oscillators')
+  ORDER BY ordinal
+""").fetchall()
+con.executemany(
+  "INSERT INTO model_feature_sets (feature_set_id, feature_name, feature_group, ordinal) VALUES (?, ?, ?, ?)",
+  [("fs_m01_prototype_pruned", n, g, i) for i, (n, g) in enumerate(rows)],
+)
+```
+
+Then train with `--feature-set fs_m01_prototype_pruned --model-version v2`.
+
+### Where output lands
+
+Every trained-model directory now contains:
+```
+models/<name>/<version>/
+    model.json                       # XGBoost booster
+    metadata.json                    # Features, split config, leakage audit
+    categorical_mapping.json         # sector/industry → category code
+    label_definition.json            # Snapshot of label_registry entry used
+    calibrator.joblib                # Isotonic calibrator (if --with-calibration)
+    calibrator.meta.json             # Calibrator metadata (pre/post ECE, fit samples)
+    reference_snapshot.json          # PSI baseline bin edges + counts (frozen at promotion)
+    pretrain_audit.html              # Self-contained Plotly audit (if --with-pretrain-audit)
+    folds/fold_<idx>/                # WF fold artifacts (model.json, metrics.json, spec.json)
+    wf_backtest/fold_<idx>/          # WF backtest per-fold trades/equity/metrics
+    wf_backtest/summary.json         # Aggregated WF backtest gates
+    backtests/<S>/                   # Strategy array runs (if run_strategy_array.py invoked)
+    backtests/comparison.md          # Strategy array ranking
+    evaluation/
+        results.json                 # All gates + metrics + SHAP + permutation
+        report_<timestamp>.md        # Human-readable summary per training run
+        walk_forward_summary.json    # Per-fold WF metrics aggregate
+        confusion_matrix.png, roc_curves.png, etc.
+        full_eval/                   # Deep-rigor (post-hoc) outputs — populated manually
+            bootstrap_ci.json
+            permutation_null.json
+            decile_analysis.json
+            ablation/<group>/...
+            full_eval_report.md      # One-pager DEMOTE/HOLD/PROMOTE verdict
+```
+
+### Production class definition
+
+Each label registry entry declares `production_class`. The evaluator's blocking gates (calibration, regime AUC, top-3 lift) are computed *for that class only*. Binary `production_class = "Home Run (>30%)"` → `_default_actionable_classes()` returns `[1]` (binary); multi-class `production_class = "Home Run (>30%)"` → returns `[3]` (the last bin in 4-class).
+
+### Outstanding operational items
+
+- [ ] **Quarterly drift report wiring.** `drift.py` library shipped + tested; the Phase-9 hook in `daily_pipeline_orchestrator.py` that fires on the 1st of Jan/Apr/Jul/Oct is not yet built. See `docs/plans/evaluation_remaining_implementation_plan_2026_05_24.md` §2.2 step 3.
+- [ ] **Backfill historical `daily_predictions`.** Phase 8 prediction logger was silently broken until 2026-05-24; the `daily_predictions` table is empty for the historical period of the prod model. `scripts/backfill_daily_predictions.py` not yet written. See plan §3.2.
+- [ ] **Deep-rigor scripts hard-code `MODEL_DIR`.** Add `--model-dir` argument to `run_bootstrap_ci.py`, `run_permutation_null.py`, `run_decile_analysis.py` so they don't need an edit-per-model. Trivial change.
+- [ ] **Lazy `src/evaluation/__init__.py`.** Eager re-exports trigger `m03_evaluator → macro_engine → yfinance` import chain → ~25 min pytest cold start on Windows + Defender. See plan §3.1.
+
+---
+
 ## Backtesting
 
 **Purpose**: Simulate the SEPA strategy historically using BackTrader. Not part of the daily pipeline — run on-demand.
@@ -1163,13 +1379,13 @@ To stop following: Ctrl+C.
 ## Open TODOs
 
 ### Model Development (blocking backtests from being meaningful)
-- [ ] **Retrain M01 on updated T3 data** — current model trained on 2026-03-15. T3 was rebuilt 2026-03-27 with 0% NULL alphas/EMAs. Retrain + compare metrics.
+- [ done ] **Retrain M01 on updated T3 data** — current model trained on 2026-03-15. T3 was rebuilt 2026-03-27 with 0% NULL alphas/EMAs. Retrain + compare metrics. [m01_prototype_may]
 - [ ] **Class imbalance** — macro_F1=0.25. Try SMOTE, cost-sensitive learning, or threshold tuning.
 - [ ] **Promote to prod** — currently `status=test`. Run `reg.set_prod(version_id)` after validation backtest.
 - [ ] **Full backtest** — run `--duckdb` on full date range (2020-2026) with all tickers to establish baseline.
 
 ### Data Quality (non-blocking but should fix)
-- [ ] **`filing_date` anomalies** — run the two patch modes to clean up remaining ~55K zero-day rows and ~6.4K stale-historical rows:
+- [ done ] **`filing_date` anomalies** — run the two patch modes to clean up remaining ~55K zero-day rows and ~6.4K stale-historical rows:
   ```bash
   python tools/patch_fundamentals.py --fix filing_date_zero --dry-run   # preview
   python tools/patch_fundamentals.py --fix filing_date_zero              # ~55K rows
@@ -1177,6 +1393,12 @@ To stop following: Ctrl+C.
   ```
 - [ ] **GE price_data + fundamentals** — GE restored to `company_profiles` (2026-03-28) but has no price_data or fundamentals yet. Will auto-fetch on next daily pipeline run.
 - [ ] **Monthly earnings calendar refresh trigger** — where to persist last-refresh timestamp (defer until pipeline automated)
+
+### Evaluation Framework (operational follow-ups)
+- [ ] **Wire quarterly drift reports into Phase 8** — `src/evaluation/drift.py` shipped 2026-05-24 with tests, but no cron-style trigger yet. See plan §2.2 step 3.
+- [ ] **Backfill `daily_predictions`** for prod-model historical period — Phase-8 prediction logger was silently broken pre-2026-05-24. Empty table → dashboard "Past Decisions" view is empty.
+- [ ] **Parameterise deep-rigor scripts** — `run_bootstrap_ci.py` / `run_permutation_null.py` / `run_decile_analysis.py` hard-code `MODEL_DIR`; add a `--model-dir` arg.
+- [ ] **Run full §1.4 deep-rigor on `m01_binary/v1`** — verdict not yet recorded. Trainer gates ran, but bootstrap CI / permutation null / decile analysis still to do. See plan §1.4 and the §1.4(c) parallel-session instructions for the template.
 
 ### Critical Next Stage:
 - [ ] **Run one-time T3 backfill on Option C universe** — `sepa_watchlist` is populated (35,560 sessions / 2,697 tickers, done 2026-05-08). T3 schema rebuilt empty. Run:
@@ -1229,3 +1451,9 @@ To stop following: Ctrl+C.
 - ~~No `model_name`/`model_version` columns in `models` table~~ → P4: idempotent migration added + backfilled existing rows by parsing `version_id` timestamp suffix (2026-05-07).
 - ~~T3 ≈ T2 (Option B universe gate produced ~70% non-SEPA noise)~~ → **Option C: `sepa_watchlist` event log + Phase 4b** (2026-05-08). T3 universe = tickers that ever entered a SEPA session, full history. New `SepaWatchlistManager` (backfill + daily incremental). Fundamentals (4 cols) removed from T3 schema — joined at query time in `v_d2_features` instead. `EXPECTED_T3_COLUMN_COUNT`: 148 → 144. Backfill `sepa_watchlist`: 35,560 sessions / 2,697 tickers in 6.8s. T3 backfill on new design pending (see Open TODOs). Wrap-up: `docs/session_logs/2026-05-08_wrapup.md`.
 - ~~T3 per-quarter wall-time grew O(cumulative history)~~ → Date-bound `candidates` CTE (`AND p.date <= '{end_date}'`) + scoped `with_velocity` t2 join (`AND t2.date BETWEEN '{fetch_start}' AND '{end_date}'`) (2026-05-08, morning session). Per-quarter wall time now flat.
+- ~~Evaluation framework was a wishlist~~ → **§5 of whitepaper now operational** (2026-05-23 → 2026-05-24). Library modules in `src/evaluation/`: `bootstrap`, `permutation_null`, `walk_forward_backtest`, `regime_decomposition`, `calibrator` (isotonic), `drift` (PSI), `ablation`. Wired into trainer via `--with-wf-backtest`, `--with-regime-decomp`, `--with-perm-importance`, `--with-calibration`. 8 blocking gates in `results.json` per model. Deep-rigor scripts (`run_bootstrap_ci.py`, `run_permutation_null.py`, `run_decile_analysis.py`, `ablation_backtest.py`) populate `evaluation/full_eval/`. See `## Evaluation Framework` above.
+- ~~`v_d2_features` fan-out bug~~ → Fixed 2026-05-24 (`QUALIFY ROW_NUMBER()` dedup on `fundamental_features` + `shares_history`). Trainer now passes `feature_parity_check` without `--skip-parity`. Commit `cca85e9`.
+- ~~Label thresholds hardcoded in trainer~~ → Replaced 2026-05-24 with `label_registry/*.json` pluggable definitions. Trainer derives `num_class`, XGBoost `objective`, class names, label boundaries from `label_def.bins`. `mfe_4class_v1` and `mfe_binary_homerun_v1` are the active labels. Binary objective handled via `_BinaryProbaShim` + `_one_hot()` evaluator helpers.
+- ~~`SEPAHybridV1` had no min-hold / persistence params, latent bugs in `_check_rank_exits`~~ → Added `min_hold_days`, `persistence_window_days`, `persistence_min_count`, `persistence_threshold` (2026-05-24). Fixed two latent bugs: `.get('trailing_10d_pct')` on a tuple + swapped args to `get_score`. `ScoreLookup.check_persistence()` added with 6 unit tests. `SEPABacktestRunner.setup()` now accepts `strategy_kwargs`. Used by S5 in the strategy array.
+- ~~`UniverseScorer` crashed on binary objective~~ → Binary detection added 2026-05-24 (`'binary' in objective`), 1-D proba handling, binary-appropriate MFE midpoints `[3, 70]`. Auto-loads `calibrator.joblib` adjacent to `model.json` if present.
+- ~~`default_signals_to_scores` left `trailing_pct` as NaN~~ → Populated 2026-05-24 from rolling daily ranks. Was breaking `rank_by='trailing'` in WF backtest and Strategy Array S2/S4.
