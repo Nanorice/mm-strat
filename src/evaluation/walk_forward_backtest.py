@@ -51,11 +51,27 @@ def default_signals_to_scores(
     production_class_idx: int,
     date_col: str = "date",
     ticker_col: str = "ticker",
+    calibrator_path: Optional[Path] = None,
+    trailing_window: int = 10,
 ) -> pd.DataFrame:
     """Default mapping: proba[:, production_class_idx] becomes the score.
 
     Replicates the contract of `UniverseScorer.score_from_t3`: emits
-    columns (date, ticker, normalized_score, daily_pct_rank, prob_elite).
+    columns (date, ticker, normalized_score, daily_pct_rank, trailing_pct,
+    prob_elite).
+
+    Args:
+        fold_result: classifier output for one fold.
+        production_class_idx: which proba column is the "elite" class.
+        date_col, ticker_col: columns on `fold_result.X_test` carrying the
+            timestamp + symbol.
+        calibrator_path: optional path to an isotonic calibrator (joblib).
+            If provided and loadable, raw probabilities are passed through
+            it before becoming `prob_elite`. Falls through to raw on any
+            error (logged as warning).
+        trailing_window: lookback (in trading days) for the trailing
+            percentile rank. The 10-day default matches the SEPA strategy's
+            'trailing' rank mode.
 
     `fold_result.X_test` must have a date column and a ticker column. If only
     the index carries them (a (ticker, date) MultiIndex), the caller should
@@ -77,7 +93,24 @@ def default_signals_to_scores(
             f"for proba.shape[1]={proba.shape[1]}"
         )
 
-    prob_elite = proba[:, production_class_idx]
+    prob_raw = proba[:, production_class_idx]
+
+    # Apply isotonic calibrator if available.
+    prob_elite = prob_raw
+    if calibrator_path is not None and Path(calibrator_path).exists():
+        try:
+            from .calibrator import IsotonicCalibrator  # local import to avoid cycle
+            cal = IsotonicCalibrator.load(Path(calibrator_path))
+            prob_elite = cal.transform(prob_raw)
+            logger.info(
+                "Applied calibrator %s to %d probabilities (mean: %.3f → %.3f)",
+                Path(calibrator_path).name, len(prob_raw),
+                float(prob_raw.mean()), float(prob_elite.mean()),
+            )
+        except Exception as e:
+            logger.warning("Calibrator load/apply failed (%s); using raw probs", e)
+            prob_elite = prob_raw
+
     out = pd.DataFrame(
         {
             "date": pd.to_datetime(X[date_col].values),
@@ -99,8 +132,16 @@ def default_signals_to_scores(
     else:
         out["normalized_score"] = 50.0
 
-    # trailing_pct: leave blank — the SEPA strategy doesn't require it for entry.
-    out["trailing_pct"] = np.nan
+    # trailing_pct: rolling mean of daily_pct_rank over the last N trading days
+    # per ticker. Strictly backward-looking (includes current day). NaN until
+    # the ticker has at least `trailing_window` observations.
+    out = out.sort_values(["ticker", "date"]).reset_index(drop=True)
+    out["trailing_pct"] = (
+        out.groupby("ticker")["daily_pct_rank"]
+        .rolling(window=trailing_window, min_periods=trailing_window)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
 
     return out.sort_values(["date", "daily_pct_rank"], ascending=[True, False]).reset_index(drop=True)
 
@@ -160,6 +201,8 @@ def run_walk_forward_backtest(
     output_dir: Path,
     signals_to_scores: Optional[SignalsToScoresFn] = None,
     top_k_lift: int = 3,
+    calibrator_path: Optional[Path] = None,
+    trailing_window: int = 10,
 ) -> List[FoldBacktestResult]:
     """Run a backtest for each fold's OOS predictions.
 
@@ -182,7 +225,14 @@ def run_walk_forward_backtest(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if signals_to_scores is None:
-        signals_to_scores = default_signals_to_scores
+        # Bind calibrator_path + trailing_window into the default impl so the
+        # call site below stays signature-compatible with user overrides.
+        def signals_to_scores(fr, idx):
+            return default_signals_to_scores(
+                fr, idx,
+                calibrator_path=calibrator_path,
+                trailing_window=trailing_window,
+            )
 
     out: List[FoldBacktestResult] = []
     for fr in fold_results:

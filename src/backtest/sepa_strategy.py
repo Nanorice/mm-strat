@@ -113,6 +113,20 @@ class SEPAHybridV1(bt.Strategy):
         ('exit_percentile_max', 0.40),  # Exit if rank falls below 40th percentile
         ('exit_use_percentile', False),  # Enable percentile-based exit
 
+        # Minimum hold period (suppresses rank-based exits only; stop-loss /
+        # SMA exits still fire because they represent real damage, not a
+        # confidence dip). Capital-preservation lever for the strategy array
+        # — avoids prematurely cutting winners that drop in cohort rank.
+        ('min_hold_days', 0),
+
+        # Persistence gate (S5 hybrid_persistent strategy). When all three are
+        # set, candidates must have had `rank_by` >= `persistence_threshold`
+        # for at least `persistence_min_count` of the last
+        # `persistence_window_days` trading days. Default off.
+        ('persistence_window_days', 0),
+        ('persistence_min_count', 0),
+        ('persistence_threshold', 0.7),
+
         # Position sizing mode
         ('sizing_mode', 'regime'),  # 'regime', 'equal_weight', 'rank_weighted', 'score_weighted'
 
@@ -450,13 +464,23 @@ class SEPAHybridV1(bt.Strategy):
             if pos.exit_pending:
                 continue
 
-            # Lookup current percentile rank
-            score_data = self.score_lookup.get_score(ticker, current_date)
+            # Respect min_hold_days — suppress rank exits during the hold window.
+            # Stop-loss and SMA exits still fire because they represent real damage.
+            if self.p.min_hold_days > 0:
+                entry_date = pos.entry_date
+                if hasattr(entry_date, "date"):
+                    entry_date = entry_date.date()
+                cur_date = current_date.date() if hasattr(current_date, "date") else current_date
+                if (cur_date - entry_date).days < self.p.min_hold_days:
+                    continue
+
+            # Lookup current percentile rank — get_score returns
+            # (normalized_score, daily_pct_rank, trailing_pct, prob_elite).
+            score_data = self.score_lookup.get_score(current_date, ticker)
             if not score_data:
                 continue
-
-            # Use trailing 10-day percentile (same as entry ranking)
-            pct_rank = score_data.get('trailing_10d_pct', 0.0)
+            _, _, trailing_pct, _ = score_data
+            pct_rank = trailing_pct if trailing_pct is not None else 0.0
 
             # Exit if rank falls below threshold
             if pct_rank < self.p.exit_percentile_max:
@@ -527,6 +551,25 @@ class SEPAHybridV1(bt.Strategy):
                     date=current_date, ticker=ticker, score=score, reason='low_liquidity'
                 ))
                 continue
+
+            # Persistence gate (S5): require sustained high rank across recent
+            # window before entry. Skipped when persistence_window_days <= 0.
+            if self.p.persistence_window_days > 0 and self.p.persistence_min_count > 0:
+                rank_field = 'trailing' if self.p.rank_by == 'trailing' else 'daily'
+                persistent = self.score_lookup.check_persistence(
+                    ticker=ticker,
+                    date=current_date,
+                    window_days=self.p.persistence_window_days,
+                    min_count=self.p.persistence_min_count,
+                    rank_threshold=self.p.persistence_threshold,
+                    rank_field=rank_field,
+                )
+                if not persistent:
+                    self.signal_rejections.append(SignalRejection(
+                        date=current_date, ticker=ticker, score=score,
+                        reason='not_persistent',
+                    ))
+                    continue
 
             valid_candidates.append((ticker, score, trailing_pct, data))
 

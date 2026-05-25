@@ -314,9 +314,15 @@ class ClassificationEvaluator(BaseEvaluator):
         return per_class
 
     def _default_actionable_classes(self) -> List[int]:
-        """Last two classes are 'actionable' by default (Strong + Home Run for MFE)."""
+        """Last two classes are 'actionable' by default (Strong + Home Run for MFE).
+
+        For binary problems (n=2), only the positive class is actionable —
+        treating both classes as actionable defeats the purpose of the sweep.
+        """
         n = len(self.class_names) if self.class_names else 4
-        return [n - 2, n - 1] if n >= 2 else [n - 1]
+        if n <= 2:
+            return [n - 1]
+        return [n - 2, n - 1]
 
     def _compute_class_distribution(
         self,
@@ -512,6 +518,33 @@ class ClassificationEvaluator(BaseEvaluator):
 
         return df
 
+    @staticmethod
+    def _unwrap_booster(model: Any) -> Any:
+        """Return the underlying xgb.Booster if `model` is a binary-proba shim.
+
+        The trainer wraps binary boosters in `_BinaryProbaShim` so `predict`
+        returns 2-D probabilities for evaluator code. SHAP's TreeExplainer and
+        sklearn-style adapters need the raw booster — this peels the wrapper
+        without forcing callers to know about it.
+        """
+        return getattr(model, "_booster", model)
+
+    @staticmethod
+    def _one_hot(y_true: np.ndarray, n_classes: int) -> np.ndarray:
+        """One-hot encode y_true to shape (n, n_classes).
+
+        sklearn's `label_binarize` returns shape (n, 1) for binary inputs — only
+        the positive column — which breaks downstream code that iterates over
+        `range(n_classes)`. This helper always returns the full matrix.
+        """
+        from sklearn.preprocessing import label_binarize
+
+        binned = label_binarize(y_true, classes=list(range(n_classes)))
+        if n_classes == 2 and binned.shape[1] == 1:
+            # Prepend the negative-class column.
+            binned = np.hstack([1 - binned, binned])
+        return binned
+
     def _compute_roc_auc(
         self,
         y_true: np.ndarray,
@@ -519,10 +552,9 @@ class ClassificationEvaluator(BaseEvaluator):
     ) -> Dict[str, float]:
         """Compute ROC AUC for each class (one-vs-rest)."""
         from sklearn.metrics import roc_auc_score
-        from sklearn.preprocessing import label_binarize
 
         n_classes = y_pred_proba.shape[1]
-        y_true_bin = label_binarize(y_true, classes=range(n_classes))
+        y_true_bin = self._one_hot(y_true, n_classes)
 
         roc_auc = {}
         for i, class_name in enumerate(self.class_names or [f"Class_{i}" for i in range(n_classes)]):
@@ -542,10 +574,9 @@ class ClassificationEvaluator(BaseEvaluator):
     ) -> Dict[str, float]:
         """Compute PR AUC (Average Precision) for each class."""
         from sklearn.metrics import average_precision_score
-        from sklearn.preprocessing import label_binarize
 
         n_classes = y_pred_proba.shape[1]
-        y_true_bin = label_binarize(y_true, classes=range(n_classes))
+        y_true_bin = self._one_hot(y_true, n_classes)
 
         pr_auc = {}
         for i, class_name in enumerate(self.class_names or [f"Class_{i}" for i in range(n_classes)]):
@@ -564,10 +595,8 @@ class ClassificationEvaluator(BaseEvaluator):
         y_pred_proba: np.ndarray
     ) -> Dict[str, float]:
         """Compute Brier score for calibration quality."""
-        from sklearn.preprocessing import label_binarize
-
         n_classes = y_pred_proba.shape[1]
-        y_true_bin = label_binarize(y_true, classes=range(n_classes))
+        y_true_bin = self._one_hot(y_true, n_classes)
 
         brier_scores = {}
         for i, class_name in enumerate(self.class_names or [f"Class_{i}" for i in range(n_classes)]):
@@ -622,17 +651,35 @@ class ClassificationEvaluator(BaseEvaluator):
             for col in cat_cols:
                 X_sample[col] = X_sample[col].cat.codes.astype('int32')
 
-        # Compute SHAP values
-        explainer = shap.TreeExplainer(model)
+        # Compute SHAP values (raw booster — SHAP doesn't recognize our shim wrapper)
+        booster = self._unwrap_booster(model)
+        explainer = shap.TreeExplainer(booster)
         shap_values = explainer.shap_values(X_sample)
 
-        # SHAP values are per-class for multi-class models
-        # Shape: (n_classes, n_samples, n_features)
+        # Normalize shape across binary / multi-class boosters and SHAP versions:
+        #   - Multi-class, old SHAP  → list of `n_classes` arrays, each (n_samples, n_features)
+        #   - Multi-class, SHAP ≥0.46 → single ndarray (n_samples, n_features, n_classes)
+        #   - Binary logistic        → single ndarray (n_samples, n_features) of SHAP for class 1
+        # For the binary case we expose SHAP for class 1 only (negative-class
+        # SHAP is the negation and adds no information).
+        if isinstance(shap_values, list):
+            per_class_shap = [np.asarray(a) for a in shap_values]
+        else:
+            arr = np.asarray(shap_values)
+            if arr.ndim == 3:
+                # (n_samples, n_features, n_classes) → split along class axis
+                per_class_shap = [arr[:, :, c] for c in range(arr.shape[2])]
+            else:
+                per_class_shap = [arr]
+        names = self.class_names or [f"Class_{i}" for i in range(len(per_class_shap))]
+        # When the trainer uses a binary objective, class_names has 2 entries but
+        # SHAP gives us only the positive-class array. Restrict names to match.
+        if len(per_class_shap) < len(names):
+            names = names[-len(per_class_shap):]
 
-        # Get mean absolute SHAP values per class
         mean_shap_per_class = {}
-        for i, class_name in enumerate(self.class_names or [f"Class_{i}" for i in range(len(shap_values))]):
-            mean_abs_shap = np.abs(shap_values[i]).mean(axis=0)
+        for i, class_name in enumerate(names):
+            mean_abs_shap = np.abs(per_class_shap[i]).mean(axis=0)
             top_features_idx = np.argsort(mean_abs_shap)[::-1][:10]
             top_features = [
                 {
@@ -647,7 +694,7 @@ class ClassificationEvaluator(BaseEvaluator):
             'base_value': float(explainer.expected_value[0]) if hasattr(explainer.expected_value, '__len__') else float(explainer.expected_value),
             'mean_abs_shap_per_class': mean_shap_per_class,
             'sample_size': len(X_sample),
-            'shap_values_shape': [len(shap_values), len(X_sample), len(X_sample.columns)]
+            'shap_values_shape': [len(per_class_shap), len(X_sample), len(X_sample.columns)]
         }
 
     def _compute_permutation_importance(
@@ -682,6 +729,11 @@ class ClassificationEvaluator(BaseEvaluator):
 
         class _XGBAdapter(BaseEstimator, ClassifierMixin):
             """Adapter so sklearn.permutation_importance can call predict_proba on a Booster."""
+            # Newer sklearn sniffs this attribute (not just MRO) to decide whether
+            # an estimator is a classifier — without it, response_method=predict_proba
+            # is rejected as "Got a regressor".
+            _estimator_type = "classifier"
+
             def __init__(self, booster, n_classes: int):
                 self.booster = booster
                 self.classes_ = np.arange(n_classes)
@@ -689,16 +741,25 @@ class ClassificationEvaluator(BaseEvaluator):
             def fit(self, X, y):
                 return self  # already trained
 
+            def __sklearn_tags__(self):  # sklearn ≥ 1.6 tag protocol
+                tags = super().__sklearn_tags__()
+                tags.estimator_type = "classifier"
+                return tags
+
             def predict_proba(self, X):
                 X_clean = X.replace([np.inf, -np.inf], np.nan) if hasattr(X, "replace") else X
                 dmat = xgb.DMatrix(X_clean, enable_categorical=True)
-                return self.booster.predict(dmat)
+                proba = np.asarray(self.booster.predict(dmat))
+                # Binary boosters return 1-D P(class=1); sklearn scoring needs 2-D.
+                if proba.ndim == 1:
+                    proba = np.column_stack([1.0 - proba, proba])
+                return proba
 
             def predict(self, X):
                 proba = self.predict_proba(X)
                 return np.argmax(proba, axis=1)
 
-        adapter = _XGBAdapter(model, n_classes)
+        adapter = _XGBAdapter(self._unwrap_booster(model), n_classes)
         result = permutation_importance(
             adapter,
             X_use,

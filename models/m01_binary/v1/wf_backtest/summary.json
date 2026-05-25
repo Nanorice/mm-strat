@@ -1,0 +1,103 @@
+{
+  "per_fold": [
+    {
+      "fold_idx": 0,
+      "train_start": "2003-01-02",
+      "train_end": "2023-04-30",
+      "test_start": "2023-05-01",
+      "test_end": "2024-05-01",
+      "sharpe_ratio": 1.0065124181854108,
+      "max_drawdown": 10.438784260261551,
+      "win_rate": 39.361702127659576,
+      "total_return": 19.83158418883571,
+      "total_trades": 94,
+      "top_3_home_run_lift": 1.5650454215809766,
+      "scores_rows": 1982
+    },
+    {
+      "fold_idx": 1,
+      "train_start": "2003-01-02",
+      "train_end": "2024-04-30",
+      "test_start": "2024-05-01",
+      "test_end": "2025-05-01",
+      "sharpe_ratio": -0.26280816333043416,
+      "max_drawdown": 24.73923984354902,
+      "win_rate": 34.166666666666664,
+      "total_return": -5.450817414442587,
+      "total_trades": 120,
+      "top_3_home_run_lift": 1.6853083606323886,
+      "scores_rows": 2659
+    },
+    {
+      "fold_idx": 2,
+      "train_start": "2003-01-02",
+      "train_end": "2025-04-30",
+      "test_start": "2025-05-01",
+      "test_end": "2026-05-01",
+      "sharpe_ratio": 0.684047789666567,
+      "max_drawdown": 15.988109884376192,
+      "win_rate": 37.03703703703704,
+      "total_return": 16.79842367819471,
+      "total_trades": 162,
+      "top_3_home_run_lift": 1.619108606557377,
+      "scores_rows": 2494
+    },
+    {
+      "fold_idx": 3,
+      "train_start": "2003-01-02",
+      "train_end": "2026-04-30",
+      "test_start": "2026-05-01",
+      "test_end": "2026-05-22",
+      "sharpe_ratio": null,
+      "max_drawdown": 0.0,
+      "win_rate": 0,
+      "total_return": 0.0,
+      "total_trades": 0,
+      "top_3_home_run_lift": 1.3214285714285712,
+      "scores_rows": 111
+    }
+  ],
+  "summary": {
+    "n_folds": 4,
+    "mean_sharpe": 0.4759173481738479,
+    "worst_sharpe": -0.26280816333043416,
+    "positive_folds": 2,
+    "worst_max_drawdown": 24.73923984354902,
+    "mean_top_3_home_run_lift": 1.5477227400498283
+  },
+  "gates": [
+    {
+      "name": "wf_backtest_mean_sharpe",
+      "status": "fail",
+      "value": 0.4759173481738479,
+      "threshold": 0.5,
+      "detail": "mean Sharpe across 4 folds",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_worst_sharpe",
+      "status": "fail",
+      "value": -0.26280816333043416,
+      "threshold": -0.3,
+      "detail": "worst Sharpe=-0.263, positive_folds=2/4 (required 3)",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_worst_max_drawdown",
+      "status": "pass",
+      "value": 24.73923984354902,
+      "threshold": 35.0,
+      "detail": "worst-fold max DD (lower is better)",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_mean_top_3_home_run_lift",
+      "status": "fail",
+      "value": 1.5477227400498283,
+      "threshold": 5.0,
+      "detail": "mean top-3 home-run lift across folds",
+      "blocking": true
+    }
+  ],
+  "aggregate_equity_rows": 564
+}

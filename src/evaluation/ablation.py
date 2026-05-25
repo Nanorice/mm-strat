@@ -10,12 +10,23 @@ SHAP top-N, permutation top-N, and ablation top-M share ≥ K features.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
 
 from .gate import GateResult
+
+# Keys tried in order when selecting the primary comparison metric.
+# First key present in a metrics dict wins.
+_PRIMARY_METRIC_CANDIDATES = ["sharpe_ratio", "roc_auc", "weighted_f1"]
+
+
+def _primary_metric_key(metrics: dict) -> str:
+    for k in _PRIMARY_METRIC_CANDIDATES:
+        if k in metrics:
+            return k
+    return _PRIMARY_METRIC_CANDIDATES[0]
 
 
 @dataclass
@@ -27,6 +38,8 @@ class AblationDelta:
     baseline_return: Optional[float] = None
     ablated_return: Optional[float] = None
     delta_return: Optional[float] = None
+    # Set when the run used --no-backtest (classification metrics instead of Sharpe).
+    primary_metric: str = "sharpe_ratio"
 
 
 def compute_ablation_delta(
@@ -34,45 +47,59 @@ def compute_ablation_delta(
     ablated_metrics: dict,
     group_name: str,
 ) -> AblationDelta:
-    """Difference of (Sharpe, total_return) between baseline and ablated runs.
+    """Difference in primary metric between baseline and ablated runs.
 
-    Both dicts must contain at least `sharpe_ratio`; `total_return` optional.
+    In backtest mode the primary metric is `sharpe_ratio`; in --no-backtest
+    mode it falls back to `roc_auc` or `weighted_f1` — whichever key is
+    present first in `_PRIMARY_METRIC_CANDIDATES`.
+
+    The `baseline_sharpe` / `ablated_sharpe` / `delta_sharpe` fields on the
+    returned dataclass carry the primary metric value regardless of its name,
+    for downstream compatibility.
     """
-    b_sharpe = float(baseline_metrics.get("sharpe_ratio") or 0.0)
-    a_sharpe = float(ablated_metrics.get("sharpe_ratio") or 0.0)
+    key = _primary_metric_key(baseline_metrics)
+    b_primary = float(baseline_metrics.get(key) or 0.0)
+    a_primary = float(ablated_metrics.get(key) or 0.0)
     b_ret = baseline_metrics.get("total_return")
     a_ret = ablated_metrics.get("total_return")
     return AblationDelta(
         group_dropped=group_name,
-        baseline_sharpe=b_sharpe,
-        ablated_sharpe=a_sharpe,
-        delta_sharpe=a_sharpe - b_sharpe,
+        baseline_sharpe=b_primary,
+        ablated_sharpe=a_primary,
+        delta_sharpe=a_primary - b_primary,
         baseline_return=float(b_ret) if b_ret is not None else None,
         ablated_return=float(a_ret) if a_ret is not None else None,
         delta_return=(
             float(a_ret) - float(b_ret) if (a_ret is not None and b_ret is not None) else None
         ),
+        primary_metric=key,
     )
 
 
 def ablation_summary_payload(deltas: Iterable[AblationDelta], baseline_metrics: dict) -> dict:
-    """Pack baseline + per-group deltas into the JSON the plan calls for."""
+    """Pack baseline + per-group deltas into the summary JSON."""
+    key = _primary_metric_key(baseline_metrics)
+    delta_list = sorted(deltas, key=lambda x: x.delta_sharpe)
     return {
+        "primary_metric": key,
         "baseline": {
-            "sharpe_ratio": float(baseline_metrics.get("sharpe_ratio") or 0.0),
+            key: float(baseline_metrics.get(key) or 0.0),
             "total_return": baseline_metrics.get("total_return"),
             "max_drawdown": baseline_metrics.get("max_drawdown"),
             "win_rate": baseline_metrics.get("win_rate"),
+            # classification-mode extras (None when in backtest mode)
+            "weighted_f1": baseline_metrics.get("weighted_f1"),
+            "pos_class_precision": baseline_metrics.get("pos_class_precision"),
         },
         "ablations": [
             {
                 "group_dropped": d.group_dropped,
-                "sharpe_ratio": d.ablated_sharpe,
-                "delta_sharpe": d.delta_sharpe,
+                d.primary_metric: d.ablated_sharpe,
+                f"delta_{d.primary_metric}": d.delta_sharpe,
                 "total_return": d.ablated_return,
                 "delta_return": d.delta_return,
             }
-            for d in sorted(deltas, key=lambda x: x.delta_sharpe)
+            for d in delta_list
         ],
     }
 
@@ -81,7 +108,7 @@ def ablation_top_groups(
     deltas: Iterable[AblationDelta],
     n: int = 3,
 ) -> List[str]:
-    """Top-N most-impactful groups: largest negative delta_sharpe = biggest hurt."""
+    """Top-N most-impactful groups: largest negative delta = biggest hurt."""
     return [d.group_dropped for d in sorted(deltas, key=lambda x: x.delta_sharpe)[:n]]
 
 

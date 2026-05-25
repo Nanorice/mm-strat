@@ -59,6 +59,21 @@ def test_summary_payload_sorts_by_delta_sharpe():
     assert payload["baseline"]["sharpe_ratio"] == 1.0
 
 
+def test_summary_payload_classification_mode():
+    """--no-backtest: primary metric is roc_auc, not sharpe_ratio."""
+    baseline = {"roc_auc": 0.72, "weighted_f1": 0.61, "pos_class_precision": 0.45}
+    deltas = [
+        AblationDelta("Momentum", 0.72, 0.65, -0.07, primary_metric="roc_auc"),
+        AblationDelta("Volume", 0.72, 0.70, -0.02, primary_metric="roc_auc"),
+    ]
+    payload = ablation_summary_payload(deltas, baseline)
+    assert payload["primary_metric"] == "roc_auc"
+    assert payload["baseline"]["roc_auc"] == 0.72
+    abl = {a["group_dropped"]: a for a in payload["ablations"]}
+    assert abl["Momentum"]["delta_roc_auc"] == pytest.approx(-0.07)
+    assert abl["Volume"]["roc_auc"] == pytest.approx(0.70)
+
+
 def test_ablation_top_groups_returns_most_impactful():
     deltas = [
         AblationDelta("A", 1.0, 0.9, -0.1, None, None, None),

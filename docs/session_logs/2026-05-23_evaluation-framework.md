@@ -63,9 +63,35 @@ them into the live training script, evaluator, and daily orchestrator.
 **None blocked.** The phase ships clean.
 
 Caveats to be aware of next session:
-- **No end-to-end run on real data yet.** Every test uses synthetic fixtures or temp DuckDBs. The first time someone runs `python scripts/train_mfe_classifier.py --walk-forward --label-id mfe_4class_30d_v1`, expect to debug small things — likely candidates: (1) feature_parity_check reaching for `v_d3_deployment` which may not exist if views haven't been recreated post-ViewManager phase 5.1 fix; (2) categorical column casting in the orchestrator's scoring path may need adjustment when actual `sector`/`industry` enter the pipeline.
+- **First live run completed 2026-05-24 (see "Live run results" below).** Confirmed `evaluator_run` metadata, `calibration_audit` gate, and label-def freeze all work against real data. The framework caught a real ECE failure on first contact.
 - **`_log_prod_model_predictions` is best-effort.** Phase 8 catches all exceptions and just logs a warning. That's deliberate — we don't want prediction logging to break the daily pipeline — but it means silent failures need monitoring.
 - **`ModelRegistry._migrate_models_table` is brittle.** Pre-existing: it calls `PRAGMA table_info('models')` which raises `CatalogException` on a fresh DB instead of returning empty rows. Test fixtures work around this by pre-creating the `models` table. Not my code, but worth flagging.
+
+### 🟢 Live run results — `m01_prototype_may/v2_gated` (2026-05-24)
+
+Command:
+```
+python .\scripts\train_mfe_classifier.py --feature-set fs_m01_prototype \
+    --model-name m01_prototype_may --model-version v2_gated \
+    --no-holdout --skip-parity
+```
+
+**Phase A integration confirmed working end-to-end against real data for the first time:**
+- `evaluator_run` block populated correctly: `git_sha=db7b627`, `label_registry_id=mfe_4class_30d_v1`, `feature_set_id=fs_m01_prototype`, plus python_version/platform.
+- `label_definition.json` frozen to artifact dir.
+- `calibration_audit` gate fired **blocking-fail**: production class `Home Run (>30%)` ECE=0.1442 > threshold 0.05.
+- `--skip-parity` flag plumbed through correctly (used per the unresolved view fan-out bug below).
+
+**Model quality (separate from gate behaviour — the gate is what we shipped, the quality is what the data says):**
+- Accuracy 30.1% vs majority baseline 41.5% → below random.
+- ROC AUC `Strong (10-30%)` = 0.518 — essentially noise on the most ambiguous class.
+- Top-K lift is the only good news: `Home Run` @ K=10 = **4.12x** (precision 60% vs base 14.5%). For SELECTION that's still actionable even with poor calibration.
+- Performance decay 2024Q1 acc 0.347 → 2026Q2 acc 0.228. Features losing signal.
+
+**Two NEW Phase-A-scope follow-ups surfaced by the live run:**
+
+1. **🔴 Markdown report does not surface the `gates` block.** `results.json` has the blocking ECE failure but `report_*.md` only mentions "NOT VIABLE" via the low-accuracy heuristic — a reader looking at the .md alone misses that a promotion gate fired. **Fix:** add a `## 🚦 Promotion Gates` section to the report renderer in `ClassificationEvaluator._generate_report` (or wherever the markdown is assembled) listing each gate name / status / value / threshold / blocking.
+2. **🟡 `evaluator_run` doesn't record parity-skip.** When `--skip-parity` is used, the run's metadata looks identical to a parity-passing run — audit gap. **Fix:** stamp `parity_status: "skipped" | "passed" | "failed"` (and ideally `parity_skip_reason`) into `evaluator_run` in `BaseEvaluator._save_metrics_json`. Caller (`train_mfe_classifier.py`) needs to pass the parity outcome down.
 
 ### 🔴 Parity-check failure on `v_d2_training` vs `v_d3_deployment` (discovered 2026-05-23 PM)
 
@@ -116,13 +142,19 @@ INFO  feature_parity_check: done in 168.4s — passed=False ...
 ```
 
 ## ⏭️ Next Steps
-1. **🔴 Fix `v_d2_training` / `v_d3_deployment` fan-out** (separate session, ~half-day). The parity gate is currently un-trustworthy because the underlying views have multiple inconsistent rows per (ticker, date). See "Parity-check failure" section above. Until this is fixed, every training run needs `--skip-parity` and the metric should be flagged as "trained-without-parity-verification."
-2. **Re-run `m01_prototype_may/v2_gated` after the view fix** without `--skip-parity` to confirm the gate passes.
-3. **Re-evaluate `M01_baseline_v0.1` end-to-end under the new framework** (the "Overall DoD" item from §8 of the plan). Expect some gates to fail — that's the point. Decide which failures are real vs. spec-bugs.
-4. **Phase B §3.1 — Walk-forward backtest harness** (3-5d) — promotes the per-fold classifier results into actual backtest-validated robustness claims. Plan: [docs/plans/evaluation_implementation_plan_2026_05_23.md §3.1](../plans/evaluation_implementation_plan_2026_05_23.md).
-5. **Phase B §3.2 — Regime-conditional metrics** (1d) — promoted to P0 because S3 (regime routing) can't be validated without it.
-6. **Phase D §5.1 — Dashboard "Today" decision toggle** (1d) — the `daily_predictions` table is already being written; the UI just needs to add the 3-state widget. Coordinate with the dashboard uplift session in [2026-05-23-dashboard-uplift.md](2026-05-23-dashboard-uplift.md).
-7. **Authoring the label fingerprint into the registry table.** Currently labels live as JSON files. A future step (not in Phase A scope) is to mirror them into a DuckDB `label_registry` table so audits can join against historical labels.
+
+### Phase A residual work (this scope, before Phase B/C)
+1. **🔴 Surface `gates` block in the markdown report** — small renderer change in `ClassificationEvaluator`. Without this, blocking-fail is only visible via `results.json`. See "Live run results" item #1 above.
+2. **🟡 Stamp `parity_status` into `evaluator_run` metadata** — needs change in `BaseEvaluator._save_metrics_json` + caller wiring in `train_mfe_classifier.py`. See "Live run results" item #2 above.
+3. **🔴 Fix `v_d2_training` / `v_d3_deployment` fan-out** (separate session, ~half-day). The parity gate is un-trustworthy until the underlying views have a unique (ticker, date) grain. See "Parity-check failure" section above. Until this is fixed, every training run needs `--skip-parity`.
+4. **Re-run `m01_prototype_may/v2_gated` after the view fix** without `--skip-parity` to confirm the gate passes.
+5. **Re-evaluate `M01_baseline_v0.1` end-to-end under the new framework** — the "Overall DoD" item from §8 of the plan. The live `m01_prototype_may` run already exercised the framework; the production baseline has not been scored against the new gates yet. Expect some gates to fail — that's the point. Decide which failures are real vs. spec-bugs.
+
+### Phase B / C / D (later sessions)
+6. **Phase B §3.1 — Walk-forward backtest harness** (3-5d) — promotes the per-fold classifier results into actual backtest-validated robustness claims. Plan: [docs/plans/evaluation_implementation_plan_2026_05_23.md §3.1](../plans/evaluation_implementation_plan_2026_05_23.md).
+7. **Phase B §3.2 — Regime-conditional metrics** (1d) — promoted to P0 because S3 (regime routing) can't be validated without it.
+8. **Phase D §5.1 — Dashboard "Today" decision toggle** (1d) — the `daily_predictions` table is already being written; the UI just needs to add the 3-state widget. Coordinate with the dashboard uplift session in [2026-05-23-dashboard-uplift.md](2026-05-23-dashboard-uplift.md).
+9. **Authoring the label fingerprint into the registry table.** Currently labels live as JSON files. A future step (not in Phase A scope) is to mirror them into a DuckDB `label_registry` table so audits can join against historical labels.
 
 ## 💡 Context/Memory
 - **Plan vs. repo layout drift.** The plan repeatedly references `test/` but the repo uses `tests/`. The plan also references `label_registry/` and `scripts/migrations/` as if they exist — they didn't, I created them. Same for the convention that artifacts live under `models/<name>/<version>/evaluation/` — that part matched what `BaseEvaluator` already does.

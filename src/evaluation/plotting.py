@@ -31,6 +31,20 @@ FIGSIZE_LARGE = (12, 10)
 DPI = 150
 
 
+def _one_hot(y_true: np.ndarray, n_classes: int) -> np.ndarray:
+    """One-hot encode y_true to shape (n, n_classes).
+
+    sklearn's `label_binarize` returns shape (n, 1) for binary inputs — only
+    the positive column — which breaks code that iterates over `range(n_classes)`.
+    This helper always returns the full matrix.
+    """
+    from sklearn.preprocessing import label_binarize
+    binned = label_binarize(y_true, classes=list(range(n_classes)))
+    if n_classes == 2 and binned.shape[1] == 1:
+        binned = np.hstack([1 - binned, binned])
+    return binned
+
+
 class EvaluationPlotter:
     """Standardized plotting for model evaluation."""
 
@@ -231,11 +245,10 @@ class EvaluationPlotter:
             Path to saved plot
         """
         from sklearn.metrics import roc_curve, auc
-        from sklearn.preprocessing import label_binarize
 
         # Binarize labels for one-vs-rest
         n_classes = len(class_names)
-        y_true_bin = label_binarize(y_true, classes=range(n_classes))
+        y_true_bin = _one_hot(y_true, n_classes)
 
         # Compute ROC curve and AUC for each class
         fig, ax = plt.subplots(figsize=FIGSIZE_SMALL)
@@ -289,11 +302,10 @@ class EvaluationPlotter:
             Path to saved plot
         """
         from sklearn.metrics import precision_recall_curve, average_precision_score
-        from sklearn.preprocessing import label_binarize
 
         # Binarize labels
         n_classes = len(class_names)
-        y_true_bin = label_binarize(y_true, classes=range(n_classes))
+        y_true_bin = _one_hot(y_true, n_classes)
 
         # Compute PR curve and AP for each class
         fig, ax = plt.subplots(figsize=FIGSIZE_SMALL)
@@ -346,11 +358,10 @@ class EvaluationPlotter:
             Path to saved plot
         """
         from sklearn.calibration import calibration_curve
-        from sklearn.preprocessing import label_binarize
 
         # Binarize labels
         n_classes = len(class_names)
-        y_true_bin = label_binarize(y_true, classes=range(n_classes))
+        y_true_bin = _one_hot(y_true, n_classes)
 
         fig, ax = plt.subplots(figsize=FIGSIZE_SMALL)
 

@@ -1,0 +1,11 @@
+{
+  "label_id": "mfe_4class_v1",
+  "description": "4-class Maximum Favorable Excursion bucket measured over the SEPA holding period. Class boundaries (in % return): Noise (0-2], Moderate (2-10], Strong (10-30], Home Run (>30). MFE = MAX(high) / FIRST(close) - 1 aggregated across the trade session, which runs from entry_date to the SEPA exit (C1 OR C2 OR C6 lost). Trades still open at the end of the data window are capped at entry_date + 120 days for a deterministic outcome. Sourced from v_d2_training.mfe_pct (materialized by FeaturePipeline + ViewManager.create_all). Bucketing logic lives in scripts/train_mfe_classifier.py::create_mfe_labels.",
+  "target_col": "mfe_class",
+  "horizon_days": null,
+  "exit_rule": "C1 OR C2 OR C6 lost (close < SMA150 OR close < SMA200 OR close < SMA50). Trade defined by SepaWatchlistManager session boundaries; mfe_pct is the max close-to-close return reached within the open session. Open-at-end-of-data fallback: entry_date + 120 days.",
+  "bins": [2.0, 10.0, 30.0],
+  "source_query": "SELECT ticker, date, mfe_pct FROM v_d2_training WHERE feature_version = 'v3.1' AND mfe_pct IS NOT NULL",
+  "git_sha": "a2bb79a",
+  "generated_at": "2026-05-24T00:00:00"
+}

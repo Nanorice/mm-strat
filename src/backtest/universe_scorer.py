@@ -50,6 +50,13 @@ class UniverseScorer:
         self.calibration_bins = None
         self.calibration_values = None
         self._m01_features: list[str] = []
+        self._is_classifier = False
+        self._is_binary = False
+        self._num_classes = 0
+        # Isotonic calibrator (separate from the legacy decile calibration_path).
+        # Looked up at load_model() time as <m01_path.parent>/calibrator.joblib
+        # — co-located with the model so signal-gen finds it automatically.
+        self._iso_calibrator = None
 
     def load_model(self):
         """Load M01 model and calibration table."""
@@ -70,6 +77,14 @@ class UniverseScorer:
             self._is_classifier = True
             self._num_classes = int(num_class)
             logger.info(f"M01 is a {self._num_classes}-class classifier (objective={objective})")
+        elif 'binary' in objective:
+            # binary:logistic returns 1-D P(class=1); we treat it as a 2-class
+            # classifier with the positive class as the production class.
+            self.m01_model = xgb.XGBClassifier()
+            self._is_classifier = True
+            self._num_classes = 2
+            self._is_binary = True
+            logger.info(f"M01 is a binary classifier (objective={objective})")
         else:
             self.m01_model = xgb.XGBRegressor()
             self._is_classifier = False
@@ -77,6 +92,17 @@ class UniverseScorer:
 
         self.m01_model.load_model(str(self.m01_path))
         logger.info(f"Loaded M01 from {self.m01_path}")
+
+        # Look for an isotonic calibrator co-located with the model (created by
+        # the trainer when --with-calibration is set).
+        iso_path = self.m01_path.parent / "calibrator.joblib"
+        if iso_path.exists():
+            try:
+                from src.evaluation.calibrator import IsotonicCalibrator
+                self._iso_calibrator = IsotonicCalibrator.load(iso_path)
+                logger.info(f"Loaded isotonic calibrator from {iso_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load isotonic calibrator: {e}")
 
         if self.calibration_path and self.calibration_path.exists():
             with open(self.calibration_path) as f:
@@ -309,15 +335,20 @@ class UniverseScorer:
         if self._is_classifier:
             import xgboost as xgb
             dtest = xgb.DMatrix(X, enable_categorical=True)
-            proba = self.m01_model.get_booster().predict(dtest)
-            midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
-            calibrated_scores = (proba * midpoints).sum(axis=1)
-            if proba.shape[1] >= 4:
-                prob_elite = proba[:, 3]
-            elif proba.shape[1] == 2:
-                prob_elite = proba[:, 1]
+            proba = np.asarray(self.m01_model.get_booster().predict(dtest))
+            if self._is_binary:
+                p_pos = proba if proba.ndim == 1 else proba[:, -1]
+                prob_elite = self._iso_calibrator.transform(p_pos) if self._iso_calibrator else p_pos
+                calibrated_scores = (1.0 - prob_elite) * 3.0 + prob_elite * 70.0
             else:
-                prob_elite = proba[:, -1]
+                midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
+                calibrated_scores = (proba * midpoints).sum(axis=1)
+                if proba.shape[1] >= 4:
+                    prob_elite = proba[:, 3]
+                elif proba.shape[1] == 2:
+                    prob_elite = proba[:, 1]
+                else:
+                    prob_elite = proba[:, -1]
             logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
         else:
             import xgboost as xgb
@@ -545,12 +576,23 @@ class UniverseScorer:
 
         prob_elite = None
         if self._is_classifier:
-            midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
             import xgboost as xgb
             dtest = xgb.DMatrix(X, enable_categorical=True)
-            proba = self.m01_model.get_booster().predict(dtest)
-            calibrated_scores = (proba * midpoints).sum(axis=1)
-            prob_elite = proba[:, -1]
+            proba_raw = np.asarray(self.m01_model.get_booster().predict(dtest))
+            if self._is_binary:
+                # binary:logistic returns 1-D P(class=1). Midpoints reflect
+                # average MFE in each bucket: ~3% for Not-Home-Run, ~70% for Home-Run.
+                if proba_raw.ndim == 1:
+                    p_pos = proba_raw
+                else:
+                    p_pos = proba_raw[:, -1]
+                prob_elite = self._iso_calibrator.transform(p_pos) if self._iso_calibrator else p_pos
+                # Expected-MFE score (used downstream for ranking / sizing).
+                calibrated_scores = (1.0 - prob_elite) * 3.0 + prob_elite * 70.0
+            else:
+                midpoints = np.array([1.0, 6.0, 20.0, 40.0])[:self._num_classes]
+                calibrated_scores = (proba_raw * midpoints).sum(axis=1)
+                prob_elite = proba_raw[:, -1]
             logger.info(f"Expected MFE range: {calibrated_scores.min():.2f} to {calibrated_scores.max():.2f}")
         else:
             import xgboost as xgb

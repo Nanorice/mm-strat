@@ -1,0 +1,19 @@
+{
+  "sharpe_ratio": null,
+  "max_drawdown": 0.0,
+  "max_drawdown_len": 0.0,
+  "total_trades": 0,
+  "won_trades": 0,
+  "lost_trades": 0,
+  "win_rate": 0,
+  "gross_profit": 0,
+  "net_profit": 0,
+  "avg_return": 0.0,
+  "sqn": 0,
+  "calmar_ratio": 0.0,
+  "annualized_return": 0.0,
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "top_3_home_run_lift": 1.3214285714285712
+}

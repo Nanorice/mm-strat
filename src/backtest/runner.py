@@ -83,6 +83,7 @@ class SEPABacktestRunner:
         scores_df: pd.DataFrame,
         max_tickers: Optional[int] = None,
         specific_tickers: List[str] = None,
+        strategy_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """Configure cerebro with regime feed, price feeds, strategy, analyzers.
 
@@ -91,7 +92,11 @@ class SEPABacktestRunner:
                        date, ticker, normalized_score, daily_pct_rank, trailing_pct, prob_elite.
             max_tickers: Cap ticker count (smoke-testing).
             specific_tickers: Restrict to this whitelist.
+            strategy_kwargs: Extra keyword args passed straight through to
+                SEPAHybridV1 (e.g., entry_top_n=5, min_hold_days=10). Lets
+                strategy-array callers configure variants without subclassing.
         """
+        self._strategy_kwargs = strategy_kwargs or {}
         logger.info("Setting up backtest (DuckDB)...")
         self.cerebro = bt.Cerebro()
         self.scores_df = scores_df
@@ -229,6 +234,7 @@ class SEPABacktestRunner:
         self.cerebro.addstrategy(
             SEPAHybridV1,
             scores_df=self.scores_df,
+            **self._strategy_kwargs,
         )
 
         # === ADD ANALYZERS ===

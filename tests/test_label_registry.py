@@ -13,7 +13,7 @@ from src.evaluation.label_registry import LabelDefinition
 
 def _make(**overrides) -> LabelDefinition:
     base = dict(
-        label_id="mfe_4class_30d_v1",
+        label_id="mfe_4class_v1",
         description="4-class MFE within 30 trading days post-breakout",
         target_col="mfe_class",
         horizon_days=30,

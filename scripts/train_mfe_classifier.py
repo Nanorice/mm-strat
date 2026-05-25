@@ -18,6 +18,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import duckdb
 import numpy as np
@@ -42,6 +43,8 @@ from src.evaluation.walk_forward_backtest import (
     run_walk_forward_backtest,
 )
 from src.evaluation.drift import reference_snapshot
+from src.evaluation.calibrator import IsotonicCalibrator, calibrator_path_for
+from src.evaluation.calibration import expected_calibration_error
 from src.model_registry import ModelRegistry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -120,40 +123,92 @@ def validate_features(df: pd.DataFrame, feature_list: list[str]) -> tuple[list[s
     return valid, missing
 
 
-def create_mfe_labels(df: pd.DataFrame, return_col: str = 'mfe_pct') -> pd.Series:
-    """Create 4-class MFE labels: Noise / Moderate / Strong / Home Run."""
-    conditions = [
-        (df[return_col] <= 2.0),
-        (df[return_col] > 2.0) & (df[return_col] <= 10.0),
-        (df[return_col] > 10.0) & (df[return_col] <= 30.0),
-        (df[return_col] > 30.0),
-    ]
-    labels = np.select(conditions, [0, 1, 2, 3], default=0)
+def create_mfe_labels(
+    df: pd.DataFrame,
+    bins: list[float],
+    return_col: str = 'mfe_pct',
+) -> pd.Series:
+    """Bucket `return_col` into integer class indices using `bins` as upper edges.
+
+    `bins=[2,10,30]` → 4 classes (Noise/Moderate/Strong/HomeRun, original behavior).
+    `bins=[30]` → 2 classes (0 if mfe<=30, 1 if mfe>30).
+    """
+    if not bins:
+        raise ValueError("bins must be a non-empty list of upper edges")
+    sorted_bins = sorted(bins)
+    conditions = []
+    prev = -np.inf
+    for edge in sorted_bins:
+        conditions.append((df[return_col] > prev) & (df[return_col] <= edge))
+        prev = edge
+    conditions.append(df[return_col] > prev)
+    choices = list(range(len(conditions)))
+    labels = np.select(conditions, choices, default=0)
 
     unique, counts = np.unique(labels, return_counts=True)
-    logger.info("📊 MFE Class Distribution:")
+    logger.info(f"📊 Class Distribution (bins={sorted_bins}, n_classes={len(choices)}):")
     for cls, count in zip(unique, counts):
         logger.info(f"   Class {cls}: {count:,} ({count / len(labels) * 100:.1f}%)")
 
     return pd.Series(labels, index=df.index)
 
 
-DEFAULT_HYPERPARAMS: dict = {
-    'objective': 'multi:softprob',
-    'num_class': 4,
-    'max_depth': 4,
-    'learning_rate': 0.05,
-    'subsample': 0.8,
-    'colsample_bytree': 0.8,
-    'eval_metric': 'mlogloss',
-    'random_state': 42,
-    'tree_method': 'hist',
-    'enable_categorical': True,
-}
+def _class_names_from_bins(bins: list[float]) -> list[str]:
+    """Default human-readable class names derived from bin edges."""
+    sorted_bins = sorted(bins)
+    if sorted_bins == [2.0, 10.0, 30.0]:
+        return ['Noise (0-2%)', 'Moderate (2-10%)', 'Strong (10-30%)', 'Home Run (>30%)']
+    if len(sorted_bins) == 1:
+        return [f'Not Home Run (<={sorted_bins[0]:.0f}%)', f'Home Run (>{sorted_bins[0]:.0f}%)']
+    names = []
+    prev = 0.0
+    for edge in sorted_bins:
+        names.append(f'({prev:.0f}-{edge:.0f}%]')
+        prev = edge
+    names.append(f'>{prev:.0f}%')
+    return names
+
+
+def _xgb_params_for_n_classes(n_classes: int) -> dict:
+    """Multi-class softprob for n>=3; binary logistic for n=2."""
+    base = {
+        'max_depth': 4,
+        'learning_rate': 0.05,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'random_state': 42,
+        'tree_method': 'hist',
+    }
+    if n_classes == 2:
+        base.update({'objective': 'binary:logistic', 'eval_metric': 'logloss'})
+    else:
+        base.update({'objective': 'multi:softprob', 'num_class': n_classes, 'eval_metric': 'mlogloss'})
+    return base
+
 
 NUM_BOOST_ROUND = 100
 EARLY_STOPPING_ROUNDS = 20
-LABEL_THRESHOLDS = [0, 2, 10, 30]  # upper bounds per class (last is open-ended)
+
+
+class _BinaryProbaShim:
+    """Wrap an XGBoost binary booster so predict() returns 2-D [P(0), P(1)].
+
+    The classification evaluator + WF aggregator both assume multi-class
+    softprob output (shape [n, n_classes]); binary:logistic returns 1-D. This
+    adapter lets binary labels flow through the same evaluator path unchanged.
+    """
+
+    def __init__(self, booster: xgb.Booster) -> None:
+        self._booster = booster
+
+    def predict(self, dmat: xgb.DMatrix) -> np.ndarray:
+        p = np.asarray(self._booster.predict(dmat))
+        if p.ndim == 1:
+            return np.column_stack([1.0 - p, p])
+        return p
+
+    def __getattr__(self, name: str):
+        return getattr(self._booster, name)
 
 
 def train_mfe_classifier(
@@ -177,7 +232,7 @@ def train_mfe_classifier(
     logger.info(f"⚖️  Class weights: {class_weights}")
 
     if params is None:
-        params = dict(DEFAULT_HYPERPARAMS)
+        params = _xgb_params_for_n_classes(len(classes))
 
     X_train = X_train.replace([np.inf, -np.inf], np.nan)
     X_val = X_val.replace([np.inf, -np.inf], np.nan)
@@ -243,7 +298,7 @@ def parse_args() -> argparse.Namespace:
                              "metrics reported are validation-set, not unbiased test metrics.")
     parser.add_argument("--promote-prod", action="store_true",
                         help="After registration, mark this version as prod (archives previous prod).")
-    parser.add_argument("--label-id", default="mfe_4class_30d_v1",
+    parser.add_argument("--label-id", default="mfe_4class_v1",
                         help="Label registry id (file label_registry/<id>.json must exist).")
     parser.add_argument("--skip-parity", action="store_true",
                         help="Skip the train-vs-deploy feature parity check (emergency override).")
@@ -272,6 +327,10 @@ def parse_args() -> argparse.Namespace:
                         help="Output dir for per-fold backtest artifacts (default: models/<name>/<version>/wf_backtest/).")
     parser.add_argument("--wf-backtest-initial-cash", type=float, default=100_000.0,
                         help="Initial cash for each fold's SEPABacktestRunner.")
+    parser.add_argument("--with-calibration", action="store_true",
+                        help="Fit an isotonic probability calibrator on the val slice and save it "
+                             "to models/<name>/<version>/calibrator.joblib. Adds pre/post ECE "
+                             "to results.json. Only meaningful for binary classifiers.")
     parser.add_argument("--db", type=Path, default=DB_PATH)
     return parser.parse_args()
 
@@ -366,8 +425,12 @@ def main() -> None:
             logger.warning(f"   ... and {len(missing_features) - 10} more")
     logger.info(f"✅ Valid features: {len(valid_features)}")
 
-    # 4. Labels + features
-    y = create_mfe_labels(df, return_col='mfe_pct')
+    # 4. Labels + features — bins come from the frozen label definition
+    label_bins = list(label_def.bins) if label_def.bins else [2.0, 10.0, 30.0]
+    y = create_mfe_labels(df, bins=label_bins, return_col='mfe_pct')
+    n_classes = len(label_bins) + 1
+    class_names = _class_names_from_bins(label_bins)
+    train_params = _xgb_params_for_n_classes(n_classes)
     X = df[valid_features].copy()
 
     # XGBoost requires `category` dtype for categoricals (object dtype is rejected
@@ -435,13 +498,14 @@ def main() -> None:
         logger.warning(f"⚠️  Suspicious features: {feature_check['suspicious_features']}")
 
     # 7. Train
-    model, training_info = train_mfe_classifier(X_train, y_train, X_val, y_val)
+    booster, training_info = train_mfe_classifier(X_train, y_train, X_val, y_val, params=train_params)
+    # Wrap binary objective so evaluator gets 2-D probabilities. Multi-class passes through.
+    model = _BinaryProbaShim(booster) if n_classes == 2 else booster
 
     # 8. Evaluate
     output_dir = Path(__file__).parent.parent / "models"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    class_names = ['Noise (0-2%)', 'Moderate (2-10%)', 'Strong (10-30%)', 'Home Run (>30%)']
     evaluator = ClassificationEvaluator(
         model_name=args.model_name,
         model_version=args.model_version,
@@ -483,8 +547,64 @@ def main() -> None:
     model_dir = output_dir / args.model_name / args.model_version
     model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / "model.json"
-    model.save_model(str(model_path))
+    booster.save_model(str(model_path))
     logger.info(f"💾 Model saved to {model_path}")
+
+    # 9a. Isotonic probability calibration (binary only).
+    # Fitted on the val slice; persisted alongside model.json so backtest /
+    # deployment can apply it transparently. Pre/post ECE merged into
+    # results.json for audit. Non-fatal if it errors — model still ships.
+    if args.with_calibration:
+        if n_classes != 2:
+            logger.warning(
+                "⚠️  --with-calibration set but n_classes=%d; isotonic calibrator "
+                "expects binary labels. Skipping.", n_classes
+            )
+        else:
+            try:
+                X_val_clean = X_val.replace([np.inf, -np.inf], np.nan)
+                dval = xgb.DMatrix(X_val_clean, enable_categorical=True)
+                proba_val = np.asarray(booster.predict(dval))
+                p_raw_pos = proba_val if proba_val.ndim == 1 else proba_val[:, 1]
+                y_val_arr = np.asarray(y_val.values if hasattr(y_val, "values") else y_val)
+
+                pre_ece = expected_calibration_error(y_val_arr, p_raw_pos, n_bins=10)["ece"]
+                cal = IsotonicCalibrator().fit(y_val_arr, p_raw_pos, model_version_id=None)
+                p_cal_pos = cal.transform(p_raw_pos)
+                post_ece = expected_calibration_error(y_val_arr, p_cal_pos, n_bins=10)["ece"]
+                cal.metadata.pre_ece = float(pre_ece)
+                cal.metadata.post_ece = float(post_ece)
+
+                cal_path = calibrator_path_for(model_dir)
+                cal.save(cal_path)
+                logger.info(
+                    "📐 Calibrator: pre_ece=%.4f → post_ece=%.4f (n_fit=%d)",
+                    pre_ece, post_ece, len(y_val_arr),
+                )
+
+                # Merge calibration block into results.json so the report + gates see it.
+                results_json_path = evaluator.eval_dir / "results.json"
+                if results_json_path.exists():
+                    existing = json.loads(results_json_path.read_text())
+                    existing["calibration"] = {
+                        "method": "isotonic",
+                        "pre_ece": float(pre_ece),
+                        "post_ece": float(post_ece),
+                        "n_fit_samples": int(len(y_val_arr)),
+                        "calibrator_path": str(cal_path.relative_to(model_dir.parent.parent)),
+                    }
+                    existing.setdefault("gates", []).append({
+                        "name": "calibration_ece_post",
+                        "status": "pass" if post_ece < 0.10 else "fail",
+                        "value": float(post_ece),
+                        "threshold": 0.10,
+                        "detail": f"post-isotonic ECE (pre={pre_ece:.4f})",
+                        "blocking": True,
+                    })
+                    results_json_path.write_text(json.dumps(existing, indent=2, default=str))
+                    logger.info("📝 Calibration metrics merged into %s", results_json_path)
+            except Exception as e:
+                logger.warning("⚠️  Calibration step failed (non-blocking): %s", e)
 
     # Freeze the label definition into the artifact dir.
     label_def.to_json(model_dir / "label_definition.json")
@@ -547,7 +667,7 @@ def main() -> None:
     weighted_f1 = eval_results.get('weighted_f1') if not args.no_holdout else None
     macro_f1 = eval_results.get('macro_f1') if not args.no_holdout else None
 
-    hyperparams = {k: v for k, v in DEFAULT_HYPERPARAMS.items()
+    hyperparams = {k: v for k, v in train_params.items()
                    if k not in ('eval_metric', 'random_state', 'tree_method', 'enable_categorical')}
 
     try:
@@ -566,7 +686,7 @@ def main() -> None:
                     'num_boost_round': NUM_BOOST_ROUND,
                     'early_stopping_rounds': EARLY_STOPPING_ROUNDS,
                     'best_iteration': training_info['best_iteration'],
-                    'label_thresholds': LABEL_THRESHOLDS,
+                    'label_thresholds': label_bins,
                     'class_weighting': 'balanced',
                     'class_weights': training_info['class_weights'],
                 },
@@ -612,7 +732,7 @@ def main() -> None:
             valid_features=valid_features,
             class_names=class_names,
             model_dir=model_dir,
-            train_params=DEFAULT_HYPERPARAMS,
+            train_params=train_params,
             wf_step=args.wf_step,
             wf_test_start=args.wf_test_start,
             wf_min_train_years=args.wf_min_train_years,
@@ -640,6 +760,11 @@ def main() -> None:
                 Path(args.wf_backtest_output) if args.wf_backtest_output
                 else model_dir / "wf_backtest"
             )
+            # If we fitted a calibrator, point the WF backtest at it so each
+            # fold's prob_elite is in true-base-rate units (matters for any
+            # absolute-threshold strategy run later).
+            cal_path = calibrator_path_for(model_dir)
+            wf_calibrator_path = cal_path if cal_path.exists() else None
             try:
                 wf_bt_agg = _run_walk_forward_backtest_block(
                     fold_results=fold_results,
@@ -647,6 +772,7 @@ def main() -> None:
                     production_class_idx=len(class_names) - 1,
                     db_path=args.db,
                     initial_cash=args.wf_backtest_initial_cash,
+                    calibrator_path=wf_calibrator_path,
                 )
                 # Merge into results.json so the §6 promotion gate sees these too.
                 if results_json_path.exists():
@@ -780,6 +906,8 @@ def _run_walk_forward_backtest_block(
     production_class_idx: int,
     db_path: Path,
     initial_cash: float = 100_000.0,
+    calibrator_path: Optional[Path] = None,
+    trailing_window: int = 10,
 ) -> dict:
     """Run a SEPA backtest per fold and emit aggregated gates.
 
@@ -841,6 +969,8 @@ def _run_walk_forward_backtest_block(
         production_class_idx=production_class_idx,
         backtest_fn=backtest_fn,
         output_dir=output_dir,
+        calibrator_path=calibrator_path,
+        trailing_window=trailing_window,
     )
     agg = aggregate_walk_forward_backtest(bt_results)
     summary_path = output_dir / "summary.json"

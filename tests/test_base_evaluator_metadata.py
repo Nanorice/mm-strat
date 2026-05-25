@@ -36,7 +36,7 @@ def _build_stub(tmp_path: Path, **overrides) -> _StubEvaluator:
 def test_metadata_block_contains_required_fields(tmp_path):
     ev = _build_stub(
         tmp_path,
-        label_registry_id="mfe_4class_30d_v1",
+        label_registry_id="mfe_4class_v1",
         feature_set_id="M01_baseline_v0.1",
         pipeline_run_id=42,
     )
@@ -57,7 +57,7 @@ def test_metadata_block_contains_required_fields(tmp_path):
     for required in ["git_sha", "python_version", "label_registry_id", "feature_set_id", "pipeline_run_id"]:
         assert required in run, f"missing key: {required}"
 
-    assert run["label_registry_id"] == "mfe_4class_30d_v1"
+    assert run["label_registry_id"] == "mfe_4class_v1"
     assert run["feature_set_id"] == "M01_baseline_v0.1"
     assert run["pipeline_run_id"] == 42
     assert run["python_version"]  # non-empty

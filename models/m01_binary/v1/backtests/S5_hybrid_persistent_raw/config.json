@@ -1,0 +1,20 @@
+{
+  "id": "S5_hybrid_persistent",
+  "description": "Persistence-gated entry (top-30% trailing rank, 3 of last 5 days), fixed 8-position cap, 10-day min hold.",
+  "strategy_kwargs": {
+    "entry_mode": "top_n",
+    "entry_top_n": 8,
+    "rank_by": "trailing",
+    "regime_max_pos": {
+      "0": 0,
+      "1": 8,
+      "2": 8,
+      "3": 8,
+      "4": 8
+    },
+    "persistence_window_days": 5,
+    "persistence_min_count": 3,
+    "persistence_threshold": 0.7,
+    "min_hold_days": 10
+  }
+}

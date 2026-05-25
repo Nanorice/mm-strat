@@ -149,6 +149,61 @@ class ScoreLookup:
 
         return day_data.get(ticker)
 
+    def check_persistence(
+        self,
+        ticker: str,
+        date: datetime,
+        window_days: int,
+        min_count: int,
+        rank_threshold: float,
+        rank_field: Literal['trailing', 'daily'] = 'trailing',
+    ) -> bool:
+        """Return True if `ticker` has had `rank_field` >= `rank_threshold` on
+        at least `min_count` of the last `window_days` trading days (inclusive
+        of `date`).
+
+        Used by the S5 "hybrid_persistent" strategy to require a candidate
+        sustained a high cohort rank rather than spiking once and fading.
+        Calendar gaps (holidays, missing data) are skipped — the window walks
+        back through indexed dates only.
+
+        Args:
+            ticker: symbol to query.
+            date: anchor date (last day of the window, inclusive).
+            window_days: lookback length in trading days.
+            min_count: minimum days at-or-above threshold required to pass.
+            rank_threshold: percentile floor on the rank field (0.0–1.0).
+            rank_field: which rank to check — 'trailing' or 'daily'.
+
+        Returns:
+            True if persistence criterion met. False otherwise (including when
+            the ticker has fewer than `window_days` indexed observations).
+        """
+        target_idx = 1 if rank_field == 'daily' else 2  # tuple is (norm, daily, trailing, prob)
+        # Walk back through indexed dates ≤ `date`.
+        all_dates = self.get_available_dates()
+        anchor = date.date() if hasattr(date, 'date') else date
+        # Bisect for the rightmost date <= anchor.
+        i = len(all_dates) - 1
+        while i >= 0 and all_dates[i] > anchor:
+            i -= 1
+        if i < 0:
+            return False
+
+        seen = 0
+        hits = 0
+        while i >= 0 and seen < window_days:
+            day = all_dates[i]
+            day_data = self._index.get(day)
+            if day_data and ticker in day_data:
+                rank_val = day_data[ticker][target_idx]
+                if rank_val is not None and rank_val >= rank_threshold:
+                    hits += 1
+                seen += 1
+            i -= 1
+
+        return hits >= min_count
+
     def get_available_dates(self) -> List[datetime]:
         """Get all dates with score data."""
         return sorted(self._index.keys())
