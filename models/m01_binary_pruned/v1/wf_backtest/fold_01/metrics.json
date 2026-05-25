@@ -1,0 +1,19 @@
+{
+  "sharpe_ratio": -0.2677561467715672,
+  "max_drawdown": 27.227313171069756,
+  "max_drawdown_len": 123,
+  "total_trades": 122,
+  "won_trades": 39,
+  "lost_trades": 79,
+  "win_rate": 31.967213114754102,
+  "gross_profit": -4591.760275392397,
+  "net_profit": -6749.181570520604,
+  "avg_return": -0.023856206706133715,
+  "sqn": -0.36311245459418123,
+  "calmar_ratio": 0.0,
+  "annualized_return": 0.0,
+  "starting_value": 100000.0,
+  "ending_value": 93940.99988569431,
+  "total_return": -6.059000114305687,
+  "top_3_home_run_lift": 1.6853083606323886
+}

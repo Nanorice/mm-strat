@@ -1,0 +1,1296 @@
+{
+  "accuracy": 0.6238284066330209,
+  "weighted_f1": 0.6793443462284873,
+  "macro_f1": 0.5477906206127403,
+  "micro_f1": 0.6238284066330209,
+  "test_samples": 5548,
+  "confusion_matrix": [
+    [
+      2868,
+      1874
+    ],
+    [
+      213,
+      593
+    ]
+  ],
+  "classification_report": {
+    "Not Home Run (<=30%)": {
+      "precision": 0.9308666017526777,
+      "recall": 0.6048080978490089,
+      "f1-score": 0.7332225488942861,
+      "support": 4742.0
+    },
+    "Home Run (>30%)": {
+      "precision": 0.24037292257803,
+      "recall": 0.7357320099255583,
+      "f1-score": 0.3623586923311946,
+      "support": 806.0
+    },
+    "accuracy": 0.6238284066330209,
+    "macro avg": {
+      "precision": 0.5856197621653538,
+      "recall": 0.6702700538872837,
+      "f1-score": 0.5477906206127403,
+      "support": 5548.0
+    },
+    "weighted avg": {
+      "precision": 0.8305533527593889,
+      "recall": 0.623828406633021,
+      "f1-score": 0.6793443462284873,
+      "support": 5548.0
+    }
+  },
+  "per_class_metrics": {
+    "Not Home Run (<=30%)": {
+      "precision": 0.9308666017526777,
+      "recall": 0.6048080978490089,
+      "f1-score": 0.7332225488942861,
+      "support": 4742.0
+    },
+    "Home Run (>30%)": {
+      "precision": 0.24037292257803,
+      "recall": 0.7357320099255583,
+      "f1-score": 0.3623586923311946,
+      "support": 806.0
+    }
+  },
+  "feature_importance": [
+    {
+      "feature": "adr_20d",
+      "gain": 345.7370300292969
+    },
+    {
+      "feature": "rs",
+      "gain": 201.99920654296875
+    },
+    {
+      "feature": "ema_8_21_ratio",
+      "gain": 90.3563232421875
+    },
+    {
+      "feature": "return_1d",
+      "gain": 84.27210235595703
+    },
+    {
+      "feature": "RS_vs_Industry",
+      "gain": 70.7684555053711
+    },
+    {
+      "feature": "industry",
+      "gain": 70.59818267822266
+    },
+    {
+      "feature": "RS_vs_Sector",
+      "gain": 63.12704849243164
+    },
+    {
+      "feature": "price_vs_spy_ma63",
+      "gain": 57.17772674560547
+    },
+    {
+      "feature": "mom_21d",
+      "gain": 52.938167572021484
+    },
+    {
+      "feature": "RS_Universe_Rank",
+      "gain": 51.77775955200195
+    },
+    {
+      "feature": "return_60d",
+      "gain": 50.73954772949219
+    },
+    {
+      "feature": "dollar_volume_avg_20",
+      "gain": 49.51734161376953
+    },
+    {
+      "feature": "pe_ratio",
+      "gain": 41.65821075439453
+    },
+    {
+      "feature": "net_income",
+      "gain": 41.610313415527344
+    },
+    {
+      "feature": "revenue_cagr_3y",
+      "gain": 39.93632507324219
+    },
+    {
+      "feature": "m03_pillar_risk",
+      "gain": 39.78118133544922
+    },
+    {
+      "feature": "return_5d",
+      "gain": 38.548519134521484
+    },
+    {
+      "feature": "shares_outstanding",
+      "gain": 38.00426483154297
+    },
+    {
+      "feature": "price_accel_10d",
+      "gain": 37.21595764160156
+    },
+    {
+      "feature": "debt_to_equity",
+      "gain": 36.92647171020508
+    },
+    {
+      "feature": "m03_pillar_trend",
+      "gain": 36.13279724121094
+    },
+    {
+      "feature": "sma_ratio_150_200",
+      "gain": 35.77666473388672
+    },
+    {
+      "feature": "eps_diluted",
+      "gain": 35.224857330322266
+    },
+    {
+      "feature": "mom_slope_63_126",
+      "gain": 34.86239242553711
+    },
+    {
+      "feature": "RS_Sector_Rank",
+      "gain": 34.7093505859375
+    },
+    {
+      "feature": "pb_ratio",
+      "gain": 34.338653564453125
+    },
+    {
+      "feature": "rs_delta",
+      "gain": 34.33487319946289
+    },
+    {
+      "feature": "RS_Industry_Rank",
+      "gain": 34.2932014465332
+    },
+    {
+      "feature": "roa",
+      "gain": 34.27699661254883
+    },
+    {
+      "feature": "alpha009",
+      "gain": 34.09446716308594
+    },
+    {
+      "feature": "alpha041",
+      "gain": 34.05526351928711
+    },
+    {
+      "feature": "mom_252d",
+      "gain": 33.986270904541016
+    },
+    {
+      "feature": "mom_slope_21_63",
+      "gain": 33.49159622192383
+    },
+    {
+      "feature": "eps_growth_yoy",
+      "gain": 33.07186508178711
+    },
+    {
+      "feature": "Sector_Momentum",
+      "gain": 32.25760269165039
+    },
+    {
+      "feature": "revenue",
+      "gain": 31.78524398803711
+    },
+    {
+      "feature": "alpha060",
+      "gain": 31.75885772705078
+    },
+    {
+      "feature": "ema_21_50_ratio",
+      "gain": 31.69709014892578
+    },
+    {
+      "feature": "price_vs_sma_50_vol_adj",
+      "gain": 31.583538055419922
+    },
+    {
+      "feature": "sector",
+      "gain": 31.262731552124023
+    },
+    {
+      "feature": "alpha008",
+      "gain": 31.187875747680664
+    },
+    {
+      "feature": "roe",
+      "gain": 31.166893005371094
+    },
+    {
+      "feature": "alpha012",
+      "gain": 30.600976943969727
+    },
+    {
+      "feature": "Industry_Momentum",
+      "gain": 30.59440040588379
+    },
+    {
+      "feature": "revenue_growth_yoy",
+      "gain": 30.410869598388672
+    },
+    {
+      "feature": "gross_margin_trend",
+      "gain": 30.061786651611328
+    },
+    {
+      "feature": "dry_up_volume_delta",
+      "gain": 30.00870704650879
+    },
+    {
+      "feature": "alpha054",
+      "gain": 29.73082160949707
+    },
+    {
+      "feature": "volume_acceleration",
+      "gain": 29.45929527282715
+    },
+    {
+      "feature": "m03_score",
+      "gain": 29.23379135131836
+    },
+    {
+      "feature": "alpha013",
+      "gain": 28.455530166625977
+    },
+    {
+      "feature": "alpha001",
+      "gain": 28.379602432250977
+    },
+    {
+      "feature": "m03_pillar_liq",
+      "gain": 27.062273025512695
+    },
+    {
+      "feature": "operating_margin",
+      "gain": 26.982519149780273
+    },
+    {
+      "feature": "sma_50_slope",
+      "gain": 26.960777282714844
+    },
+    {
+      "feature": "peg_adjusted",
+      "gain": 26.719139099121094
+    },
+    {
+      "feature": "alpha046",
+      "gain": 26.61373519897461
+    },
+    {
+      "feature": "m03_regime_vol",
+      "gain": 26.21678352355957
+    },
+    {
+      "feature": "turnover",
+      "gain": 26.069082260131836
+    },
+    {
+      "feature": "alpha004",
+      "gain": 26.018056869506836
+    },
+    {
+      "feature": "m03_delta_20d",
+      "gain": 25.86614990234375
+    },
+    {
+      "feature": "revenue_accel",
+      "gain": 25.841684341430664
+    },
+    {
+      "feature": "rs_line_lag_delta",
+      "gain": 24.61811065673828
+    },
+    {
+      "feature": "m03_delta_5d",
+      "gain": 24.28520965576172
+    },
+    {
+      "feature": "mom_21d_vol_adj",
+      "gain": 23.952245712280273
+    },
+    {
+      "feature": "earnings_quality_score",
+      "gain": 23.563730239868164
+    },
+    {
+      "feature": "gross_margin",
+      "gain": 23.237735748291016
+    },
+    {
+      "feature": "alpha015",
+      "gain": 23.108200073242188
+    },
+    {
+      "feature": "alpha006",
+      "gain": 22.995010375976562
+    },
+    {
+      "feature": "alpha011",
+      "gain": 22.980253219604492
+    },
+    {
+      "feature": "ema_50_100_ratio",
+      "gain": 22.918025970458984
+    },
+    {
+      "feature": "alpha049",
+      "gain": 22.77652359008789
+    },
+    {
+      "feature": "eps_stability_score",
+      "gain": 22.72632598876953
+    },
+    {
+      "feature": "vol_ratio",
+      "gain": 21.120098114013672
+    },
+    {
+      "feature": "volume_velocity_2d",
+      "gain": 20.969175338745117
+    },
+    {
+      "feature": "current_ratio",
+      "gain": 20.4148006439209
+    },
+    {
+      "feature": "rs_ma_delta",
+      "gain": 19.157670974731445
+    },
+    {
+      "feature": "rs_ma",
+      "gain": 18.53508949279785
+    },
+    {
+      "feature": "fcf_margin",
+      "gain": 15.97314167022705
+    }
+  ],
+  "roc_auc_per_class": {
+    "Not Home Run (<=30%)": 0.7172601262358544,
+    "Home Run (>30%)": 0.7172601262358544
+  },
+  "pr_auc_per_class": {
+    "Not Home Run (<=30%)": 0.9306919424348468,
+    "Home Run (>30%)": 0.2808735056195914
+  },
+  "brier_score": {
+    "Not Home Run (<=30%)": 0.2322584883988884,
+    "Home Run (>30%)": 0.23225848843811564,
+    "mean": 0.23225848841850202
+  },
+  "ece_per_class": {
+    "Not Home Run (<=30%)": 0.3221180627220555,
+    "Home Run (>30%)": 0.3221180627831589
+  },
+  "production_class_ece": 0.3221180627831589,
+  "gates": [
+    {
+      "name": "calibration_ece",
+      "status": "fail",
+      "value": 0.3221180627831589,
+      "threshold": 0.05,
+      "detail": "production_class='Home Run (>30%)' ece=0.3221 threshold=0.0500",
+      "blocking": true
+    },
+    {
+      "name": "regime_decomposition",
+      "status": "pass",
+      "value": 4.0,
+      "threshold": 3.0,
+      "detail": "4/4 regimes >= 0.55 AUC; catastrophic regimes (< 0.50): none",
+      "blocking": true
+    },
+    {
+      "name": "calibration_ece_post",
+      "status": "pass",
+      "value": 1.362764743636863e-17,
+      "threshold": 0.1,
+      "detail": "post-isotonic ECE (pre=0.3221)",
+      "blocking": true
+    },
+    {
+      "name": "walk_forward_worst_auc",
+      "status": "pass",
+      "value": 0.6798283813600093,
+      "threshold": 0.65,
+      "detail": "worst-fold ROC-AUC for class 'Home Run (>30%)'",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_mean_sharpe",
+      "status": "fail",
+      "value": 0.4053206858292771,
+      "threshold": 0.5,
+      "detail": "mean Sharpe across 4 folds",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_worst_sharpe",
+      "status": "fail",
+      "value": -0.2677561467715672,
+      "threshold": -0.3,
+      "detail": "worst Sharpe=-0.268, positive_folds=2/4 (required 3)",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_worst_max_drawdown",
+      "status": "pass",
+      "value": 27.227313171069756,
+      "threshold": 35.0,
+      "detail": "worst-fold max DD (lower is better)",
+      "blocking": true
+    },
+    {
+      "name": "wf_backtest_mean_top_3_home_run_lift",
+      "status": "fail",
+      "value": 1.6570628494397859,
+      "threshold": 5.0,
+      "detail": "mean top-3 home-run lift across folds",
+      "blocking": true
+    }
+  ],
+  "class_distribution": {
+    "train": {
+      "Not Home Run (<=30%)": {
+        "count": 27872,
+        "pct": 0.8881524440762221
+      },
+      "Home Run (>30%)": {
+        "count": 3510,
+        "pct": 0.11184755592377796
+      }
+    },
+    "val": {
+      "Not Home Run (<=30%)": {
+        "count": 4742,
+        "pct": 0.8547224224945926
+      },
+      "Home Run (>30%)": {
+        "count": 806,
+        "pct": 0.14527757750540735
+      }
+    },
+    "test": {
+      "Not Home Run (<=30%)": {
+        "count": 4742,
+        "pct": 0.8547224224945926
+      },
+      "Home Run (>30%)": {
+        "count": 806,
+        "pct": 0.14527757750540735
+      }
+    }
+  },
+  "temporal_stability": [
+    {
+      "period": "2024Q1",
+      "n_samples": 193,
+      "accuracy": 0.6113989637305699,
+      "weighted_f1": 0.666726076052501,
+      "macro_f1": 0.5257985257985258
+    },
+    {
+      "period": "2024Q2",
+      "n_samples": 541,
+      "accuracy": 0.6635859519408502,
+      "weighted_f1": 0.7205123429329431,
+      "macro_f1": 0.5318289018220549
+    },
+    {
+      "period": "2024Q3",
+      "n_samples": 781,
+      "accuracy": 0.6734955185659411,
+      "weighted_f1": 0.7171147002201524,
+      "macro_f1": 0.5558115519552499
+    },
+    {
+      "period": "2024Q4",
+      "n_samples": 757,
+      "accuracy": 0.6882430647291942,
+      "weighted_f1": 0.7397772433827352,
+      "macro_f1": 0.5896905890567008
+    },
+    {
+      "period": "2025Q1",
+      "n_samples": 615,
+      "accuracy": 0.6699186991869919,
+      "weighted_f1": 0.7719528175650879,
+      "macro_f1": 0.47620925617476895
+    },
+    {
+      "period": "2025Q2",
+      "n_samples": 342,
+      "accuracy": 0.6111111111111112,
+      "weighted_f1": 0.6477341626083045,
+      "macro_f1": 0.5785953177257526
+    },
+    {
+      "period": "2025Q3",
+      "n_samples": 453,
+      "accuracy": 0.6379690949227373,
+      "weighted_f1": 0.666594548809899,
+      "macro_f1": 0.6130302525210434
+    },
+    {
+      "period": "2025Q4",
+      "n_samples": 675,
+      "accuracy": 0.5688888888888889,
+      "weighted_f1": 0.6054710749181427,
+      "macro_f1": 0.5396918390063858
+    },
+    {
+      "period": "2026Q1",
+      "n_samples": 783,
+      "accuracy": 0.5606641123882503,
+      "weighted_f1": 0.6232871836978181,
+      "macro_f1": 0.5038315305490878
+    },
+    {
+      "period": "2026Q2",
+      "n_samples": 408,
+      "accuracy": 0.5,
+      "weighted_f1": 0.5742825865978576,
+      "macro_f1": 0.4576589256392212
+    }
+  ],
+  "probability_stats": {
+    "Not Home Run (<=30%)": {
+      "mean_p_when_true": 0.5552340149879456,
+      "mean_p_when_false": 0.3994657099246979,
+      "separation": 0.15576830506324768,
+      "support_positive": 4742
+    },
+    "Home Run (>30%)": {
+      "mean_p_when_true": 0.6005343198776245,
+      "mean_p_when_false": 0.4447660446166992,
+      "separation": 0.1557682752609253,
+      "support_positive": 806
+    }
+  },
+  "topk_precision": [
+    {
+      "class": "Not Home Run (<=30%)",
+      "k": 10,
+      "precision": 1.0,
+      "lift": 1.1699704765921553,
+      "hits": 10,
+      "base_rate": 0.8547224224945926
+    },
+    {
+      "class": "Not Home Run (<=30%)",
+      "k": 50,
+      "precision": 0.98,
+      "lift": 1.1465710670603122,
+      "hits": 49,
+      "base_rate": 0.8547224224945926
+    },
+    {
+      "class": "Not Home Run (<=30%)",
+      "k": 100,
+      "precision": 0.99,
+      "lift": 1.1582707718262337,
+      "hits": 99,
+      "base_rate": 0.8547224224945926
+    },
+    {
+      "class": "Not Home Run (<=30%)",
+      "k": 250,
+      "precision": 0.964,
+      "lift": 1.1278515394348376,
+      "hits": 241,
+      "base_rate": 0.8547224224945926
+    },
+    {
+      "class": "Not Home Run (<=30%)",
+      "k": 500,
+      "precision": 0.96,
+      "lift": 1.123171657528469,
+      "hits": 480,
+      "base_rate": 0.8547224224945926
+    },
+    {
+      "class": "Not Home Run (<=30%)",
+      "k": 1000,
+      "precision": 0.954,
+      "lift": 1.116151834668916,
+      "hits": 954,
+      "base_rate": 0.8547224224945926
+    },
+    {
+      "class": "Home Run (>30%)",
+      "k": 10,
+      "precision": 0.4,
+      "lift": 2.7533498759305215,
+      "hits": 4,
+      "base_rate": 0.14527757750540735
+    },
+    {
+      "class": "Home Run (>30%)",
+      "k": 50,
+      "precision": 0.46,
+      "lift": 3.1663523573200996,
+      "hits": 23,
+      "base_rate": 0.14527757750540735
+    },
+    {
+      "class": "Home Run (>30%)",
+      "k": 100,
+      "precision": 0.36,
+      "lift": 2.478014888337469,
+      "hits": 36,
+      "base_rate": 0.14527757750540735
+    },
+    {
+      "class": "Home Run (>30%)",
+      "k": 250,
+      "precision": 0.336,
+      "lift": 2.312813895781638,
+      "hits": 84,
+      "base_rate": 0.14527757750540735
+    },
+    {
+      "class": "Home Run (>30%)",
+      "k": 500,
+      "precision": 0.322,
+      "lift": 2.2164466501240696,
+      "hits": 161,
+      "base_rate": 0.14527757750540735
+    },
+    {
+      "class": "Home Run (>30%)",
+      "k": 1000,
+      "precision": 0.302,
+      "lift": 2.0787791563275433,
+      "hits": 302,
+      "base_rate": 0.14527757750540735
+    }
+  ],
+  "actionable_classes": [
+    1
+  ],
+  "threshold_sweep": [
+    {
+      "threshold": 0.3,
+      "n_signals": 4192,
+      "true_positives": 744,
+      "precision": 0.17748091603053434,
+      "recall": 0.9230769230769231
+    },
+    {
+      "threshold": 0.35,
+      "n_signals": 3781,
+      "true_positives": 716,
+      "precision": 0.18936789209203914,
+      "recall": 0.8883374689826302
+    },
+    {
+      "threshold": 0.4,
+      "n_signals": 3318,
+      "true_positives": 685,
+      "precision": 0.20644966847498494,
+      "recall": 0.8498759305210918
+    },
+    {
+      "threshold": 0.45,
+      "n_signals": 2898,
+      "true_positives": 645,
+      "precision": 0.2225672877846791,
+      "recall": 0.8002481389578163
+    },
+    {
+      "threshold": 0.5,
+      "n_signals": 2467,
+      "true_positives": 593,
+      "precision": 0.24037292257803,
+      "recall": 0.7357320099255583
+    },
+    {
+      "threshold": 0.55,
+      "n_signals": 2052,
+      "true_positives": 527,
+      "precision": 0.25682261208577,
+      "recall": 0.6538461538461539
+    },
+    {
+      "threshold": 0.6,
+      "n_signals": 1667,
+      "true_positives": 457,
+      "precision": 0.2741451709658068,
+      "recall": 0.5669975186104218
+    },
+    {
+      "threshold": 0.7,
+      "n_signals": 977,
+      "true_positives": 295,
+      "precision": 0.30194472876151485,
+      "recall": 0.36600496277915634
+    }
+  ],
+  "shap_summary": {
+    "base_value": 0.0379226952791214,
+    "mean_abs_shap_per_class": {
+      "Home Run (>30%)": [
+        {
+          "feature": "industry",
+          "mean_abs_shap": 0.31227874755859375
+        },
+        {
+          "feature": "adr_20d",
+          "mean_abs_shap": 0.30023813247680664
+        },
+        {
+          "feature": "price_vs_spy_ma63",
+          "mean_abs_shap": 0.12969237565994263
+        },
+        {
+          "feature": "return_1d",
+          "mean_abs_shap": 0.08250816911458969
+        },
+        {
+          "feature": "ema_8_21_ratio",
+          "mean_abs_shap": 0.07190224528312683
+        },
+        {
+          "feature": "rs",
+          "mean_abs_shap": 0.05765281990170479
+        },
+        {
+          "feature": "m03_pillar_risk",
+          "mean_abs_shap": 0.05230318382382393
+        },
+        {
+          "feature": "revenue_cagr_3y",
+          "mean_abs_shap": 0.05083613470196724
+        },
+        {
+          "feature": "m03_pillar_trend",
+          "mean_abs_shap": 0.04531465098261833
+        },
+        {
+          "feature": "RS_vs_Industry",
+          "mean_abs_shap": 0.035523854196071625
+        }
+      ]
+    },
+    "sample_size": 1000,
+    "shap_values_shape": [
+      1,
+      1000,
+      79
+    ]
+  },
+  "permutation_importance": [
+    {
+      "feature": "industry",
+      "mean_importance": 0.005147868869119598,
+      "std_importance": 0.004021645260287602
+    },
+    {
+      "feature": "m03_pillar_liq",
+      "mean_importance": 0.0008637225376239233,
+      "std_importance": 0.00027028525248902577
+    },
+    {
+      "feature": "Sector_Momentum",
+      "mean_importance": 0.0007743564912229273,
+      "std_importance": 0.0002631829756230228
+    },
+    {
+      "feature": "mom_slope_21_63",
+      "mean_importance": 0.0006409622400256332,
+      "std_importance": 0.0001992427066725548
+    },
+    {
+      "feature": "m03_pillar_trend",
+      "mean_importance": 0.0005852334923253544,
+      "std_importance": 0.0003319103209725428
+    },
+    {
+      "feature": "operating_margin",
+      "mean_importance": 0.0005787982868378005,
+      "std_importance": 5.336676736385357e-05
+    },
+    {
+      "feature": "revenue_growth_yoy",
+      "mean_importance": 0.0004986413439066917,
+      "std_importance": 0.00026764355582529185
+    },
+    {
+      "feature": "sma_ratio_150_200",
+      "mean_importance": 0.0004789418327301398,
+      "std_importance": 0.0001949853819514985
+    },
+    {
+      "feature": "ema_21_50_ratio",
+      "mean_importance": 0.00045708230164611676,
+      "std_importance": 0.00015873031661923253
+    },
+    {
+      "feature": "eps_diluted",
+      "mean_importance": 0.0003368117432443585,
+      "std_importance": 0.0001623647531027484
+    },
+    {
+      "feature": "RS_vs_Sector",
+      "mean_importance": 0.0002664676291782353,
+      "std_importance": 0.00033560371138789186
+    },
+    {
+      "feature": "ema_50_100_ratio",
+      "mean_importance": 0.00024914578226880034,
+      "std_importance": 3.9533117045340924e-05
+    },
+    {
+      "feature": "sector",
+      "mean_importance": 0.00022784307832082184,
+      "std_importance": 3.576695786089183e-05
+    },
+    {
+      "feature": "eps_growth_yoy",
+      "mean_importance": 0.00022188815182171416,
+      "std_importance": 8.675509413642914e-05
+    },
+    {
+      "feature": "price_vs_sma_50_vol_adj",
+      "mean_importance": 0.0001835675421666627,
+      "std_importance": 0.00027216071603384704
+    },
+    {
+      "feature": "earnings_quality_score",
+      "mean_importance": 0.00017931746657524618,
+      "std_importance": 5.287340868823429e-05
+    },
+    {
+      "feature": "gross_margin_trend",
+      "mean_importance": 0.0001537314056949457,
+      "std_importance": 0.00011007674301459522
+    },
+    {
+      "feature": "volume_acceleration",
+      "mean_importance": 0.00013905888968201996,
+      "std_importance": 6.893937149957035e-05
+    },
+    {
+      "feature": "turnover",
+      "mean_importance": 0.00013227718865291838,
+      "std_importance": 0.00014623000274061745
+    },
+    {
+      "feature": "alpha015",
+      "mean_importance": 0.0001214074524904074,
+      "std_importance": 7.061530788313985e-05
+    },
+    {
+      "feature": "volume_velocity_2d",
+      "mean_importance": 5.285889582917758e-05,
+      "std_importance": 7.540034810652397e-05
+    },
+    {
+      "feature": "alpha006",
+      "mean_importance": 3.598930555648305e-05,
+      "std_importance": 7.770086605131851e-05
+    },
+    {
+      "feature": "RS_Industry_Rank",
+      "mean_importance": 3.362605756564996e-05,
+      "std_importance": 8.011514751145027e-05
+    },
+    {
+      "feature": "mom_21d_vol_adj",
+      "mean_importance": 2.4467760976620843e-05,
+      "std_importance": 8.982279968660427e-05
+    },
+    {
+      "feature": "vol_ratio",
+      "mean_importance": 2.353432119575061e-05,
+      "std_importance": 0.00011983840879138322
+    },
+    {
+      "feature": "shares_outstanding",
+      "mean_importance": 2.0320299238152375e-06,
+      "std_importance": 0.00018735057907086315
+    },
+    {
+      "feature": "alpha049",
+      "mean_importance": -4.3258108351817984e-06,
+      "std_importance": 3.702487399264195e-05
+    },
+    {
+      "feature": "alpha009",
+      "mean_importance": -9.083012685073833e-06,
+      "std_importance": 3.0598620920941834e-05
+    },
+    {
+      "feature": "current_ratio",
+      "mean_importance": -9.57904459288894e-06,
+      "std_importance": 4.767238676573569e-05
+    },
+    {
+      "feature": "fcf_margin",
+      "mean_importance": -1.0156892150736675e-05,
+      "std_importance": 4.2011635072676984e-05
+    },
+    {
+      "feature": "alpha046",
+      "mean_importance": -2.1690435363819205e-05,
+      "std_importance": 2.6372950879024744e-05
+    },
+    {
+      "feature": "rs_line_lag_delta",
+      "mean_importance": -3.0015316634290913e-05,
+      "std_importance": 8.460108162173793e-05
+    },
+    {
+      "feature": "m03_delta_5d",
+      "mean_importance": -3.237194624921003e-05,
+      "std_importance": 3.85198068169326e-05
+    },
+    {
+      "feature": "alpha013",
+      "mean_importance": -3.9634202084637415e-05,
+      "std_importance": 5.690970510741017e-05
+    },
+    {
+      "feature": "alpha011",
+      "mean_importance": -4.030569910540294e-05,
+      "std_importance": 2.6206735454187964e-05
+    },
+    {
+      "feature": "alpha004",
+      "mean_importance": -4.3565345322083e-05,
+      "std_importance": 7.11814707458955e-05
+    },
+    {
+      "feature": "gross_margin",
+      "mean_importance": -5.530930485084795e-05,
+      "std_importance": 5.4575936645619726e-05
+    },
+    {
+      "feature": "pb_ratio",
+      "mean_importance": -6.114804933512463e-05,
+      "std_importance": 0.00015072931833542575
+    },
+    {
+      "feature": "rs_ma_delta",
+      "mean_importance": -8.276903606334596e-05,
+      "std_importance": 1.7115976778339305e-05
+    },
+    {
+      "feature": "alpha001",
+      "mean_importance": -0.00011358316855658579,
+      "std_importance": 5.937575076205814e-05
+    },
+    {
+      "feature": "RS_Universe_Rank",
+      "mean_importance": -0.00014031543205135223,
+      "std_importance": 0.00015541132669533666
+    },
+    {
+      "feature": "alpha060",
+      "mean_importance": -0.00015024774771534854,
+      "std_importance": 6.555819719580427e-05
+    },
+    {
+      "feature": "m03_regime_vol",
+      "mean_importance": -0.00015379535898607521,
+      "std_importance": 0.00020534140931449506
+    },
+    {
+      "feature": "RS_vs_Industry",
+      "mean_importance": -0.00017445373962359233,
+      "std_importance": 0.0004085841757677345
+    },
+    {
+      "feature": "roe",
+      "mean_importance": -0.00018730321626427848,
+      "std_importance": 0.00017983338181530592
+    },
+    {
+      "feature": "debt_to_equity",
+      "mean_importance": -0.00019426874157573159,
+      "std_importance": 0.0002264401878782573
+    },
+    {
+      "feature": "roa",
+      "mean_importance": -0.0001967859903284408,
+      "std_importance": 5.098560865433011e-05
+    },
+    {
+      "feature": "rs_ma",
+      "mean_importance": -0.00020703047921299955,
+      "std_importance": 8.567327919692283e-05
+    },
+    {
+      "feature": "m03_delta_20d",
+      "mean_importance": -0.0002495028401308552,
+      "std_importance": 9.816925150294831e-05
+    },
+    {
+      "feature": "dollar_volume_avg_20",
+      "mean_importance": -0.00025890935525498817,
+      "std_importance": 0.0002477891772520423
+    },
+    {
+      "feature": "mom_slope_63_126",
+      "mean_importance": -0.0002599420705627686,
+      "std_importance": 0.00038259790894502193
+    },
+    {
+      "feature": "revenue",
+      "mean_importance": -0.0002830483168764442,
+      "std_importance": 6.452904473717118e-05
+    },
+    {
+      "feature": "dry_up_volume_delta",
+      "mean_importance": -0.0003047878516130309,
+      "std_importance": 0.00011677537291582973
+    },
+    {
+      "feature": "alpha008",
+      "mean_importance": -0.0003158415171651052,
+      "std_importance": 6.0375796426407324e-05
+    },
+    {
+      "feature": "m03_pillar_risk",
+      "mean_importance": -0.00037044732718418685,
+      "std_importance": 0.00016644875580496693
+    },
+    {
+      "feature": "alpha012",
+      "mean_importance": -0.0003785257665058328,
+      "std_importance": 0.00014224712946275976
+    },
+    {
+      "feature": "RS_Sector_Rank",
+      "mean_importance": -0.00039811660468451747,
+      "std_importance": 0.0001670227422405308
+    },
+    {
+      "feature": "return_60d",
+      "mean_importance": -0.00044712562353272923,
+      "std_importance": 0.00031345982687011565
+    },
+    {
+      "feature": "rs_delta",
+      "mean_importance": -0.0004542521065793892,
+      "std_importance": 0.0002658342575818263
+    },
+    {
+      "feature": "revenue_accel",
+      "mean_importance": -0.00045614867015872915,
+      "std_importance": 0.00016844306178638962
+    },
+    {
+      "feature": "sma_50_slope",
+      "mean_importance": -0.0004839278002149117,
+      "std_importance": 0.00010589010193334474
+    },
+    {
+      "feature": "eps_stability_score",
+      "mean_importance": -0.0004949884011355099,
+      "std_importance": 8.5264186395409e-05
+    },
+    {
+      "feature": "Industry_Momentum",
+      "mean_importance": -0.0005277505197560206,
+      "std_importance": 0.000301440548791758
+    },
+    {
+      "feature": "revenue_cagr_3y",
+      "mean_importance": -0.0005727126571903219,
+      "std_importance": 0.0006982288399747434
+    },
+    {
+      "feature": "alpha041",
+      "mean_importance": -0.000636353121719524,
+      "std_importance": 0.00010800513142180973
+    },
+    {
+      "feature": "peg_adjusted",
+      "mean_importance": -0.000638369581981646,
+      "std_importance": 7.749379390846371e-05
+    },
+    {
+      "feature": "pe_ratio",
+      "mean_importance": -0.0006686859354679608,
+      "std_importance": 0.0001969345443488303
+    },
+    {
+      "feature": "return_1d",
+      "mean_importance": -0.0008107302905407509,
+      "std_importance": 0.00042068535720140893
+    },
+    {
+      "feature": "m03_score",
+      "mean_importance": -0.0009660408239940521,
+      "std_importance": 0.0005379256084668397
+    },
+    {
+      "feature": "alpha054",
+      "mean_importance": -0.0010347331895478318,
+      "std_importance": 0.00017914756866085256
+    },
+    {
+      "feature": "net_income",
+      "mean_importance": -0.001064581046891644,
+      "std_importance": 0.00020620271643172086
+    },
+    {
+      "feature": "price_vs_spy_ma63",
+      "mean_importance": -0.0011187204070301382,
+      "std_importance": 0.0012811878680951637
+    },
+    {
+      "feature": "mom_252d",
+      "mean_importance": -0.0012822957806316814,
+      "std_importance": 0.00024441640409391204
+    },
+    {
+      "feature": "price_accel_10d",
+      "mean_importance": -0.0014108696140344046,
+      "std_importance": 0.0002508937915115623
+    },
+    {
+      "feature": "rs",
+      "mean_importance": -0.002899572180938459,
+      "std_importance": 0.00042863752531757904
+    },
+    {
+      "feature": "return_5d",
+      "mean_importance": -0.003032737965398824,
+      "std_importance": 0.0004150091796210799
+    },
+    {
+      "feature": "mom_21d",
+      "mean_importance": -0.005391611096879134,
+      "std_importance": 0.0003253070946735033
+    },
+    {
+      "feature": "ema_8_21_ratio",
+      "mean_importance": -0.007102507906287236,
+      "std_importance": 0.0011455956449611922
+    },
+    {
+      "feature": "adr_20d",
+      "mean_importance": -0.010484505067598437,
+      "std_importance": 0.003143364418657486
+    }
+  ],
+  "regime_decomposition": {
+    "by_regime": {
+      "Strong Bear": {
+        "n": 0,
+        "status": "insufficient_data",
+        "accuracy": NaN,
+        "weighted_f1": NaN,
+        "top_3_lift": NaN,
+        "calibration_ece": NaN,
+        "roc_auc_production_class": NaN
+      },
+      "Bear": {
+        "n": 68,
+        "status": "ok",
+        "accuracy": 0.5147058823529411,
+        "weighted_f1": 0.6055349996224421,
+        "top_3_lift": 0.0,
+        "calibration_ece": 0.3497507484520183,
+        "roc_auc_production_class": 0.6229508196721312
+      },
+      "Neutral": {
+        "n": 765,
+        "status": "ok",
+        "accuracy": 0.538562091503268,
+        "weighted_f1": 0.6018950266058929,
+        "top_3_lift": 2.361111111111111,
+        "calibration_ece": 0.3803522860302645,
+        "roc_auc_production_class": 0.7376684142285359
+      },
+      "Bull": {
+        "n": 2679,
+        "status": "ok",
+        "accuracy": 0.6304591265397537,
+        "weighted_f1": 0.6826829788809037,
+        "top_3_lift": 2.1995073891625614,
+        "calibration_ece": 0.31538680777476547,
+        "roc_auc_production_class": 0.713349471954991
+      },
+      "Strong Bull": {
+        "n": 2036,
+        "status": "ok",
+        "accuracy": 0.6507858546168959,
+        "weighted_f1": 0.7040735230009052,
+        "top_3_lift": 4.762573099415204,
+        "calibration_ece": 0.3081715150218464,
+        "roc_auc_production_class": 0.7216287434749066
+      }
+    },
+    "gate": {
+      "name": "regime_decomposition",
+      "status": "pass",
+      "value": 4.0,
+      "threshold": 3.0,
+      "detail": "4/4 regimes >= 0.55 AUC; catastrophic regimes (< 0.50): none",
+      "blocking": true
+    }
+  },
+  "_metadata": {
+    "model_name": "m01_binary_pruned",
+    "model_version": "v1",
+    "evaluation_timestamp": "2026-05-25T11:09:45.866540",
+    "evaluator_class": "ClassificationEvaluator",
+    "evaluator_run": {
+      "git_sha": "c6f3d7296170e71167d1186ee39d4abdcf72c0a7",
+      "python_version": "3.12.0",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "label_registry_id": "mfe_binary_homerun_v1",
+      "feature_set_id": "fs_m01_prototype_pruned",
+      "pipeline_run_id": null
+    }
+  },
+  "calibration": {
+    "method": "isotonic",
+    "pre_ece": 0.3221180627831589,
+    "post_ece": 1.362764743636863e-17,
+    "n_fit_samples": 5548,
+    "calibrator_path": "m01_binary_pruned\\v1\\calibrator.joblib"
+  },
+  "walk_forward_summary": {
+    "n_folds": 4,
+    "accuracy_mean": 0.5474303878817878,
+    "accuracy_std": 0.14886745877672194,
+    "accuracy_worst": 0.2972972972972973,
+    "weighted_f1_mean": 0.6109400061905241,
+    "weighted_f1_std": 0.13156883231277486,
+    "weighted_f1_worst": 0.39418509418509423,
+    "macro_f1_mean": 0.4751587342994203,
+    "macro_f1_worst": 0.27121212121212124,
+    "production_class_auc_mean": 0.7254805016397661,
+    "production_class_auc_worst": 0.6798283813600093,
+    "aggregate_confusion_matrix": [
+      [
+        3803,
+        2394
+      ],
+      [
+        307,
+        742
+      ]
+    ]
+  },
+  "wf_backtest_summary": {
+    "n_folds": 4,
+    "mean_sharpe": 0.4053206858292771,
+    "worst_sharpe": -0.2677561467715672,
+    "positive_folds": 2,
+    "worst_max_drawdown": 27.227313171069756,
+    "mean_top_3_home_run_lift": 1.6570628494397859
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "per_fold": [
+    {
+      "fold_idx": 0,
+      "train_start": "2003-01-02",
+      "train_end": "2023-04-30",
+      "test_start": "2023-05-01",
+      "test_end": "2024-05-01",
+      "n_train": 29721,
+      "n_test": 1982,
+      "accuracy": 0.6261352169525731,
+      "weighted_f1": 0.6816662234375448,
+      "macro_f1": 0.5303736547097031,
+      "roc_auc_Home Run (>30%)": 0.6798283813600093,
+      "train_seconds": 0.5073554999980843
+    },
+    {
+      "fold_idx": 1,
+      "train_start": "2003-01-02",
+      "train_end": "2024-04-30",
+      "test_start": "2024-05-01",
+      "test_end": "2025-05-01",
+      "n_train": 31684,
+      "n_test": 2659,
+      "accuracy": 0.6840917638209854,
+      "weighted_f1": 0.7413753907147138,
+      "macro_f1": 0.5532486858843578,
+      "roc_auc_Home Run (>30%)": 0.7035489976770196,
+      "train_seconds": 0.5427663000009488
+    },
+    {
+      "fold_idx": 2,
+      "train_start": "2003-01-02",
+      "train_end": "2025-04-30",
+      "test_start": "2025-05-01",
+      "test_end": "2026-05-01",
+      "n_train": 34336,
+      "n_test": 2494,
+      "accuracy": 0.5821972734562951,
+      "weighted_f1": 0.6265333164247437,
+      "macro_f1": 0.5458004753914989,
+      "roc_auc_Home Run (>30%)": 0.7248938338712417,
+      "train_seconds": 0.5570314999931725
+    },
+    {
+      "fold_idx": 3,
+      "train_start": "2003-01-02",
+      "train_end": "2026-04-30",
+      "test_start": "2026-05-01",
+      "test_end": "2026-05-22",
+      "n_train": 36819,
+      "n_test": 111,
+      "accuracy": 0.2972972972972973,
+      "weighted_f1": 0.39418509418509423,
+      "macro_f1": 0.27121212121212124,
+      "roc_auc_Home Run (>30%)": 0.7936507936507936,
+      "train_seconds": 0.5335820999898715
+    }
+  ],
+  "summary": {
+    "n_folds": 4,
+    "accuracy_mean": 0.5474303878817878,
+    "accuracy_std": 0.14886745877672194,
+    "accuracy_worst": 0.2972972972972973,
+    "weighted_f1_mean": 0.6109400061905241,
+    "weighted_f1_std": 0.13156883231277486,
+    "weighted_f1_worst": 0.39418509418509423,
+    "macro_f1_mean": 0.4751587342994203,
+    "macro_f1_worst": 0.27121212121212124,
+    "production_class_auc_mean": 0.7254805016397661,
+    "production_class_auc_worst": 0.6798283813600093,
+    "aggregate_confusion_matrix": [
+      [
+        3803,
+        2394
+      ],
+      [
+        307,
+        742
+      ]
+    ]
+  },
+  "gates": [
+    {
+      "name": "walk_forward_worst_auc",
+      "status": "pass",
+      "value": 0.6798283813600093,
+      "threshold": 0.65,
+      "detail": "worst-fold ROC-AUC for class 'Home Run (>30%)'",
+      "blocking": true
+    }
+  ]
+}
