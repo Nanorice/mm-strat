@@ -201,13 +201,23 @@ def _header_html(card) -> str:
 def _verdict_html(card) -> str:
     band = card.aggregate.get("band", "—")
     band_badge = _badge(band, BAND_COLOR.get(band, "#555"))
+    reasons_map = getattr(card, "use_case_reasons", {}) or {}
     rows = []
     for use_case, verdict in card.use_case_verdicts.items():
         color = VERDICT_COLOR.get(verdict, "#555")
+        sub = reasons_map.get(use_case, [])
+        sub_html = " · ".join(
+            (
+                f"<span style='color:{VERDICT_COLOR.get(r['verdict'], '#555')}'>"
+                f"{html.escape(r['section'])}={html.escape(r['verdict'])}"
+                f"</span>"
+            )
+            for r in sub
+        )
         rows.append(
             f"<div>{html.escape(use_case)}</div>"
             f"<div>{_badge(verdict, color)}</div>"
-            f"<div></div>"
+            f"<div class='detail'>{sub_html}</div>"
         )
     score_line = (
         f"Aggregate: <strong>{card.aggregate.get('total')}"
@@ -236,6 +246,62 @@ def _verdict_html(card) -> str:
     )
 
 
+def _benchmarks_html(card) -> str:
+    bm = getattr(card, "benchmarks", {}) or {}
+    if not bm:
+        return ""
+    model = bm.get("model")
+    sepa = bm.get("sepa_composite")
+    delta = bm.get("delta_vs_sepa_composite")
+    if not model:
+        return ""
+
+    rows = []
+    columns = ["name", "n_rows", "auc", "pr_auc", "brier", "log_loss",
+               "binary_ic_mean", "top5_lift", "prevalence"]
+
+    def _row(d: dict) -> str:
+        return "<tr>" + "".join(f"<td>{_esc(d.get(c))}</td>" for c in columns) + "</tr>"
+
+    rows.append(_row(model))
+    if sepa:
+        rows.append(_row(sepa))
+    head = "".join(f"<th>{html.escape(c)}</th>" for c in columns)
+    table = (
+        f"<table class='grid'><thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+    delta_html = ""
+    if delta:
+        delta_rows = "".join(
+            f"<tr><td>{html.escape(k)}</td><td>{_esc(v)}</td></tr>"
+            for k, v in delta.items()
+        )
+        delta_html = (
+            "<h4>Model − SEPA composite (positive = model wins)</h4>"
+            f"<table class='grid'><thead><tr><th>metric</th><th>delta</th></tr></thead>"
+            f"<tbody>{delta_rows}</tbody></table>"
+        )
+    elif "sepa_composite_skipped" in bm:
+        delta_html = (
+            f"<p class='detail'><em>SEPA composite baseline skipped: "
+            f"{html.escape(str(bm['sepa_composite_skipped']))}</em></p>"
+        )
+
+    return (
+        "<div class='section'>"
+        "<h2>Benchmarks — model vs SEPA composite</h2>"
+        "<p class='detail'>The SEPA composite is an equal-weight per-day rank "
+        "of canonical SEPA strength features (no ML). Outperformance vs this "
+        "baseline is the 'does ML add value over a domain-knowledge score?' "
+        "test.</p>"
+        f"{table}"
+        f"{delta_html}"
+        "</div>"
+    )
+
+
 def render(card, html_path: Path) -> None:
     void_banner = (
         "<div class='banner void'>CARD VOID — Section A blocking gate failed. "
@@ -249,6 +315,7 @@ def render(card, html_path: Path) -> None:
         f"{_header_html(card)}"
         f"{void_banner}"
         f"{_verdict_html(card)}"
+        f"{_benchmarks_html(card)}"
         + "".join(_section_html(s) for s in card.sections.values())
     )
     doc = f"<!doctype html><html><head><meta charset='utf-8'><title>Model Card — {html.escape(card.model_id)}</title>{STYLE}</head><body>{body}</body></html>"

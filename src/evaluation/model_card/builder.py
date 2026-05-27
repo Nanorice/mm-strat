@@ -10,13 +10,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from .benchmarks import (
+    BaselineMetrics,
+    baseline_delta,
+    model_metrics_for_comparison,
+    sepa_composite_baseline,
+)
 from .data_loader import (
     EvalSplit,
     build_mode_a_pool,
     build_mode_b_pool,
     load_eval_data,
 )
-from .rubric import SectionResult, placeholder_section
+from .rubric import SectionResult
 from .sections import (
     run_section_a,
     run_section_b,
@@ -24,8 +30,14 @@ from .sections import (
     run_section_d,
     run_section_e,
     run_section_f,
+    run_section_g,
 )
-from .verdict import aggregate_score, card_void, use_case_verdicts
+from .verdict import (
+    aggregate_score,
+    card_void,
+    use_case_verdicts,
+    use_case_verdicts_with_reasons,
+)
 from . import report as report_renderer
 
 logger = logging.getLogger(__name__)
@@ -39,8 +51,10 @@ class ModelCard:
     built_at: str
     sections: dict[str, SectionResult]
     use_case_verdicts: dict[str, str]
+    use_case_reasons: dict[str, list[dict[str, str]]]
     aggregate: dict[str, Any]
     card_void: bool
+    benchmarks: dict[str, Any] = field(default_factory=dict)
     meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -52,7 +66,9 @@ class ModelCard:
             "card_void": self.card_void,
             "sections": {k: v.to_dict() for k, v in self.sections.items()},
             "use_case_verdicts": dict(self.use_case_verdicts),
+            "use_case_reasons": dict(self.use_case_reasons),
             "aggregate": dict(self.aggregate),
+            "benchmarks": dict(self.benchmarks),
             "meta": dict(self.meta),
         }
 
@@ -73,6 +89,10 @@ class ModelCardBuilder:
         build_mode_b: bool = False,
         mode_b_cache_dir: Optional[Path] = None,
         mode_b_force_recompute: bool = False,
+        section_g_n_permutations: int = 500,
+        section_g_n_bootstrap: int = 500,
+        section_g_block_size_days: int = 60,
+        skip_benchmarks: bool = False,
     ):
         self.model_id = model_id
         self.model_path = Path(model_path)
@@ -86,6 +106,10 @@ class ModelCardBuilder:
         self.build_mode_b = build_mode_b
         self.mode_b_cache_dir = Path(mode_b_cache_dir) if mode_b_cache_dir else None
         self.mode_b_force_recompute = mode_b_force_recompute
+        self.section_g_n_permutations = section_g_n_permutations
+        self.section_g_n_bootstrap = section_g_n_bootstrap
+        self.section_g_block_size_days = section_g_block_size_days
+        self.skip_benchmarks = skip_benchmarks
 
     def build(self) -> ModelCard:
         t0 = time.perf_counter()
@@ -137,9 +161,41 @@ class ModelCardBuilder:
         sections["D"] = run_section_d(split, mode_a_pool, mode_b_pool)
         sections["E"] = run_section_e(split, mode_a_pool)
         sections["F"] = run_section_f(split, self.db_path)
-        sections["G"] = placeholder_section("G", "Edge existence (Phase 3)")
+        logger.info(
+            "Running Section G (perm=%d, bootstrap=%d, block=%dd) ...",
+            self.section_g_n_permutations, self.section_g_n_bootstrap,
+            self.section_g_block_size_days,
+        )
+        sections["G"] = run_section_g(
+            mode_a_pool,
+            n_permutations=self.section_g_n_permutations,
+            n_bootstrap=self.section_g_n_bootstrap,
+            block_size_days=self.section_g_block_size_days,
+        )
 
-        verdicts = use_case_verdicts(sections)
+        benchmarks_block: dict[str, Any] = {}
+        if not self.skip_benchmarks:
+            logger.info("Running model vs SEPA-composite baseline ...")
+            try:
+                model_metrics = model_metrics_for_comparison(split, mode_a_pool)
+                sepa = sepa_composite_baseline(split, mode_a_pool)
+                benchmarks_block["model"] = model_metrics.to_dict()
+                if sepa is not None:
+                    benchmarks_block["sepa_composite"] = sepa.to_dict()
+                    benchmarks_block["delta_vs_sepa_composite"] = baseline_delta(
+                        model_metrics, sepa,
+                    )
+                else:
+                    benchmarks_block["sepa_composite_skipped"] = (
+                        "no canonical SEPA components present in eval dataframe"
+                    )
+            except Exception as e:  # pragma: no cover
+                logger.exception("Benchmarks failed: %s", e)
+                benchmarks_block["error"] = str(e)
+
+        verdicts_detail = use_case_verdicts_with_reasons(sections)
+        verdicts = {k: v["verdict"] for k, v in verdicts_detail.items()}
+        reasons = {k: v["reasons"] for k, v in verdicts_detail.items()}
         agg = aggregate_score(sections)
         void = card_void(sections)
         elapsed = time.perf_counter() - t0
@@ -151,14 +207,18 @@ class ModelCardBuilder:
             built_at=datetime.utcnow().isoformat(timespec="seconds") + "Z",
             sections=sections,
             use_case_verdicts=verdicts,
+            use_case_reasons=reasons,
             aggregate=agg,
             card_void=void,
+            benchmarks=benchmarks_block,
             meta={
                 "split": split.meta,
                 "build_seconds": round(elapsed, 2),
-                "phase": "2 (A/B/C/D/E/F; G placeholder)",
+                "phase": "3 (A/B/C/D/E/F/G + benchmarks)",
                 "mode_a_pool_rows": int(len(mode_a_pool)),
                 "mode_b_pool_rows": int(len(mode_b_pool)) if mode_b_pool is not None else None,
+                "section_g_n_permutations": self.section_g_n_permutations,
+                "section_g_n_bootstrap": self.section_g_n_bootstrap,
             },
         )
         logger.info("Built model card in %.2fs (void=%s, band=%s)", elapsed, void, agg.get("band"))
@@ -171,7 +231,9 @@ class ModelCardBuilder:
         if html_path is None:
             html_path = self.output_dir / f"{slug}.html"
         if json_path is None:
-            json_path = self.output_dir / f"{slug}.json"
+            # Derive JSON path from the HTML path so a custom --output html
+            # name does not collide with the default-slug JSON.
+            json_path = Path(html_path).with_suffix(".json")
         json_path.write_text(json.dumps(card.to_dict(), indent=2, default=str))
         report_renderer.render(card, html_path)
         logger.info("Wrote %s and %s", html_path, json_path)

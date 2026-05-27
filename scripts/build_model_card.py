@@ -63,6 +63,14 @@ def main() -> int:
                              "(default: mode_b_cache/)")
     parser.add_argument("--mode-b-force-recompute", action="store_true",
                         help="Ignore the Mode B parquet cache and re-score")
+    parser.add_argument("--section-g-permutations", type=int, default=500,
+                        help="Permutation iterations for Section G (default 500)")
+    parser.add_argument("--section-g-bootstrap", type=int, default=500,
+                        help="Bootstrap iterations for Section G (default 500)")
+    parser.add_argument("--section-g-block-days", type=int, default=60,
+                        help="Block size (days) for Section G bootstrap (default 60)")
+    parser.add_argument("--skip-benchmarks", action="store_true",
+                        help="Skip the SEPA-composite baseline comparison")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -88,6 +96,10 @@ def main() -> int:
         build_mode_b=args.mode_b,
         mode_b_cache_dir=Path(args.mode_b_cache_dir),
         mode_b_force_recompute=args.mode_b_force_recompute,
+        section_g_n_permutations=args.section_g_permutations,
+        section_g_n_bootstrap=args.section_g_bootstrap,
+        section_g_block_size_days=args.section_g_block_days,
+        skip_benchmarks=args.skip_benchmarks,
     )
     card = builder.build()
     html_path, json_path = builder.render(card, html_path=output_path)

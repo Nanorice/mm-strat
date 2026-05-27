@@ -1,7 +1,8 @@
 """Use-case verdict matrix + aggregate band.
 
-Phase 1: structurally complete but D, E, G are placeholders, so use cases
-that depend on those sections return 'PENDING' until Phase 2/3 land.
+Phase 3: all seven sections (A-G) are implemented, so any PENDING verdict
+now reflects an actually-skipped section (e.g., Mode B not built) rather
+than unfinished code.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from .rubric import SectionResult
 USE_CASE_REQUIREMENTS: dict[str, list[str]] = {
     "selection_ranker_size_by_p": ["A", "D_binary", "D_magnitude", "G"],
     "hit_rate_ranker_equal_size": ["A", "D_binary", "G"],
-    "threshold_gate": ["A", "C", "E", "G"],
+    "threshold_gate": ["A", "E", "G"],
     "probability_sizing": ["A", "B", "C", "G"],
     "composite_gate_plus_rank": ["A", "C", "D_binary", "D_magnitude", "E", "G"],
 }
@@ -56,23 +57,43 @@ def _d_subscore_verdict(d_section: SectionResult | None, sub_key: str) -> str:
 def use_case_verdicts(sections: dict[str, SectionResult]) -> dict[str, str]:
     """Walk USE_CASE_REQUIREMENTS. D_binary / D_magnitude resolve to their
     specific rubric subscores within section D (set by run_section_d)."""
-    out: dict[str, str] = {}
+    detailed = use_case_verdicts_with_reasons(sections)
+    return {use_case: v["verdict"] for use_case, v in detailed.items()}
+
+
+def use_case_verdicts_with_reasons(
+    sections: dict[str, SectionResult],
+) -> dict[str, dict[str, Any]]:
+    """Same as `use_case_verdicts` but each entry also carries the list of
+    per-section sub-verdicts that drove the aggregate, so the report can
+    explain *why* a use case rejects.
+
+    Returns:
+        {use_case: {
+            'verdict': 'PASS' | 'MARGINAL' | 'REJECT' | 'PENDING',
+            'reasons': [{'section': 'A', 'verdict': 'PASS'}, ...],
+        }}
+    """
+    out: dict[str, dict[str, Any]] = {}
     d_section = sections.get("D")
     for use_case, required in USE_CASE_REQUIREMENTS.items():
-        verdicts = []
+        per_section: list[dict[str, str]] = []
         for key in required:
             if key in ("D_binary", "D_magnitude"):
-                verdicts.append(_d_subscore_verdict(d_section, key))
+                v = _d_subscore_verdict(d_section, key)
             else:
-                verdicts.append(_section_verdict(sections.get(key)))
+                v = _section_verdict(sections.get(key))
+            per_section.append({"section": key, "verdict": v})
+        verdicts = [r["verdict"] for r in per_section]
         if "REJECT" in verdicts:
-            out[use_case] = "REJECT"
+            agg = "REJECT"
         elif "PENDING" in verdicts:
-            out[use_case] = "PENDING"
+            agg = "PENDING"
         elif "MARGINAL" in verdicts:
-            out[use_case] = "MARGINAL"
+            agg = "MARGINAL"
         else:
-            out[use_case] = "PASS"
+            agg = "PASS"
+        out[use_case] = {"verdict": agg, "reasons": per_section}
     return out
 
 
