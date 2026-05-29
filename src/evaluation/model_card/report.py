@@ -8,6 +8,8 @@ charts come in Phase 2/3 (decile profiles, reliability diagrams).
 from __future__ import annotations
 
 import html
+import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +125,62 @@ def _table_html(title: str, rows: list[dict]) -> str:
     )
 
 
+def _chart_html(table_name: str, title: str, rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    
+    div_id = f"plotly_{table_name}_{uuid.uuid4().hex[:8]}"
+    
+    if table_name == "reliability_curve":
+        x = [r.get("mean_pred") for r in rows]
+        y = [r.get("mean_obs") for r in rows]
+        trace1 = {"x": x, "y": y, "mode": "markers+lines", "name": "Observed"}
+        trace2 = {"x": [0, 1], "y": [0, 1], "mode": "lines", "name": "Perfect Calibration", "line": {"dash": "dash"}}
+        data = [trace1, trace2]
+        layout = {"title": "Reliability Curve", "xaxis": {"title": "Mean Predicted"}, "yaxis": {"title": "Mean Observed"}, "height": 400}
+        
+    elif table_name == "threshold_bin_calibration":
+        x = [f"{r.get('bin_lo'):.1f}-{r.get('bin_hi'):.1f}" if r.get('bin_lo') is not None else "N/A" for r in rows]
+        y_obs = [r.get("observed_freq") for r in rows]
+        y_pred = [r.get("predicted_mean") for r in rows]
+        trace1 = {"x": x, "y": y_obs, "type": "bar", "name": "Observed Freq"}
+        trace2 = {"x": x, "y": y_pred, "type": "bar", "name": "Predicted Mean"}
+        data = [trace1, trace2]
+        layout = {"title": "Threshold Bin Calibration", "barmode": "group", "height": 400}
+        
+    elif table_name.startswith("decile_"):
+        x = [f"D{r.get('decile')}" for r in rows]
+        y_mean = [r.get("mean") for r in rows]
+        y_median = [r.get("median") for r in rows]
+        p_min = [r.get("p_min") for r in rows]
+        p_max = [r.get("p_max") for r in rows]
+        
+        trace1 = {"x": x, "y": y_mean, "type": "bar", "name": "Mean Target"}
+        trace2 = {"x": x, "y": y_median, "type": "bar", "name": "Median Target"}
+        trace3 = {"x": x, "y": p_min, "type": "scatter", "mode": "lines+markers", "name": "p_min (Pred)", "yaxis": "y2", "line": {"dash": "dot"}}
+        trace4 = {"x": x, "y": p_max, "type": "scatter", "mode": "lines+markers", "name": "p_max (Pred)", "yaxis": "y2", "line": {"dash": "dot"}}
+        
+        data = [trace1, trace2, trace3, trace4]
+        layout = {
+            "title": f"{title} Profile", 
+            "barmode": "group", 
+            "height": 400,
+            "yaxis": {"title": "Target Value"},
+            "yaxis2": {"title": "Predicted Proba", "overlaying": "y", "side": "right", "range": [0, 1]}
+        }
+        
+    else:
+        return _table_html(title, rows)
+
+    return f"""
+    <h4>{html.escape(title)}</h4>
+    <div id="{div_id}"></div>
+    <script>
+      Plotly.newPlot('{div_id}', {json.dumps(data)}, {json.dumps(layout)});
+    </script>
+    """
+
+
 def _rubric_html(scores: dict[str, int]) -> str:
     if not scores:
         return ""
@@ -158,7 +216,13 @@ def _section_html(s: SectionResult) -> str:
     gate_html = "".join(_gate_html(g) for g in s.gates)
     metrics_html = _metrics_html(s.metrics)
     rubric_html = _rubric_html(s.rubric_scores)
-    tables_html = "".join(_table_html(name, rows) for name, rows in s.tables.items())
+    
+    tables_html = ""
+    for name, rows in s.tables.items():
+        if name in ("reliability_curve", "threshold_bin_calibration") or name.startswith("decile_"):
+            tables_html += _chart_html(name, name, rows)
+        else:
+            tables_html += _table_html(name, rows)
 
     summary = (
         f"<p>Aggregate score: <strong>{s.aggregate_score if s.aggregate_score is not None else '—'}/3</strong>"
@@ -318,6 +382,6 @@ def render(card, html_path: Path) -> None:
         f"{_benchmarks_html(card)}"
         + "".join(_section_html(s) for s in card.sections.values())
     )
-    doc = f"<!doctype html><html><head><meta charset='utf-8'><title>Model Card — {html.escape(card.model_id)}</title>{STYLE}</head><body>{body}</body></html>"
+    doc = f"<!doctype html><html><head><meta charset='utf-8'><title>Model Card — {html.escape(card.model_id)}</title>{STYLE}<script src='https://cdn.plot.ly/plotly-2.27.0.min.js'></script></head><body>{body}</body></html>"
     Path(html_path).parent.mkdir(parents=True, exist_ok=True)
     Path(html_path).write_text(doc, encoding="utf-8")

@@ -236,8 +236,9 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
 
     # Column order: probabilities BEFORE status (action-relevant first).
     proba_cols = [f"p_{l}" for l in CLASS_LABELS]
-    show_cols = ["ticker", "company_name", "sector", "entry_date", "entry_price",
-                 "close_price", "pct_return", "days_held"]
+    show_cols = ["ticker", "company_name", "sector", "market_cap",
+                 "entry_date", "entry_price", "close_price",
+                 "pct_return", "days_held"]
     if "m01_class" in display.columns:
         show_cols.append("m01_class")
         show_cols.extend(proba_cols)
@@ -246,8 +247,16 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     available_cols = [c for c in show_cols if c in display.columns]
     table = display[available_cols].copy()
 
+    # Ticker → Finviz link via LinkColumn. URL goes in the column; display_text
+    # regex strips it back to the bare ticker for display.
+    if "ticker" in table.columns:
+        table["ticker"] = table["ticker"].apply(
+            lambda t: f"https://finviz.com/quote.ashx?t={t}" if pd.notna(t) else None
+        )
+
     rename = {
         "ticker": "Ticker", "company_name": "Company", "sector": "Sector",
+        "market_cap": "Mkt Cap",
         "entry_date": "Entry Date", "entry_price": "Entry $", "close_price": "Price $",
         "pct_return": "Return %", "days_held": "Days", "status": "Status",
         "m01_class": "M01 Class",
@@ -255,6 +264,29 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     for l in CLASS_LABELS:
         rename[f"p_{l}"] = f"P({l.split(' ')[0]})"
     table = table.rename(columns={k: v for k, v in rename.items() if k in table.columns})
+
+    def _fmt_mcap(v):
+        if pd.isna(v):
+            return "—"
+        if v >= 1e12:
+            return f"${v / 1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v / 1e9:.2f}B"
+        if v >= 1e6:
+            return f"${v / 1e6:.0f}M"
+        return f"${v:,.0f}"
+
+    column_config: dict = {}
+    if "Ticker" in table.columns:
+        column_config["Ticker"] = st.column_config.LinkColumn(
+            "Ticker", help="Open Finviz quote",
+            display_text=r"finviz\.com/quote\.ashx\?t=(.+)$",
+        )
+    if "Mkt Cap" in table.columns:
+        column_config["Mkt Cap"] = st.column_config.TextColumn(
+            "Mkt Cap", help="Market cap (point-in-time at watchlist refresh)",
+        )
+        table["Mkt Cap"] = table["Mkt Cap"].apply(_fmt_mcap)
 
     def style_return(val):
         if pd.isna(val):
@@ -273,7 +305,8 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     if "Return %" in table.columns:
         styled = styled.format("{:+.2f}%", subset=["Return %"])
 
-    st.dataframe(styled, use_container_width=True, height=500)
+    st.dataframe(styled, use_container_width=True, height=500,
+                 column_config=column_config)
     st.caption(f"Showing {len(table)} trades · sorted by {sort_choice}")
 
 
@@ -722,8 +755,8 @@ PAGES_DIR = Path(__file__).resolve().parent / "pages"
 
 pg = st.navigation([
     st.Page(page_today, title="Today", icon="📋"),
-    st.Page(str(PAGES_DIR / "1_Feature_Time_Series.py"),
-            title="Feature Time Series", icon="📈"),
+    st.Page(str(PAGES_DIR / "1_Dataset_EDA.py"),
+            title="Dataset EDA", icon="📈"),
     st.Page(str(PAGES_DIR / "3_Model_Lab.py"),
             title="Model Lab", icon="🧪"),
     st.Page(str(PAGES_DIR / "4_Backtest_Studio.py"),

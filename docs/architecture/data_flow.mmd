@@ -1,0 +1,121 @@
+flowchart TD
+    %% ── External Sources ──
+    API_YF["yfinance / FMP"]
+    API_FRED["FRED"]
+
+    %% ── Phase 1: Ingestion ──
+    subgraph P1_Ingestion [Phase 1: Ingestion]
+        direction TB
+        P1_PRICE["1.1 Price"]
+        P1_FUND["1.2 Fundamentals + Earnings"]
+        P1_SHARES["1.3 Shares"]
+        P1_MACRO["1.4 Macro"]
+
+        T1_P[("price_data")]
+        T1_F[("fundamentals")]
+        T1_EC[("earnings_calendar")]
+        T1_S[("shares_history")]
+        T1_M[("macro_data")]
+        T1_TM[("t1_macro")]
+    end
+    
+    API_YF --> P1_PRICE --> T1_P
+    API_YF --> P1_FUND
+    P1_FUND --> T1_F & T1_EC
+    API_YF --> P1_SHARES --> T1_S
+    API_FRED & API_YF --> P1_MACRO
+    P1_MACRO --> T1_M & T1_TM
+
+    %% ── Phase 2: Screener Membership ──
+    subgraph P2_Screener [Phase 2: Screener]
+        P2["Screener Manager"]
+        T2_SM[("screener_membership")]
+    end
+    T1_P & T1_S --> P2 --> T2_SM
+
+    %% ── Phase 3: T2 Features ──
+    subgraph P3_T2 [Phase 3: T2 Features]
+        P3["Feature Pipeline"]
+        T2_SF[("t2_screener_features")]
+    end
+    T1_P & T1_TM & T2_SM --> P3 --> T2_SF
+
+    %% ── Phase 4: Regime & Phase 4b: SEPA ──
+    subgraph P4_Context [Phase 4: Regime & SEPA Watchlist]
+        P4["M03 Regime"]
+        T2_RS[("t2_regime_scores")]
+        
+        P4B["SEPA Manager"]
+        SW[("sepa_watchlist")]
+    end
+    T1_TM & T1_M --> P4 --> T2_RS
+    T2_SF --> P4B --> SW
+
+    %% ── Phase 5: T3 Features ──
+    subgraph P5_T3 [Phase 5: T3 Features]
+        P5["SEPA Feature Pipeline"]
+        T3_SF[("t3_sepa_features")]
+    end
+    T2_SF & SW & T1_P & T2_RS --> P5 --> T3_SF
+
+    %% ── Phase 6: Views ──
+    subgraph P6_Views [Phase 6: SQL Views]
+        P6["View Manager"]
+        
+        V_SEPA(["v_sepa_candidates"])
+        V_D1(["v_d1_candidates"])
+        V_D2F(["v_d2_features"])
+        V_D2H(["v_d2_hydrated"])
+        V_D2T(["v_d2_training"])
+        V_D3D(["v_d3_deployment"])
+        V_SD(["v_screener_dashboard"])
+        
+        MAT_SW[("screener_watchlist")]
+        
+        V_D1 --> V_D2F & V_D2H & V_SD
+        V_D2F --> V_D2T & V_D3D & V_D2H
+        V_D2H --> V_D2T
+        V_SD --> MAT_SW
+    end
+    T3_SF & T1_P & T1_F & T1_S --> P6
+    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_SD
+
+    %% ── Phase 7: Cache Refresh ──
+    subgraph P7_Cache [Phase 7: Cache]
+        P7["Cache Refresh"]
+        D2_CACHE[("d2_training_cache")]
+    end
+    V_D2T --> P7 --> D2_CACHE
+
+    %% ── Phase 8: Monitoring ──
+    subgraph P8_Monitor [Phase 8: Monitoring]
+        MODELS[("models")]
+        P8["Monitoring & Alerts"]
+    end
+    V_D3D & MODELS --> P8
+
+    %% ── Downstream Applications ──
+    subgraph Downstream [Downstream Applications]
+        ML_TRAIN["Model Training"]
+        BT["Backtest Runner"]
+        NB["Notebooks / Diagnostics"]
+        
+        %% Dashboard
+        DASH["Streamlit Dashboard"]
+    end
+    
+    D2_CACHE --> ML_TRAIN --> MODELS
+    T3_SF & T1_P & MODELS --> BT
+    
+    %% Dashboard connections grouped
+    MAT_SW & V_D3D & MODELS & T2_RS & BT & T2_SF --> DASH
+    
+    %% Notebooks
+    V_SEPA & V_D1 --> NB
+
+%% ─────────────────────────────────────────────────────────────────
+%% LEGEND — node IDs ↦ implementing modules
+%% (kept as Mermaid comments so the .mmd parses everywhere; a human-
+%%  readable version lives in data_flow_legend.md, rendered by the
+%%  dashboard alongside the diagram.)
+%% ─────────────────────────────────────────────────────────────────

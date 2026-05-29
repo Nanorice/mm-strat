@@ -3,6 +3,7 @@ audit history."""
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
@@ -19,11 +21,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import (
     load_data_freshness,
+    load_fundamentals_volume_by_quarter,
+    load_latest_fundamentals_snapshot,
     load_pipeline_runs_window,
+    load_t1_ingestion_failures,
     load_universe_trend,
 )
 
 AUDIT_DIR = ROOT / "data" / "audit_reports"
+DATA_FLOW_MMD = ROOT / "docs" / "architecture" / "data_flow.mmd"
+DATA_FLOW_LEGEND = ROOT / "docs" / "architecture" / "data_flow_legend.md"
 
 STATUS_COLORS = {
     "success": "#2e7d32",
@@ -33,16 +40,67 @@ STATUS_COLORS = {
 STATUS_NUMS = {"success": 1, "running": 0.5, "failed": 0}  # for heatmap z
 
 FRESHNESS_TOLERANCE_DAYS = {
+    # Phase 1 — daily ingestion
     "price_data":           2,
-    "daily_features":       2,
+    "shares_history":       30,   # weekly-ish updates
+    "macro_data":           8,    # long-format mix; WALCL/WTREGEN/WBAA are weekly (Thu/Fri release)
+    "t1_macro":             2,
+    "fundamentals":         95,   # quarterly
+    "earnings_calendar":   -200,  # future-looking; allow negative lag
+    # Phase 2-5 — daily features
+    "screener_membership":  2,
     "t2_screener_features": 2,
-    "t3_sepa_features":     2,
     "t2_regime_scores":     3,
     "t2_risk_scores":       2,
-    "fundamentals":         95,   # quarterly
-    "earnings_calendar":   -200,  # future-looking, allow negative lag
+    "sepa_watchlist":       2,
+    "t3_sepa_features":     2,
+    # Phase 6-7 — materialised
     "screener_watchlist":   2,
+    "d2_training_cache":    7,    # refreshed at end of daily pipeline
+    # ML registry — no SLA, large lags expected
+    "models":               9999,
 }
+
+
+# ── Architecture diagram ─────────────────────────────────────────────────────
+
+def render_data_flow_diagram() -> None:
+    st.subheader("Data Flow")
+    st.caption(
+        f"Source: `{DATA_FLOW_MMD.relative_to(ROOT)}` — also referenced by "
+        "`docs/manual_for_me.md`. Edit the `.mmd` file to update both."
+    )
+
+    if not DATA_FLOW_MMD.exists():
+        st.warning(f"Diagram source not found at `{DATA_FLOW_MMD}`.")
+        return
+
+    try:
+        mermaid_src = DATA_FLOW_MMD.read_text(encoding="utf-8")
+    except OSError as e:
+        st.error(f"Could not read diagram: {e}")
+        return
+
+    # Mermaid JS via CDN. Escape the .mmd content so it survives transport
+    # through the HTML literal (Mermaid parses it back inside the <pre>).
+    escaped = html_lib.escape(mermaid_src)
+    page = f"""
+    <div class="mermaid">
+{escaped}
+    </div>
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+      mermaid.initialize({{ startOnLoad: true, theme: 'default', securityLevel: 'loose' }});
+    </script>
+    """
+    components.html(page, height=900, scrolling=True)
+
+    if DATA_FLOW_LEGEND.exists():
+        with st.expander("Legend — node ↦ implementing module", expanded=False):
+            try:
+                st.markdown(DATA_FLOW_LEGEND.read_text(encoding="utf-8"))
+            except OSError as e:
+                st.error(f"Could not read legend: {e}")
 
 
 # ── Heatmap ──────────────────────────────────────────────────────────────────
@@ -149,6 +207,96 @@ def render_freshness(fresh: pd.DataFrame) -> None:
     if "Lag (days)" in f.columns:
         styled = styled.format("{:.0f}", subset=["Lag (days)"], na_rep="—")
     st.dataframe(styled, use_container_width=True, hide_index=True, height=380)
+
+
+# ── T1 ingestion failures ────────────────────────────────────────────────────
+
+def render_t1_failures() -> None:
+    st.subheader("T1 Ingestion Failures (last 30d)")
+    st.caption(
+        "One row per (ticker, phase, error_type). `days_failing` is the count "
+        "of distinct `target_date`s in the last 30 days where this ticker "
+        "errored — chronic offenders (high days_failing) are pruning candidates."
+    )
+
+    fails = load_t1_ingestion_failures(days=30)
+    if fails.empty:
+        st.success("No T1 ingestion failures in the last 30 days.")
+        return
+
+    # Headline: how many chronic offenders (>=10 days failing)?
+    chronic = fails[fails["days_failing"] >= 10]
+    if not chronic.empty:
+        st.warning(
+            f"⚠️ {len(chronic)} ticker(s) with ≥10 days of failures — review for "
+            "deactivation via `python tools/deactivate_tickers.py <TICKERS> --execute`."
+        )
+
+    rename = {
+        "ticker": "Ticker", "phase": "Phase", "error_type": "Error",
+        "days_failing": "Days Failing",
+        "first_failure_date": "First", "last_failure_date": "Last",
+        "sample_detail": "Sample Detail",
+    }
+    show = fails.rename(columns=rename)
+    st.dataframe(show, use_container_width=True, hide_index=True, height=380)
+    st.caption(f"Total: {len(fails)} (ticker, phase, error_type) tuples.")
+
+
+# ── Fundamentals updates audit ───────────────────────────────────────────────
+
+def render_fundamentals_audit() -> None:
+    st.subheader("Fundamentals Updates Audit")
+    st.caption(
+        "Most-recently-updated fundamentals rows (sanity check the ingestor is "
+        "actually writing) + quarterly fetch volume (spot coverage drops)."
+    )
+
+    # ── Latest snapshot ──
+    snap = load_latest_fundamentals_snapshot(n=10)
+    if snap.empty:
+        st.info("No fundamentals rows with `updated_at` set.")
+    else:
+        last_update = snap["updated_at"].iloc[0]
+        st.markdown(f"**Last `updated_at`:** `{last_update}`")
+        show = snap.rename(columns={
+            "ticker": "Ticker", "period_end": "Period",
+            "filing_date": "Filed", "updated_at": "Updated",
+            "source": "Source", "total_revenue": "Revenue",
+            "net_income": "Net Income", "basic_eps": "Basic EPS",
+            "free_cash_flow": "FCF",
+        })
+        styled = show.style
+        for c in ["Revenue", "Net Income", "FCF"]:
+            if c in show.columns:
+                styled = styled.format("{:,.0f}", subset=[c], na_rep="—")
+        if "Basic EPS" in show.columns:
+            styled = styled.format("{:.2f}", subset=["Basic EPS"], na_rep="—")
+        st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
+
+    # ── Quarterly fetch volume chart ──
+    st.markdown("**Rows fetched per quarter** (period_end basis, non-null revenue)")
+    vol = load_fundamentals_volume_by_quarter(start_year=2020)
+    if vol.empty:
+        st.info("No fundamentals data.")
+        return
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=vol["quarter_label"], y=vol["rows_fetched"],
+        marker_color="#42a5f5", name="rows",
+        text=vol["rows_fetched"], textposition="outside",
+    )
+    fig.update_layout(
+        height=320, margin=dict(l=40, r=20, t=20, b=60),
+        xaxis_tickangle=-45, yaxis_title="Rows", xaxis_title="",
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Mid-quarter dips (latest bar) are expected — companies report on rolling "
+        "schedules. Look for prior-quarter drops vs the trailing baseline."
+    )
 
 
 # ── Universe / breakout trend ────────────────────────────────────────────────
@@ -268,9 +416,15 @@ st.title("Pipeline Health")
 st.caption("Daily ops dashboard — spot drift, freshness issues, and audit "
            "regressions before they propagate.")
 
+render_data_flow_diagram()
+st.markdown("---")
 render_runs_heatmap(load_pipeline_runs_window(days=30))
 st.markdown("---")
 render_freshness(load_data_freshness())
+st.markdown("---")
+render_t1_failures()
+st.markdown("---")
+render_fundamentals_audit()
 st.markdown("---")
 render_universe_trend(load_universe_trend(days=60))
 st.markdown("---")

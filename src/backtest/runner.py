@@ -795,10 +795,16 @@ class SEPABacktestRunner:
                 'cooldown_days': self.strategy.p.cooldown_days,
             }
 
+        strategy_class = (
+            type(self.strategy).__name__ if self.strategy is not None
+            else 'SEPAHybridV1'
+        )
+
         return {
             'manifest_version': 'v1',
             'run_id': run_id,
             'created_at': pd.Timestamp.now().isoformat(),
+            'strategy': strategy_class,
             'model': {
                 'name': self.model_name,
                 'version_id': self.model_version_id,

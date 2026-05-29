@@ -20,7 +20,22 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import load_models_table
 
-REPORTS_DIR = ROOT / "docs" / "reports"
+MODEL_CARDS_DIR = ROOT / "model_cards"
+
+
+def _model_card_slug(artifacts_path: str | None) -> str | None:
+    """Derive the model_card filename slug from artifacts_path.
+
+    Card files are written as `<name>_<version>.{html,json}` where
+    `<name>/<version>` is the last two path components of artifacts_path
+    (matches model_id in the card JSON, slashes replaced with underscores).
+    """
+    if not artifacts_path:
+        return None
+    parts = Path(artifacts_path).parts
+    if len(parts) < 2:
+        return None
+    return f"{parts[-2]}_{parts[-1]}"
 
 
 def _resolve_artifacts_dir(artifacts_path: str | None) -> Path | None:
@@ -31,16 +46,6 @@ def _resolve_artifacts_dir(artifacts_path: str | None) -> Path | None:
     if not p.is_absolute():
         p = ROOT / artifacts_path
     return p if p.exists() else None
-
-
-def _latest_pretrain_html() -> Path | None:
-    """Pick the most recent pretrain_audit_*.html in docs/reports/. Versioning
-    is not yet model-pinned (see plan §Open Question 5)."""
-    if not REPORTS_DIR.exists():
-        return None
-    candidates = sorted(REPORTS_DIR.glob("pretrain_audit_*.html"),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
 
 
 def _render_registry_table(models: pd.DataFrame) -> str | None:
@@ -117,20 +122,47 @@ def _render_overview(row: pd.Series, art_dir: Path | None) -> None:
                    f"{sum(1 for _ in art_dir.rglob('*') if _.is_file())} files")
 
 
-def _render_pretrain_tab(row: pd.Series) -> None:
-    html = _latest_pretrain_html()
-    if html is None:
-        st.info("No pretrain HTML report found in `docs/reports/`. Generate one with "
-                "`python scripts/run_pretrain_audit.py --mode trades`.")
+def _render_model_card_tab(row: pd.Series) -> None:
+    """Embed the Model Card HTML rendered by the evaluation framework.
+
+    Looks for `model_cards/<slug>.html` where slug = <name>_<version> derived
+    from the registry row's artifacts_path.
+    """
+    slug = _model_card_slug(row.get("artifacts_path"))
+    if slug is None:
+        st.info("No artifacts_path on this registry row — cannot resolve a model card.")
         return
 
-    st.caption(f"📄 `{html.name}` ({html.stat().st_size / 1024:.0f} KB)  "
-               f"· _Not version-pinned to this model yet — see plan Open Q #5._")
+    html_path = MODEL_CARDS_DIR / f"{slug}.html"
+    if not html_path.exists():
+        st.info(f"No model card found at `{html_path.relative_to(ROOT)}`.")
+        st.caption(
+            "Generate one with `python -m src.evaluation.model_card.build "
+            f"--model {slug.replace('_', '/', 1)}` "
+            "(replace the first `_` with `/` to get the model_id)."
+        )
+        return
+
+    st.caption(
+        f"📄 `{html_path.relative_to(ROOT)}` "
+        f"({html_path.stat().st_size / 1024:.0f} KB)"
+    )
     try:
-        content = html.read_text(encoding="utf-8")
+        content = html_path.read_text(encoding="utf-8")
         components.html(content, height=900, scrolling=True)
     except OSError as e:
-        st.error(f"Could not read HTML report: {e}")
+        st.error(f"Could not read model card HTML: {e}")
+
+
+PLOT_GROUPS: list[tuple[str, list[str]]] = [
+    # (group label, list of stem names ordered the way we want them displayed)
+    ("Performance",  ["confusion_matrix", "confusion_matrix_normalized",
+                      "roc_curves", "pr_curves", "topk_precision"]),
+    ("Calibration",  ["calibration_curves", "probability_distributions",
+                      "threshold_sweep"]),
+    ("Stability",    ["temporal_stability", "class_distribution"]),
+    ("Features",     ["feature_importance"]),
+]
 
 
 def _render_plots_tab(art_dir: Path | None) -> None:
@@ -140,15 +172,46 @@ def _render_plots_tab(art_dir: Path | None) -> None:
 
     eval_dir = art_dir / "evaluation"
     search_dir = eval_dir if eval_dir.exists() else art_dir
-    pngs = sorted(search_dir.glob("*.png"))
+
+    # Recursive — picks up sub-folder plots like evaluation/full_eval/ablation/*.png
+    pngs = sorted(search_dir.rglob("*.png"))
     if not pngs:
-        st.info(f"No PNGs found in `{search_dir}`.")
+        st.info(f"No PNGs found under `{search_dir.relative_to(ROOT)}`.")
         return
 
-    cols = st.columns(2)
-    for i, png in enumerate(pngs):
-        with cols[i % 2]:
-            st.image(str(png), caption=png.stem.replace("_", " "), use_container_width=True)
+    st.caption(
+        f"Plots are written by `src/evaluation/classification_evaluator.py` "
+        f"(`ClassificationEvaluator.evaluate()`) during training. "
+        f"Source: `{search_dir.relative_to(ROOT)}` · {len(pngs)} file(s)."
+    )
+
+    # Bucket by group. Use a stem-based lookup; whatever doesn't match a known
+    # plot ends up in "Other" (preserves discoverability of new/ad-hoc plots).
+    by_stem: dict[str, Path] = {p.stem: p for p in pngs}
+    consumed: set[str] = set()
+
+    for group_label, stems in PLOT_GROUPS:
+        members = [(s, by_stem[s]) for s in stems if s in by_stem]
+        if not members:
+            continue
+        st.markdown(f"**{group_label}**")
+        cols = st.columns(2)
+        for i, (_, png) in enumerate(members):
+            with cols[i % 2]:
+                st.image(str(png), caption=png.stem.replace("_", " "),
+                         use_container_width=True)
+            consumed.add(png.stem)
+
+    other = [p for p in pngs if p.stem not in consumed]
+    if other:
+        st.markdown("**Other**")
+        st.caption("Plots not in the standard groups — typically from sub-folder "
+                   "evaluations like ablation studies.")
+        cols = st.columns(2)
+        for i, png in enumerate(other):
+            with cols[i % 2]:
+                label = str(png.relative_to(search_dir))
+                st.image(str(png), caption=label, use_container_width=True)
 
 
 def _render_specs_tab(row: pd.Series) -> None:
@@ -229,11 +292,11 @@ art_dir = _resolve_artifacts_dir(row["artifacts_path"])
 
 st.subheader(f"Selected: `{selected}`")
 
-tabs = st.tabs(["Overview", "Pretrain Report (HTML)", "Plots", "Report (MD)", "Specs", "Diff"])
+tabs = st.tabs(["Overview", "Model Card", "Plots", "Report (MD)", "Specs", "Diff"])
 with tabs[0]:
     _render_overview(row, art_dir)
 with tabs[1]:
-    _render_pretrain_tab(row)
+    _render_model_card_tab(row)
 with tabs[2]:
     _render_plots_tab(art_dir)
 with tabs[3]:

@@ -51,10 +51,14 @@ def discover_runs() -> pd.DataFrame:
         summary = m.get("summary_metrics", {})
         model = m.get("model", {})
         params = m.get("params", {})
+        # Older v1 manifests don't include 'strategy'. Default to the only
+        # strategy class that has ever produced a v1 run (SEPAHybridV1).
+        strategy = m.get("strategy") or "SEPAHybridV1 (assumed)"
         rows.append({
             "run_id": m.get("run_id", d.name),
             "dir": d.name,
             "created_at": m.get("created_at"),
+            "strategy": strategy,
             "model_name": model.get("name"),
             "model_version_id": model.get("version_id"),
             "start_date": params.get("start_date"),
@@ -110,13 +114,13 @@ def render_run_list(runs: pd.DataFrame) -> Optional[str]:
                    "Re-run a backtest with the current pipeline to populate.")
         return None
 
-    show = runs[["run_id", "model_name", "model_version_id",
+    show = runs[["run_id", "strategy", "model_name", "model_version_id",
                  "start_date", "end_date",
                  "total_return", "sharpe_ratio", "max_drawdown",
                  "total_trades", "win_rate", "created_at"]].copy()
     rename = {
-        "run_id": "Run", "model_name": "Model",
-        "model_version_id": "Version",
+        "run_id": "Run", "strategy": "Strategy",
+        "model_name": "Model", "model_version_id": "Version",
         "start_date": "Start", "end_date": "End",
         "total_return": "Total Ret %", "sharpe_ratio": "Sharpe",
         "max_drawdown": "Max DD %", "total_trades": "Trades",
@@ -360,7 +364,8 @@ c1.metric("Total Return", f"{run_row['total_return']:.2f}%" if pd.notna(run_row[
 c2.metric("Sharpe", f"{run_row['sharpe_ratio']:.2f}" if pd.notna(run_row["sharpe_ratio"]) else "—")
 c3.metric("Max DD", f"{run_row['max_drawdown']:.2f}%" if pd.notna(run_row["max_drawdown"]) else "—")
 c4.metric("Trades", f"{int(run_row['total_trades']):,}" if pd.notna(run_row["total_trades"]) else "—")
-st.caption(f"Model: `{run_row['model_version_id']}` · "
+st.caption(f"Strategy: `{run_row['strategy']}` · "
+           f"Model: `{run_row['model_version_id']}` · "
            f"Window: {run_row['start_date']} → {run_row['end_date']} · "
            f"Cash: ${run_row['initial_cash']:,.0f}")
 

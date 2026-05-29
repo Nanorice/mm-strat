@@ -78,6 +78,13 @@ _CASHFLOW_MAP = {
 # All DuckDB fundamental columns (excluding PK + metadata)
 _ALL_FUNDAMENTAL_COLS = list(_INCOME_MAP.values()) + list(_BALANCE_MAP.values()) + list(_CASHFLOW_MAP.values())
 
+# A filing_date within this many days of period_end is yfinance returning the
+# announcement timestamp (or worse, the period_end itself) rather than the SEC
+# 10-Q filing date. Real 10-Q filings take at least 8 days (accelerated filers
+# average 20-30 days). Treat closer gaps as NULL — better honest unknown than
+# misleading PIT anchor.
+_MIN_REAL_FILING_GAP_DAYS = 8
+
 
 class FundamentalEngine:
     """
@@ -327,6 +334,14 @@ class FundamentalEngine:
         if df is None or df.empty:
             return 0
 
+        df, n_rejected, sample = _sanitize_filing_dates(df)
+        if n_rejected:
+            logger.info(
+                f"[FundamentalEngine] Rejected {n_rejected} filing_date(s) within "
+                f"{_MIN_REAL_FILING_GAP_DAYS}d of period_end for {ticker}. "
+                f"Sample: {sample}"
+            )
+
         df = df.copy()
         df['updated_at'] = datetime.utcnow()
 
@@ -361,6 +376,348 @@ class FundamentalEngine:
         finally:
             if own_conn:
                 conn.close()
+
+    def _insert_to_duckdb_no_overwrite(
+        self,
+        ticker: str,
+        df: pd.DataFrame,
+        conn: duckdb.DuckDBPyConnection = None,
+    ) -> int:
+        """
+        INSERT fundamental rows; DO NOTHING on (ticker, period_end) conflict.
+
+        Backfill-only path. The daily UPSERT (_upsert_to_duckdb) must overwrite
+        to pick up restated quarters; this path must never touch an existing
+        row. Returns number of rows actually inserted.
+        """
+        if df is None or df.empty:
+            return 0
+
+        df, n_rejected, sample = _sanitize_filing_dates(df)
+        if n_rejected:
+            logger.info(
+                f"[FundamentalEngine] Rejected {n_rejected} filing_date(s) within "
+                f"{_MIN_REAL_FILING_GAP_DAYS}d of period_end for {ticker}. "
+                f"Sample: {sample}"
+            )
+
+        df = df.copy()
+        df['updated_at'] = datetime.utcnow()
+
+        all_cols = ['ticker', 'period_end', 'period_type', 'filing_date'] + _ALL_FUNDAMENTAL_COLS + ['source', 'updated_at']
+        for col in all_cols:
+            if col not in df.columns:
+                df[col] = None
+        df = df[all_cols]
+        col_list = ', '.join(all_cols)
+
+        own_conn = conn is None
+        if own_conn:
+            conn = duckdb.connect(self.db_path)
+        try:
+            before = conn.execute("SELECT COUNT(*) FROM fundamentals WHERE ticker = ?", [ticker]).fetchone()[0]
+            conn.register('_fund_batch', df)
+            conn.execute(f"""
+                INSERT INTO fundamentals ({col_list})
+                SELECT {col_list} FROM _fund_batch
+                ON CONFLICT (ticker, period_end) DO NOTHING
+            """)
+            after = conn.execute("SELECT COUNT(*) FROM fundamentals WHERE ticker = ?", [ticker]).fetchone()[0]
+            return after - before
+        finally:
+            if own_conn:
+                conn.close()
+
+    def backfill_fundamentals(
+        self,
+        tickers: List[str],
+        max_workers: int = 8,
+    ) -> Dict[str, int]:
+        """
+        Non-destructive backfill: fetch from yfinance and INSERT only missing
+        (ticker, period_end) rows. Existing rows are preserved as-is.
+
+        Returns {ticker: rows_inserted}. Tickers with 0 indicate either a
+        fetch failure or no new periods available.
+        """
+        results: Dict[str, int] = {}
+        fetched: Dict[str, Optional[pd.DataFrame]] = {}
+
+        logger.info(f"[Backfill] Fetching {len(tickers)} tickers from yfinance")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self._fetch_from_yfinance, t): t for t in tickers}
+            done = 0
+            for future in as_completed(futures):
+                ticker = futures[future]
+                fetched[ticker] = future.result()
+                done += 1
+                if done % 100 == 0:
+                    logger.info(f"[Backfill] Fetch progress: {done}/{len(tickers)}")
+
+        logger.info(f"[Backfill] Writing inserts (no-overwrite mode)")
+        conn = duckdb.connect(self.db_path)
+        try:
+            for ticker, df in fetched.items():
+                if df is None:
+                    results[ticker] = 0
+                    continue
+                results[ticker] = self._insert_to_duckdb_no_overwrite(ticker, df, conn=conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+        total_inserted = sum(results.values())
+        tickers_with_inserts = sum(1 for n in results.values() if n > 0)
+        logger.info(
+            f"[Backfill] Done: {total_inserted} rows inserted across "
+            f"{tickers_with_inserts}/{len(tickers)} tickers"
+        )
+        return results
+
+    def _fetch_filing_dates_for_ticker(self, ticker: str) -> Dict:
+        """
+        Fetch only earnings dates for one ticker and return a {period_end: filing_date}
+        mapping suitable for the filing-date backfill. period_ends pulled from the
+        existing fundamentals rows we already have for this ticker.
+        """
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            rows = conn.execute("""
+                SELECT period_end FROM fundamentals
+                WHERE ticker = ? AND filing_date IS NULL AND source = 'yfinance'
+            """, [ticker]).fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return {}
+        period_ends = [r[0] for r in rows]
+
+        try:
+            t = yf.Ticker(ticker)
+            earnings_dates = t.get_earnings_dates(limit=40)
+        except Exception as e:
+            logger.debug(f"[FundamentalEngine] earnings fetch failed for {ticker}: {e}")
+            return {}
+        finally:
+            time.sleep(0.3)
+
+        mapping = self._map_period_end_to_filing_date(period_ends, earnings_dates)
+        # _map_period_end_to_filing_date keys by pd.Timestamp; normalise to date
+        return {pd.Timestamp(k).date(): pd.Timestamp(v).date() for k, v in mapping.items()}
+
+    def backfill_filing_dates_from_calendar(
+        self,
+        tickers: Optional[List[str]] = None,
+    ) -> Dict[str, int]:
+        """
+        Fill filing_date from the local earnings_calendar table.
+
+        Pure-SQL path: no API calls. For each (ticker, period_end) where
+        filing_date IS NULL, find the first earnings_calendar.earnings_date
+        strictly after period_end and within 90 days. Same mapping rule as
+        _map_period_end_to_filing_date, just sourced from the DB.
+
+        Rejects filing_date within _MIN_REAL_FILING_GAP_DAYS of period_end
+        (same gap guard as the sanitiser — yfinance sometimes stores the
+        period_end itself as an "announcement").
+
+        Args:
+            tickers: Restrict to these tickers (None = all NULL-fd tickers).
+
+        Returns {ticker: rows_updated}. Tickers with 0 updates are omitted.
+        """
+        conn = duckdb.connect(self.db_path)
+        try:
+            ticker_filter = ""
+            if tickers:
+                conn.register('_bf_tickers', pd.DataFrame({'ticker': tickers}))
+                ticker_filter = "AND f.ticker IN (SELECT ticker FROM _bf_tickers)"
+
+            # CTE picks the closest (earliest) earnings_date strictly > period_end,
+            # within 90 days, with gap >= _MIN_REAL_FILING_GAP_DAYS. ROW_NUMBER on
+            # (ticker, period_end) keeps the earliest qualifying announcement.
+            mapped = conn.execute(f"""
+                WITH eligible AS (
+                  SELECT
+                    f.ticker,
+                    f.period_end,
+                    ec.earnings_date,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY f.ticker, f.period_end
+                      ORDER BY ec.earnings_date
+                    ) AS rn
+                  FROM fundamentals f
+                  JOIN earnings_calendar ec
+                    ON ec.ticker = f.ticker
+                   AND ec.earnings_date >  f.period_end
+                   AND ec.earnings_date <= f.period_end + INTERVAL 90 DAY
+                   AND DATE_DIFF('day', f.period_end, ec.earnings_date) >= {int(_MIN_REAL_FILING_GAP_DAYS)}
+                  WHERE f.source = 'yfinance'
+                    AND f.filing_date IS NULL
+                    {ticker_filter}
+                )
+                SELECT ticker, period_end, earnings_date AS filing_date
+                FROM eligible
+                WHERE rn = 1
+            """).fetchdf()
+
+            if mapped.empty:
+                logger.info("[FilingBackfill/Cal] No earnings_calendar matches found")
+                return {}
+
+            conn.register('_fd_map', mapped)
+            conn.execute("""
+                UPDATE fundamentals f
+                SET filing_date = m.filing_date,
+                    updated_at = CURRENT_TIMESTAMP
+                FROM _fd_map m
+                WHERE f.ticker      = m.ticker
+                  AND f.period_end  = m.period_end
+                  AND f.source      = 'yfinance'
+                  AND f.filing_date IS NULL
+            """)
+            conn.commit()
+
+            per_ticker = mapped.groupby('ticker').size().to_dict()
+            total = int(mapped.shape[0])
+            logger.info(
+                f"[FilingBackfill/Cal] Updated {total} rows across "
+                f"{len(per_ticker)} tickers from earnings_calendar"
+            )
+            return per_ticker
+        finally:
+            if tickers:
+                try:
+                    conn.unregister('_bf_tickers')
+                except Exception:
+                    pass
+            try:
+                conn.unregister('_fd_map')
+            except Exception:
+                pass
+            conn.close()
+
+    def backfill_filing_dates(
+        self,
+        tickers: List[str],
+        max_workers: int = 4,
+        use_yfinance_fallback: bool = True,
+    ) -> Dict[str, int]:
+        """
+        Fill in filing_date for rows where it is currently NULL.
+
+        Two-stage strategy:
+          1. SQL match against local earnings_calendar (fast, free, authoritative
+             for any ticker whose earnings have been fetched).
+          2. yfinance fallback for tickers that still have NULLs after stage 1
+             (covers cases where earnings_calendar lacks the announcement).
+
+        Only touches source='yfinance' rows with filing_date IS NULL. Numbers
+        (revenue, etc.) are never modified. Bogus filing_dates (gap < 8d) are
+        rejected by the gap guard.
+
+        Returns {ticker: rows_updated} aggregated across both stages.
+        """
+        results: Dict[str, int] = {t: 0 for t in tickers}
+
+        # Stage 1: SQL from earnings_calendar
+        cal_results = self.backfill_filing_dates_from_calendar(tickers)
+        for tk, n in cal_results.items():
+            results[tk] = results.get(tk, 0) + n
+
+        if not use_yfinance_fallback:
+            with_updates = sum(1 for n in results.values() if n > 0)
+            total = sum(results.values())
+            logger.info(
+                f"[FilingBackfill] Done (calendar only): {total} updates across "
+                f"{with_updates}/{len(tickers)} tickers"
+            )
+            return results
+
+        # Stage 2: yfinance fallback — only for tickers that still have NULLs
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            conn.register('_bf_tickers', pd.DataFrame({'ticker': tickers}))
+            remaining = [r[0] for r in conn.execute("""
+                SELECT DISTINCT ticker FROM fundamentals
+                WHERE source = 'yfinance'
+                  AND filing_date IS NULL
+                  AND ticker IN (SELECT ticker FROM _bf_tickers)
+            """).fetchall()]
+        finally:
+            conn.close()
+
+        if not remaining:
+            logger.info(
+                f"[FilingBackfill] Done: {sum(results.values())} updates "
+                f"from earnings_calendar only — no yfinance fallback needed"
+            )
+            return results
+
+        logger.info(
+            f"[FilingBackfill/yf] {len(remaining)} tickers still NULL after "
+            f"calendar pass — falling back to yfinance"
+        )
+        fetched: Dict[str, Dict] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self._fetch_filing_dates_for_ticker, t): t for t in remaining}
+            done = 0
+            for future in as_completed(futures):
+                ticker = futures[future]
+                try:
+                    fetched[ticker] = future.result()
+                except Exception as e:
+                    logger.debug(f"[FilingBackfill/yf] {ticker} failed: {e}")
+                    fetched[ticker] = {}
+                done += 1
+                if done % 100 == 0:
+                    logger.info(f"[FilingBackfill/yf] Fetch progress: {done}/{len(remaining)}")
+
+        conn = duckdb.connect(self.db_path)
+        try:
+            for ticker, pe_to_fd in fetched.items():
+                if not pe_to_fd:
+                    continue
+                pairs = [
+                    (pe, fd) for pe, fd in pe_to_fd.items()
+                    if (pd.Timestamp(fd) - pd.Timestamp(pe)).days >= _MIN_REAL_FILING_GAP_DAYS
+                ]
+                if not pairs:
+                    continue
+                batch_df = pd.DataFrame(pairs, columns=['period_end', 'filing_date'])
+                batch_df['ticker'] = ticker
+                conn.register('_fd_batch', batch_df)
+                before = conn.execute("""
+                    SELECT COUNT(*) FROM fundamentals
+                    WHERE ticker = ? AND filing_date IS NULL AND source = 'yfinance'
+                """, [ticker]).fetchone()[0]
+                conn.execute("""
+                    UPDATE fundamentals f
+                    SET filing_date = b.filing_date,
+                        updated_at = CURRENT_TIMESTAMP
+                    FROM _fd_batch b
+                    WHERE f.ticker = b.ticker
+                      AND f.period_end = b.period_end
+                      AND f.filing_date IS NULL
+                      AND f.source = 'yfinance'
+                """)
+                after = conn.execute("""
+                    SELECT COUNT(*) FROM fundamentals
+                    WHERE ticker = ? AND filing_date IS NULL AND source = 'yfinance'
+                """, [ticker]).fetchone()[0]
+                conn.unregister('_fd_batch')
+                results[ticker] = results.get(ticker, 0) + (before - after)
+            conn.commit()
+        finally:
+            conn.close()
+
+        total = sum(results.values())
+        with_updates = sum(1 for n in results.values() if n > 0)
+        logger.info(
+            f"[FilingBackfill] Done: {total} updates across {with_updates}/{len(tickers)} tickers "
+            f"(calendar: {sum(cal_results.values())}, yfinance fallback: {total - sum(cal_results.values())})"
+        )
+        return results
 
     # =========================================================================
     # yfinance: Earnings calendar
@@ -413,13 +770,18 @@ class FundamentalEngine:
                 for dt, row in ed.iterrows():
                     dt_clean = pd.Timestamp(dt).tz_localize(None).date()
                     reported = row.get('Reported EPS')
+                    # is_confirmed stays FALSE here. It only flips to TRUE in
+                    # _mark_earnings_confirmed after a successful fundamentals
+                    # upsert. Marking it TRUE just because Yahoo knows the EPS
+                    # poisons the queue: update_fundamentals skips confirmed
+                    # rows, so the filing would never be ingested.
                     rows.append({
                         'ticker':           ticker,
                         'earnings_date':    dt_clean,
                         'eps_estimate':     _nan_to_none(row.get('EPS Estimate')),
                         'reported_eps':     _nan_to_none(reported),
                         'eps_surprise_pct': _nan_to_none(row.get('Surprise(%)')),
-                        'is_confirmed':     bool(pd.notna(reported)),
+                        'is_confirmed':     False,
                         'updated_at':       datetime.utcnow(),
                     })
                 return pd.DataFrame(rows) if rows else None
@@ -451,6 +813,10 @@ class FundamentalEngine:
         conn = duckdb.connect(self.db_path)
         try:
             conn.register('_ec_batch', combined)
+            # is_confirmed is intentionally NOT updated on conflict.
+            # Once flipped TRUE by _mark_earnings_confirmed (after a successful
+            # fundamentals upsert), a calendar refresh must not flip it back to
+            # FALSE — that would re-queue the same filing for re-ingestion.
             conn.execute("""
                 INSERT INTO earnings_calendar
                 SELECT * FROM _ec_batch
@@ -458,7 +824,6 @@ class FundamentalEngine:
                     eps_estimate     = EXCLUDED.eps_estimate,
                     reported_eps     = EXCLUDED.reported_eps,
                     eps_surprise_pct = EXCLUDED.eps_surprise_pct,
-                    is_confirmed     = EXCLUDED.is_confirmed,
                     updated_at       = EXCLUDED.updated_at
             """)
             conn.commit()
@@ -536,15 +901,24 @@ class FundamentalEngine:
             to_fetch = tickers
             reason = "force"
         else:
+            # Co-equal triggers: a ticker is fetched if it has a pending
+            # earnings row OR its last fundamentals row is stale. Earlier the
+            # staleness check was a fallback that only ran when pending was
+            # empty; that left ghost tickers (no calendar row at all, e.g. MU)
+            # permanently frozen.
+            staleness_days = getattr(config, 'FUNDAMENTAL_STALENESS_DAYS', 100)
             pending = set(self.get_tickers_with_pending_earnings(target_date))
-            to_fetch = [t for t in tickers if t in pending]
+            stale = set(self._get_stale_fundamental_tickers(tickers, max_age_days=staleness_days))
+            triggered = pending | stale
+            to_fetch = [t for t in tickers if t in triggered]
 
-            if not to_fetch:
-                stale = set(self._get_stale_fundamental_tickers(tickers, max_age_days=90))
-                to_fetch = [t for t in tickers if t in stale]
-                reason = "staleness (>90d)" if to_fetch else None
+            if to_fetch:
+                reason = (
+                    f"pending={len(pending & set(to_fetch))}, "
+                    f"stale>{staleness_days}d={len(stale & set(to_fetch))}"
+                )
             else:
-                reason = "pending earnings"
+                reason = None
 
         if not to_fetch:
             logger.debug(f"Fundamentals: all {len(tickers)} tickers up-to-date")
@@ -861,6 +1235,33 @@ def _safe_float(df: pd.DataFrame, idx, col: str) -> Optional[float]:
         return float(val)
     except Exception:
         return None
+
+
+def _sanitize_filing_dates(df: pd.DataFrame) -> Tuple[pd.DataFrame, int, List[Tuple[str, int]]]:
+    """
+    NULL out filing_date when it sits within _MIN_REAL_FILING_GAP_DAYS of period_end.
+
+    Returns (sanitized_df, rejected_count, rejected_sample) where rejected_sample
+    is a list of (ticker, gap_days) tuples for logging — capped at 5.
+    """
+    if df is None or df.empty or 'filing_date' not in df.columns or 'period_end' not in df.columns:
+        return df, 0, []
+
+    df = df.copy()
+    pe = pd.to_datetime(df['period_end'])
+    fd = pd.to_datetime(df['filing_date'])
+    gap = (fd - pe).dt.days
+
+    bad_mask = fd.notna() & (gap < _MIN_REAL_FILING_GAP_DAYS)
+    rejected_count = int(bad_mask.sum())
+
+    sample: List[Tuple[str, int]] = []
+    if rejected_count and 'ticker' in df.columns:
+        bad_rows = df.loc[bad_mask, ['ticker']].assign(gap=gap.loc[bad_mask].astype(int))
+        sample = [(r.ticker, int(r.gap)) for r in bad_rows.head(5).itertuples()]
+
+    df.loc[bad_mask, 'filing_date'] = None
+    return df, rejected_count, sample
 
 
 def _nan_to_none(val) -> Optional[float]:

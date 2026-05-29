@@ -77,6 +77,14 @@ FMP_BATCH_SIZE = 50  # Target tickers per batch (actual batch size varies by URL
 # Fred API Key
 FRED_API_KEY = os.getenv('FRED_API_KEY', '')  # Load from .env file
 
+# SEC EDGAR — no API key required, but SEC mandates a User-Agent header
+# identifying the requester (Name + Email). Rate limit: 10 req/sec.
+# Format: "Quantamental Research yourname@example.com"
+EDGAR_USER_AGENT = os.getenv('EDGAR_USER_AGENT', 'Quantamental Research contact@example.com')
+EDGAR_RATE_LIMIT_PER_SEC = 10
+EDGAR_TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json'
+EDGAR_SUBMISSIONS_URL = 'https://data.sec.gov/submissions/CIK{cik:010d}.json'
+
 # ==============================================================================
 # MACROECONOMIC DATA SETTINGS (M03 Regime Model)
 # ==============================================================================
@@ -249,6 +257,26 @@ FMP_FUNDAMENTAL_RATE_LIMIT = 300  # FMP Starter tier: 300 calls/minute
 FMP_FUNDAMENTAL_BATCH_SIZE = 95  # Process 95 tickers at a time (95 * 3 calls = 285 calls, safe buffer)
 FMP_FUNDAMENTAL_BATCH_DELAY = 5  # Small delay between batches (rate limiting is handled by _rate_limit_check)
 
+# A ticker's fundamentals are stale when last period_end > this many days ago.
+# Co-equal trigger alongside the earnings_calendar in update_fundamentals: catches
+# ghost tickers (no calendar row) and any case where the calendar refresh missed them.
+FUNDAMENTAL_STALENESS_DAYS = 100
+
+# How often the earnings_calendar must be refreshed. Gated on the last successful
+# phase_1_earnings_calendar_refresh entry in pipeline_runs.
+EARNINGS_CALENDAR_REFRESH_DAYS = 7
+
+# Filing-date backfill (Phase 1.x): cap tickers per daily run to keep latency
+# bounded. SEC EDGAR rate limit is 10 req/sec → 200 tickers ≈ 20s.
+# Only rows where period_end is older than FILING_BACKFILL_MIN_AGE_DAYS are
+# eligible — recent quarters' 10-Q filings typically land 30-45d after period_end.
+FILING_BACKFILL_MAX_TICKERS = 200
+FILING_BACKFILL_MIN_AGE_DAYS = 30
+
+# How often to refresh the ticker→CIK map from SEC. Gated on the last successful
+# phase_1_cik_map_refresh entry in pipeline_runs.
+CIK_MAP_REFRESH_DAYS = 7
+
 # ==============================================================================
 # FUNDAMENTAL FILTERS (PLACEHOLDER FOR FUTURE)
 # ==============================================================================
@@ -319,6 +347,8 @@ PIPELINE_FAILURE_MODES = {
     "phase_1_t1_fundamentals": PipelineFailureMode.WARN,  # Non-critical - stale data OK
     "phase_1_t1_shares": PipelineFailureMode.WARN,        # Non-critical - use previous shares
     "phase_1_t1_macro": PipelineFailureMode.WARN,         # Non-critical - M03 will use previous scores
+    "phase_1_cik_map_refresh": PipelineFailureMode.WARN,         # Non-critical - cik_map staleness only delays new SEC filings
+    "phase_1_filing_date_backfill": PipelineFailureMode.WARN,    # Non-critical - fills NULL filing_dates from SEC EDGAR
 
     # Phase 2-3: T2 Screener
     "phase_2_screener_membership": PipelineFailureMode.HALT,  # CRITICAL - needed for T2 features

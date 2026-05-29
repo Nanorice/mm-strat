@@ -179,8 +179,14 @@ def run_yfinance_backfill(
     tickers: Optional[List[str]],
     resume: bool,
     report: bool,
+    no_overwrite: bool = False,
 ) -> None:
-    """Fetch fundamentals from yfinance and write to DuckDB."""
+    """Fetch fundamentals from yfinance and write to DuckDB.
+
+    no_overwrite=True uses INSERT ... ON CONFLICT DO NOTHING via
+    FundamentalEngine.backfill_fundamentals(). Existing (ticker, period_end)
+    rows are preserved as-is — only missing periods are filled.
+    """
     from src.fundamental_engine import FundamentalEngine
 
     engine = FundamentalEngine(db_path=str(DB_PATH), source='yfinance')
@@ -203,8 +209,12 @@ def run_yfinance_backfill(
         logger.info("✅ Nothing to do.")
         return
 
+    mode = "no-overwrite (DO NOTHING)" if no_overwrite else "overwrite (DO UPDATE)"
+    logger.info(f"🔒 Write mode: {mode}")
+
     total_ok = 0
     total_fail = 0
+    total_inserted = 0
 
     for batch_start in range(0, len(remaining), BATCH_SIZE):
         batch = remaining[batch_start: batch_start + BATCH_SIZE]
@@ -216,14 +226,35 @@ def run_yfinance_backfill(
             f"({batch_start + 1}-{min(batch_start + BATCH_SIZE, len(remaining))} "
             f"of {len(remaining)})"
         )
-        results = engine.update_fundamentals(batch, force=True, max_workers=workers)
-        batch_ok = sum(results.values())
-        batch_fail = len(results) - batch_ok
+
+        if no_overwrite:
+            results = engine.backfill_fundamentals(batch, max_workers=workers)
+            batch_ok = sum(1 for n in results.values() if n > 0)
+            batch_fail = sum(1 for n in results.values() if n == 0)
+            batch_inserted = sum(results.values())
+            total_inserted += batch_inserted
+            logger.info(
+                f"  ✅ Batch done: {batch_ok} tickers with inserts, "
+                f"{batch_fail} with 0, {batch_inserted} rows inserted"
+            )
+        else:
+            results = engine.update_fundamentals(batch, force=True, max_workers=workers)
+            batch_ok = sum(results.values())
+            batch_fail = len(results) - batch_ok
+            logger.info(
+                f"  ✅ Batch done: {batch_ok} OK, {batch_fail} failed "
+                f"(cumulative: {total_ok + batch_ok}/{total_ok + batch_ok + total_fail + batch_fail})"
+            )
         total_ok += batch_ok
         total_fail += batch_fail
-        logger.info(f"  ✅ Batch done: {batch_ok} OK, {batch_fail} failed (cumulative: {total_ok}/{total_ok + total_fail})")
 
-    logger.info(f"\n🚀 yfinance backfill complete — {total_ok} OK, {total_fail} failed")
+    if no_overwrite:
+        logger.info(
+            f"\n🚀 yfinance backfill complete — {total_inserted} rows inserted, "
+            f"{total_ok} tickers updated, {total_fail} with 0 rows"
+        )
+    else:
+        logger.info(f"\n🚀 yfinance backfill complete — {total_ok} OK, {total_fail} failed")
 
     if report:
         print_quality_report(str(DB_PATH))
@@ -524,6 +555,7 @@ def main() -> None:
     parser.add_argument("--tickers", nargs="+", metavar="TICKER", help="Test with specific tickers instead of full universe")
     parser.add_argument("--dry-run", action="store_true", help="[edgar] Fetch and resolve but do NOT write to DB")
     parser.add_argument("--overwrite", action="store_true", help="[fmp] ON CONFLICT DO UPDATE — clobbers existing edgar/yfinance rows. [edgar] DELETE before re-inserting. Required for initial backfill.")
+    parser.add_argument("--no-overwrite", action="store_true", help="[yfinance] INSERT OR IGNORE — preserve existing rows, only fill missing (ticker, period_end) holes. Recommended for hole-filling backfills.")
     parser.add_argument("--screener-check", action="store_true", help="[fmp] Cross-check target list against FMP screener universe")
     parser.add_argument("--report", action="store_true", help="Print data quality report (usable standalone or after backfill)")
     args = parser.parse_args()
@@ -540,6 +572,7 @@ def main() -> None:
             tickers=args.tickers,
             resume=args.resume,
             report=args.report,
+            no_overwrite=args.no_overwrite,
         )
     elif args.source == "fmp":
         workers = min(args.workers, 8)

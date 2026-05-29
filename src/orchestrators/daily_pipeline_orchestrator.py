@@ -20,6 +20,7 @@ from src.data_engine import DataRepository
 from src.fundamental_engine import FundamentalEngine
 from src.shares_engine import SharesEngine
 from src.macro_engine import MacroEngine
+from src.edgar_engine import EDGAREngine
 from src.feature_pipeline import FeaturePipeline
 from src.regime_pipeline import RegimePipeline
 from src.pipeline.risk_5_factor import RiskFiveFactorCalculator
@@ -86,6 +87,7 @@ class DailyPipelineOrchestrator:
         self.fund_engine = FundamentalEngine(db_path=self.db_path, source='yfinance')
         self.shares_engine = SharesEngine(self.db_path)
         self.macro_engine = MacroEngine(self.db_path)
+        self.edgar_engine = EDGAREngine(db_path=self.db_path)
 
         # Initialize pipelines (delegate computation)
         self.feature_pipeline = FeaturePipeline(self.db_path)
@@ -391,27 +393,47 @@ class DailyPipelineOrchestrator:
         return last_day
 
     def _should_refresh_earnings_calendar(self, trading_day: str) -> bool:
-        """Check if earnings calendar needs a monthly refresh.
+        """Check if earnings calendar needs a refresh.
 
-        Triggers on the first trading day of each month by checking whether
-        any earnings_calendar row was updated this month already.
+        Gates on the last successful run of phase_1_earnings_calendar_refresh
+        in pipeline_runs. Triggers when older than EARNINGS_CALENDAR_REFRESH_DAYS
+        (default 7).
+
+        The previous heuristic queried earnings_calendar.updated_at, but
+        update_fundamentals touches that timestamp via _mark_earnings_confirmed
+        almost every day — so the gate never opened.
         """
-        td = datetime.strptime(trading_day, '%Y-%m-%d')
-        month_start = td.replace(day=1).strftime('%Y-%m-%d')
+        from config import EARNINGS_CALENDAR_REFRESH_DAYS
 
         conn = duckdb.connect(self.db_path, read_only=True)
         try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM earnings_calendar WHERE updated_at >= ?",
-                [month_start]
-            ).fetchone()
-            already_refreshed = row[0] > 0
+            row = conn.execute("""
+                SELECT MAX(completed_at)
+                FROM pipeline_runs
+                WHERE phase_name = 'phase_1_earnings_calendar_refresh'
+                  AND status = 'success'
+            """).fetchone()
+            last_success = row[0] if row else None
         finally:
             conn.close()
 
-        if not already_refreshed:
-            logger.debug(f"[Phase 1] Earnings calendar needs monthly refresh (since {month_start})")
-        return not already_refreshed
+        if last_success is None:
+            logger.info("[Phase 1] Earnings calendar: no prior successful refresh — triggering")
+            return True
+
+        age_days = (datetime.now() - last_success).days
+        should = age_days >= EARNINGS_CALENDAR_REFRESH_DAYS
+        if should:
+            logger.info(
+                f"[Phase 1] Earnings calendar: last refresh {age_days}d ago "
+                f"(>= {EARNINGS_CALENDAR_REFRESH_DAYS}d) — triggering"
+            )
+        else:
+            logger.debug(
+                f"[Phase 1] Earnings calendar: last refresh {age_days}d ago "
+                f"(< {EARNINGS_CALENDAR_REFRESH_DAYS}d) — skipping"
+            )
+        return should
 
     def _run_phase_1_1_quarterly_refresh(self, run_stats: Dict) -> None:
         """
@@ -598,15 +620,28 @@ class DailyPipelineOrchestrator:
             logger.info("[Phase 1] Price: all fresh, skipped")
             results['price'] = {'success': True, 'ok': 0, 'failed': 0}
 
-        # Earnings Calendar (monthly) — equities only (ETFs/indices have no earnings)
+        # Earnings Calendar (weekly) — equities only (ETFs/indices have no earnings).
+        # Tracked as its own phase so the gate query in _should_refresh_earnings_calendar
+        # has an authoritative signal — independent of any row-touch side effects.
         if equity_tickers and self._should_refresh_earnings_calendar(latest_trading_day):
+            ec_run_id = self.run_manager.start_phase(
+                target_date=latest_trading_day,
+                phase_name='phase_1_earnings_calendar_refresh',
+                metadata={'ticker_count': len(equity_tickers)},
+            )
             try:
                 rows = self.fund_engine.refresh_earnings_calendar(equity_tickers)
                 results['earnings_calendar'] = {'success': True, 'rows_written': rows}
                 logger.info(f"[Phase 1] Earnings calendar: {rows} rows refreshed")
+                self.run_manager.complete_phase(
+                    ec_run_id, PipelineRunStatus.SUCCESS, rows_processed=rows
+                )
             except Exception as e:
                 results['earnings_calendar'] = {'success': False, 'error': str(e)}
                 logger.warning(f"[Phase 1] Earnings calendar FAILED (non-critical): {e}")
+                self.run_manager.complete_phase(
+                    ec_run_id, PipelineRunStatus.FAILED, error_message=str(e)
+                )
 
         # Fundamentals — equities only (ETFs/indices have no IS/BS/CF)
         if equity_tickers:
@@ -632,6 +667,26 @@ class DailyPipelineOrchestrator:
                 results['fundamentals'] = {'success': False, 'error': str(e)}
                 logger.error(f"[Phase 1] Fundamentals FAILED: {e}", exc_info=True)
 
+        # cik_map refresh (weekly) — keeps ticker→CIK lookups current for the
+        # EDGAR filing-date backfill below. Cheap (~1 HTTP call, ~10K rows).
+        if self._should_refresh_cik_map():
+            try:
+                results['cik_map_refresh'] = self._run_phase_1_cik_map_refresh(latest_trading_day)
+            except Exception as e:
+                results['cik_map_refresh'] = {'success': False, 'error': str(e)}
+                logger.warning(f"[Phase 1] cik_map refresh FAILED (non-critical): {e}")
+
+        # Filing-date backfill — fills filing_date for rows where it is currently
+        # NULL, using SEC EDGAR as the authoritative source. Runs AFTER fundamentals
+        # (any rows just upserted are eligible) and AFTER the cik_map refresh.
+        if equity_tickers:
+            try:
+                fb_result = self._run_phase_1_filing_date_backfill(latest_trading_day)
+                results['filing_date_backfill'] = fb_result
+            except Exception as e:
+                results['filing_date_backfill'] = {'success': False, 'error': str(e)}
+                logger.warning(f"[Phase 1] Filing-date backfill FAILED (non-critical): {e}")
+
         # Shares — equities only (ETFs report AUM, not shares outstanding)
         if equity_tickers:
             try:
@@ -646,14 +701,42 @@ class DailyPipelineOrchestrator:
                 results['shares'] = {'success': False, 'error': str(e)}
                 logger.error(f"[Phase 1] Shares FAILED: {e}", exc_info=True)
 
-        # Macro
+        # Macro — two writers, two tables:
+        #   ingest_daily_macro()  -> t1_macro    (wide: SPY/QQQ/VIX OHLCV)
+        #   update_macro_cache()  -> macro_data  (long: FRED series + VIX, consumed
+        #                                         by risk_5_factor + m03_regime)
+        # Both must run daily. Previously only t1_macro was written; macro_data
+        # was orphaned and drifted ~17d stale, silently freezing 5-factor risk
+        # scores at their last manual-backfill date.
         try:
-            result = self.macro_engine.ingest_daily_macro(start_date=latest_trading_day, force=False)
-            rows = result.get('rows_written', 0) if isinstance(result, dict) else result
-            results['macro'] = {'success': True, 'rows_written': rows}
-            logger.info(f"[Phase 1] Macro: {rows} rows")
-            if rows and rows > 0:
-                self.run_manager.record_write('macro_data', rows, 'phase_1_t1_macro')
+            t1_rows = self.macro_engine.ingest_daily_macro(start_date=latest_trading_day, force=False)
+            t1_rows = t1_rows.get('rows_written', 0) if isinstance(t1_rows, dict) else (t1_rows or 0)
+
+            # Diff macro_data row count to get true inserted count (update_macro_cache
+            # returns per-series total cache size, not inserts).
+            conn = duckdb.connect(self.db_path, read_only=True)
+            try:
+                md_before = conn.execute("SELECT COUNT(*) FROM macro_data").fetchone()[0]
+            finally:
+                conn.close()
+            self.macro_engine.update_macro_cache(force=False, write_db=True)
+            conn = duckdb.connect(self.db_path, read_only=True)
+            try:
+                md_after = conn.execute("SELECT COUNT(*) FROM macro_data").fetchone()[0]
+            finally:
+                conn.close()
+            md_rows = md_after - md_before
+
+            results['macro'] = {
+                'success': True,
+                't1_macro_rows': t1_rows,
+                'macro_data_rows': md_rows,
+            }
+            logger.info(f"[Phase 1] Macro: t1_macro +{t1_rows} rows, macro_data +{md_rows} rows")
+            if t1_rows and t1_rows > 0:
+                self.run_manager.record_write('t1_macro', t1_rows, 'phase_1_t1_macro')
+            if md_rows and md_rows > 0:
+                self.run_manager.record_write('macro_data', md_rows, 'phase_1_t1_macro')
         except Exception as e:
             results['macro'] = {'success': False, 'error': str(e)}
             logger.error(f"[Phase 1] Macro FAILED: {e}", exc_info=True)
@@ -662,6 +745,126 @@ class DailyPipelineOrchestrator:
             'rows_processed': len(active_tickers),
             'sub_phases': results
         }
+
+    def _should_refresh_cik_map(self) -> bool:
+        """Check if cik_map needs a refresh.
+
+        Gates on the last successful run of phase_1_cik_map_refresh in
+        pipeline_runs. Triggers when older than CIK_MAP_REFRESH_DAYS (default 7).
+        SEC adds new tickers slowly; weekly is plenty.
+        """
+        from config import CIK_MAP_REFRESH_DAYS
+
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            row = conn.execute("""
+                SELECT MAX(completed_at)
+                FROM pipeline_runs
+                WHERE phase_name = 'phase_1_cik_map_refresh'
+                  AND status = 'success'
+            """).fetchone()
+            last_success = row[0] if row else None
+        finally:
+            conn.close()
+
+        if last_success is None:
+            logger.info("[Phase 1] cik_map: no prior successful refresh — triggering")
+            return True
+
+        age_days = (datetime.now() - last_success).days
+        return age_days >= CIK_MAP_REFRESH_DAYS
+
+    def _run_phase_1_cik_map_refresh(self, trading_day: str) -> Dict:
+        """Phase 1.x: refresh ticker→CIK map from SEC (weekly cadence)."""
+        ck_run_id = self.run_manager.start_phase(
+            target_date=trading_day,
+            phase_name='phase_1_cik_map_refresh',
+            metadata={},
+        )
+        try:
+            n = self.edgar_engine.refresh_cik_map()
+            logger.info(f"[Phase 1] cik_map: {n} rows after refresh")
+            self.run_manager.complete_phase(
+                ck_run_id, PipelineRunStatus.SUCCESS, rows_processed=n
+            )
+            return {'success': True, 'rows': n}
+        except Exception as e:
+            self.run_manager.complete_phase(
+                ck_run_id, PipelineRunStatus.FAILED, error_message=str(e)
+            )
+            raise
+
+    def _run_phase_1_filing_date_backfill(self, trading_day: str) -> Dict:
+        """Phase 1.x: backfill filing_date for rows where it is currently NULL,
+        using SEC EDGAR as the authoritative source.
+
+        Eligible: source='yfinance' AND filing_date IS NULL AND period_end older
+        than FILING_BACKFILL_MIN_AGE_DAYS. Recent quarters are excluded because
+        the 10-Q filing typically lands ≥30d after period_end — letting them
+        roll forward to a later run is correct.
+
+        Bounded by FILING_BACKFILL_MAX_TICKERS per run (priority: most-missing
+        first). Tracked as its own phase for heatmap visibility.
+        """
+        from config import (
+            FILING_BACKFILL_MAX_TICKERS,
+            FILING_BACKFILL_MIN_AGE_DAYS,
+        )
+
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            candidates = conn.execute(f"""
+                SELECT f.ticker, COUNT(*) AS missing
+                FROM fundamentals f
+                JOIN cik_map cm ON f.ticker = cm.ticker
+                WHERE f.source = 'yfinance'
+                  AND f.filing_date IS NULL
+                  AND f.period_end < CURRENT_DATE - INTERVAL {int(FILING_BACKFILL_MIN_AGE_DAYS)} DAY
+                GROUP BY f.ticker
+                ORDER BY missing DESC, f.ticker
+                LIMIT {int(FILING_BACKFILL_MAX_TICKERS)}
+            """).fetchall()
+        finally:
+            conn.close()
+
+        if not candidates:
+            logger.debug("[Phase 1] Filing-date backfill: no eligible rows")
+            return {'success': True, 'tickers': 0, 'rows_updated': 0}
+
+        tickers = [c[0] for c in candidates]
+        total_missing = sum(c[1] for c in candidates)
+
+        fb_run_id = self.run_manager.start_phase(
+            target_date=trading_day,
+            phase_name='phase_1_filing_date_backfill',
+            metadata={'ticker_count': len(tickers), 'rows_eligible': total_missing},
+        )
+        try:
+            results = self.edgar_engine.backfill_filing_dates_from_edgar(
+                tickers=tickers, only_null=True
+            )
+            rows_updated = sum(results.values())
+            tickers_touched = len(results)
+            logger.info(
+                f"[Phase 1] Filing-date backfill (EDGAR): {rows_updated} rows updated "
+                f"across {tickers_touched}/{len(tickers)} tickers "
+                f"(eligible: {total_missing} rows)"
+            )
+            self.run_manager.complete_phase(
+                fb_run_id, PipelineRunStatus.SUCCESS, rows_processed=rows_updated
+            )
+            return {
+                'success': True,
+                'tickers': len(tickers),
+                'tickers_touched': tickers_touched,
+                'rows_updated': rows_updated,
+                'rows_eligible': total_missing,
+            }
+        except Exception as e:
+            self.run_manager.complete_phase(
+                fb_run_id, PipelineRunStatus.FAILED, error_message=str(e)
+            )
+            raise
 
     def _run_phase_2_screener_membership(self, target_date: str) -> Dict:
         """Phase 2: Evaluate and log screener membership event."""
@@ -1093,35 +1296,77 @@ class DailyPipelineOrchestrator:
         return resolved
 
     def _check_filing_date_quality(self, tickers: list) -> None:
-        """Warn if any fundamental rows have filing_date <= 7 days after period_end.
+        """Two-part fundamentals DQ check.
 
-        A gap <= 7 days means yfinance mapped an earnings announcement date (which can be
-        1-3 days after quarter-end for fast reporters) rather than the actual 10-Q filing date.
-        Legitimate 10-Q filings take at least 8 days; accelerated filers average 20-30 days.
+        1. Bogus filing_dates: rows where filing_date sits within 8d of period_end.
+           These are yfinance announcement dates (or worse, the period_end itself)
+           rather than real 10-Q filings. New ingests are now sanitised at the
+           upsert gate, so any remaining hits indicate pre-fix legacy rows.
+
+        2. Stale filings: latest filing_date per ticker > 100d ago. US issuers
+           must file 10-Q within ~45d of quarter-end, then the next quarter ends
+           ~90d later. 100d after the last filing is a real anomaly: late filer,
+           delisted, fiscal-calendar restate, or our pipeline missed it. NULL
+           filing_date counts as stale because we have no PIT anchor proof.
         """
         if not tickers:
             return
-        ticker_list = ", ".join(f"'{t}'" for t in tickers)
+        import pandas as pd
+        from config import FUNDAMENTAL_STALENESS_DAYS
+
+        ticker_df = pd.DataFrame({'ticker': tickers})
         con = duckdb.connect(self.db_path, read_only=True)
         try:
-            rows = con.execute(f"""
+            con.register('_dq_tickers', ticker_df)
+
+            bogus = con.execute("""
                 SELECT ticker, period_end, filing_date,
                        DATE_DIFF('day', period_end, filing_date) AS gap_days
                 FROM fundamentals
-                WHERE ticker IN ({ticker_list})
+                WHERE ticker IN (SELECT ticker FROM _dq_tickers)
                   AND filing_date IS NOT NULL
-                  AND DATE_DIFF('day', period_end, filing_date) <= 7
+                  AND DATE_DIFF('day', period_end, filing_date) < 8
                 ORDER BY gap_days
                 LIMIT 20
+            """).fetchdf()
+
+            stale = con.execute(f"""
+                WITH latest AS (
+                  SELECT ticker, MAX(filing_date) AS last_filing
+                  FROM fundamentals
+                  WHERE ticker IN (SELECT ticker FROM _dq_tickers)
+                  GROUP BY ticker
+                )
+                SELECT ticker, last_filing,
+                       CASE WHEN last_filing IS NULL THEN NULL
+                            ELSE DATE_DIFF('day', last_filing, CURRENT_DATE)
+                       END AS days_since
+                FROM latest
+                WHERE last_filing IS NULL
+                   OR DATE_DIFF('day', last_filing, CURRENT_DATE) > {int(FUNDAMENTAL_STALENESS_DAYS)}
+                ORDER BY days_since DESC NULLS LAST
             """).fetchdf()
         finally:
             con.close()
 
-        if not rows.empty:
-            sample = ", ".join(f"{r.ticker} ({r.gap_days}d)" for r in rows.head(5).itertuples())
+        if not bogus.empty:
+            sample = ", ".join(f"{r.ticker} ({r.gap_days}d)" for r in bogus.head(5).itertuples())
             logger.warning(
-                f"[Phase 1] DQ: {len(rows)} fundamentals with filing_date <= 7d after period_end. "
-                f"Sample: {sample}"
+                f"[Phase 1] DQ: {len(bogus)} legacy rows with filing_date < 8d after period_end. "
+                f"Sample: {sample}. Run scripts/backfill_filing_dates.py to clean."
+            )
+
+        if not stale.empty:
+            null_count = int(stale['last_filing'].isna().sum())
+            old_count = len(stale) - null_count
+            sample_old = stale.dropna(subset=['last_filing']).head(5)
+            sample_str = ", ".join(
+                f"{r.ticker} ({int(r.days_since)}d)" for r in sample_old.itertuples()
+            )
+            logger.warning(
+                f"[Phase 1] DQ: {len(stale)} equities with stale fundamentals "
+                f"(null_filing={null_count}, last_filing>{FUNDAMENTAL_STALENESS_DAYS}d={old_count}). "
+                f"Sample old: {sample_str or 'n/a'}"
             )
 
     def _check_coverage(self, target_date: str) -> Dict:

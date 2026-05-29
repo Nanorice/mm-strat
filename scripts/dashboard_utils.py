@@ -186,17 +186,33 @@ def load_pipeline_runs_window(days: int = 30) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_data_freshness() -> pd.DataFrame:
-    """One row per key table: max date and rows. For Page 5 freshness panel."""
+    """One row per key table: max date and rows. For Page 5 freshness panel.
+
+    Table list mirrors `docs/manual_for_me.md` §Key Tables. Tables without a
+    natural date column (company_profiles, ticker_blacklist,
+    screener_criteria_versions, pipeline_runs) are omitted.
+    """
     queries = [
-        ("price_data",          "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM price_data"),
-        ("daily_features",      "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM daily_features"),
-        ("t2_screener_features","SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t2_screener_features"),
-        ("t3_sepa_features",    "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t3_sepa_features"),
-        ("t2_regime_scores",    "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t2_regime_scores"),
-        ("t2_risk_scores",      "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t2_risk_scores"),
-        ("fundamentals",        "SELECT MAX(period_end)::DATE max_d, COUNT(*) n FROM fundamentals"),
-        ("earnings_calendar",   "SELECT MAX(earnings_date)::DATE max_d, COUNT(*) n FROM earnings_calendar"),
-        ("screener_watchlist",  "SELECT MAX(price_date)::DATE max_d, COUNT(*) n FROM screener_watchlist"),
+        # Phase 1 — raw ingestion
+        ("price_data",           "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM price_data"),
+        ("fundamentals",         "SELECT MAX(period_end)::DATE max_d, COUNT(*) n FROM fundamentals"),
+        ("earnings_calendar",    "SELECT MAX(earnings_date)::DATE max_d, COUNT(*) n FROM earnings_calendar"),
+        ("shares_history",       "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM shares_history"),
+        ("macro_data",           "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM macro_data"),
+        ("t1_macro",             "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t1_macro"),
+        # Phase 2 — universe
+        ("screener_membership",  "SELECT MAX(effective_date)::DATE max_d, COUNT(*) n FROM screener_membership"),
+        # Phase 3-5 — features
+        ("t2_screener_features", "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t2_screener_features"),
+        ("t2_regime_scores",     "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t2_regime_scores"),
+        ("t2_risk_scores",       "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t2_risk_scores"),
+        ("sepa_watchlist",       "SELECT MAX(entry_date)::DATE max_d, COUNT(*) n FROM sepa_watchlist"),
+        ("t3_sepa_features",     "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM t3_sepa_features"),
+        # Phase 6-7 — materialised
+        ("screener_watchlist",   "SELECT MAX(price_date)::DATE max_d, COUNT(*) n FROM screener_watchlist"),
+        ("d2_training_cache",    "SELECT MAX(date)::DATE max_d, COUNT(*) n FROM d2_training_cache"),
+        # ML registry
+        ("models",               "SELECT MAX(training_date)::DATE max_d, COUNT(*) n FROM models"),
     ]
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
@@ -214,6 +230,77 @@ def load_data_freshness() -> pd.DataFrame:
             except duckdb.Error:
                 rows.append({"table": table, "max_date": None, "rows": 0, "lag_days": None})
         return pd.DataFrame(rows)
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_t1_ingestion_failures(days: int = 30) -> pd.DataFrame:
+    """Aggregated T1 failures from pipeline_error_log for Page 5.
+
+    One row per (ticker, phase, error_type) — sorted by days_failing desc so
+    chronic offenders surface first as pruning candidates.
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT pel.affected_entity                AS ticker,
+                   pel.phase_name                     AS phase,
+                   pel.error_type                     AS error_type,
+                   COUNT(DISTINCT pr.target_date)     AS days_failing,
+                   MIN(pr.target_date)                AS first_failure_date,
+                   MAX(pr.target_date)                AS last_failure_date,
+                   ANY_VALUE(pel.error_detail)        AS sample_detail
+            FROM pipeline_error_log pel
+            JOIN pipeline_runs pr ON pel.run_id = pr.run_id
+            WHERE pel.phase_name LIKE 'phase_1%'
+              AND pr.target_date >= CURRENT_DATE - INTERVAL '{int(days)} day'
+              AND pel.affected_entity IS NOT NULL
+            GROUP BY 1, 2, 3
+            ORDER BY days_failing DESC, last_failure_date DESC
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_latest_fundamentals_snapshot(n: int = 10) -> pd.DataFrame:
+    """For Page 5 Fundamentals Audit: most recently updated tickers with key metrics."""
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT ticker, period_end, filing_date, updated_at, source,
+                   total_revenue, net_income, basic_eps, free_cash_flow
+            FROM fundamentals
+            WHERE updated_at IS NOT NULL
+            ORDER BY updated_at DESC, period_end DESC
+            LIMIT {int(n)}
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_fundamentals_volume_by_quarter(start_year: int = 2020) -> pd.DataFrame:
+    """For Page 5 Fundamentals Audit: row counts per period quarter.
+
+    Catches volume drops that would indicate yfinance/FMP coverage gaps.
+    Counts rows where revenue is non-null (a row with only date is not a real fetch).
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT YEAR(period_end)                                 AS year,
+                   QUARTER(period_end)                              AS quarter,
+                   YEAR(period_end) || '-Q' || QUARTER(period_end)  AS quarter_label,
+                   COUNT(*)                                         AS rows_fetched,
+                   COUNT(DISTINCT ticker)                           AS tickers
+            FROM fundamentals
+            WHERE period_end >= '{int(start_year)}-01-01'
+              AND total_revenue IS NOT NULL
+            GROUP BY 1, 2
+            ORDER BY year, quarter
+        """).fetchdf()
     finally:
         con.close()
 

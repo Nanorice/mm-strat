@@ -58,6 +58,10 @@ Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener memb
 │                         -> logs / alerts only
 ```
 
+### Detailed Data Flow & Dependency Chart
+
+> **Source of truth:** [`docs/architecture/data_flow.mmd`](architecture/data_flow.mmd) — single Mermaid file shared with the dashboard's Pipeline Health page. Render locally with `mmdc -i docs/architecture/data_flow.mmd -o data_flow.svg`, view inline in any Mermaid-aware viewer, or open the dashboard.
+
 **CLI (daily runner):**
 ```bash
 python scripts/run_daily_pipeline.py                    # Full pipeline (yesterday)

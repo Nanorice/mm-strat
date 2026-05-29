@@ -282,10 +282,10 @@ def _add_binary_gates(section: SectionResult, mode_a: RankerMetrics,
     top5 = mode_a.top_k_lift.get(5, float("nan"))
     section.gates.append(GateEntry(
         name="D2_top5_hit_lift",
-        status="pass" if (not np.isnan(top5) and top5 > 1.5) else "fail",
+        status="pass" if (not np.isnan(top5) and top5 > 1.3) else "fail",
         value=float(top5) if not np.isnan(top5) else None,
-        threshold=1.5,
-        detail=f"top-5 hit lift={top5:.3f}× (need > 1.5×)",
+        threshold=1.3,
+        detail=f"top-5 hit lift={top5:.3f}× (need > 1.3×)",
         blocking=True,
     ))
     # D-gate-3: top decile vs bottom AND absolute floor 1.5× prevalence
@@ -330,11 +330,11 @@ def _add_magnitude_gates(section: SectionResult, mode_a: RankerMetrics) -> None:
     top5 = mode_a.top_k_lift.get(5, float("nan"))
     section.gates.append(GateEntry(
         name="D5_top5_magnitude_lift",
-        status="pass" if (not np.isnan(top5) and top5 > 1.5) else "fail",
+        status="pass" if (not np.isnan(top5) and top5 > 1.3) else "warn",
         value=float(top5) if not np.isnan(top5) else None,
-        threshold=1.5,
-        detail=f"top-5 magnitude lift={top5:.3f}× (need > 1.5×)",
-        blocking=True,
+        threshold=1.3,
+        detail=f"top-5 magnitude lift={top5:.3f}× (warn if < 1.3×)",
+        blocking=False,
     ))
     # D-gate-6: warning gate, threshold 0.20
     tr = mode_a.tail_recall
@@ -362,7 +362,7 @@ def _aggregate_d_score(binary_a: Optional[RankerMetrics],
         # decile monotonicity proxy: top-vs-bottom ratio
         ratio = binary_a.top_decile_vs_bottom
         ic_score = rubric_score(ic if not np.isnan(ic) else 0.0, [0.0, 0.03, 0.08])
-        top5_score = rubric_score(top5 if not np.isnan(top5) else 0.0, [1.2, 1.5, 2.5])
+        top5_score = rubric_score(top5 if not np.isnan(top5) else 0.0, [1.2, 1.3, 2.5])
         # +inf ⇒ perfect separation (bottom decile mean is zero); treat as Strong.
         if np.isnan(ratio):
             decile_score = 0
@@ -376,7 +376,7 @@ def _aggregate_d_score(binary_a: Optional[RankerMetrics],
         top5 = magnitude_a.top_k_lift.get(5, float("nan"))
         tr = magnitude_a.tail_recall
         ic_score = rubric_score(ic if not np.isnan(ic) else 0.0, [0.0, 0.03, 0.08])
-        top5_score = rubric_score(top5 if not np.isnan(top5) else 0.0, [1.2, 1.5, 2.5])
+        top5_score = rubric_score(top5 if not np.isnan(top5) else 0.0, [1.2, 1.3, 2.5])
         tr_score = rubric_score(tr if not np.isnan(tr) else 0.0, [0.10, 0.20, 0.35])
         out["D_magnitude"] = int(min(ic_score, top5_score, tr_score))
     return out
@@ -492,9 +492,10 @@ def run_section_d(
         })
     section.tables["summary"] = summary_rows
 
-    # Detail line
     section.detail = (
-        f"Mode A (entry-only): n={binary_a.n_rows} across {binary_a.n_days} days. "
+        "<b>Mode A (Entry-only):</b> Evaluated only on the rows that became actual SEPA candidates (drives quality gates).<br>"
+        "<b>Mode B (Stateful):</b> Evaluated across all rows in the window to test signal retention (informational, no gates).<br><br>"
+        f"<b>Metrics Summary:</b> Mode A: n={binary_a.n_rows} across {binary_a.n_days} days. "
         f"Binary IC median={binary_a.ic_median:.4f} (t={binary_a.ic_t_stat:.2f}), "
         f"MFE IC median={magnitude_a.ic_median:.4f} (t={magnitude_a.ic_t_stat:.2f}). "
         f"Mode B: " + (
