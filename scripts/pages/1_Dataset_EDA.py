@@ -1,109 +1,120 @@
-"""Dataset EDA — embeds the pretrain audit report rendered per model.
+"""Dataset EDA — lists the latest pretrain audit reports in docs/reports/.
 
-Placeholder for a richer EDA dashboard (target distribution, class imbalance,
-feature drift per label set). For now: dropdown of registered models that
-have a pretrain_audit.html on disk, embed that HTML.
-
-Replaces the retired Feature Time Series page (third-party tools like
-TradingView / Finviz cover candle + indicator charting better).
+Reports are produced by `python scripts/run_pretrain_audit.py [--mode trades]
+[--label-set NAME]`. This page sorts the HTML artefacts by mtime descending
+and embeds the chosen one. Filenames follow the convention
+`pretrain_audit_<mode>[_<label_set>]_<YYYYMMDD_HHMMSS>.html`.
 """
 
 from __future__ import annotations
 
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard_utils import load_models_table
+REPORTS_DIR = ROOT / "docs" / "reports"
+FNAME_RE = re.compile(
+    r"^pretrain_audit_(?P<mode>dense|trades)(?:_(?P<labelset>[A-Za-z0-9]+))?"
+    r"_(?P<ts>\d{8}_\d{6})\.html$"
+)
 
 
-def _pretrain_html_for_row(row: pd.Series) -> Path | None:
-    """Return the pretrain_audit.html path for a registry row, or None."""
-    ap = row.get("artifacts_path")
-    if not ap:
+def _parse_report(p: Path) -> dict | None:
+    m = FNAME_RE.match(p.name)
+    if not m:
         return None
-    p = Path(ap)
-    if not p.is_absolute():
-        p = ROOT / ap
-    candidate = p / "pretrain_audit.html"
-    return candidate if candidate.exists() else None
+    try:
+        ts = datetime.strptime(m.group("ts"), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+    return {
+        "path": p,
+        "mode": m.group("mode"),
+        "label_set": m.group("labelset") or "default",
+        "ts": ts,
+        "size_kb": p.stat().st_size / 1024,
+    }
+
+
+def _label(r: dict) -> str:
+    return (
+        f"{r['ts']:%Y-%m-%d %H:%M}  ·  mode={r['mode']}  ·  "
+        f"label-set={r['label_set']}  ·  {r['size_kb']:.0f} KB"
+    )
 
 
 # ── Page ─────────────────────────────────────────────────────────────────────
 
 st.title("Dataset EDA")
 st.caption(
-    "Pretrain audit report per registered model — target distribution, "
-    "class balance, feature/target relationships. "
-    "Dropdown lists registry models with a `pretrain_audit.html` artifact."
+    "Pretrain audit reports — target distribution, class balance, "
+    "feature/target relationships. Sorted by recency. Generate new ones with "
+    "`python scripts/run_pretrain_audit.py --mode trades --label-set <name>`."
 )
 
-models = load_models_table()
-if models.empty:
-    st.warning("Registry is empty.")
+if not REPORTS_DIR.exists():
+    st.warning(f"Reports directory not found: `{REPORTS_DIR.relative_to(ROOT)}`")
     st.stop()
 
-# Build the per-model availability map
-options: list[tuple[str, Path]] = []
-for _, row in models.iterrows():
-    html = _pretrain_html_for_row(row)
-    if html is not None:
-        options.append((row["version_id"], html))
-
-if not options:
+reports = [
+    r for r in (
+        _parse_report(p) for p in REPORTS_DIR.glob("pretrain_audit_*.html")
+    ) if r is not None
+]
+if not reports:
     st.info(
-        "No registered model has a `pretrain_audit.html` on disk. "
-        "Generate one with `python scripts/run_pretrain_audit.py "
-        "--model <version_id> --mode trades`."
+        "No pretrain audit reports in `docs/reports/`. "
+        "Generate one with `python scripts/run_pretrain_audit.py --mode trades`."
     )
     st.stop()
 
-# Default to the prod model if it has one, otherwise the most recently trained
-prod_with_audit = [vid for vid, _ in options
-                   if models.loc[models["version_id"] == vid, "status_flag"].iloc[0] == "prod"]
-default_idx = 0
-if prod_with_audit:
-    default_idx = next(
-        (i for i, (vid, _) in enumerate(options) if vid == prod_with_audit[0]), 0
-    )
+reports.sort(key=lambda r: r["ts"], reverse=True)
 
-selected = st.selectbox(
-    "Model (feature set)",
-    [vid for vid, _ in options],
-    index=default_idx,
-    help="Each pretrain audit is keyed by the model's feature set. Switching "
-         "models re-renders the EDA against that feature set.",
+# Optional filters keep the dropdown short when reports accumulate
+modes = sorted({r["mode"] for r in reports})
+label_sets = sorted({r["label_set"] for r in reports})
+
+c1, c2 = st.columns(2)
+with c1:
+    mode_filter = st.selectbox("Mode", ["(all)"] + modes, index=0)
+with c2:
+    ls_filter = st.selectbox("Label set", ["(all)"] + label_sets, index=0)
+
+filtered = [
+    r for r in reports
+    if (mode_filter == "(all)" or r["mode"] == mode_filter)
+    and (ls_filter == "(all)" or r["label_set"] == ls_filter)
+]
+
+if not filtered:
+    st.info("No reports match the selected filters.")
+    st.stop()
+
+selected_label = st.selectbox(
+    "Report",
+    [_label(r) for r in filtered],
+    index=0,
+    help="Most recent first.",
 )
-
-html_path = dict(options)[selected]
-row = models[models["version_id"] == selected].iloc[0]
+selected = filtered[[_label(r) for r in filtered].index(selected_label)]
 
 st.caption(
-    f"Status: **{row['status_flag'] or '—'}** · "
-    f"Feature ver.: `{row.get('feature_version') or '—'}` · "
-    f"Trained: {row.get('training_date') or '—'} · "
-    f"Source: `{html_path.relative_to(ROOT)}` "
-    f"({html_path.stat().st_size / 1024:.0f} KB)"
+    f"Source: `{selected['path'].relative_to(ROOT)}` · "
+    f"Generated: {selected['ts']:%Y-%m-%d %H:%M:%S} · "
+    f"Mode: **{selected['mode']}** · "
+    f"Label set: **{selected['label_set']}**"
 )
-
 st.markdown("---")
 
-# TODO (next session, per dashboard_pipeline_tasks.md):
-# - Switch from per-model embedded HTML to a regenerable EDA keyed by
-#   feature set id (not model). Once data quality is confirmed, run weekly/daily.
-# - Investigate t3_sepa_features load perf for live EDA queries.
-# - Hand off bad-ticker filtering to Phase 1 (don't filter in training).
-# - Add DoD price-change audit to Phase 1.
-
 try:
-    content = html_path.read_text(encoding="utf-8")
+    content = selected["path"].read_text(encoding="utf-8")
     components.html(content, height=900, scrolling=True)
 except OSError as e:
     st.error(f"Could not read pretrain audit HTML: {e}")

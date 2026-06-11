@@ -225,7 +225,9 @@ class ModelCardBuilder:
         return card
 
     def render(self, card: ModelCard, html_path: Optional[Path] = None,
-               json_path: Optional[Path] = None) -> tuple[Path, Path]:
+               json_path: Optional[Path] = None,
+               register_version_id: Optional[str] = None,
+               registry_db_path: Optional[Path] = None) -> tuple[Path, Path]:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         slug = self.model_id.replace("/", "_").replace(" ", "_")
         if html_path is None:
@@ -237,4 +239,18 @@ class ModelCardBuilder:
         json_path.write_text(json.dumps(card.to_dict(), indent=2, default=str))
         report_renderer.render(card, html_path)
         logger.info("Wrote %s and %s", html_path, json_path)
+
+        # Advisory write-back: store the card path + build time on the models
+        # row so set_prod() and the dashboard can find it. Lazy import keeps the
+        # eval package decoupled from the registry's storage.
+        if register_version_id:
+            from src.model_registry import ModelRegistry
+
+            registry = ModelRegistry(db_path=registry_db_path)
+            registry.register_model_card(
+                version_id=register_version_id,
+                card_path=str(json_path),
+                built_at=card.built_at,
+            )
+
         return html_path, json_path

@@ -56,6 +56,10 @@ Thumbs.db
 
 # Logs
 *.log
+logs/data_quality/*.log
+
+# Scratch / ephemeral probe scripts
+scratch/
 
 # Reports
 reports/

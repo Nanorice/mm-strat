@@ -970,11 +970,15 @@ class DataRepository:
             results.update(fmp_results)
             self.last_errors = fmp_errors
         else:
-            # yfinance path: returns (results_dict, buffer)
-            yf_results, buffer = self._update_cache_yfinance(to_update, latest_trading_day)
+            # yfinance path: returns (results_dict, buffer, errors_dict)
+            yf_results, buffer, yf_errors = self._update_cache_yfinance(to_update, latest_trading_day)
             results.update(yf_results)
-            # yfinance bulk download doesn't produce per-ticker error messages
-            self.last_errors = [(t, 'No data from yfinance bulk download') for t, ok in yf_results.items() if not ok]
+            # Surface per-ticker cause so PipelineRunManager.classify_error can
+            # bucket into RATE_LIMIT / TIMEOUT / NO_DATA / FETCH_FAILURE.
+            self.last_errors = [
+                (t, yf_errors.get(t, 'yfinance fetch failed (no cause recorded)'))
+                for t, ok in yf_results.items() if not ok
+            ]
 
             # Intermediate flush if buffer is large (force=True full-history scenario)
             if len(buffer) > 0:
@@ -1152,7 +1156,7 @@ class DataRepository:
 
         return results, buffer, failed_tickers
 
-    def _update_cache_yfinance(self, tickers: List[str], latest_trading_day: str = None) -> Tuple[Dict[str, bool], List[Tuple[str, pd.DataFrame]]]:
+    def _update_cache_yfinance(self, tickers: List[str], latest_trading_day: str = None) -> Tuple[Dict[str, bool], List[Tuple[str, pd.DataFrame]], Dict[str, str]]:
         """
         Update cache using a single yfinance bulk download (no batching).
 
@@ -1161,10 +1165,12 @@ class DataRepository:
         ticker drags the whole batch back to 1970.
 
         IPO validation is skipped — these are incremental updates, not full history.
-        Returns (results dict, buffer of (ticker, df) for bulk DuckDB write).
+        Returns (results dict, buffer of (ticker, df) for bulk DuckDB write,
+        errors dict mapping failed ticker -> cause string).
         """
         results: Dict[str, bool] = {}
         buffer: List[Tuple[str, pd.DataFrame]] = []
+        errors: Dict[str, str] = {}
 
         # Use MIN(MAX(date)) — the oldest gap across stale tickers, but exclude
         # corrupt pre-2000 rows (e.g. 1970-01-01 from bad yfinance data).
@@ -1207,8 +1213,9 @@ class DataRepository:
 
         def _download_and_extract(batch: List[str]) -> List[str]:
             """Download + extract one batch. Returns tickers that yielded no data.
-            On success appends to buffer and sets results[ticker]=True; on any
-            failure sets results[ticker]=False. Identical for first + retry pass."""
+            On success appends to buffer, sets results[ticker]=True, clears any
+            prior error; on failure sets results[ticker]=False and records the
+            cause in errors[ticker]. Identical for first + retry pass."""
             try:
                 data = yf.download(
                     batch,
@@ -1220,9 +1227,11 @@ class DataRepository:
                     threads=True,
                 )
             except Exception as e:
+                cause = f"yfinance batch download exception: {type(e).__name__}: {e}"
                 logger.warning(f"[Phase 1] yfinance batch ({len(batch)} tickers) failed: {e}")
                 for ticker in batch:
                     results[ticker] = False
+                    errors[ticker] = cause
                 return list(batch)
 
             failed: List[str] = []
@@ -1232,12 +1241,17 @@ class DataRepository:
                     if ticker_data is not None and not ticker_data.empty:
                         buffer.append((ticker, ticker_data))
                         results[ticker] = True
+                        errors.pop(ticker, None)
                     else:
                         results[ticker] = False
+                        errors[ticker] = (
+                            'yfinance returned no data for ticker (not in response or empty frame)'
+                        )
                         failed.append(ticker)
                 except Exception as e:
                     logger.debug(f"Failed to extract {ticker}: {e}")
                     results[ticker] = False
+                    errors[ticker] = f"yfinance extract exception: {type(e).__name__}: {e}"
                     failed.append(ticker)
             return failed
 
@@ -1268,7 +1282,7 @@ class DataRepository:
         no_data = len(tickers) - ok
         logger.debug(f"yfinance done: {ok}/{len(tickers)} OK, {no_data} no data")
 
-        return results, buffer
+        return results, buffer, errors
 
     def _flush_buffer(self, buffer: List[Tuple[str, pd.DataFrame]], run_date: str) -> int:
         """

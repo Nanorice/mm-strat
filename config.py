@@ -262,6 +262,15 @@ FMP_FUNDAMENTAL_BATCH_DELAY = 5  # Small delay between batches (rate limiting is
 # ghost tickers (no calendar row) and any case where the calendar refresh missed them.
 FUNDAMENTAL_STALENESS_DAYS = 100
 
+# Expected lag from a fiscal quarter-end to its NEXT 10-Q filing: ~90d to the next
+# quarter-end + ~45d to file = ~135d. The DQ staleness check flags a ticker only
+# when today is past (last_period_end + this), i.e. the next quarter is genuinely
+# overdue — NOT merely >FUNDAMENTAL_STALENESS_DAYS since the last filing (which a
+# healthy filer crosses every quarter while waiting for the next report). Anchoring
+# on period_end (the quarter we have) rather than filing_date (which says nothing
+# about when the next quarter is due) removes the per-quarter false positives.
+EXPECTED_NEXT_FILING_LAG_DAYS = 135
+
 # How often the earnings_calendar must be refreshed. Gated on the last successful
 # phase_1_earnings_calendar_refresh entry in pipeline_runs.
 EARNINGS_CALENDAR_REFRESH_DAYS = 7
@@ -364,6 +373,10 @@ PIPELINE_FAILURE_MODES = {
     "phase_6_t3_lazy": PipelineFailureMode.WARN,          # Non-critical - T3 can lag by 1 day
     "phase_7_views": PipelineFailureMode.WARN,            # Non-critical - views are recreatable
     "phase_8_cache": PipelineFailureMode.WARN,            # Non-critical - cache is optional
+
+    # Phase 10: Advisory model-card rebuild for the prod model. ALWAYS WARN —
+    # a slow/failed card build must never block the daily price/feature pipeline.
+    "phase_10_model_card": PipelineFailureMode.WARN,
 }
 
 # Alert thresholds

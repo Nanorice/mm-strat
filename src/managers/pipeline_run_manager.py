@@ -10,6 +10,7 @@ Responsibilities:
 - Track per-ticker errors with classification (pipeline_error_log)
 """
 
+import json
 import logging
 from enum import Enum
 from pathlib import Path
@@ -123,8 +124,6 @@ class PipelineRunManager:
         Returns:
             run_id: Unique ID for this execution
         """
-        import json
-
         conn = duckdb.connect(self.db_path)
         try:
             # Get next run_id
@@ -186,6 +185,33 @@ class PipelineRunManager:
                 f"status={status.value}, runtime={runtime:.1f}s)"
             )
 
+        finally:
+            conn.close()
+
+    def update_phase_metadata(self, run_id: int, extra: dict) -> None:
+        """Merge `extra` into a run's JSON metadata (set once at start_phase).
+
+        Used to attach DQ counts computed during the phase (e.g.
+        null_filing_date_written) without expanding complete_phase's signature.
+        """
+        if run_id is None or not extra:
+            return
+        conn = duckdb.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT metadata FROM pipeline_runs WHERE run_id = ?", [run_id]
+            ).fetchone()
+            current = {}
+            if row and row[0]:
+                try:
+                    current = json.loads(row[0])
+                except (json.JSONDecodeError, TypeError):
+                    current = {}
+            current.update(extra)
+            conn.execute(
+                "UPDATE pipeline_runs SET metadata = ? WHERE run_id = ?",
+                [json.dumps(current), run_id],
+            )
         finally:
             conn.close()
 
@@ -422,7 +448,14 @@ class PipelineRunManager:
             return 'RATE_LIMIT'
         if 'timeout' in msg or 'timed out' in msg:
             return 'TIMEOUT'
-        if 'no fmp response' in msg or 'no data parsed' in msg or 'max retries' in msg:
+        if (
+            'no fmp response' in msg
+            or 'no data parsed' in msg
+            or 'max retries' in msg
+            or 'returned no data' in msg
+            or 'no data rows' in msg
+            or 'no new rows' in msg
+        ):
             return 'NO_DATA'
         if 'validation' in msg:
             return 'VALIDATION'

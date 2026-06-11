@@ -217,6 +217,64 @@ class EDGAREngine:
         return {tk: int(cik) for tk, cik in rows}
 
     # =========================================================================
+    # Instrument classification (form-type → ticker_type)
+    # =========================================================================
+
+    # EDGAR form types that identify a non-operating-company instrument. A ticker
+    # filing these (and NOT 10-Q/10-K) cannot have quarterly fundamentals by design,
+    # so it should not sit in the EQUITY cohort fed to the yfinance fundamentals path.
+    _FOREIGN_FORMS = frozenset({'20-F', '40-F', '6-K'})
+    _FUND_FORMS    = frozenset({
+        'N-CSR', 'N-CSRS', 'N-CEN', 'NPORT-P', 'NPORT-EX',
+        '25-NSE', '40-17G', 'N-2', 'N-30D', 'N-Q',
+    })
+    # Domestic operating-company forms — presence keeps a ticker EQUITY regardless
+    # of any incidental N-/foreign filing.
+    _EQUITY_FORMS = frozenset({'10-Q', '10-K', '10-Q/A', '10-K/A'})
+
+    def classify_ticker_type(self, cik: int) -> Optional[str]:
+        """
+        Classify one CIK by the form types in its recent EDGAR filings.
+
+        Returns 'EQUITY' (files 10-Q/10-K), 'FOREIGN' (20-F/40-F/6-K, no 10-x),
+        'FUND' (N-CSR/NPORT/etc., no 10-x), or None when submissions are
+        unavailable or the form set is inconclusive (caller leaves type unchanged).
+        """
+        sub = self.client.get_submissions(cik)
+        if sub is None:
+            return None
+        forms = set(sub.get('filings', {}).get('recent', {}).get('form', []))
+        if not forms:
+            return None
+
+        # Operating company takes precedence: a 10-Q/10-K filer is EQUITY even if it
+        # also filed an incidental N-/foreign form.
+        if forms & self._EQUITY_FORMS:
+            return 'EQUITY'
+        if forms & self._FOREIGN_FORMS:
+            return 'FOREIGN'
+        if forms & self._FUND_FORMS:
+            return 'FUND'
+        return None
+
+    def classify_ticker_types(self, tickers: List[str]) -> Dict[str, str]:
+        """
+        Bulk-classify tickers by EDGAR form type. Returns {ticker: ticker_type}
+        only for tickers with a CIK and a conclusive classification. Tickers with
+        no CIK or inconclusive submissions are omitted (caller leaves them as-is).
+        """
+        cik_map = self.get_ciks(tickers)
+        out: Dict[str, str] = {}
+        for tk in tickers:
+            cik = cik_map.get(tk)
+            if cik is None:
+                continue
+            ttype = self.classify_ticker_type(cik)
+            if ttype is not None:
+                out[tk] = ttype
+        return out
+
+    # =========================================================================
     # Filing-date backfill
     # =========================================================================
 
@@ -225,9 +283,11 @@ class EDGAREngine:
     MIN_FILING_GAP_DAYS = 8
 
     # How far apart period_end and EDGAR reportDate can drift before we reject
-    # the match. Most issuers align exactly; weekend/holiday rollover or fiscal
-    # calendar quirks can introduce 1-7 day gaps. 15d is a generous ceiling.
-    REPORT_DATE_TOLERANCE_DAYS = 15
+    # the match. Most issuers align exactly; fiscal-calendar non-aligned filers
+    # (AZO Aug-FY, COST May-FY, retail 4-5-4 calendars) can drift 20-30d. 35d
+    # is safe because quarters are 90d apart — a 35d half-window can never
+    # reach an adjacent quarter (needs >45d).
+    REPORT_DATE_TOLERANCE_DAYS = 35
 
     def backfill_filing_dates_from_edgar(
         self,

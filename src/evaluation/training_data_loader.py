@@ -39,6 +39,27 @@ DEFAULT_MFE_BINS = [
     (30.0, np.inf, 3),   # Elite : mfe_pct > 30
 ]
 
+# Named label-set registry. Add a new entry here to expose it via the CLI
+# (--label-set NAME) and the pretrain audit. Each value is:
+#   {"bins": [(low, high, class_idx), ...], "class_names": (str, ...)}
+# bins use the np.select convention: low exclusive, high inclusive, first/last
+# are open-ended. class_idx must be 0..N-1 contiguous.
+LABEL_SETS: dict[str, dict] = {
+    "default": {
+        "bins": DEFAULT_MFE_BINS,
+        "class_names": ("Dud", "Noise", "Solid", "Elite"),
+    },
+    # m01_binary: single-cutoff variant — anything that runs >= 10% MFE is
+    # "Win", otherwise "Lose". Maps to the m01_binary model family.
+    "binary": {
+        "bins": [
+            (-np.inf, 10.0, 0),
+            (10.0, np.inf, 1),
+        ],
+        "class_names": ("Lose", "Win"),
+    },
+}
+
 Mode = Literal["dense", "trades"]
 
 

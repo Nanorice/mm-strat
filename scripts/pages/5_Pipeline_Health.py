@@ -23,6 +23,7 @@ from dashboard_utils import (
     load_data_freshness,
     load_fundamentals_volume_by_quarter,
     load_latest_fundamentals_snapshot,
+    load_null_filing_writes,
     load_pipeline_runs_window,
     load_t1_ingestion_failures,
     load_universe_trend,
@@ -33,11 +34,13 @@ DATA_FLOW_MMD = ROOT / "docs" / "architecture" / "data_flow.mmd"
 DATA_FLOW_LEGEND = ROOT / "docs" / "architecture" / "data_flow_legend.md"
 
 STATUS_COLORS = {
-    "success": "#2e7d32",
-    "running": "#fdd835",
-    "failed":  "#c62828",
+    "failed":  "#c62828",  # red
+    "warning": "#fdd835",  # yellow — phase succeeded but logged per-entity errors
+    "running": "#42a5f5",  # blue — phase still in flight
+    "success": "#2e7d32",  # green — clean success
 }
-STATUS_NUMS = {"success": 1, "running": 0.5, "failed": 0}  # for heatmap z
+# z values picked so colorscale stops below render cleanly; missing cells = NaN ("(no run)").
+STATUS_NUMS = {"failed": 0.0, "warning": 0.34, "running": 0.67, "success": 1.0}
 
 FRESHNESS_TOLERANCE_DAYS = {
     # Phase 1 — daily ingestion
@@ -107,6 +110,10 @@ def render_data_flow_diagram() -> None:
 
 def render_runs_heatmap(runs: pd.DataFrame) -> None:
     st.subheader("Pipeline Runs (last 30d)")
+    st.caption(
+        "🟢 success · 🟡 success with per-entity warnings (e.g. T1 ticker errors) · "
+        "🔵 still running · 🔴 failed phase · ⬜ no run that day"
+    )
 
     if runs.empty:
         st.info("No pipeline runs in the last 30 days.")
@@ -114,39 +121,60 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
 
     r = runs.copy()
     r["target_date"] = pd.to_datetime(r["target_date"]).dt.date
-    # Most recent status per (date, phase) — older retries get superseded
+    if "n_errors" not in r.columns:
+        r["n_errors"] = 0
+    r["n_errors"] = r["n_errors"].fillna(0).astype(int)
+
+    # Most recent run per (date, phase) — older retries are superseded.
     r = (r.sort_values("started_at")
           .drop_duplicates(subset=["target_date", "phase_name"], keep="last"))
 
-    pivot_status = r.pivot(index="phase_name", columns="target_date", values="status")
-    pivot_runtime = r.pivot(index="phase_name", columns="target_date", values="runtime_seconds")
+    # Promote success-with-errors to "warning" so the heatmap surfaces it.
+    r["display_status"] = r["status"].where(
+        ~((r["status"] == "success") & (r["n_errors"] > 0)),
+        "warning",
+    )
 
-    # Sort phases by name (phase_1, phase_2, ...) — alpha-sort on the raw name
-    # is good enough since they follow phase_N_ prefix.
-    pivot_status = pivot_status.sort_index()
-    pivot_runtime = pivot_runtime.reindex_like(pivot_status)
+    pivot_status = r.pivot(index="phase_name", columns="target_date", values="display_status")
+    pivot_runtime = r.pivot(index="phase_name", columns="target_date", values="runtime_seconds")
+    pivot_errors = r.pivot(index="phase_name", columns="target_date", values="n_errors")
+
+    # Continuous date axis: fill missing days with NaN so cells are evenly spaced
+    # (fixes the "uneven bar widths" — was caused by Plotly's categorical x-axis
+    # only including dates that had runs).
+    min_d, max_d = pivot_status.columns.min(), pivot_status.columns.max()
+    full_dates = pd.date_range(min_d, max_d, freq="D").date
+    pivot_status = pivot_status.reindex(columns=full_dates).sort_index()
+    pivot_runtime = pivot_runtime.reindex(columns=full_dates).reindex(index=pivot_status.index)
+    pivot_errors = pivot_errors.reindex(columns=full_dates).reindex(index=pivot_status.index)
 
     z = pivot_status.map(lambda s: STATUS_NUMS.get(s, np.nan)).astype(float).values
-    text = pivot_status.fillna("").values
 
+    # Discrete colorscale: each status owns a band so 0.34/0.67/1.0 render cleanly.
     colorscale = [
-        [0.0, STATUS_COLORS["failed"]],
-        [0.5, STATUS_COLORS["running"]],
-        [1.0, STATUS_COLORS["success"]],
+        [0.00, STATUS_COLORS["failed"]],
+        [0.25, STATUS_COLORS["failed"]],
+        [0.25, STATUS_COLORS["warning"]],
+        [0.50, STATUS_COLORS["warning"]],
+        [0.50, STATUS_COLORS["running"]],
+        [0.84, STATUS_COLORS["running"]],
+        [0.84, STATUS_COLORS["success"]],
+        [1.00, STATUS_COLORS["success"]],
     ]
 
-    # hover with runtime
     hover_text = []
     for i, phase in enumerate(pivot_status.index):
         row = []
         for j, date in enumerate(pivot_status.columns):
             status = pivot_status.iloc[i, j]
             runtime = pivot_runtime.iloc[i, j]
+            n_err = pivot_errors.iloc[i, j]
             if pd.isna(status):
-                row.append("(no run)")
+                row.append(f"{phase}<br>{date}<br>(no run)")
             else:
                 rt = f"{runtime:.0f}s" if pd.notna(runtime) else "—"
-                row.append(f"{phase}<br>{date}<br>{status} · {rt}")
+                err_str = f" · {int(n_err)} entity error(s)" if pd.notna(n_err) and n_err > 0 else ""
+                row.append(f"{phase}<br>{date}<br>{status} · {rt}{err_str}")
         hover_text.append(row)
 
     fig = go.Figure(go.Heatmap(
@@ -155,7 +183,6 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
         y=list(pivot_status.index),
         colorscale=colorscale, zmin=0, zmax=1,
         showscale=False,
-        text=text, texttemplate="",
         hovertemplate="%{customdata}<extra></extra>",
         customdata=hover_text,
         xgap=1, ygap=1,
@@ -168,12 +195,24 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Drill-down: failed runs in window
+    # Drill-downs: failed phases, then success-with-warnings.
     failed = r[r["status"] == "failed"]
     if not failed.empty:
-        with st.expander(f"⚠️ {len(failed)} failed run(s) — details", expanded=False):
+        with st.expander(f"🔴 {len(failed)} failed run(s) — details", expanded=False):
             show = failed[["target_date", "phase_name", "started_at",
                            "runtime_seconds", "error_message"]].copy()
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+    warned = r[r["display_status"] == "warning"]
+    if not warned.empty:
+        with st.expander(
+            f"🟡 {len(warned)} phase-run(s) succeeded with logged entity errors — "
+            "see T1 Ingestion Failures section below for the per-ticker breakdown",
+            expanded=False,
+        ):
+            show = warned[["target_date", "phase_name", "n_errors",
+                           "runtime_seconds", "started_at"]].copy()
+            show = show.rename(columns={"n_errors": "Entity Errors"})
             st.dataframe(show, use_container_width=True, hide_index=True)
 
 
@@ -274,6 +313,27 @@ def render_fundamentals_audit() -> None:
             styled = styled.format("{:.2f}", subset=["Basic EPS"], na_rep="—")
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
+    # ── NULL filing_date written (per-run DQ) ──
+    nfw = load_null_filing_writes(days=30)
+    if not nfw.empty:
+        latest = nfw.iloc[0]
+        st.metric(
+            "NULL filing_date written (last run)",
+            int(latest["null_filing_written"]),
+            help="Tickers whose fundamentals wrote OK but with no filing_date "
+                 "(yfinance earnings fetch failed → no point-in-time anchor). "
+                 "Not errors — the EDGAR backfill repairs these on a later run. "
+                 "A rising trend means the earnings endpoint is degrading.",
+        )
+        if (nfw["null_filing_written"] > 0).any():
+            st.caption(
+                f"30-day trend: "
+                + ", ".join(
+                    f"{r.target_date}={int(r.null_filing_written)}"
+                    for r in nfw.head(8).itertuples()
+                )
+            )
+
     # ── Quarterly fetch volume chart ──
     st.markdown("**Rows fetched per quarter** (period_end basis, non-null revenue)")
     vol = load_fundamentals_volume_by_quarter(start_year=2020)
@@ -351,6 +411,11 @@ def load_audit_history() -> pd.DataFrame:
 
 def render_audit_history() -> None:
     st.subheader("Audit History")
+    st.caption(
+        "Daily pipeline Phase 8 invokes `tools/run_all_audits.py` and writes a "
+        "JSON to `data/audit_reports/audit_report_YYYYMMDD.json`. Each line below "
+        "is one daily report; history accumulates one row per successful daily run."
+    )
     audit = load_audit_history()
     if audit.empty:
         st.info("No audit reports in `data/audit_reports/` yet. "
@@ -359,7 +424,7 @@ def render_audit_history() -> None:
 
     if len(audit) == 1:
         st.warning("⚠️ Only 1 audit report on disk — line chart shows a single point. "
-                   "History will accumulate as the daily pipeline writes more.")
+                   "More will accumulate as the daily pipeline runs.")
 
     fig = go.Figure()
     fig.add_scatter(x=audit["date"], y=audit["pass"], mode="lines+markers",

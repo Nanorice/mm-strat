@@ -76,36 +76,76 @@ def _fig_return_horizons(stats: pd.DataFrame) -> Optional[go.Figure]:
         mode="markers+lines", marker=dict(size=10, color="#d62728"),
     )
     fig.update_layout(
-        title="Forward Return by Horizon (mean vs median, %)",
-        yaxis_title="Return %", xaxis_title="Horizon", **_LAYOUT,
+        title="Trailing Return at Entry by Horizon (mean vs median, %)",
+        yaxis_title="Return %", xaxis_title="Trailing horizon", **_LAYOUT,
     )
     return fig
 
 
 def _fig_weekly_activity(weekly: pd.DataFrame) -> Optional[go.Figure]:
+    """Two-row stacked layout — the old dual-axis crushed bars (single digits)
+    under the line (hundreds). Top: avg daily active tickers with a 26-week
+    MA trend and the raw weekly series faded behind it. Bottom: SEPA
+    additions aggregated to yearly bars with a 3-year MA trendline."""
     if weekly.empty:
         return None
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    if "new_additions" in weekly.columns:
-        fig.add_bar(
-            x=weekly["week"], y=weekly["new_additions"],
-            name="New SEPA additions / week",
-            marker_color=ACCENT, opacity=0.55,
-            secondary_y=False,
-        )
-    if "avg_daily_active" in weekly.columns:
-        fig.add_scatter(
-            x=weekly["week"], y=weekly["avg_daily_active"],
-            name="Avg daily active tickers", mode="lines",
-            line=dict(color="#d62728", width=2),
-            secondary_y=True,
-        )
-    fig.update_layout(
-        title="Weekly SEPA Activity",
-        xaxis_title="Week (ISO, Fri-ending)", **_LAYOUT,
+    w = weekly.copy()
+    w["week"] = pd.to_datetime(w["week"])
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.55, 0.45], vertical_spacing=0.08,
     )
-    fig.update_yaxes(title_text="New additions", secondary_y=False)
-    fig.update_yaxes(title_text="Avg daily active", secondary_y=True)
+
+    # Top — avg daily active: raw shadow + smoothed trend
+    if "avg_daily_active" in w.columns:
+        fig.add_scatter(
+            x=w["week"], y=w["avg_daily_active"],
+            name="Weekly mean of daily active", mode="lines",
+            line=dict(color="#f4b0b0", width=1),
+            opacity=0.5, showlegend=True,
+            row=1, col=1,
+        )
+        smoothed = w["avg_daily_active"].rolling(window=26, min_periods=4).mean()
+        fig.add_scatter(
+            x=w["week"], y=smoothed,
+            name="26-week trend", mode="lines",
+            line=dict(color="#d62728", width=2.5),
+            row=1, col=1,
+        )
+
+    # Bottom — yearly aggregated additions + trendline
+    if "new_additions" in w.columns:
+        yearly = (
+            w.set_index("week")["new_additions"]
+            .resample("YS")  # year-start anchor
+            .sum()
+            .reset_index()
+        )
+        fig.add_bar(
+            x=yearly["week"], y=yearly["new_additions"],
+            name="New SEPA entries / year (sum)",
+            marker_color=ACCENT, opacity=0.65,
+            row=2, col=1,
+        )
+        trend = yearly["new_additions"].rolling(window=3, min_periods=1).mean()
+        fig.add_scatter(
+            x=yearly["week"], y=trend,
+            name="3-year trend", mode="lines",
+            line=dict(color="#1a3f7a", width=2),
+            row=2, col=1,
+        )
+
+    fig.update_layout(
+        title="SEPA Universe Activity",
+        height=560, showlegend=True,
+        legend=dict(orientation="h", y=1.08, x=1, xanchor="right"),
+        **{k: v for k, v in _LAYOUT.items() if k != "margin"},
+        margin=dict(l=60, r=30, t=70, b=50),
+    )
+    fig.update_yaxes(title_text="Avg daily active", row=1, col=1)
+    fig.update_yaxes(title_text="New additions / yr", row=2, col=1)
+    fig.update_xaxes(title_text="Year", row=2, col=1)
     return fig
 
 
@@ -113,19 +153,43 @@ def _fig_mfe_hist(mfe: pd.Series) -> Optional[go.Figure]:
     s = pd.to_numeric(mfe, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if s.empty:
         return None
-    # clip the long right tail for readability; note it in the caption
+    # Bin the 0..p99 body normally, then add a single overflow bar at the
+    # right end for everything > p99. Clipping (old behaviour) piled the
+    # whole right tail onto the last body bin and looked like a real spike;
+    # binning means tens of multi-year breakouts get lost in the title text.
+    # Overflow bar = honest "here are N trades that went way past the
+    # cutoff" without crushing the 0–p99 detail.
     hi = float(s.quantile(0.99))
+    body = s[s <= hi]
+    tail = s[s > hi]
+    nbins = 80
+    bin_width = hi / nbins if hi > 0 else 1.0
+    overflow_x = hi + bin_width  # one bin-width past the body
+
     fig = go.Figure()
     fig.add_histogram(
-        x=s.clip(upper=hi), nbinsx=80, marker_color=ACCENT, opacity=0.85,
+        x=body, xbins=dict(start=0, end=hi, size=bin_width),
+        marker_color=ACCENT, opacity=0.85, name=f"≤ p99 ({len(body):,})",
     )
+    if not tail.empty:
+        max_pct = float(tail.max())
+        fig.add_bar(
+            x=[overflow_x], y=[len(tail)], width=[bin_width],
+            marker_color="#d62728", opacity=0.85,
+            name=f"> p99 ({len(tail):,}, max {max_pct:.0f}%)",
+            hovertemplate=(
+                f"Overflow: {len(tail):,} trades<br>"
+                f"range: {hi:.0f}–{max_pct:.0f}%<extra></extra>"
+            ),
+        )
     fig.add_vline(
         x=float(s.median()), line=dict(color="#d62728", dash="dash"),
         annotation_text=f"median {s.median():.1f}%",
     )
     fig.update_layout(
-        title="Raw MFE Distribution (max favourable excursion since watchlist add)",
-        xaxis_title="MFE % (clipped at p99)", yaxis_title="Trades", **_LAYOUT,
+        title=f"Raw MFE Distribution — p99 = {hi:.0f}%, overflow bar = trades > p99",
+        xaxis_title="MFE %", yaxis_title="Trades",
+        showlegend=True, **_LAYOUT,
     )
     return fig
 
@@ -148,19 +212,33 @@ def _fig_class_counts(counts: pd.Series, proportions: pd.Series) -> go.Figure:
 def _fig_days_active_density(days: pd.DataFrame) -> Optional[go.Figure]:
     if days.empty:
         return None
-    cap = float(days["days_observed"].quantile(0.98))
+    # Truncate the long right tail rather than clipping. Clip(upper=cap) piled
+    # every value >= cap into the rightmost bin and looked like a real Elite
+    # spike — it was the multi-year SEPA runs (e.g. UHT 2011→2024, 3425 days)
+    # collapsing onto one bar. Drop them instead and note it in the caption.
+    cap = float(days["days_observed"].quantile(0.99))
     fig = go.Figure()
-    for cls in ["Dud", "Noise", "Solid", "Elite"]:
+    n_dropped = 0
+    # Iterate over the class labels actually present in the data, not a
+    # hardcoded Dud/Noise/Solid/Elite list. Lets binary / custom label sets
+    # render with their own names.
+    present_classes = list(days["class"].drop_duplicates())
+    for cls in present_classes:
         sub = days.loc[days["class"] == cls, "days_observed"]
         if sub.empty:
             continue
+        n_dropped += int((sub > cap).sum())
+        sub = sub[sub <= cap]
+        if sub.empty:
+            continue
         fig.add_histogram(
-            x=sub.clip(upper=cap), name=cls, histnorm="probability density",
+            x=sub, name=str(cls), histnorm="probability density",
             opacity=0.55, marker_color=CLASS_COLORS.get(cls, ACCENT), nbinsx=60,
         )
+    title_suffix = f" — pooled p99 = {cap:.0f}d, {n_dropped} tail rows dropped"
     fig.update_layout(
         barmode="overlay",
-        title="Days Active Density by Class (days_observed, p98-clipped)",
+        title="Days Active Density by Class" + title_suffix,
         xaxis_title="Days active", yaxis_title="Density", **_LAYOUT,
     )
     return fig
@@ -175,6 +253,23 @@ def _fig_corr_heatmap(corr: pd.DataFrame, top: int = 40) -> Optional[go.Figure]:
     np.fill_diagonal(m.values, 0.0)
     order = m.abs().sum().sort_values(ascending=False).head(top).index.tolist()
     sub = corr.loc[order, order]
+    # Hierarchical reorder so visually-related features land next to each
+    # other (notebook's clustermap pattern). Distance = 1 - |ρ|, condensed
+    # to upper-triangle form for scipy.linkage; average linkage matches the
+    # default seaborn clustermap behaviour.
+    from scipy.cluster.hierarchy import leaves_list, linkage
+    from scipy.spatial.distance import squareform
+    d = 1.0 - sub.abs().values
+    np.fill_diagonal(d, 0.0)
+    d = (d + d.T) / 2.0  # enforce symmetry (corr rounding can break it)
+    try:
+        Z = linkage(squareform(d, checks=False), method="average")
+        clustered = [order[i] for i in leaves_list(Z)]
+        sub = corr.loc[clustered, clustered]
+    except ValueError:
+        # Fall back to the original sum-of-|ρ| order if linkage fails on
+        # degenerate input — better a messy heatmap than no heatmap.
+        pass
     fig = go.Figure(
         go.Heatmap(
             z=sub.values, x=sub.columns, y=sub.index,
@@ -183,7 +278,7 @@ def _fig_corr_heatmap(corr: pd.DataFrame, top: int = 40) -> Optional[go.Figure]:
         )
     )
     fig.update_layout(
-        title=f"Multicollinearity — Spearman ρ (top {len(order)} most-correlated features)",
+        title=f"Multicollinearity — Spearman ρ (top {len(sub)} most-correlated, hierarchically clustered)",
         height=820, **{k: v for k, v in _LAYOUT.items() if k != "margin"},
         margin=dict(l=140, r=30, t=60, b=140),
     )
@@ -193,16 +288,16 @@ def _fig_corr_heatmap(corr: pd.DataFrame, top: int = 40) -> Optional[go.Figure]:
 
 
 def _fig_bar(df: pd.DataFrame, value_col: str, title: str, n: int = 30) -> Optional[go.Figure]:
+    """Horizontal bar of top-N features. Uniform colour — the bar length
+    already encodes the value, a gradient on the same dimension would just
+    be decoration."""
     if df is None or df.empty:
         return None
     sub = df.head(n).iloc[::-1]
     fig = go.Figure(
         go.Bar(
             x=sub[value_col], y=sub["feature"], orientation="h",
-            marker=dict(
-                color=sub[value_col],
-                colorscale="Viridis",
-            ),
+            marker=dict(color=ACCENT),
         )
     )
     fig.update_layout(
@@ -283,12 +378,15 @@ def build_html_report(
     )
 
     # 1. Returns
-    parts.append("<h2>1. Forward-Return Profile</h2>")
+    parts.append("<h2>1. Trailing Return at Entry</h2>")
     fig = _fig_return_horizons(return_stats)
     if fig is not None:
         charts_before = len(charts)
-        emit(fig, "Mean vs median forward return across 1/5/20/60-day horizons. "
-                  "Right-skew (mean &gt; median) is expected for breakout trades.")
+        emit(fig, "Mean vs median <em>trailing</em> N-day return at the moment "
+                  "of SEPA entry — i.e. close / LAG(close, N) − 1 evaluated on "
+                  "the entry date, not forward outcome. By construction these "
+                  "are positive: SEPA only fires on uptrend + breakout. "
+                  "Forward outcomes (MFE, MAE, days active) are in §3.")
         parts.append("".join(charts[charts_before:]))
         parts.append(_df_table(return_stats, float_fmt="{:.2f}"))
     else:
@@ -314,8 +412,8 @@ def build_html_report(
         emit(_fig_class_counts(target_dist.counts, target_dist.proportions),
              f"Imbalance ratio (max/min) = {target_dist.imbalance_ratio:.2f}.")
         emit(_fig_days_active_density(days_active),
-             "How long trades stay active, split by outcome class — "
-             "Elite trades should run longer than Duds.")
+             "How long trades stay active, split by outcome class. "
+             "Higher-MFE classes should run longer than lower-MFE ones.")
         parts.append("".join(charts[cb:]))
     else:
         parts.append("<p class='muted'>Dense mode has no target column.</p>")
@@ -338,10 +436,12 @@ def build_html_report(
 
     # 5. Feature signal
     parts.append("<h2>5. Feature Signal</h2>")
-    fic = _fig_bar(ic_df, "abs_ic", "Spearman |IC| vs target — Top 30") \
-        if not ic_df.empty else None
-    fmi = _fig_bar(mi_df, "mi_score", "Mutual Information vs target — Top 30") \
-        if not mi_df.empty else None
+    fic = _fig_bar(
+        ic_df, "abs_ic", "Spearman |IC| vs target — Top 30",
+    ) if not ic_df.empty else None
+    fmi = _fig_bar(
+        mi_df, "mi_score", "Mutual Information vs target — Top 30",
+    ) if not mi_df.empty else None
     if fic is not None or fmi is not None:
         cb = len(charts)
         emit(fic, "Monotonic rank association with the target class.")

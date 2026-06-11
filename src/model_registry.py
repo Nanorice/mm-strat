@@ -99,6 +99,10 @@ class ModelRegistry:
             con.execute("ALTER TABLE models ADD COLUMN model_name VARCHAR")
         if "model_version" not in existing_cols:
             con.execute("ALTER TABLE models ADD COLUMN model_version VARCHAR")
+        if "model_card_path" not in existing_cols:
+            con.execute("ALTER TABLE models ADD COLUMN model_card_path VARCHAR")
+        if "model_card_built_at" not in existing_cols:
+            con.execute("ALTER TABLE models ADD COLUMN model_card_built_at TIMESTAMP")
 
         con.execute(r"""
             UPDATE models
@@ -317,6 +321,12 @@ class ModelRegistry:
                 promoted_by=promoted_by,
             )
 
+        # 3b. Advisory model-card check — INFORMATIONAL ONLY, never blocks.
+        # The card's verdict thresholds are hand-set and unvalidated; the hard
+        # quality gate is the results.json blocking-gate logic above. We surface
+        # an adverse card verdict so a human notices, then promote regardless.
+        self._warn_on_adverse_card(version_id)
+
         # 4. Proceed with original promotion logic.
         con = duckdb.connect(self.db_path)
         try:
@@ -331,6 +341,54 @@ class ModelRegistry:
             print(f"[OK] {version_id} is now PRODUCTION")
         finally:
             con.close()
+
+    def _warn_on_adverse_card(
+        self, version_id: str, use_case: str = "composite_gate_plus_rank"
+    ) -> None:
+        """Log a warning if the registered model card is stale or its use-case
+        verdict is REJECT/PENDING. Advisory only — does NOT block promotion.
+
+        Silent (info-level) when no card is registered: a card is not a
+        promotion prerequisite.
+        """
+        info = self.get_model_card_info(version_id)
+        if info is None:
+            logger.info(
+                f"[Promote] No model card registered for {version_id} "
+                f"(advisory only; not required)."
+            )
+            return
+
+        card_path = Path(info["path"])
+        if not card_path.exists():
+            logger.warning(
+                f"[Promote] Model card path on record for {version_id} is "
+                f"missing on disk: {card_path} (advisory only)."
+            )
+            return
+
+        try:
+            card = json.loads(card_path.read_text())
+        except Exception as e:
+            logger.warning(
+                f"[Promote] Could not read model card {card_path}: {e} "
+                f"(advisory only)."
+            )
+            return
+
+        verdict = (card.get("use_case_verdicts") or {}).get(use_case)
+        band = (card.get("aggregate") or {}).get("band")
+        if verdict in ("REJECT", "PENDING") or card.get("card_void"):
+            logger.warning(
+                f"[Promote] ADVISORY: model card for {version_id} reports "
+                f"{use_case}={verdict}, band={band}, void={card.get('card_void')}. "
+                f"This does NOT block promotion - proceeding. Review {card_path}."
+            )
+        else:
+            logger.info(
+                f"[Promote] Model card OK for {version_id}: "
+                f"{use_case}={verdict}, band={band}."
+            )
 
     def _log_forced_promotion(
         self,
@@ -384,6 +442,50 @@ class ModelRegistry:
                 "SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1"
             ).fetchone()
             return result[0] if result else None
+        finally:
+            con.close()
+
+    def register_model_card(
+        self, version_id: str, card_path: str, built_at: Optional[str] = None
+    ) -> None:
+        """Write the model-card path + build timestamp back to the models row.
+
+        Advisory metadata only — does not gate promotion. `built_at` defaults to
+        CURRENT_TIMESTAMP if not supplied (pass the card's own built_at to keep
+        them aligned).
+        """
+        con = duckdb.connect(self.db_path)
+        try:
+            if built_at is None:
+                con.execute(
+                    "UPDATE models SET model_card_path = ?, "
+                    "model_card_built_at = CURRENT_TIMESTAMP, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE version_id = ?",
+                    [card_path, version_id],
+                )
+            else:
+                con.execute(
+                    "UPDATE models SET model_card_path = ?, "
+                    "model_card_built_at = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE version_id = ?",
+                    [card_path, built_at, version_id],
+                )
+            logger.info(f"[OK] Registered model card for {version_id}: {card_path}")
+        finally:
+            con.close()
+
+    def get_model_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
+        """Return {'path', 'built_at'} for the version's card, or None if unset."""
+        con = duckdb.connect(self.db_path)
+        try:
+            row = con.execute(
+                "SELECT model_card_path, model_card_built_at FROM models "
+                "WHERE version_id = ?",
+                [version_id],
+            ).fetchone()
+            if not row or row[0] is None:
+                return None
+            return {"path": row[0], "built_at": row[1]}
         finally:
             con.close()
 

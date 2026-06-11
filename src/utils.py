@@ -215,7 +215,7 @@ def get_model_features(model_name: str = 'M01', db_path: str = 'data/market_data
         result = con.execute(
             """
             SELECT feature_set_id FROM models
-            WHERE status_flag = 'prod' AND version_id LIKE ?
+            WHERE status_flag = 'prod' AND LOWER(version_id) LIKE LOWER(?)
             ORDER BY created_at DESC LIMIT 1
             """,
             [f"{model_name}%"],

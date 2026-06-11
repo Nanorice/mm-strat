@@ -21,7 +21,7 @@ import numpy as np
 
 from src.evaluation.data_quality import DataQualityError
 from src.evaluation.pretrain_report import run_pretrain_audit
-from src.evaluation.training_data_loader import DEFAULT_MFE_BINS
+from src.evaluation.training_data_loader import DEFAULT_MFE_BINS, LABEL_SETS
 
 
 def _parse_mfe_bins(spec: str):
@@ -41,12 +41,24 @@ def main() -> int:
         help="dense=v_d2_features (no target); trades=v_d2_training (default)",
     )
     parser.add_argument(
+        "--label-set", type=str, default="default",
+        choices=sorted(LABEL_SETS.keys()),
+        help=(
+            "Named label set from src/evaluation/training_data_loader.py:LABEL_SETS. "
+            f"Options: {', '.join(sorted(LABEL_SETS.keys()))}. "
+            "Ignored if --mfe-bins is supplied."
+        ),
+    )
+    parser.add_argument(
         "--mfe-bins", type=str, default=None,
-        help='Comma-separated bin edges, e.g. "2,10,30" (default: notebook bins)',
+        help=(
+            'Override the label-set bins with comma-separated edges, e.g. "2,10,30". '
+            "Class names default to integer indices when this is used."
+        ),
     )
     parser.add_argument(
         "--out", type=str, default=None,
-        help="Output HTML path (default: docs/reports/pretrain_audit_<mode>_<ts>.html)",
+        help="Output HTML path (default: docs/reports/pretrain_audit_<mode>[_<label-set>]_<ts>.html)",
     )
     parser.add_argument(
         "--markdown", action="store_true",
@@ -54,14 +66,26 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    mfe_bins = _parse_mfe_bins(args.mfe_bins) if args.mfe_bins else DEFAULT_MFE_BINS
+    # Resolve bins + class_names. --mfe-bins overrides --label-set.
+    if args.mfe_bins:
+        mfe_bins = _parse_mfe_bins(args.mfe_bins)
+        class_names = tuple(str(i) for i in range(len(mfe_bins)))
+        label_set_name = None
+    else:
+        ls = LABEL_SETS[args.label_set]
+        mfe_bins = ls["bins"]
+        class_names = ls["class_names"]
+        label_set_name = args.label_set
+
     out = Path(args.out) if args.out else None
 
-    print(f"[AUDIT] Running pre-train audit (mode={args.mode})...")
+    print(f"[AUDIT] Running pre-train audit (mode={args.mode}, "
+          f"label-set={label_set_name or 'custom'})...")
     try:
         rep = run_pretrain_audit(
-            mode=args.mode, mfe_bins=mfe_bins, output_path=out,
-            emit_markdown=args.markdown,
+            mode=args.mode, mfe_bins=mfe_bins, class_names=class_names,
+            output_path=out, emit_markdown=args.markdown,
+            label_set_name=label_set_name,
         )
     except DataQualityError as e:
         print(f"[FAIL] {e}")

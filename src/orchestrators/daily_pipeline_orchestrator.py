@@ -274,6 +274,17 @@ class DailyPipelineOrchestrator:
             self.run_manager.record_write('d2_training_cache', phase_stats['rows_processed'], 'phase_7_cache')
         # Non-critical, continue even if failed
 
+        # Phase 7.5: Slim dashboard DB rebuild (best-effort; a slow rebuild must
+        # never block the daily pipeline). Snapshots the freshly-refreshed cache
+        # + latest features into data/dashboard.duckdb for cross-device sync.
+        phase_success, phase_stats = self._execute_phase(
+            "phase_7_5_dashboard_db",
+            lambda: self._run_phase_7_5_dashboard_db(),
+            target_date
+        )
+        run_stats['phase_7_5'] = phase_stats
+        # Non-critical, continue even if failed
+
         # Phase 8: Monitoring (ALWAYS RUN)
         phase_success, phase_stats = self._execute_phase(
             "phase_8_monitoring",
@@ -281,6 +292,17 @@ class DailyPipelineOrchestrator:
             target_date
         )
         run_stats['phase_8'] = phase_stats
+
+        # Phase 10: Advisory model-card rebuild for the prod model (WARN-only).
+        # Skips when the card is already fresh; a failure here never halts the
+        # daily pipeline (the card is informational, not a gate).
+        phase_success, phase_stats = self._execute_phase(
+            "phase_10_model_card",
+            lambda: self._run_phase_10_model_card(target_date),
+            target_date,
+            skip_idempotency_check=True,
+        )
+        run_stats['phase_10'] = phase_stats
 
         phases_run = len(run_stats)
         logger.info(f"[Pipeline] DONE | {phases_run} phases | {'OK' if critical_success else 'FAILED'}")
@@ -654,13 +676,31 @@ class DailyPipelineOrchestrator:
                 fund_results = result if isinstance(result, dict) else {}
                 fund_ok = sum(1 for v in fund_results.values() if v)
                 fund_failed = len(fund_results) - fund_ok
-                results['fundamentals'] = {'success': True, 'ok': fund_ok, 'failed': fund_failed}
-                logger.info(f"[Phase 1] Fundamentals: {fund_ok}/{len(fund_results)} OK")
+                # DQ: tickers that wrote rows but whose newest quarter has a NULL
+                # filing_date (yfinance earnings endpoint failed). Non-fatal — these
+                # are OK writes — but the per-run count is otherwise unobservable
+                # (no pipeline_error_log entry). Surface it without flipping status.
+                null_filing_written = len(self.fund_engine._null_filing_writes)
+                results['fundamentals'] = {
+                    'success': True, 'ok': fund_ok, 'failed': fund_failed,
+                    'null_filing_written': null_filing_written,
+                }
+                logger.info(
+                    f"[Phase 1] Fundamentals: {fund_ok}/{len(fund_results)} OK"
+                    + (f" | DQ: {null_filing_written} wrote NULL filing_date "
+                       f"(earnings fetch failed; EDGAR backfill will repair)"
+                       if null_filing_written else "")
+                )
                 if fund_ok > 0:
                     self.run_manager.record_write('fundamentals', fund_ok, 'phase_1_t1_fundamentals')
                 if self._current_run_id and self.fund_engine.last_errors:
                     self.run_manager.record_errors(
                         self._current_run_id, 'phase_1_t1_fundamentals', self.fund_engine.last_errors
+                    )
+                if self._current_run_id and not self.dry_run:
+                    self.run_manager.update_phase_metadata(
+                        self._current_run_id,
+                        {'null_filing_date_written': null_filing_written},
                     )
                 self._check_filing_date_quality(equity_tickers)
             except Exception as e:
@@ -1051,6 +1091,107 @@ class DailyPipelineOrchestrator:
 
         return {'rows_processed': rows}
 
+    def _run_phase_7_5_dashboard_db(self) -> Dict:
+        """Phase 7.5: Rebuild the slim dashboard.duckdb from the full DB.
+
+        Delegates to scripts/build_dashboard_db.py via subprocess so the build
+        runs in its own process against a fresh read-only ATTACH (no connection
+        contention with the orchestrator's open handle to the source DB).
+        Best-effort: a failure here is logged but never fails the daily run.
+        """
+        import subprocess
+        import sys
+
+        project_root = Path(__file__).resolve().parent.parent.parent
+        build_script = project_root / "scripts" / "build_dashboard_db.py"
+        if not build_script.exists():
+            logger.warning(f"[Phase 7.5] Build script not found: {build_script}")
+            return {'rows_processed': 0}
+
+        proc = subprocess.run(
+            [sys.executable, str(build_script)],
+            capture_output=True, text=True, timeout=600,
+            cwd=str(project_root),
+        )
+        if proc.returncode != 0:
+            logger.warning(
+                f"[Phase 7.5] dashboard DB rebuild failed (rc={proc.returncode}): "
+                f"{proc.stderr.strip()[:500]}"
+            )
+            return {'rows_processed': 0}
+
+        out_db = project_root / "data" / "dashboard.duckdb"
+        size_mb = out_db.stat().st_size / 1024 ** 2 if out_db.exists() else 0
+        logger.info(f"[Phase 7.5] Slim dashboard DB rebuilt: {size_mb:,.0f} MB")
+        return {'rows_processed': 1}
+
+    def _run_phase_10_model_card(self, target_date: str) -> Dict:
+        """Phase 10: Advisory rebuild of the model card for the prod model.
+
+        Freshness gate: skip if the prod model already has a card built within
+        the last 7 days. Otherwise rebuild via scripts/build_model_card.py in a
+        subprocess (own read-only ATTACH; no contention) and register the path
+        back to the models row. Best-effort — failures WARN, never halt.
+        """
+        import subprocess
+        import sys
+        from datetime import datetime as _dt, timedelta as _td
+
+        from src.model_registry import ModelRegistry
+
+        registry = ModelRegistry(db_path=Path(self.db_path))
+        prod_version = registry.get_prod_version()
+        if not prod_version:
+            logger.info("[Phase 10] No prod model registered; skipping card build.")
+            return {'rows_processed': 0, 'status': 'no_prod_model'}
+
+        info = registry.get_model_card_info(prod_version)
+        if info and info.get("built_at") is not None:
+            built_at = info["built_at"]
+            if isinstance(built_at, str):
+                try:
+                    built_at = _dt.fromisoformat(built_at.replace("Z", ""))
+                except ValueError:
+                    built_at = None
+            if built_at is not None and (_dt.utcnow() - built_at) < _td(days=7):
+                logger.info(
+                    f"[Phase 10] Card for {prod_version} is fresh "
+                    f"(built {built_at}); skipping rebuild."
+                )
+                return {'rows_processed': 0, 'status': 'fresh'}
+
+        project_root = Path(__file__).resolve().parent.parent.parent
+        build_script = project_root / "scripts" / "build_model_card.py"
+        if not build_script.exists():
+            logger.warning(f"[Phase 10] Build script not found: {build_script}")
+            return {'rows_processed': 0, 'status': 'no_script'}
+
+        cmd = [
+            sys.executable, str(build_script),
+            "--model", prod_version,
+            "--db", self.db_path,
+            "--register-version", prod_version,
+            "--skip-sepa-match",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600,
+                cwd=str(project_root),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("[Phase 10] Model card build timed out after 600s")
+            return {'rows_processed': 0, 'status': 'timeout'}
+
+        if proc.returncode != 0:
+            logger.warning(
+                f"[Phase 10] Model card build failed (rc={proc.returncode}): "
+                f"{proc.stderr.strip()[:500]}"
+            )
+            return {'rows_processed': 0, 'status': 'build_failed'}
+
+        logger.info(f"[Phase 10] Rebuilt model card for {prod_version}")
+        return {'rows_processed': 1, 'status': 'rebuilt'}
+
     def _run_phase_8_monitoring(self, target_date: str, run_stats: Dict) -> Dict:
         """Phase 8: Generate health report, coverage check, and alerts. Always runs."""
 
@@ -1103,6 +1244,13 @@ class DailyPipelineOrchestrator:
         except Exception as e:
             logger.warning(f"[Phase 8] Quarterly drift report skipped: {e}")
 
+        # Daily audit report (best-effort; populates Pipeline Health audit history).
+        audit_report = None
+        try:
+            audit_report = self._run_daily_audits(target_date)
+        except Exception as e:
+            logger.warning(f"[Phase 8] Daily audit run skipped: {e}")
+
         return {
             'rows_processed': predictions_written,
             'alerts': alerts,
@@ -1110,6 +1258,62 @@ class DailyPipelineOrchestrator:
             'coverage': coverage,
             'predictions_written': predictions_written,
             'drift_report': drift_report,
+            'audit_report': audit_report,
+        }
+
+    def _run_daily_audits(self, target_date: str) -> Optional[Dict]:
+        """Invoke tools/run_all_audits.py as a subprocess. Best-effort.
+
+        Writes one JSON per run to data/audit_reports/audit_report_YYYYMMDD.json
+        (filename = orchestrator run UTC date — same key used by the dashboard).
+        """
+        import subprocess
+        import sys
+        import json
+
+        repo_root = Path(__file__).parent.parent.parent
+        audit_script = repo_root / "tools" / "run_all_audits.py"
+        if not audit_script.exists():
+            logger.warning(f"[Phase 8] Audit script not found: {audit_script}")
+            return None
+
+        cmd = [sys.executable, str(audit_script), "--date", target_date, "--warn-only"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            logger.warning("[Phase 8] Audit run timed out after 600s")
+            return None
+
+        # run_all_audits exits 0 (all OK) or 1 (any WARNING/FAIL); 2+ = crash.
+        if proc.returncode not in (0, 1):
+            err = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "unknown"
+            logger.warning(f"[Phase 8] Audit run crashed (rc={proc.returncode}): {err}")
+            return None
+
+        # The script writes audit_report_YYYYMMDD.json keyed by UTC run date.
+        from datetime import datetime as _dt
+        date_str = _dt.utcnow().strftime("%Y%m%d")
+        report_path = repo_root / "data" / "audit_reports" / f"audit_report_{date_str}.json"
+        if not report_path.exists():
+            logger.warning(f"[Phase 8] Audit report not written at expected path: {report_path}")
+            return None
+
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            logger.warning(f"[Phase 8] Could not parse audit report: {e}")
+            return None
+
+        summary = report.get("summary", {}).get("total", {})
+        logger.info(
+            f"[Phase 8] Audit report saved ({report_path.name}): "
+            f"FAIL={summary.get('FAIL', 0)} WARN={summary.get('WARNING', 0)} "
+            f"OK={summary.get('OK', 0)} overall={report.get('overall')}"
+        )
+        return {
+            'path': str(report_path),
+            'overall': report.get('overall'),
+            'summary': summary,
         }
 
     def _log_prod_model_predictions(self, target_date: str) -> int:
@@ -1303,16 +1507,25 @@ class DailyPipelineOrchestrator:
            rather than real 10-Q filings. New ingests are now sanitised at the
            upsert gate, so any remaining hits indicate pre-fix legacy rows.
 
-        2. Stale filings: latest filing_date per ticker > 100d ago. US issuers
-           must file 10-Q within ~45d of quarter-end, then the next quarter ends
-           ~90d later. 100d after the last filing is a real anomaly: late filer,
-           delisted, fiscal-calendar restate, or our pipeline missed it. NULL
-           filing_date counts as stale because we have no PIT anchor proof.
+        2. Stale fundamentals: the NEXT expected quarter is overdue. A healthy
+           quarterly filer crosses 100d-since-last-filing for ~45d of every quarter
+           (10-Q lands ~45d after period_end, the next quarter ends ~90d later), so
+           measuring days-since-last-FILING raises a false alarm every cycle. We
+           anchor on last period_end instead: stale ⟺ today > last_period_end +
+           EXPECTED_NEXT_FILING_LAG_DAYS (~135d). When period_end is unknown (ticker
+           with no fundamentals rows at all), fall back to the flat
+           FUNDAMENTAL_STALENESS_DAYS check on last_filing. A genuinely stale name is
+           a late filer, delisted, fiscal-calendar restate, or a pipeline miss.
+
+           Known residual (accepted, not fixed here): off-calendar fiscal filers
+           (e.g. AZO Aug-FY) have legitimately longer gaps and may still trip — same
+           fiscal-calendar floor noted in the EDGAR backfill. The form-type →
+           ticker_type reclassification removes the non-10-Q filers (CEFs/BDCs/ADRs).
         """
         if not tickers:
             return
         import pandas as pd
-        from config import FUNDAMENTAL_STALENESS_DAYS
+        from config import FUNDAMENTAL_STALENESS_DAYS, EXPECTED_NEXT_FILING_LAG_DAYS
 
         ticker_df = pd.DataFrame({'ticker': tickers})
         con = duckdb.connect(self.db_path, read_only=True)
@@ -1330,21 +1543,42 @@ class DailyPipelineOrchestrator:
                 LIMIT 20
             """).fetchdf()
 
+            # Primary anchor: the most recent period_end we have an ACTUAL FILING for
+            # (filing_date IS NOT NULL). yfinance fabricates future quarterly period_end
+            # slots with a NULL filing_date (earnings-endpoint failures), so MAX(period_end)
+            # alone would trust a quarter we have no proof was ever filed and mask dead
+            # tickers. Flag only when the NEXT quarter's filing is overdue
+            # (today > last_filed_period_end + EXPECTED_NEXT_FILING_LAG_DAYS). Fall back to
+            # the flat days-since-last-filing check only when we have no filed quarter at all.
             stale = con.execute(f"""
                 WITH latest AS (
-                  SELECT ticker, MAX(filing_date) AS last_filing
+                  SELECT ticker,
+                         MAX(filing_date) AS last_filing,
+                         MAX(period_end) FILTER (WHERE filing_date IS NOT NULL)
+                             AS last_period_end
                   FROM fundamentals
                   WHERE ticker IN (SELECT ticker FROM _dq_tickers)
                   GROUP BY ticker
                 )
-                SELECT ticker, last_filing,
+                SELECT ticker, last_filing, last_period_end,
                        CASE WHEN last_filing IS NULL THEN NULL
                             ELSE DATE_DIFF('day', last_filing, CURRENT_DATE)
-                       END AS days_since
+                       END AS days_since,
+                       CASE WHEN last_period_end IS NULL THEN NULL
+                            ELSE DATE_DIFF('day', last_period_end, CURRENT_DATE)
+                       END AS days_since_period_end
                 FROM latest
-                WHERE last_filing IS NULL
-                   OR DATE_DIFF('day', last_filing, CURRENT_DATE) > {int(FUNDAMENTAL_STALENESS_DAYS)}
-                ORDER BY days_since DESC NULLS LAST
+                WHERE
+                    CASE
+                        WHEN last_period_end IS NOT NULL THEN
+                            DATE_DIFF('day', last_period_end, CURRENT_DATE)
+                                > {int(EXPECTED_NEXT_FILING_LAG_DAYS)}
+                        ELSE
+                            last_filing IS NULL
+                            OR DATE_DIFF('day', last_filing, CURRENT_DATE)
+                                > {int(FUNDAMENTAL_STALENESS_DAYS)}
+                    END
+                ORDER BY days_since_period_end DESC NULLS LAST
             """).fetchdf()
         finally:
             con.close()
@@ -1359,14 +1593,15 @@ class DailyPipelineOrchestrator:
         if not stale.empty:
             null_count = int(stale['last_filing'].isna().sum())
             old_count = len(stale) - null_count
-            sample_old = stale.dropna(subset=['last_filing']).head(5)
+            sample_old = stale.dropna(subset=['last_period_end']).head(5)
             sample_str = ", ".join(
-                f"{r.ticker} ({int(r.days_since)}d)" for r in sample_old.itertuples()
+                f"{r.ticker} ({int(r.days_since_period_end)}d since period_end)"
+                for r in sample_old.itertuples()
             )
             logger.warning(
                 f"[Phase 1] DQ: {len(stale)} equities with stale fundamentals "
-                f"(null_filing={null_count}, last_filing>{FUNDAMENTAL_STALENESS_DAYS}d={old_count}). "
-                f"Sample old: {sample_str or 'n/a'}"
+                f"(next quarter overdue: period_end>{EXPECTED_NEXT_FILING_LAG_DAYS}d ago; "
+                f"null_filing={null_count}). Sample: {sample_str or 'n/a'}"
             )
 
     def _check_coverage(self, target_date: str) -> Dict:

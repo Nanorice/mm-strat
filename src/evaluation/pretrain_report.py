@@ -221,8 +221,10 @@ def _build_markdown(rep: PretrainReport, mfe_bins) -> str:
 def run_pretrain_audit(
     mode: Literal["dense", "trades"] = "trades",
     mfe_bins=DEFAULT_MFE_BINS,
+    class_names: Optional[tuple] = None,
     output_path: Optional[Path] = None,
     emit_markdown: bool = False,
+    label_set_name: Optional[str] = None,
 ) -> PretrainReport:
     """Sequence the Phase-1 checks and emit a self-contained HTML report.
 
@@ -262,11 +264,12 @@ def run_pretrain_audit(
     mfe_series: Optional[pd.Series] = None
 
     if mode == "trades":
-        td = target_distribution(df[target_col])
+        cn_kwargs = {"class_names": class_names} if class_names else {}
+        td = target_distribution(df[target_col], **cn_kwargs)
         ic_df = compute_ic(df, feature_cols, target_col)
         mi_df = compute_mutual_information(df, feature_cols, target_col)
         corr_matrix, redundant_pairs = compute_redundancy(df, feature_cols)
-        days_active = days_active_by_class(df, target_col=target_col)
+        days_active = days_active_by_class(df, target_col=target_col, **cn_kwargs)
         if "mfe_pct" in df.columns:
             mfe_series = df.drop_duplicates(
                 subset=["trade_id"] if "trade_id" in df.columns else None
@@ -292,7 +295,8 @@ def run_pretrain_audit(
     if output_path is None:
         DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = DEFAULT_OUT_DIR / f"pretrain_audit_{mode}_{ts}.html"
+        ls_suffix = f"_{label_set_name}" if label_set_name and label_set_name != "default" else ""
+        output_path = DEFAULT_OUT_DIR / f"pretrain_audit_{mode}{ls_suffix}_{ts}.html"
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)

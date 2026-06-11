@@ -71,6 +71,14 @@ def main() -> int:
                         help="Block size (days) for Section G bootstrap (default 60)")
     parser.add_argument("--skip-benchmarks", action="store_true",
                         help="Skip the SEPA-composite baseline comparison")
+    parser.add_argument("--require-promotion-pass", default=None, metavar="USE_CASE",
+                        help="Exit non-zero if the card's verdict for USE_CASE is "
+                             "REJECT or PENDING (MARGINAL warns but exits 0). For "
+                             "CI/manual gating only — does NOT affect "
+                             "ModelRegistry.set_prod(), where the card is advisory.")
+    parser.add_argument("--register-version", default=None, metavar="VERSION_ID",
+                        help="Write the card path + build time back to the given "
+                             "models.version_id row (advisory metadata).")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -102,12 +110,34 @@ def main() -> int:
         skip_benchmarks=args.skip_benchmarks,
     )
     card = builder.build()
-    html_path, json_path = builder.render(card, html_path=output_path)
+    html_path, json_path = builder.render(
+        card, html_path=output_path,
+        register_version_id=args.register_version,
+        registry_db_path=Path(args.db),
+    )
     print(f"[OK] Wrote {html_path}")
     print(f"[OK] Wrote {json_path}")
     if card.card_void:
         print("[WARN] Card is VOID due to Section A blocking failure", file=sys.stderr)
         return 2
+
+    if args.require_promotion_pass:
+        use_case = args.require_promotion_pass
+        verdict = card.use_case_verdicts.get(use_case)
+        if verdict is None:
+            print(f"[ERR] Unknown use case {use_case!r}; known: "
+                  f"{sorted(card.use_case_verdicts)}", file=sys.stderr)
+            return 2
+        if verdict in ("REJECT", "PENDING"):
+            print(f"[ERR] Promotion gate FAILED: {use_case} = {verdict}",
+                  file=sys.stderr)
+            return 1
+        if verdict == "MARGINAL":
+            print(f"[WARN] Promotion gate MARGINAL: {use_case} = {verdict} "
+                  f"(exit 0)", file=sys.stderr)
+        else:
+            print(f"[OK] Promotion gate passed: {use_case} = {verdict}")
+
     return 0
 
 

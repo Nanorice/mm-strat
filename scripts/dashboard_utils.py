@@ -7,6 +7,7 @@ rendering. Read-only DB access throughout.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -17,7 +18,16 @@ import streamlit as st
 import xgboost as xgb
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT / "data" / "market_data.duckdb"
+
+# DB path is configurable so the same app runs against the full local DB or a
+# slim, remote-synced dashboard.duckdb. Set DASHBOARD_DB_PATH (absolute, or
+# relative to repo root) to point at the slim DB. Default: full local DB.
+_db_env = os.environ.get("DASHBOARD_DB_PATH")
+if _db_env:
+    _db = Path(_db_env)
+    DB_PATH = _db if _db.is_absolute() else ROOT / _db
+else:
+    DB_PATH = ROOT / "data" / "market_data.duckdb"
 
 # ── M01 class taxonomy ────────────────────────────────────────────────────────
 
@@ -170,15 +180,52 @@ def load_pipeline_status(limit: int = 20) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_pipeline_runs_window(days: int = 30) -> pd.DataFrame:
-    """Page 5 heatmap source — all phases x dates for the last N days."""
+    """Page 5 heatmap source — all phases x dates for the last N days.
+
+    Includes `n_errors` (count of pipeline_error_log rows joined on run_id) so
+    the heatmap can surface 'success-with-warnings' (e.g. T1 ingestion completes
+    but logs per-ticker failures).
+    """
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
         return con.execute(f"""
-            SELECT target_date, phase_name, status, runtime_seconds,
-                   started_at, completed_at, error_message
+            SELECT pr.target_date, pr.phase_name, pr.status, pr.runtime_seconds,
+                   pr.started_at, pr.completed_at, pr.error_message,
+                   COALESCE(el.n_errors, 0) AS n_errors
+            FROM pipeline_runs pr
+            LEFT JOIN (
+                SELECT run_id, COUNT(*) AS n_errors
+                FROM pipeline_error_log
+                GROUP BY run_id
+            ) el ON pr.run_id = el.run_id
+            WHERE pr.target_date >= CURRENT_DATE - INTERVAL {int(days)} DAY
+            ORDER BY pr.target_date DESC, pr.phase_name
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_null_filing_writes(days: int = 30) -> pd.DataFrame:
+    """Per-run count of fundamentals rows written with a NULL filing_date.
+
+    Read from pipeline_runs.metadata.null_filing_date_written (written by the
+    Phase-1 fundamentals step). These are OK writes whose yfinance earnings fetch
+    failed → no PIT filing anchor until the EDGAR backfill repairs them. NOT errors
+    (don't appear in pipeline_error_log), so this is the only place the per-run rate
+    is observable. Empty frame if no run carries the field yet.
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT target_date,
+                   CAST(json_extract_string(metadata, '$.null_filing_date_written') AS INTEGER)
+                       AS null_filing_written
             FROM pipeline_runs
-            WHERE target_date >= CURRENT_DATE - INTERVAL {int(days)} DAY
-            ORDER BY target_date DESC, phase_name
+            WHERE phase_name = 'phase_1_t1_ingestion'
+              AND target_date >= CURRENT_DATE - INTERVAL {int(days)} DAY
+              AND json_extract_string(metadata, '$.null_filing_date_written') IS NOT NULL
+            ORDER BY target_date DESC
         """).fetchdf()
     finally:
         con.close()

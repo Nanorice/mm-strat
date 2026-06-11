@@ -1,9 +1,75 @@
-# Pending: Model Card Phase 4 — Promotion-Gate Integration
+# Model Card Phase 4 — Promotion-Gate Integration
 
-**Status:** DEFERRED (Phases 1–3 done; framework operational standalone)
+**Status:** ✅ DONE (2026-06-11, sprint 12) — implemented as **ADVISORY**, not a hard gate.
 **Source plan:** [docs/plans/model_card_implementation_plan_2026_05_25.md §5](../../plans/model_card_implementation_plan_2026_05_25.md)
-**Estimated effort:** 0.5 day
+**Decision log:** [docs/decision_log/2026-06-11_model_card_gate.md](../../decision_log/2026-06-11_model_card_gate.md)
 **Carried over from session:** 2026-05-26 (Phase 3 completion)
+
+---
+
+## ✅ Implementation record (2026-06-11)
+
+**Key reversal vs. the spec below:** the user directed that the model card is
+**informational only and must NOT block promotion**. The card's verdict
+thresholds (`USE_CASE_REQUIREMENTS`, band cutoffs `6/21`, `12/21`, `17/21`) are
+hand-set and empirically unvalidated; blocking promotion on them would let an
+arbitrary number veto a human decision and manufacture false confidence. The
+**only hard promotion gate remains the `results.json` blocking gates** already
+in `set_prod()` (overridable via `force=True` + logged `force_reason`).
+
+### Prod model resolution (confirmed)
+"Prod" = the dashboard's model = the single `models` row with
+`status_flag='prod' AND model_type='classifier'`:
+**`m01_prototype_2003_2026_20260514_233125`** (`model_name=m01_prototype_2003_2026`, `v2`).
+- Dashboard resolves it via `dashboard_utils.load_prod_model()` /
+  `load_prod_model_version_id()` ([scripts/dashboard_utils.py:462,575](../../../scripts/dashboard_utils.py#L462)).
+- Phase 10 + `set_prod()` resolve the same row via
+  `ModelRegistry.get_prod_version()`. No mismatch.
+- ⚠️ **Minor open note:** `get_prod_version()` filters only `status_flag='prod'`
+  (no `model_type` filter). With a single prod row the two agree; if a non-
+  classifier prod row is ever added, Phase 10 should add the
+  `model_type='classifier'` filter to stay identical to the dashboard. Not
+  changed now (single prod row, no ambiguity).
+
+### What shipped (4 touch points + advisory wiring)
+
+| # | Change | Location |
+|---|--------|----------|
+| 1 | `models.model_card_path VARCHAR`, `models.model_card_built_at TIMESTAMP` — added idempotently | `ModelRegistry._migrate_models_table` ([src/model_registry.py](../../../src/model_registry.py)) |
+| 2 | `register_model_card(version_id, card_path, built_at)` + `get_model_card_info(version_id)` | src/model_registry.py |
+| 3 | `ModelCardBuilder.render(register_version_id=..., registry_db_path=...)` writes the card path back (lazy registry import → eval package stays decoupled) | [src/evaluation/model_card/builder.py](../../../src/evaluation/model_card/builder.py) |
+| 4 | CLI `--require-promotion-pass <use_case>` (exit≠0 on REJECT/PENDING, 0+stderr on MARGINAL — CI/manual only, does NOT touch set_prod) + `--register-version` | [scripts/build_model_card.py](../../../scripts/build_model_card.py) |
+| — | `set_prod()` calls `_warn_on_adverse_card()` — logs a WARNING on REJECT/PENDING/void for `composite_gate_plus_rank`, then **promotes regardless**. Silent (info) when no card registered. | src/model_registry.py |
+| — | Orchestrator **Phase 10** `_run_phase_10_model_card()` — rebuilds prod card when stale (>7d), registers path back. **Best-effort.** | [src/orchestrators/daily_pipeline_orchestrator.py](../../../src/orchestrators/daily_pipeline_orchestrator.py) |
+| — | `phase_10_model_card: PipelineFailureMode.WARN` in config — **required** because `_execute_phase` defaults unregistered phases to HALT; without this a slow card build would halt the daily pipeline. | [config.py](../../../config.py) |
+
+### Threshold-gate Section-C question — RESOLVED
+`USE_CASE_REQUIREMENTS["threshold_gate"]` stays `["A", "E", "G"]` (C dropped).
+A fixed-cutoff threshold gate does not consume calibrated probabilities, so
+Section C (calibration) is not required. `probability_sizing` and
+`composite_gate_plus_rank` still require C. Moot in practice since the card is
+advisory. Documented in the decision log.
+
+### Verified (no full card build kicked off, per user)
+- Migration adds both columns against the live DB; `register_model_card` /
+  `get_model_card_info` round-trip `built_at`.
+- Advisory path: synthetic REJECT card → WARNING + **no exception**; PASS → info.
+  (Test card path reset to NULL on the prod row afterward.)
+- All touched files parse; new CLI flags register in `--help`.
+- **Not run:** an end-to-end Phase 10 / full card build (multi-minute Section G).
+  Subprocess wiring mirrors the already-tested Phase 7.5 pattern.
+
+### Remaining (process, not code)
+- §8.7 acceptance: populate `models.model_card_path` for the prod card by running
+  `build_model_card.py --model <prod_version> --register-version <prod_version>`
+  once (or let Phase 10 do it on the next daily run). Currently NULL on the prod
+  row (test value was cleared).
+- Human sign-off for `is_production=true` flips is still a decision-log process
+  rule, not enforced in code.
+
+---
+
+## Original spec (below) — superseded where it conflicts with the advisory decision
 
 ---
 

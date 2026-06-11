@@ -108,6 +108,16 @@ class FundamentalEngine:
             Path(__file__).parent.parent / "data" / "market_data.duckdb"
         )
         self.last_errors: List[Tuple[str, Optional[str]]] = []
+        # Per-ticker cause string, populated by _fetch_from_yfinance on failure.
+        # Reset at the top of each update_fundamentals() call.
+        self._fetch_error_causes: Dict[str, str] = {}
+        # Tickers that wrote fundamentals rows whose newest quarter has a NULL
+        # filing_date because the yfinance earnings endpoint returned nothing.
+        # Non-fatal (statements still landed) but leaves no PIT filing anchor until
+        # the EDGAR backfill repairs it. Detected in the single-threaded write loop
+        # (no worker-side shared state). Surfaced as a per-run DQ count, NOT an error
+        # (would falsely flip the run to 'warning' when EDGAR self-heals). Reset each run.
+        self._null_filing_writes: set = set()
 
         if source == 'yfinance':
             self._ensure_tables()
@@ -221,7 +231,10 @@ class FundamentalEngine:
         Fetch IS + BS + CF + earnings dates from yfinance for one ticker.
 
         Returns a DataFrame indexed by period_end with filing_date mapped,
-        or None on failure.
+        or None on failure. On failure, records the cause in
+        self._fetch_error_causes[ticker] so the caller can surface a
+        classifiable string (RATE_LIMIT / TIMEOUT / NO_DATA / ...) into
+        pipeline_error_log instead of a generic placeholder.
         """
         try:
             t = yf.Ticker(ticker)
@@ -229,6 +242,8 @@ class FundamentalEngine:
             balance  = t.get_balance_sheet(freq='quarterly')
             cashflow = t.get_cashflow(freq='quarterly')
         except Exception as e:
+            cause = f"yfinance fetch exception: {type(e).__name__}: {e}"
+            self._fetch_error_causes[ticker] = cause
             logger.warning(f"[FundamentalEngine] yfinance fetch failed for {ticker}: {e}")
             return None
         finally:
@@ -240,6 +255,9 @@ class FundamentalEngine:
             earnings_dates = None
 
         if income is None or income.empty:
+            self._fetch_error_causes[ticker] = (
+                'yfinance returned no data for income statement (None or empty)'
+            )
             logger.debug(f"[FundamentalEngine] No yfinance income data for {ticker}")
             return None
 
@@ -287,6 +305,9 @@ class FundamentalEngine:
             rows.append(row)
 
         if not rows:
+            self._fetch_error_causes[ticker] = (
+                'yfinance income statement parsed but yielded no data rows'
+            )
             return None
 
         df = pd.DataFrame(rows)
@@ -834,7 +855,17 @@ class FundamentalEngine:
         return total
 
     def _get_stale_fundamental_tickers(self, tickers: List[str], max_age_days: int = 90) -> List[str]:
-        """Return tickers with no fundamentals row newer than max_age_days."""
+        """Return tickers whose most-recent fundamental period_end is older
+        than max_age_days, or have no fundamentals at all.
+
+        Staleness is measured against period_end (the *data* date), not
+        updated_at (when we last wrote a row). Using updated_at masks the
+        case where we wrote an old quarter recently — the row looks "fresh"
+        by audit timestamp but the underlying data hasn't advanced.
+
+        A 24-hour updated_at cooldown prevents the same ticker being re-fetched
+        within one calendar day when an upstream provider (yfinance) hasn't
+        actually published a new quarter yet."""
         conn = duckdb.connect(self.db_path)
         try:
             conn.register('_ticker_list', pd.DataFrame({'ticker': tickers}))
@@ -842,12 +873,20 @@ class FundamentalEngine:
                 SELECT tl.ticker
                 FROM _ticker_list tl
                 LEFT JOIN (
-                    SELECT ticker, MAX(updated_at) AS last_update
+                    SELECT ticker,
+                           MAX(period_end) AS last_period,
+                           MAX(updated_at) AS last_update
                     FROM fundamentals
                     GROUP BY ticker
                 ) f ON tl.ticker = f.ticker
-                WHERE f.last_update IS NULL
-                   OR f.last_update < CURRENT_TIMESTAMP - INTERVAL {int(max_age_days)} DAY
+                WHERE (
+                        f.last_period IS NULL
+                     OR f.last_period < CURRENT_DATE - INTERVAL {int(max_age_days)} DAY
+                      )
+                  AND (
+                        f.last_update IS NULL
+                     OR f.last_update < CURRENT_TIMESTAMP - INTERVAL 24 HOUR
+                      )
                 ORDER BY tl.ticker
             """).fetchall()
             return [r[0] for r in rows]
@@ -928,6 +967,8 @@ class FundamentalEngine:
 
         results: Dict[str, bool] = {}
         fetched: Dict[str, object] = {}
+        self._fetch_error_causes = {}
+        self._null_filing_writes = set()
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(self._fetch_from_yfinance, t): t for t in to_fetch}
@@ -948,7 +989,17 @@ class FundamentalEngine:
                 rows_written = self._upsert_to_duckdb(ticker, df, conn=conn)
                 if rows_written > 0:
                     self._mark_earnings_confirmed(ticker, target_date, conn=conn)
+                    # DQ: newest written quarter has no filing_date → no PIT anchor
+                    # (yfinance earnings endpoint failed). Statements still landed, so
+                    # the ticker is OK; record for a per-run count, not as an error.
+                    newest = df.loc[df['period_end'].idxmax()]
+                    if pd.isna(newest.get('filing_date')) or newest.get('filing_date') is None:
+                        self._null_filing_writes.add(ticker)
                 results[ticker] = rows_written > 0
+                if rows_written == 0:
+                    self._fetch_error_causes[ticker] = (
+                        'yfinance fetch parsed but upsert wrote no new rows (no data after dedup)'
+                    )
             conn.commit()
         finally:
             conn.close()
@@ -958,7 +1009,8 @@ class FundamentalEngine:
                 results[t] = True
 
         self.last_errors = [
-            (t, 'yfinance fetch returned None') for t, ok in results.items() if not ok
+            (t, self._fetch_error_causes.get(t, 'yfinance fetch failed (no cause recorded)'))
+            for t, ok in results.items() if not ok
         ]
 
         return results
