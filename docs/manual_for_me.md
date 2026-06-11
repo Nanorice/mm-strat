@@ -1,6 +1,6 @@
 # Conceptual Architecture
 
-> Last updated: 2026-05-08 — T3 universe gate refactor (Option C). New `sepa_watchlist` event log + Phase 4b in the daily pipeline.
+> Last updated: 2026-06-11 — EDGAR engine, instrument reclassification, macro fix, model card Phase 4, slim dashboard DB.
 
 > Naming convention: t1 is raw data in phase 1. t2 is filtered data for investible universe, with lightweight and alpha (because it uses crossectional features so need a larger universe). t3 is furthered filter for SEPA entry criterias.
 
@@ -453,7 +453,10 @@ Shows: data freshness, recent trades, per-day C1-C9 trend + B1-B2 breakout pass/
 | `screener_watchlist` | 6 | ~38K | Materialized `v_screener_dashboard` (all trades, ACTIVE/EXITED, with returns) |
 | `d2_training_cache` | 7 | ~38K | Materialized `v_d2_training` (trade-level with outcomes, ~592s to refresh) |
 | `pipeline_runs` | 8 | varies | Phase execution tracking + idempotency |
-| `models` | ML | varies | Model registry — versions, metrics, artifact paths |
+| `pipeline_error_log` | 8 | varies | Per-ticker errors by phase; drives heatmap warning state |
+| `daily_predictions` | 8 | varies | Point-in-time M01 scores for every SEPA candidate each day |
+| `cik_map` | 1.2b | 10.4K | Ticker → SEC CIK; maintained by `EDGAREngine` (weekly refresh) |
+| `models` | ML | varies | Model registry — versions, metrics, artifact paths, model card path/timestamp |
 
 ---
 
@@ -1200,7 +1203,11 @@ python scripts/run_backtest.py --full                          # Legacy: prepare
 
 **Purpose**: Multi-page Streamlit UI to expose pipeline output. Localhost-only, single-user, no auth. Never bind to `0.0.0.0`.
 
-**Run:** `streamlit run scripts/dashboard.py`  → opens at http://localhost:8501
+**Run (full DB):** `streamlit run scripts/dashboard.py`
+
+**Run (slim DB):** `$env:DASHBOARD_DB_PATH="data/dashboard.duckdb"; streamlit run scripts/dashboard.py`
+
+The slim DB (`data/dashboard.duckdb`, 783 MB) is rebuilt nightly by orchestrator Phase 7.5 via `scripts/build_dashboard_db.py`. It contains only the tables/windows the dashboard actually queries — safe to sync across devices. The main DB (`data/market_data.duckdb`) remains the pipeline source of truth.
 
 **Plan / spec:** `docs/plans/dashboard_implementation_plan_2026_05_23.md`. The dashboard's philosophy is *expose existing work, do not recompute*: DuckDB tables + registered models + pre-generated HTML reports are the canonical artifacts; pages render them.
 
@@ -1380,42 +1387,101 @@ To stop following: Ctrl+C.
 
 ---
 
+## Runbooks
+
+Quick reference for common operational tasks.
+
+### Deactivate dead tickers
+
+Use when a ticker has no yfinance data for ≥10 trading days and you've confirmed it's not a temporary halt.
+
+```bash
+# 1. Verify manually
+python -c "import yfinance as yf; print(yf.Ticker('XYZ').history(period='1mo'))"
+
+# 2. Dry run
+python tools/deactivate_tickers.py --tickers XYZ --reason "no yfinance data 30d"
+
+# 3. Execute (writes to logs/data_quality/deactivations.jsonl)
+python tools/deactivate_tickers.py --tickers XYZ --reason "no yfinance data 30d" --execute
+```
+
+### Repair macro_data gap
+
+Use when Pipeline Health shows `macro_data` stale or audit flags `date_gaps_vs_price_data`.
+
+```python
+from src.macro_engine import MacroEngine
+import duckdb
+conn = duckdb.connect('data/market_data.duckdb')
+MacroEngine(conn).update_macro_cache(write_db=True)
+```
+
+Then verify: `SELECT MAX(date) FROM macro_data` should be within 8d of today.
+
+### Recreate views after schema changes
+
+```bash
+python scripts/create_duckdb_views.py
+python scripts/refresh_training_cache.py
+python scripts/refresh_training_cache.py --stats   # verify row count + age
+```
+
+### EDGAR filing date backfill
+
+Use when `null_filing_date_written` counter is elevated on Pipeline Health, or after adding new tickers.
+
+```bash
+python scripts/backfill_filing_dates_edgar.py --dry-run   # preview
+python scripts/backfill_filing_dates_edgar.py --execute
+```
+
+### Rebuild slim dashboard DB
+
+```bash
+python scripts/build_dashboard_db.py                     # default 252d window
+python scripts/build_dashboard_db.py --window-days 365   # wider window
+```
+
+### Repair t1_macro gap
+
+Use when audit shows `t1_macro/date_gaps_vs_price_data > 0`.
+
+1. Identify missing dates: `SELECT date FROM price_data EXCEPT SELECT date FROM t1_macro ORDER BY 1`
+2. Run `ingest_daily_macro()` for missing dates or insert manually.
+3. Recompute T2 for the affected range: `DELETE FROM t2_screener_features WHERE date = 'YYYY-MM-DD'` then `--phase-3-only`.
+4. Verify: `SELECT COUNT(*) FROM t2_screener_features WHERE date = 'YYYY-MM-DD' AND trend_ok = TRUE` — should be non-zero.
+
+### Reclassify instrument types (EDGAR)
+
+Use when the stale-fundamentals cohort is inflated by funds/foreign filers incorrectly typed as EQUITY.
+
+```bash
+python scripts/enrich_ticker_types_edgar.py --dry-run    # preview cohort
+python scripts/enrich_ticker_types_edgar.py --execute    # apply; audit at logs/data_quality/ticker_type_reclass.jsonl
+```
+
+---
+
 ## Open TODOs
 
-### Model Development (blocking backtests from being meaningful)
-- [ done ] **Retrain M01 on updated T3 data** — current model trained on 2026-03-15. T3 was rebuilt 2026-03-27 with 0% NULL alphas/EMAs. Retrain + compare metrics. [m01_prototype_may]
-- [ ] **Class imbalance** — macro_F1=0.25. Try SMOTE, cost-sensitive learning, or threshold tuning.
-- [ ] **Promote to prod** — currently `status=test`. Run `reg.set_prod(version_id)` after validation backtest.
-- [ ] **Full backtest** — run `--duckdb` on full date range (2020-2026) with all tickers to establish baseline.
+### Model Development
+- [ ] **Binary home-run model with calibration** — candidate `m01_prototype/v2` card band=WEAK; AUC 0.773 vs SEPA baseline 0.594 (real edge confirmed). Next step: retrain as binary (`mfe_binary_homerun_v1`) with `--with-calibration` to address ECE 0.132 vs gate <0.05.
+- [ ] **Promote to prod** — human decision after seeing binary card. Current prod: `m01_prototype_2003_2026_20260514_233125`.
+- [ ] **Mode B score trajectory analysis** — correlation of daily `daily_predictions` scores with forward returns at 5d/20d/60d; score trajectory for super-performers vs ordinary trades. See Sprint 12 T6.
 
-### Data Quality (non-blocking but should fix)
-- [ done ] **`filing_date` anomalies** — run the two patch modes to clean up remaining ~55K zero-day rows and ~6.4K stale-historical rows:
-  ```bash
-  python tools/patch_fundamentals.py --fix filing_date_zero --dry-run   # preview
-  python tools/patch_fundamentals.py --fix filing_date_zero              # ~55K rows
-  python tools/patch_fundamentals.py --fix filing_date_stale_historical  # ~6.4K rows
-  ```
-- [ ] **GE price_data + fundamentals** — GE restored to `company_profiles` (2026-03-28) but has no price_data or fundamentals yet. Will auto-fetch on next daily pipeline run.
-- [ ] **Monthly earnings calendar refresh trigger** — where to persist last-refresh timestamp (defer until pipeline automated)
+### Data Quality
+- [ ] **Universe lifecycle automation** — outflow: auto-detect ≥14 consecutive NO_DATA tickers → yfinance-confirm → auto-deactivate. See Sprint 12 T5.
+- [ ] **`earnings_calendar` at-scale rate-limit** — yfinance silently limits at ~3,400 tickers; affects upcoming-earnings trigger for fundamentals refresh. Low urgency since EDGAR filing-date backfill covers the gap.
+- [ ] **Stale fundamentals live-backfill cohort** — 102 LIVE_BACKFILL tickers (EDGAR has a recent 10-Q but our DB lags). Low priority; check no longer false-alarms on them.
 
-### Evaluation Framework (operational follow-ups)
-- [ ] **Wire quarterly drift reports into Phase 8** — `src/evaluation/drift.py` shipped 2026-05-24 with tests, but no cron-style trigger yet. See plan §2.2 step 3.
-- [ ] **Backfill `daily_predictions`** for prod-model historical period — Phase-8 prediction logger was silently broken pre-2026-05-24. Empty table → dashboard "Past Decisions" view is empty.
-- [ ] **Parameterise deep-rigor scripts** — `run_bootstrap_ci.py` / `run_permutation_null.py` / `run_decile_analysis.py` hard-code `MODEL_DIR`; add a `--model-dir` arg.
-- [ ] **Run full §1.4 deep-rigor on `m01_binary/v1`** — verdict not yet recorded. Trainer gates ran, but bootstrap CI / permutation null / decile analysis still to do. See plan §1.4 and the §1.4(c) parallel-session instructions for the template.
+### Evaluation Framework
+- [ ] **Wire quarterly PSI drift reports** — `src/evaluation/drift.py` shipped; Phase-9 hook not yet built.
+- [ ] **Parameterise deep-rigor scripts** — `run_bootstrap_ci.py` / `run_permutation_null.py` / `run_decile_analysis.py` hard-code `MODEL_DIR`; add `--model-dir` arg.
 
-### Critical Next Stage:
-- [ ] **Run one-time T3 backfill on Option C universe** — `sepa_watchlist` is populated (35,560 sessions / 2,697 tickers, done 2026-05-08). T3 schema rebuilt empty. Run:
-  ```bash
-  python scripts/backfill_t3_sepa_features.py --restart --from 2001-Q1
-  # then:
-  python scripts/create_duckdb_views.py
-  python scripts/refresh_training_cache.py
-  ```
-  Expected: ~9.4M rows, 1.5-2.5h. Tail: `tail -f -n 5 logs/t3_backfill_progress.log`. See `docs/session_logs/2026-05-08_wrapup.md` for full guidance.
-- [ ] **Re-train M01 sanity check** after T3 backfill completes — feature *values* unchanged (fundamentals still reach model via `v_d2_features` JOIN), but verify metrics match `M01_baseline_v0.1` (acc=0.6705, wF1=0.582, macroF1=0.248) within ±0.005. Drift = bug.
-- [ ] Finalise notebook to prototype model. This should include EDA, Feature Engineering, model training (with class imbalance), Model evaluation. Then replicate to prod code and create a new model for registry.
-- [ ] Dashboard Phase 2: data audit, model eval, backtest results, feature time-series pages. See `docs/dashboard_design.md`.
+### Infrastructure
+- [ ] **Dashboard sync S1–S4** — GitHub push → R2 upload → Streamlit Cloud deploy → spare-PC Task Scheduler. See `docs/session_logs/sprint_12/dashboard_sync_deploy_plan.md`.
+- [ ] **DuckDB VACUUM** — main DB is ~95% dead/unvacuumed rows (t2 has 173M dead). Run `VACUUM` during a maintenance window; expect significant size reduction.
 
 ---
 

@@ -1,6 +1,6 @@
 # Comprehensive Methodological Guide to the Quantamental SEPA Framework
 
-> Last updated: 2026-05-16. Authoritative reference for replication. Cross-checked against `docs/manual_for_me.md`.
+> Last updated: 2026-06-11. Authoritative reference for replication. Cross-checked against `docs/manual_for_me.md`.
 
 ---
 
@@ -85,9 +85,11 @@ Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener memb
 | Phase | Module | Input | Output Table | Criticality |
 |-------|--------|-------|--------------|-------------|
 | 1.1 Price | `src/data_engine.py` | yfinance API, `company_profiles` | `price_data` | CRITICAL |
-| 1.2 Fundamentals | `src/fundamental_engine.py` | FMP API, SEC EDGAR | `fundamentals`, `earnings_calendar` | CRITICAL |
+| 1.2 Fundamentals | `src/fundamental_engine.py` | yfinance API, SEC EDGAR | `fundamentals`, `earnings_calendar` | CRITICAL |
+| 1.2b CIK map | `src/edgar_engine.py` | SEC directory (weekly, gated) | `cik_map` | non-critical |
+| 1.2c Filing dates | `src/edgar_engine.py` | SEC submissions API (200/run) | `fundamentals.filing_date` | non-critical |
 | 1.3 Shares | `src/shares_engine.py` | yfinance API | `shares_history` | CRITICAL |
-| 1.4 Macro | `src/macro_engine.py` | FRED API, yfinance | `macro_data`, `t1_macro` | CRITICAL |
+| 1.4 Macro | `src/macro_engine.py` | FRED API, yfinance | `macro_data` AND `t1_macro` | CRITICAL |
 | 2 Screener | `src/managers/screener_manager.py` | `price_data`, `shares_history`, `screener_criteria_versions` | `screener_membership` | CRITICAL |
 | 3 T2 Features | `src/feature_pipeline.py` | `price_data`, `screener_membership`, `t1_macro` | `t2_screener_features` | CRITICAL |
 | 4 Regime | `src/pipeline/m03_regime.py` | `macro_data`, `price_data` | `t2_regime_scores` | non-critical |
@@ -95,7 +97,9 @@ Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener memb
 | 5 T3 Features | `src/feature_pipeline.py` | `t2_screener_features`, `sepa_watchlist`, `t2_regime_scores` | `t3_sepa_features` | CRITICAL |
 | 6 Views | `src/managers/view_manager.py` | `t3_sepa_features`, `fundamentals`, `company_profiles` | SQL views + `screener_watchlist` | non-critical |
 | 7 ML Cache | `src/managers/view_manager.py` | `v_d2_training` | `d2_training_cache` | non-critical |
-| 8 Monitoring | `src/orchestrators/daily_pipeline_orchestrator.py` | all tables | logs/alerts only | always |
+| 7.5 Slim DB | `scripts/build_dashboard_db.py` | main DB | `data/dashboard.duckdb` | non-critical |
+| 8 Monitoring + Audits | `src/orchestrators/daily_pipeline_orchestrator.py`, `tools/run_all_audits.py` | all tables | logs/alerts + `data/audit_reports/` | always |
+| 10 Model Card | `scripts/build_model_card.py` | prod model + `d2_training_cache` | `model_cards/<version>.html` | WARN only |
 
 ### Key Tables Reference
 
@@ -130,8 +134,12 @@ Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener memb
 |--------|------|--------|
 | **yfinance** | Daily OHLCV (equities), shares outstanding, SPY/QQQ/VIX | `data_engine.py`, `shares_engine.py`, `macro_engine.py` |
 | **Financial Modeling Prep (FMP)** | Quarterly IS/BS/CF, universe discovery | `fundamental_engine.py`, `universe_backfill.py` |
-| **SEC EDGAR** | Filing date resolution, earnings date patches | `fundamental_engine.py`, `tools/patch_fundamentals.py` |
+| **SEC EDGAR** | Authoritative 10-Q/10-K filing dates via submissions API; CIK map | `src/edgar_engine.py` (`EDGARClient` + `EDGAREngine`) |
 | **FRED** | Macroeconomic rates and indicators | `macro_engine.py` |
+
+**EDGAR engine** (`src/edgar_engine.py`): primary source for `fundamentals.filing_date`. Queries `data.sec.gov/submissions/CIK*.json` at 10 req/s. Maintains `cik_map` table (10.4K ticker→CIK rows). Daily pipeline runs a bounded backfill (200 tickers/run) via `phase_1_filing_date_backfill`; weekly `phase_1_cik_map_refresh` refreshes the CIK map from the SEC directory. Filing-date coverage: **97.73%** (up from 42.9% before the EDGAR engine). Residual NULLs: fiscal-calendar mismatches >35d tolerance, foreign filers with no CIK.
+
+**Instrument classification**: `EDGAREngine.classify_ticker_types` maps EDGAR form types to `ticker_type` (`EQUITY`/`FOREIGN`/`FUND`/`ETF`/`INDEX`). Only `EQUITY` tickers run through the fundamentals fetch and staleness checks. Run `scripts/enrich_ticker_types_edgar.py` to reclassify a cohort.
 
 ### 3.2 Universe Construction — Screener Membership (Phase 2)
 
@@ -152,10 +160,11 @@ The criteria parameter history is stored in `screener_criteria_versions` — ena
 
 Survivorship bias is mitigated via a structured ticker lifecycle system (see §12 for full CLI reference):
 
-- **Deactivations**: Delisted or acquired tickers are flagged `is_active = FALSE` in `company_profiles`. Historical rows are preserved; ingestion halts.
+- **Deactivations**: Delisted or acquired tickers are flagged `is_active = FALSE` in `company_profiles`. Historical rows are preserved; ingestion halts. CLI: `tools/deactivate_tickers.py --tickers XYZ --reason "..." --execute`. Requires `--reason` with `--execute`; writes one JSONL row per deactivation to `logs/data_quality/deactivations.jsonl` (`db_before`/`yf_evidence`/`db_after`/`reason`).
 - **Renames/Mergers**: Ticker symbol changes are patched retroactively across all eight affected tables.
 - **Purges**: Non-tradeable securities (Warrants `*-WT`, Units `*-UN`, Rights `*-RI`, Preferred `*-P_`, SPACs) are permanently blacklisted in `ticker_blacklist` and deleted from `company_profiles` and `price_data`.
-- **Auditing**: `tools/run_all_audits.py` enforces SLAs on data freshness, null thresholds, and temporal alignment (see §11).
+- **Instrument reclassification**: `ticker_type` column on `company_profiles` distinguishes `EQUITY`/`FOREIGN`/`FUND`/`ETF`/`INDEX`. Derived from EDGAR form types via `scripts/enrich_ticker_types_edgar.py`; audit trail at `logs/data_quality/ticker_type_reclass.jsonl`. Non-EQUITY types are excluded from fundamentals fetch and staleness checks automatically.
+- **Auditing**: `tools/run_all_audits.py` enforces SLAs on data freshness, null thresholds, and temporal alignment (see §11). Runs daily as orchestrator Phase 8 (600s timeout, best-effort); reports at `data/audit_reports/audit_report_YYYYMMDD.json`.
 
 ### 3.4 Macro Data (Phase 1.4)
 
@@ -346,6 +355,10 @@ All experiments are logged to the `models` table in DuckDB. Key columns:
 | `feature_version` | Feature schema version (e.g. `v3.1`) |
 | `artifacts_path` | Filesystem path to model files |
 | `accuracy`, `weighted_f1`, `macro_f1` | Evaluation metrics |
+| `model_card_path` | Path to most recent model card HTML (populated by `ModelCardBuilder.render()`) |
+| `model_card_built_at` | Timestamp of most recent card build |
+
+**Promotion gate**: `ModelRegistry.set_prod()` calls `_warn_on_adverse_card()` — emits an advisory warning if the card is REJECT, PENDING, or stale (>7d), but does **not block** promotion. Hard blocking gates remain the `results.json` gate battery (calibration ECE, WF Sharpe, regime AUC, etc.). This is intentional: card thresholds are hand-calibrated and not validated enough to be a hard stop. See `docs/decision_log/2026-06-11_model_card_gate.md`.
 
 **Artifact layout** (written by `train_mfe_classifier.py`):
 ```
@@ -580,11 +593,16 @@ The coverage-gap alerts are the most operationally important: a partial yfinance
 
 ### 10.4 Dashboard
 
-`streamlit run scripts/dashboard.py`
+```bash
+streamlit run scripts/dashboard.py   # full local DB
+DASHBOARD_DB_PATH=data/dashboard.duckdb streamlit run scripts/dashboard.py  # slim DB
+```
 
-Four sections: M03 Regime Header (composite score + pillar metrics), M01 Signal Summary (class distribution across active trades), Screener Watchlist Table (filterable, with M01 class probabilities per trade), and Analytics (win rate, avg return, trade age chart, sector concentration).
+Multi-page Streamlit app. Pages: Today (`dashboard.py`), Dataset EDA (`pages/1_Dataset_EDA.py`), Model Lab (`pages/3_Model_Lab.py`), Backtest Studio (`pages/4_Backtest_Studio.py`), Pipeline Health (`pages/5_Pipeline_Health.py`).
 
-**Data flow**: Active trades from `screener_watchlist` → joined to latest `v_d3_deployment` features → M01 `predict_proba()` → 4-class softmax probabilities displayed per trade.
+**Slim dashboard DB** (`data/dashboard.duckdb`): 783 MB replica of the tables the dashboard actually reads (98.8% reduction from 67 GB). Built by `scripts/build_dashboard_db.py`; rebuilt nightly by orchestrator Phase 7.5. Set `DASHBOARD_DB_PATH=data/dashboard.duckdb` to use it. The main DB remains the source of truth for all pipeline writes.
+
+**Decision Log** (Page 1): `daily_predictions` table logs every SEPA candidate scored by the prod model each day (point-in-time paper-trade record). Page 1 surfaces today's predictions with a toggle to mark `taken`/`skipped`. Past decisions joined to outcomes via `screener_watchlist`.
 
 ### 10.4 Cache & Report Locations
 
@@ -653,11 +671,11 @@ Key checks: all 144 columns present, `feature_version = 'v3.1'` for all rows, 19
 
 ### Deactivate (delisted / acquired)
 
-Sets `is_active = FALSE`, `delisting_date = CURRENT_DATE` in `company_profiles`. Preserves all historical rows. Halts future ingestion.
+Sets `is_active = FALSE`, `delisting_date = CURRENT_DATE` in `company_profiles`. Preserves all historical rows. Halts future ingestion. `--reason` is required with `--execute`; each deactivation writes a JSONL row to `logs/data_quality/deactivations.jsonl`.
 
 ```bash
-python tools/deactivate_tickers.py FPAY IMAB ZYXI           # dry-run
-python tools/deactivate_tickers.py FPAY IMAB ZYXI --execute  # apply
+python tools/deactivate_tickers.py --tickers FPAY IMAB ZYXI --reason "confirmed delisted yfinance"          # dry-run
+python tools/deactivate_tickers.py --tickers FPAY IMAB ZYXI --reason "confirmed delisted yfinance" --execute # apply
 ```
 
 ### Rename (symbol change or merger)
@@ -850,7 +868,104 @@ This increments all tables by one trading day, updates `sepa_watchlist`, appends
 
 ---
 
-## 15. Known Tech Debt & Future Work
+## 15. Model Development Lifecycle
+
+This section documents the decision framework for developing a new model from idea to deployment. Follow this sequence — skipping steps (especially backtesting before passing the model card) manufactures false confidence.
+
+```
+IDEA → Step 1: Target Selection
+     → Step 2: Feature Selection
+     → Step 3: Training
+     → Step 4: Evaluation & Model Card
+     → Step 5: Easy Fixes (if MARGINAL)
+     → Step 6: Backtest (only after card PASSES)
+     → Step 7: Deployment
+```
+
+### Step 1: Target Selection
+
+Answer before writing any code:
+- **What is the model trying to do?** Selection (which setup?) vs. Timing (when?) vs. Sizing (how much?). `m01_prototype` is a selection filter — it never ranked trades well (horizon-invariant; 1d and 20d scores correlate at 0.92).
+- **2-class or 4-class?** 2-class (binary home-run threshold) is simpler, trains faster, and the card's calibration gate is achievable. 4-class gives more signal nuance but fails calibration easily on imbalanced classes. Start binary unless you have a specific reason for 4-class.
+- **What horizon?** MFE is measured over the SEPA holding period (not a fixed N days) — this is already baked into the label registry. Don't create a fixed-horizon label without a good reason; it introduces lookahead when sessions are still open at horizon cutoff.
+- **What is the base rate?** Check `d2_training_cache`: `SELECT AVG(mfe_pct > 0.30)` for the home-run rate. Below ~10% base rate → class imbalance will dominate; plan for `scale_pos_weight` or `class_weight='balanced'`.
+
+### Step 2: Feature Selection
+
+Sources: `daily_features` (149 cols), `model_feature_sets` table (registered groups for M01).
+
+Decision criteria:
+- **Mutual Information / IC** — visible in the EDA report (Page 1 Dataset EDA → Feature Signal). Features with near-zero IC across deciles are noise.
+- **Multicollinearity** — drop one of any pair with |ρ| > 0.85. The hierarchical cluster plot in the EDA report shows natural groups.
+- **Phase leakage** — all features in `t3_sepa_features` are point-in-time safe. If you derive a new feature, run `LeakageGuard` before training.
+- **Fundamentals** — available but sparse (~40% null rate for recent quarters). XGBoost handles NULLs natively; include them, but watch the null fraction in the pretrain audit.
+- `sector`/`industry` — always include as XGBoost categoricals (`enable_categorical=True`). Do not integer-encode.
+
+### Step 3: Training
+
+```bash
+python scripts/train_mfe_classifier.py \
+    --feature-set fs_m01_prototype \
+    --model-name m01_<name> \
+    --label-id mfe_binary_homerun_v1 \
+    --no-holdout --walk-forward \
+    --with-regime-decomp --with-calibration
+```
+
+Use chronological 60/20/20 for exploration; `--no-holdout` (85/15) for the final production candidate. Always pass `--walk-forward` — the WF gates are what the card evaluates.
+
+### Step 4: Evaluation & Model Card
+
+```bash
+python scripts/build_model_card.py --model m01_<name>/<version>
+```
+
+Read the card verdict for the *intended use case*:
+- **PASS** → proceed to Step 6.
+- **MARGINAL** → Step 5, then re-run card once.
+- **REJECT** → go back to Step 1 or 2. The problem is structural. **Do not backtest a REJECT model** — the backtest will find a strategy that works on bad probabilities.
+
+Current use cases in the card: `composite_gate_plus_rank`, `threshold_gate` (`["A","E","G"]` — Section C not required, see decision log), `human_screener`, `hit_rate_ranker_equal_size`.
+
+Current prod model findings for reference: AUC 0.773 vs SEPA baseline 0.594 (Section G PASS); calibration ECE 0.132 (gate requires <0.05 — FAIL). The real edge exists; calibration is the open problem.
+
+### Step 5: Easy Fixes (MARGINAL cards only)
+
+Attempt at most 2–3 iterations. Common fixes:
+- **Calibration failing**: try `--with-calibration` (Isotonic). If ECE stays >0.05, the score distribution is bimodal — no calibrator fixes that; revisit label design.
+- **E2 trade frequency failing** (too few trades at T*): lower T* threshold, or add a `human_screener` use case that relaxes frequency. Do not just tune the threshold to pass the gate without understanding why frequency is low.
+- **Regime decomp failing**: one regime (usually Strong Bear) has AUC < 0.50. Check if Strong Bear samples are too few (<50 positives) — that's a data shape problem, not a model problem.
+
+### Step 6: Backtest
+
+Only run after the card PASSES for the intended use case.
+
+```bash
+python scripts/run_strategy_array.py \
+    --model-name m01_<name> --model-version v1 \
+    --start 2020-01-01 --end 2026-01-01 \
+    --strategies S1,S2,S3
+```
+
+The backtest is a **sanity check**, not an optimisation target. A model that passes the card should produce reasonable backtest metrics. If the backtest dramatically outperforms what the card predicted, you're overfitting to the train/test regime — investigate.
+
+Mode B (stateful daily pool via `run_deep_rigor_suite.py`) is appropriate for assessing how score trajectories evolve over a live SEPA session — see Sprint 12 T6.
+
+### Step 7: Deployment
+
+Prerequisites: card built within last 7 days; PASS or MARGINAL (with documented sign-off) for the deployed use case; `model_card_path` populated in registry.
+
+```python
+from src.model_registry import ModelRegistry
+ModelRegistry().set_prod('<version_id>')
+# → triggers _warn_on_adverse_card() (advisory); hard gate is results.json blocking checks
+```
+
+Post-deployment: `daily_predictions` logs every candidate scored; review at P ≥ 0.30 (consideration) or P ≥ 0.60 (high conviction). Monitor calibration drift quarterly via PSI report.
+
+---
+
+## 16. Known Tech Debt & Future Work
 
 ### Active Tech Debt
 
