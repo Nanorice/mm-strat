@@ -19,6 +19,16 @@ import xgboost as xgb
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Streamlit Cloud stores secrets in st.secrets, not os.environ. Bridge them
+# into os.environ so all downstream code (including _ensure_local_db) works
+# identically whether running locally (.env) or on Streamlit Cloud (secrets).
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str) and _k not in os.environ:
+            os.environ[_k] = _v
+except Exception:
+    pass  # st.secrets unavailable outside Streamlit context (tests, scripts)
+
 # DB path is configurable so the same app runs against the full local DB or a
 # slim, remote-synced dashboard.duckdb. Set DASHBOARD_DB_PATH (absolute, or
 # relative to repo root) to point at the slim DB. Default: full local DB.
