@@ -285,6 +285,15 @@ class DailyPipelineOrchestrator:
         run_stats['phase_7_5'] = phase_stats
         # Non-critical, continue even if failed
 
+        # Phase 7.6: Upload slim DB to R2 (best-effort; skipped if R2 creds absent)
+        phase_success, phase_stats = self._execute_phase(
+            "phase_7_6_r2_sync",
+            lambda: self._run_phase_7_6_r2_sync(),
+            target_date
+        )
+        run_stats['phase_7_6'] = phase_stats
+        # Non-critical, continue even if failed
+
         # Phase 8: Monitoring (ALWAYS RUN)
         phase_success, phase_stats = self._execute_phase(
             "phase_8_monitoring",
@@ -1123,6 +1132,42 @@ class DailyPipelineOrchestrator:
         out_db = project_root / "data" / "dashboard.duckdb"
         size_mb = out_db.stat().st_size / 1024 ** 2 if out_db.exists() else 0
         logger.info(f"[Phase 7.5] Slim dashboard DB rebuilt: {size_mb:,.0f} MB")
+        return {'rows_processed': 1}
+
+    def _run_phase_7_6_r2_sync(self) -> Dict:
+        """Phase 7.6: Upload data/dashboard.duckdb to Cloudflare R2.
+
+        Delegates to scripts/sync_dashboard_db.py. Skipped silently when R2
+        credentials are absent (so local-only runs are unaffected).
+        Best-effort: failure is logged but never halts the daily run.
+        """
+        import os
+        import subprocess
+        import sys
+
+        if not os.environ.get("R2_ACCOUNT_ID"):
+            logger.info("[Phase 7.6] R2 credentials absent; skipping upload")
+            return {'rows_processed': 0}
+
+        project_root = Path(__file__).resolve().parent.parent.parent
+        sync_script = project_root / "scripts" / "sync_dashboard_db.py"
+        if not sync_script.exists():
+            logger.warning(f"[Phase 7.6] Sync script not found: {sync_script}")
+            return {'rows_processed': 0}
+
+        proc = subprocess.run(
+            [sys.executable, str(sync_script), "--no-archive"],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(project_root),
+        )
+        if proc.returncode != 0:
+            logger.warning(
+                f"[Phase 7.6] R2 upload failed (rc={proc.returncode}): "
+                f"{proc.stderr.strip()[:500]}"
+            )
+            return {'rows_processed': 0}
+
+        logger.info("[Phase 7.6] dashboard.duckdb uploaded to R2 (latest/)")
         return {'rows_processed': 1}
 
     def _run_phase_10_model_card(self, target_date: str) -> Dict:
