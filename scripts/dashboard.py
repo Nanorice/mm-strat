@@ -12,6 +12,7 @@ Auth model:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from dashboard_utils import DB_PATH as _DB_PATH  # noqa: F401 — imported for debug sidebar
 from dashboard_utils import (
     CLASS_COLORS,
     CLASS_LABELS,
@@ -705,6 +707,9 @@ def render_past_decisions() -> None:
 
 def page_today() -> None:
     st.title("Quantamental — Today")
+
+    # TEMP DEBUG — remove once cloud deploy is confirmed working
+    st.caption(f"DB: `{_DB_PATH}` | exists={_DB_PATH.exists()} | R2={bool(os.environ.get('R2_ACCOUNT_ID'))}")
 
     render_pipeline_status(load_pipeline_status())
     st.markdown("---")

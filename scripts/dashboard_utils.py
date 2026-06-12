@@ -19,13 +19,18 @@ import xgboost as xgb
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Streamlit Cloud stores secrets in st.secrets, not os.environ. Bridge them
-# into os.environ so all downstream code (including _ensure_local_db) works
-# identically whether running locally (.env) or on Streamlit Cloud (secrets).
+# Streamlit Cloud stores secrets in st.secrets, not os.environ. Pull each key
+# we care about explicitly — iterating st.secrets can miss keys depending on
+# TOML structure.
+_SECRET_KEYS = (
+    "DASHBOARD_DB_PATH",
+    "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY",
+    "R2_BUCKET_NAME", "R2_JURI_ENDPOINT_URL",
+)
 try:
-    for _k, _v in st.secrets.items():
-        if isinstance(_v, str) and _k not in os.environ:
-            os.environ[_k] = _v
+    for _k in _SECRET_KEYS:
+        if _k not in os.environ and _k in st.secrets:
+            os.environ[_k] = str(st.secrets[_k])
 except Exception:
     pass  # st.secrets unavailable outside Streamlit context (tests, scripts)
 
