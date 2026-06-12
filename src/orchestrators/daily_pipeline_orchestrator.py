@@ -1156,7 +1156,7 @@ class DailyPipelineOrchestrator:
             return {'rows_processed': 0}
 
         proc = subprocess.run(
-            [sys.executable, str(sync_script), "--no-archive"],
+            [sys.executable, str(sync_script)],
             capture_output=True, text=True, timeout=300,
             cwd=str(project_root),
         )
