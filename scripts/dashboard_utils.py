@@ -42,7 +42,7 @@ def _ensure_local_db() -> None:
         R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
         DASHBOARD_DB_PATH  — local path where the pulled file is written
     """
-    if not os.environ.get("R2_ACCOUNT_ID"):
+    if not os.environ.get("R2_ACCOUNT_ID") or not os.environ.get("R2_ACCESS_KEY"):
         return  # local run — do nothing
 
     if not _db_env:
@@ -58,11 +58,12 @@ def _ensure_local_db() -> None:
     import boto3
 
     account_id = os.environ["R2_ACCOUNT_ID"]
+    endpoint = os.environ.get("R2_JURI_ENDPOINT_URL") or f"https://{account_id}.r2.cloudflarestorage.com"
     client = boto3.client(
         "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        endpoint_url=endpoint,
+        aws_access_key_id=os.environ["R2_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["R2_SECRET_KEY"],
         region_name="auto",
     )
     bucket = os.environ["R2_BUCKET_NAME"]

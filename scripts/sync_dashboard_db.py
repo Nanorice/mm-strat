@@ -31,18 +31,19 @@ def _r2_client():
     import boto3
 
     account_id = os.environ["R2_ACCOUNT_ID"]
+    endpoint = os.environ.get("R2_JURI_ENDPOINT_URL") or f"https://{account_id}.r2.cloudflarestorage.com"
     return boto3.client(
         "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        endpoint_url=endpoint,
+        aws_access_key_id=os.environ["R2_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["R2_SECRET_KEY"],
         region_name="auto",
     )
 
 
 def upload(db_path: Path, bucket: str, key: str, dry_run: bool) -> None:
     size_mb = db_path.stat().st_size / 1024 ** 2
-    print(f"  {'[DRY-RUN] ' if dry_run else ''}upload {db_path.name} ({size_mb:,.0f} MB) → s3://{bucket}/{key}")
+    print(f"  {'[DRY-RUN] ' if dry_run else ''}upload {db_path.name} ({size_mb:,.0f} MB) -> s3://{bucket}/{key}")
     if dry_run:
         return
     client = _r2_client()
@@ -65,7 +66,7 @@ def main() -> None:
         print(f"[ERR] DB not found: {args.db}")
         sys.exit(1)
 
-    missing = [k for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME") if not os.environ.get(k)]
+    missing = [k for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY", "R2_BUCKET_NAME") if not os.environ.get(k)]
     if missing:
         print(f"[ERR] Missing env vars: {', '.join(missing)}")
         sys.exit(1)
