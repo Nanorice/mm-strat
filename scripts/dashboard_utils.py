@@ -29,6 +29,49 @@ if _db_env:
 else:
     DB_PATH = ROOT / "data" / "market_data.duckdb"
 
+
+def _ensure_local_db() -> None:
+    """Pull dashboard.duckdb from R2 when running on Streamlit Cloud.
+
+    Only activates when R2_ACCOUNT_ID is present AND the target DB file is
+    missing or stale (>23h old). This makes the cloud host self-healing: on
+    every cold start it pulls the latest slim DB that the dev box uploaded
+    overnight.
+
+    Env vars required (set in Streamlit Cloud secrets):
+        R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
+        DASHBOARD_DB_PATH  — local path where the pulled file is written
+    """
+    if not os.environ.get("R2_ACCOUNT_ID"):
+        return  # local run — do nothing
+
+    if not _db_env:
+        return  # no explicit DB path configured, nothing to pull to
+
+    import time
+
+    target = DB_PATH
+    # Pull if missing or older than 23h (nightly upload lands ~1h after midnight)
+    if target.exists() and (time.time() - target.stat().st_mtime) < 23 * 3600:
+        return
+
+    import boto3
+
+    account_id = os.environ["R2_ACCOUNT_ID"]
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        region_name="auto",
+    )
+    bucket = os.environ["R2_BUCKET_NAME"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, "latest/dashboard.duckdb", str(target))
+
+
+_ensure_local_db()
+
 # ── M01 class taxonomy ────────────────────────────────────────────────────────
 
 CLASS_LABELS = ["Noise (0-2%)", "Moderate (2-10%)", "Strong (10-30%)", "Home Run (>30%)"]
