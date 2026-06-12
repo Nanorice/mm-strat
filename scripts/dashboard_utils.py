@@ -243,6 +243,38 @@ def load_deployment_features() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
+    """Watchlist rows joined with latest daily_predictions scores.
+
+    Replaces live model scoring on the dashboard — scores are pre-computed by
+    the nightly universe scorer and stored in daily_predictions, so the model
+    file never needs to exist on the serving host.
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute("""
+            SELECT
+                sw.ticker, sw.company_name, sw.sector, sw.industry,
+                sw.market_cap, sw.entry_date, sw.entry_price,
+                sw.exit_date, sw.status, sw.close_price, sw.price_date,
+                sw.pct_return, sw.days_held, sw.refreshed_at,
+                dp.prob_class_0, dp.prob_class_1, dp.prob_class_2, dp.prob_class_3,
+                dp.predicted_class, dp.rank_within_day, dp.prediction_date
+            FROM screener_watchlist sw
+            LEFT JOIN daily_predictions dp
+                ON dp.ticker = sw.ticker
+               AND dp.model_version_id = ?
+               AND dp.prediction_date = (
+                   SELECT MAX(prediction_date) FROM daily_predictions
+                   WHERE model_version_id = ?
+               )
+            ORDER BY sw.entry_date DESC, sw.ticker
+        """, [model_version_id, model_version_id]).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_pipeline_status(limit: int = 20) -> pd.DataFrame:
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:

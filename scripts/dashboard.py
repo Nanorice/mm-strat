@@ -45,6 +45,7 @@ from dashboard_utils import (
     load_prod_model_version_id,
     load_regime,
     load_risk_5f,
+    load_scored_watchlist,
     load_sector_heat,
     load_watchlist,
     score_features_df,
@@ -725,11 +726,10 @@ def page_today() -> None:
 
     st.markdown("---")
 
-    # Active trades
-    watchlist = load_watchlist()
-    deployment = load_deployment_features()
-    scored = score_active_trades(watchlist, deployment)
-    render_watchlist_table(scored, watchlist)
+    # Active trades — scores from daily_predictions (no model file needed)
+    version_id = load_prod_model_version_id()
+    scored = load_scored_watchlist(version_id) if version_id else load_watchlist()
+    render_watchlist_table(scored, scored)
 
     st.markdown("---")
 
