@@ -29,6 +29,7 @@ scikit-learn>=1.3.0
 
 # Database
 # sqlite3 (built-in to Python)
+duckdb>=0.10.0
 
 # Object storage (Cloudflare R2 / S3-compatible)
 boto3>=1.34.0
