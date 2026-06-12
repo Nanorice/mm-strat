@@ -31,13 +31,17 @@ try:
     for _k in _SECRET_KEYS:
         if _k not in os.environ and _k in st.secrets:
             os.environ[_k] = str(st.secrets[_k])
-except Exception:
-    pass  # st.secrets unavailable outside Streamlit context (tests, scripts)
+except Exception as _e:
+    st.warning(f"[DEBUG] secrets bridge failed: {_e!r} | keys seen: {list(st.secrets.keys()) if hasattr(st, 'secrets') else 'N/A'}")
 
 # DB path is configurable so the same app runs against the full local DB or a
 # slim, remote-synced dashboard.duckdb. Set DASHBOARD_DB_PATH (absolute, or
 # relative to repo root) to point at the slim DB. Default: full local DB.
 _db_env = os.environ.get("DASHBOARD_DB_PATH")
+try:
+    st.write(f"[DEBUG] DASHBOARD_DB_PATH env='{_db_env}' | secret='{st.secrets.get('DASHBOARD_DB_PATH', 'NOT FOUND')}'")
+except Exception:
+    pass
 if _db_env:
     _db = Path(_db_env)
     DB_PATH = _db if _db.is_absolute() else ROOT / _db
