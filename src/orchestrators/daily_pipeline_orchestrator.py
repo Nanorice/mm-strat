@@ -1126,12 +1126,16 @@ class DailyPipelineOrchestrator:
         return {'rows_processed': 1}
 
     def _run_phase_10_model_card(self, target_date: str) -> Dict:
-        """Phase 10: Advisory rebuild of the model card for the prod model.
+        """Phase 10: Advisory weekly DRIFT card for the prod model.
 
-        Freshness gate: skip if the prod model already has a card built within
-        the last 7 days. Otherwise rebuild via scripts/build_model_card.py in a
-        subprocess (own read-only ATTACH; no contention) and register the path
-        back to the models row. Best-effort — failures WARN, never halt.
+        Builds a trailing-window (1-year) card that re-tests the FROZEN prod
+        model against recent data, so behavioral drift is not drowned out by
+        20+ years of history. This is a monitoring artifact and is registered
+        to model_card_drift_path — it does NOT overwrite model_card_path, which
+        is the authoritative full-history promotion-gate card.
+
+        Freshness gate: skip if a drift card was built within the last 7 days.
+        Best-effort — failures WARN, never halt the pipeline.
         """
         import subprocess
         import sys
@@ -1145,7 +1149,7 @@ class DailyPipelineOrchestrator:
             logger.info("[Phase 10] No prod model registered; skipping card build.")
             return {'rows_processed': 0, 'status': 'no_prod_model'}
 
-        info = registry.get_model_card_info(prod_version)
+        info = registry.get_drift_card_info(prod_version)
         if info and info.get("built_at") is not None:
             built_at = info["built_at"]
             if isinstance(built_at, str):
@@ -1155,7 +1159,7 @@ class DailyPipelineOrchestrator:
                     built_at = None
             if built_at is not None and (_dt.utcnow() - built_at) < _td(days=7):
                 logger.info(
-                    f"[Phase 10] Card for {prod_version} is fresh "
+                    f"[Phase 10] Drift card for {prod_version} is fresh "
                     f"(built {built_at}); skipping rebuild."
                 )
                 return {'rows_processed': 0, 'status': 'fresh'}
@@ -1166,30 +1170,61 @@ class DailyPipelineOrchestrator:
             logger.warning(f"[Phase 10] Build script not found: {build_script}")
             return {'rows_processed': 0, 'status': 'no_script'}
 
+        # Resolve the clean '<name>/<version>' slug (maps to models/<name>/<version>/
+        # model.json and yields a clean card filename) rather than the timestamped
+        # version_id, which build_model_card.py cannot resolve.
+        try:
+            model_slug = registry.get_model_slug(prod_version)
+        except ValueError as e:
+            logger.warning(f"[Phase 10] {e}")
+            return {'rows_processed': 0, 'status': 'no_model_slug'}
+
+        # Trailing 1-year drift window. ~603K SEPA rows over 1y keeps Section G
+        # well-powered. FUTURE: recency-weighted bootstrap instead of a hard
+        # cutoff (see docs/proposals/model_card_drift_window.md).
+        end_dt = _dt.strptime(target_date, "%Y-%m-%d")
+        start_date = (end_dt - _td(days=365)).strftime("%Y-%m-%d")
+        slug = model_slug.replace("/", "_")
+        out_html = project_root / "model_cards" / f"{slug}_drift.html"
+
+        # NOTE: no --register-version (that writes model_card_path, the gate card).
+        # Phase 10 registers the drift path itself after a clean exit.
         cmd = [
             sys.executable, str(build_script),
-            "--model", prod_version,
+            "--model", model_slug,
             "--db", self.db_path,
-            "--register-version", prod_version,
+            "--output", str(out_html),
+            "--start-date", start_date,
+            "--end-date", target_date,
             "--skip-sepa-match",
         ]
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600,
+                cmd, capture_output=True, text=True, timeout=1800,
                 cwd=str(project_root),
             )
         except subprocess.TimeoutExpired:
-            logger.warning("[Phase 10] Model card build timed out after 600s")
+            logger.warning("[Phase 10] Drift card build timed out after 1800s")
             return {'rows_processed': 0, 'status': 'timeout'}
 
         if proc.returncode != 0:
             logger.warning(
-                f"[Phase 10] Model card build failed (rc={proc.returncode}): "
+                f"[Phase 10] Drift card build failed (rc={proc.returncode}): "
                 f"{proc.stderr.strip()[:500]}"
             )
             return {'rows_processed': 0, 'status': 'build_failed'}
 
-        logger.info(f"[Phase 10] Rebuilt model card for {prod_version}")
+        # build_model_card.py derives the JSON path from --output by suffix swap.
+        card_json = out_html.with_suffix(".json")
+        registry.register_drift_card(
+            version_id=prod_version,
+            card_path=str(card_json),
+            built_at=_dt.utcnow().isoformat(timespec="seconds") + "Z",
+        )
+        logger.info(
+            f"[Phase 10] Rebuilt drift card ({start_date}..{target_date}) "
+            f"for {prod_version}"
+        )
         return {'rows_processed': 1, 'status': 'rebuilt'}
 
     def _run_phase_8_monitoring(self, target_date: str, run_stats: Dict) -> Dict:

@@ -474,6 +474,50 @@ class ModelRegistry:
         finally:
             con.close()
 
+    def register_drift_card(
+        self, version_id: str, card_path: str, built_at: Optional[str] = None
+    ) -> None:
+        """Write the trailing-window drift card path + build time on the models row.
+
+        Separate from register_model_card(): the drift card is a recency-focused
+        monitoring artifact and must NOT overwrite model_card_path, which is the
+        full-history promotion-gate card.
+        """
+        con = duckdb.connect(self.db_path)
+        try:
+            if built_at is None:
+                con.execute(
+                    "UPDATE models SET model_card_drift_path = ?, "
+                    "model_card_drift_built_at = CURRENT_TIMESTAMP, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE version_id = ?",
+                    [card_path, version_id],
+                )
+            else:
+                con.execute(
+                    "UPDATE models SET model_card_drift_path = ?, "
+                    "model_card_drift_built_at = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE version_id = ?",
+                    [card_path, built_at, version_id],
+                )
+            logger.info(f"[OK] Registered drift card for {version_id}: {card_path}")
+        finally:
+            con.close()
+
+    def get_drift_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
+        """Return {'path', 'built_at'} for the version's drift card, or None."""
+        con = duckdb.connect(self.db_path)
+        try:
+            row = con.execute(
+                "SELECT model_card_drift_path, model_card_drift_built_at FROM models "
+                "WHERE version_id = ?",
+                [version_id],
+            ).fetchone()
+            if not row or row[0] is None:
+                return None
+            return {"path": row[0], "built_at": row[1]}
+        finally:
+            con.close()
+
     def get_model_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
         """Return {'path', 'built_at'} for the version's card, or None if unset."""
         con = duckdb.connect(self.db_path)
@@ -498,6 +542,27 @@ class ModelRegistry:
             if not result:
                 raise ValueError(f"Model version not found: {version_id}")
             return Path(result[0])
+        finally:
+            con.close()
+
+    def get_model_slug(self, version_id: str) -> str:
+        """Return the '<model_name>/<model_version>' slug for a version_id.
+
+        This is the resolvable model id consumed by build_model_card.py
+        (maps to models/<name>/<version>/model.json) and yields a clean card
+        filename — unlike a raw file path or the timestamped version_id.
+        """
+        con = duckdb.connect(self.db_path)
+        try:
+            row = con.execute(
+                "SELECT model_name, model_version FROM models WHERE version_id = ?",
+                [version_id],
+            ).fetchone()
+            if not row or row[0] is None or row[1] is None:
+                raise ValueError(
+                    f"Model name/version unset for version_id={version_id}"
+                )
+            return f"{row[0]}/{row[1]}"
         finally:
             con.close()
 

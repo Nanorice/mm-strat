@@ -114,6 +114,9 @@ buy_list_export.csv
 # Keep: documented fixes and summaries that are final
 # Ignore: work-in-progress investigation notes
 
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
+
 # Auto-generated model artifacts and temp files
 models/m01_baseline_*/
 models/m01_prototype*/

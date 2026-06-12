@@ -105,3 +105,9 @@ Do this last (after T1–T3), so the doc reflects any discoveries made during in
 - [ ] Audit script timeout: `tools/run_all_audits.py:51` 120s → 600s (trivial, do whenever touching that file)
 - [ ] `trend_c8` CTE rename to `trend_exit`
 - [ ] Cross-sectional casing in `COLUMN_CASE_MAP` (`rs_sector_rank` etc.)
+
+
+## Daily To Do
+- [ ] Try dashboard remote
+- [ ] Figure out data sync
+- 
