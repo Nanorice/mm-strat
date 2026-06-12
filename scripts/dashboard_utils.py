@@ -33,13 +33,12 @@ else:
 def _ensure_local_db() -> None:
     """Pull dashboard.duckdb from R2 when running on Streamlit Cloud.
 
-    Only activates when R2_ACCOUNT_ID is present AND the target DB file is
-    missing or stale (>23h old). This makes the cloud host self-healing: on
-    every cold start it pulls the latest slim DB that the dev box uploaded
-    overnight.
+    Downloads when: file is missing, local size doesn't match R2, or file is
+    >23h old. Downloads atomically (temp file + rename) so a failed download
+    never leaves a truncated DB behind.
 
     Env vars required (set in Streamlit Cloud secrets):
-        R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
+        R2_ACCOUNT_ID, R2_ACCESS_KEY, R2_SECRET_KEY, R2_BUCKET_NAME
         DASHBOARD_DB_PATH  — local path where the pulled file is written
     """
     if not os.environ.get("R2_ACCOUNT_ID") or not os.environ.get("R2_ACCESS_KEY"):
@@ -50,13 +49,9 @@ def _ensure_local_db() -> None:
 
     import time
 
-    target = DB_PATH
-    # Pull if missing or older than 23h (nightly upload lands ~1h after midnight)
-    if target.exists() and (time.time() - target.stat().st_mtime) < 23 * 3600:
-        return
-
     import boto3
 
+    target = DB_PATH
     account_id = os.environ["R2_ACCOUNT_ID"]
     endpoint = os.environ.get("R2_JURI_ENDPOINT_URL") or f"https://{account_id}.r2.cloudflarestorage.com"
     client = boto3.client(
@@ -67,8 +62,29 @@ def _ensure_local_db() -> None:
         region_name="auto",
     )
     bucket = os.environ["R2_BUCKET_NAME"]
+
+    # Check R2 object size
+    head = client.head_object(Bucket=bucket, Key="latest/dashboard.duckdb")
+    r2_size = head["ContentLength"]
+
+    # Skip if local file matches R2 size and is fresh (<23h)
+    if (
+        target.exists()
+        and target.stat().st_size == r2_size
+        and (time.time() - target.stat().st_mtime) < 23 * 3600
+    ):
+        return
+
+    # Download atomically: write to .tmp then rename
     target.parent.mkdir(parents=True, exist_ok=True)
-    client.download_file(bucket, "latest/dashboard.duckdb", str(target))
+    tmp = target.with_suffix(".tmp")
+    try:
+        client.download_file(bucket, "latest/dashboard.duckdb", str(tmp))
+        tmp.rename(target)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise
 
 
 _ensure_local_db()
