@@ -32,7 +32,10 @@ def _model_card_slug(artifacts_path: str | None) -> str | None:
     """
     if not artifacts_path:
         return None
-    parts = Path(artifacts_path).parts
+    # Normalize backslashes first: registry rows from the Windows dev box store
+    # backslash paths, which a PosixPath on the cloud host treats as ONE part
+    # (slug -> None). Mirror _resolve_artifacts_dir's normalization.
+    parts = Path(artifacts_path.replace("\\", "/")).parts
     if len(parts) < 2:
         return None
     return f"{parts[-2]}_{parts[-1]}"

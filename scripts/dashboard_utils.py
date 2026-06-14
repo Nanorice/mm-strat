@@ -111,14 +111,23 @@ _ASSET_DIRS: list[tuple[Path, str]] = [
 ]
 
 
+# Per-dir outcome of the last _ensure_asset_dirs() run, surfaced by the
+# Pipeline Health debug expander. One record per asset dir:
+#   {"prefix", "pulled", "skipped", "exists", "error"}
+ASSET_PULL_DIAG: list[dict] = []
+
+
 def _ensure_asset_dirs() -> None:
     """Pull the dashboard's disk-file asset dirs from R2 on Streamlit Cloud.
 
     Each dir is mirrored from latest/<prefix>/ preserving relative paths. Best-
     effort and per-dir freshness-gated (>23h) so a cold start re-pulls but warm
     reruns don't. Failures never block the app — the reading pages degrade to a
-    'not available' message. No-op on local runs.
+    'not available' message. No-op on local runs. Per-dir results land in
+    ASSET_PULL_DIAG so the Pipeline Health page can show what actually happened
+    on the cloud host (the failure mode is invisible otherwise).
     """
+    ASSET_PULL_DIAG.clear()
     if not _on_cloud():
         return
 
@@ -127,11 +136,15 @@ def _ensure_asset_dirs() -> None:
     try:
         client = _r2_client()
         bucket = os.environ["R2_BUCKET_NAME"]
-    except Exception:
+    except Exception as e:
+        ASSET_PULL_DIAG.append({"prefix": "<client>", "pulled": 0,
+                                "skipped": False, "exists": False, "error": repr(e)})
         return
 
     paginator = client.get_paginator("list_objects_v2")
     for local_dir, prefix in _ASSET_DIRS:
+        rec = {"prefix": prefix, "pulled": 0, "skipped": False,
+               "exists": False, "error": None}
         try:
             # Freshness gate keyed on a sentinel marker that ONLY this pull writes
             # — NOT on file mtimes. Git may deploy a stale/partial subset of these
@@ -141,6 +154,8 @@ def _ensure_asset_dirs() -> None:
             # cold cloud boot always pulls.
             marker = local_dir / ".r2_synced"
             if marker.exists() and (time.time() - marker.stat().st_mtime) < 23 * 3600:
+                rec["skipped"] = True
+                rec["exists"] = local_dir.exists()
                 continue  # pulled within 23h — skip
             for page in paginator.paginate(Bucket=bucket, Prefix=f"latest/{prefix}/"):
                 for obj in page.get("Contents", []):
@@ -150,10 +165,18 @@ def _ensure_asset_dirs() -> None:
                     dest = local_dir / rel
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     client.download_file(bucket, obj["Key"], str(dest))
+                    rec["pulled"] += 1
             local_dir.mkdir(parents=True, exist_ok=True)
-            marker.touch()  # record a successful pull
-        except Exception:
-            continue  # best-effort per dir
+            rec["exists"] = local_dir.exists()
+            # Only set the 23h sentinel if we actually pulled something. An empty
+            # listing (transient R2 hiccup, wrong prefix) would otherwise cache an
+            # empty dir for 23h and starve the reading pages.
+            if rec["pulled"] > 0:
+                marker.touch()
+        except Exception as e:
+            rec["error"] = repr(e)  # surface, don't swallow — still non-fatal
+        finally:
+            ASSET_PULL_DIAG.append(rec)
 
 
 _ensure_local_db()

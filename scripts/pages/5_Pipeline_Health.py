@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import (
+    ASSET_PULL_DIAG,
     load_data_freshness,
     load_fundamentals_volume_by_quarter,
     load_latest_fundamentals_snapshot,
@@ -516,10 +517,32 @@ def render_storage() -> None:
 
 # ── Page entrypoint ──────────────────────────────────────────────────────────
 
+def render_asset_pull_diag() -> None:
+    """Surface the R2 asset-pull outcome (cloud only). The pull is best-effort
+    and was previously silent, so a cloud-side failure left model cards/artifacts
+    absent with no trace. ASSET_PULL_DIAG is empty on local runs → render nothing.
+    """
+    if not ASSET_PULL_DIAG:
+        return
+    err = any(r["error"] for r in ASSET_PULL_DIAG)
+    label = "🔧 R2 asset pull — diagnostics" + ("  ⚠️ errors" if err else "")
+    with st.expander(label, expanded=err):
+        df = pd.DataFrame(ASSET_PULL_DIAG)[
+            ["prefix", "pulled", "skipped", "exists", "error"]
+        ]
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.caption(
+            "pulled = files fetched this boot · skipped = sentinel <23h (no pull) · "
+            "exists = dir present after · error = swallowed exception (still non-fatal). "
+            "All zeros + no error usually means the sentinel skipped a stale pull."
+        )
+
+
 st.title("Pipeline Health")
 st.caption("Daily ops dashboard — spot drift, freshness issues, and audit "
            "regressions before they propagate.")
 
+render_asset_pull_diag()
 render_data_flow_diagram()
 st.markdown("---")
 render_runs_heatmap(load_pipeline_runs_window(days=30))
