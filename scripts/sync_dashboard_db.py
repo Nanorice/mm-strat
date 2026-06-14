@@ -39,9 +39,11 @@ ASSET_DIRS: list[tuple[Path, str, tuple[str, ...]]] = [
     (PROJECT_ROOT / "model_cards",        "model_cards",   (".html", ".json")),
     (PROJECT_ROOT / "data" / "audit_reports", "audit_reports", (".json",)),
     (PROJECT_ROOT / "docs" / "reports",   "docs_reports",  (".html",)),
-    # Model artifact plots/reports for the Model Lab plot tabs. Excludes
-    # model.json (the weights) by suffix allow-list.
-    (PROJECT_ROOT / "models",             "model_artifacts", (".png", ".html", ".csv", ".txt")),
+    # Model artifact plots/reports for the Model Lab plot + report tabs. Includes
+    # .md/.json reports (results.json, diffs, report_*.md) but NOT model.json —
+    # the weights are filtered by name in upload_asset_dir so live-scoring can't
+    # be resurrected on the serving host.
+    (PROJECT_ROOT / "models",             "model_artifacts", (".png", ".html", ".csv", ".txt", ".md", ".json")),
 ]
 
 
@@ -84,9 +86,12 @@ def upload_asset_dir(local_dir: Path, r2_prefix: str, suffixes: tuple[str, ...],
     if not local_dir.exists():
         print(f"  [SKIP] {local_dir.name}/ not found")
         return 0
+    # model.json is the trained weights — never ship it (keeps the serving host
+    # read-only and stops live-scoring creeping back). All other .json (cards,
+    # results, diffs) are fine.
     files = sorted(
         f for f in local_dir.rglob("*")
-        if f.is_file() and f.suffix.lower() in suffixes
+        if f.is_file() and f.suffix.lower() in suffixes and f.name != "model.json"
     )
     if not files:
         print(f"  [SKIP] {local_dir.name}/ — no matching files")

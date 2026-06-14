@@ -133,9 +133,15 @@ def _ensure_asset_dirs() -> None:
     paginator = client.get_paginator("list_objects_v2")
     for local_dir, prefix in _ASSET_DIRS:
         try:
-            existing = [f for f in local_dir.rglob("*") if f.is_file()] if local_dir.exists() else []
-            if existing and (time.time() - max(f.stat().st_mtime for f in existing)) < 23 * 3600:
-                continue  # fresh — skip
+            # Freshness gate keyed on a sentinel marker that ONLY this pull writes
+            # — NOT on file mtimes. Git may deploy a stale/partial subset of these
+            # dirs (e.g. card .json files are tracked, .html are not); an mtime gate
+            # would see those fresh files and skip the R2 pull, leaving the .html
+            # (what Model Lab renders) absent. The marker is git-ignored, so a
+            # cold cloud boot always pulls.
+            marker = local_dir / ".r2_synced"
+            if marker.exists() and (time.time() - marker.stat().st_mtime) < 23 * 3600:
+                continue  # pulled within 23h — skip
             for page in paginator.paginate(Bucket=bucket, Prefix=f"latest/{prefix}/"):
                 for obj in page.get("Contents", []):
                     rel = obj["Key"].split(f"latest/{prefix}/", 1)[-1]
@@ -144,6 +150,8 @@ def _ensure_asset_dirs() -> None:
                     dest = local_dir / rel
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     client.download_file(bucket, obj["Key"], str(dest))
+            local_dir.mkdir(parents=True, exist_ok=True)
+            marker.touch()  # record a successful pull
         except Exception:
             continue  # best-effort per dir
 
