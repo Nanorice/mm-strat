@@ -10,7 +10,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.evaluation.prediction_logger import ensure_schema, log_daily_predictions
+from src.evaluation.prediction_logger import (
+    _migrate_add_cohort,
+    ensure_schema,
+    log_daily_predictions,
+)
 
 
 def _make_predictions(n: int = 50, seed: int = 0) -> pd.DataFrame:
@@ -130,6 +134,63 @@ def test_missing_production_class_column_raises(tmp_path: Path):
             model_version_id="M01_v0.1", predictions=bad,
             production_class_idx=3,
         )
+
+
+def test_two_cohorts_coexist_same_date_ticker(tmp_path: Path):
+    """Same (date, ticker, model) under two cohorts → two distinct rows."""
+    db = tmp_path / "pred.duckdb"
+    preds = _make_predictions(n=10, seed=3)
+    log_daily_predictions(db_path=db, prediction_date=date(2026, 5, 23),
+                          model_version_id="M01_v0.1", predictions=preds, cohort="breakout")
+    log_daily_predictions(db_path=db, prediction_date=date(2026, 5, 23),
+                          model_version_id="M01_v0.1", predictions=preds, cohort="pre_breakout")
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        n = con.execute("SELECT COUNT(*) FROM daily_predictions").fetchone()[0]
+        cohorts = {r[0] for r in con.execute("SELECT DISTINCT cohort FROM daily_predictions").fetchall()}
+    finally:
+        con.close()
+    assert n == 20  # 10 per cohort, no PK collision
+    assert cohorts == {"breakout", "pre_breakout"}
+
+
+def test_invalid_cohort_raises(tmp_path: Path):
+    db = tmp_path / "pred.duckdb"
+    with pytest.raises(ValueError, match="cohort must be"):
+        log_daily_predictions(db_path=db, prediction_date=date(2026, 5, 23),
+                              model_version_id="M01_v0.1",
+                              predictions=_make_predictions(n=3), cohort="bogus")
+
+
+def test_legacy_table_migrates_to_breakout(tmp_path: Path):
+    """A pre-cohort table is rebuilt with cohort='breakout' for existing rows."""
+    db = tmp_path / "pred.duckdb"
+    # Simulate the OLD schema (no cohort column, old PK).
+    con = duckdb.connect(str(db))
+    try:
+        con.execute("""
+            CREATE TABLE daily_predictions (
+                prediction_date DATE NOT NULL, ticker VARCHAR NOT NULL,
+                model_version_id VARCHAR NOT NULL,
+                prob_class_0 DOUBLE, prob_class_1 DOUBLE,
+                prob_class_2 DOUBLE, prob_class_3 DOUBLE,
+                predicted_class INTEGER, rank_within_day INTEGER,
+                decision_taken VARCHAR, taken_at TIMESTAMP, notes VARCHAR,
+                ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (prediction_date, ticker, model_version_id)
+            )""")
+        con.execute("""INSERT INTO daily_predictions
+            (prediction_date, ticker, model_version_id, prob_class_3, predicted_class, rank_within_day)
+            VALUES ('2026-05-01', 'AAPL', 'M01_v0.1', 0.9, 3, 1)""")
+        _migrate_add_cohort(con)
+        cols = {r[1] for r in con.execute("PRAGMA table_info('daily_predictions')").fetchall()}
+        cohort = con.execute("SELECT cohort FROM daily_predictions WHERE ticker='AAPL'").fetchone()[0]
+        # Second call must be a no-op (idempotent), not re-trigger the rebuild.
+        _migrate_add_cohort(con)
+    finally:
+        con.close()
+    assert "cohort" in cols
+    assert cohort == "breakout"
 
 
 def test_decision_taken_defaults_to_null(tmp_path: Path):

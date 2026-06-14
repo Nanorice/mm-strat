@@ -274,6 +274,18 @@ class DailyPipelineOrchestrator:
             self.run_manager.record_write('d2_training_cache', phase_stats['rows_processed'], 'phase_7_cache')
         # Non-critical, continue even if failed
 
+        # Phase 7.4: Prod-model scoring (best-effort). Materializes today's scores
+        # into daily_predictions for BOTH cohorts BEFORE the slim DB is built/
+        # uploaded, so the dashboard reads fresh, materialized scores (never live).
+        phase_success, phase_stats = self._execute_phase(
+            "phase_7_4_scoring",
+            lambda: self._run_phase_7_4_scoring(target_date),
+            target_date,
+            skip_idempotency_check=True,
+        )
+        run_stats['phase_7_4'] = phase_stats
+        # Non-critical, continue even if failed
+
         # Phase 7.5: Slim dashboard DB rebuild (best-effort; a slow rebuild must
         # never block the daily pipeline). Snapshots the freshly-refreshed cache
         # + latest features into data/dashboard.duckdb for cross-device sync.
@@ -1100,6 +1112,20 @@ class DailyPipelineOrchestrator:
 
         return {'rows_processed': rows}
 
+    def _run_phase_7_4_scoring(self, target_date: str) -> Dict:
+        """Phase 7.4: Score target_date with the prod model → daily_predictions.
+
+        Runs before the dashboard DB build (7.5) so the materialized scores are
+        included in the slim DB and the R2 sync. Best-effort: a scoring failure
+        never fails the daily run (the dashboard degrades to last good scores).
+        """
+        n = 0
+        try:
+            n = self._log_prod_model_predictions(target_date)
+        except Exception as e:
+            logger.warning(f"[Phase 7.4] Prediction logging skipped: {e}")
+        return {'rows_processed': n}
+
     def _run_phase_7_5_dashboard_db(self) -> Dict:
         """Phase 7.5: Rebuild the slim dashboard.duckdb from the full DB.
 
@@ -1310,12 +1336,9 @@ class DailyPipelineOrchestrator:
         logger.info(f"[Phase 8] Data freshness: {health['max_dates']}")
         logger.info(f"[Phase 8] Breakout drought: {health['breakout_drought_days']} days")
 
-        # Paper-trade prediction logging (best-effort; failures don't break Phase 8).
-        predictions_written = 0
-        try:
-            predictions_written = self._log_prod_model_predictions(target_date)
-        except Exception as e:
-            logger.warning(f"[Phase 8] Prediction logging skipped: {e}")
+        # Prediction logging moved to Phase 7.4 (runs before the dashboard DB is
+        # built/uploaded so today's scores ride along; see _run_phase_7_4_scoring).
+        predictions_written = run_stats.get('phase_7_4', {}).get('rows_processed', 0)
 
         # Quarterly feature-drift report (best-effort; only fires on 1st of Jan/Apr/Jul/Oct).
         drift_report = None
@@ -1397,17 +1420,16 @@ class DailyPipelineOrchestrator:
         }
 
     def _log_prod_model_predictions(self, target_date: str) -> int:
-        """Score `target_date` SEPA candidates with the prod model and log predictions.
+        """Score `target_date` candidates with the prod model and log predictions.
 
-        Skips silently (returns 0) if:
-        - no prod model is registered
-        - no candidates exist for target_date in v_d3_deployment
-        - the model artifact dir is missing
+        Scores TWO cohorts so the dashboard never has to score live:
+        - 'breakout'      — SEPA entries from v_d3_deployment (breakout_ok=TRUE)
+        - 'pre_breakout'  — in-setup names (trend_ok=TRUE AND breakout_ok=FALSE)
+
+        Skips silently (returns 0) if no prod model is registered or its artifact
+        is missing. A failure on one cohort never blocks the other.
         """
-        # Late import — keep model_registry/evaluation off the orchestrator's
-        # required-import path so older deployments don't break.
         from pathlib import Path as _Path
-        from src.evaluation.prediction_logger import log_daily_predictions
         from src.model_registry import ModelRegistry
 
         registry = ModelRegistry(db_path=self.db_path)
@@ -1427,50 +1449,78 @@ class DailyPipelineOrchestrator:
             logger.warning(f"[Phase 8] Model artifact missing: {model_path}")
             return 0
 
-        # Pull today's deployment candidates. v_d3_deployment is the last 252d
-        # of SEPA breakouts; we want only the row dated target_date.
+        total = 0
+        for cohort, candidates in (
+            ("breakout", self._fetch_breakout_candidates(target_date)),
+            ("pre_breakout", self._fetch_pre_breakout_candidates(target_date)),
+        ):
+            try:
+                total += self._score_and_log_cohort(
+                    cohort, candidates, target_date, registry, prod_version_id, model_path
+                )
+            except Exception as e:
+                logger.warning(f"[Phase 8] Scoring cohort '{cohort}' failed: {e}")
+        return total
+
+    def _fetch_breakout_candidates(self, target_date: str):
+        """SEPA breakout entries for target_date (v_d3_deployment)."""
         con = duckdb.connect(self.db_path, read_only=True)
         try:
-            candidates = con.execute(
-                "SELECT * FROM v_d3_deployment WHERE date = ?",
-                [target_date],
+            return con.execute(
+                "SELECT * FROM v_d3_deployment WHERE date = ?", [target_date]
             ).df()
         except duckdb.Error as e:
             logger.warning(f"[Phase 8] Could not query v_d3_deployment: {e}")
-            con.close()
-            return 0
+            import pandas as pd
+            return pd.DataFrame()
         finally:
-            try:
-                con.close()
-            except Exception:
-                pass
+            con.close()
+
+    def _fetch_pre_breakout_candidates(self, target_date: str):
+        """In-setup names (trend_ok AND NOT breakout_ok) for target_date.
+
+        Reads v_d3_prebreakout, which hydrates the pre-breakout cohort with the
+        SAME feature contract as v_d3_deployment (deltas + fundamentals), so the
+        prod model scores both cohorts with one feature list.
+        """
+        con = duckdb.connect(self.db_path, read_only=True)
+        try:
+            return con.execute(
+                "SELECT * FROM v_d3_prebreakout WHERE date = ?", [target_date]
+            ).df()
+        except duckdb.Error as e:
+            logger.warning(f"[Phase 8] Could not query v_d3_prebreakout: {e}")
+            import pandas as pd
+            return pd.DataFrame()
+        finally:
+            con.close()
+
+    def _score_and_log_cohort(
+        self, cohort, candidates, target_date, registry, prod_version_id, model_path
+    ) -> int:
+        """Score one cohort's candidate frame with the prod model and log it."""
+        from src.evaluation.prediction_logger import log_daily_predictions
 
         if candidates.empty:
-            logger.info(f"[Phase 8] No SEPA candidates on {target_date} — nothing to log.")
-            return 0
-
-        # Score with prod model.
-        try:
-            import xgboost as xgb
-            booster = xgb.Booster()
-            booster.load_model(str(model_path))
-            feature_cols = self._resolve_prod_feature_cols(registry, prod_version_id, candidates)
-            if not feature_cols:
-                logger.warning("[Phase 8] Could not resolve prod feature columns.")
-                return 0
-            X = candidates[feature_cols].replace([float('inf'), float('-inf')], None)
-            # Cast object columns to category (XGBoost requirement).
-            for col in X.select_dtypes(include='object').columns:
-                X[col] = X[col].astype('category')
-            dmatrix = xgb.DMatrix(X, enable_categorical=True)
-            proba = booster.predict(dmatrix)
-        except Exception as e:
-            logger.warning(f"[Phase 8] Scoring failed: {e}")
+            logger.info(f"[Phase 8] No '{cohort}' candidates on {target_date}.")
             return 0
 
         import numpy as np
         import pandas as pd
-        proba = np.asarray(proba)
+        import xgboost as xgb
+
+        booster = xgb.Booster()
+        booster.load_model(str(model_path))
+        feature_cols = self._resolve_prod_feature_cols(registry, prod_version_id, candidates)
+        if not feature_cols:
+            logger.warning(f"[Phase 8] Could not resolve prod feature columns for '{cohort}'.")
+            return 0
+
+        X = candidates[feature_cols].replace([float('inf'), float('-inf')], None)
+        for col in X.select_dtypes(include='object').columns:
+            X[col] = X[col].astype('category')
+        dmatrix = xgb.DMatrix(X, enable_categorical=True)
+        proba = np.asarray(booster.predict(dmatrix))
         if proba.ndim == 1:
             proba = np.column_stack([1 - proba, proba])
 
@@ -1480,16 +1530,16 @@ class DailyPipelineOrchestrator:
             pred_df[f"prob_class_{i}"] = proba[:, i]
         pred_df["predicted_class"] = proba.argmax(axis=1)
 
-        production_class_idx = n_classes - 1  # last actionable class
         target_dt = pd.to_datetime(target_date).date() if isinstance(target_date, str) else target_date
         n = log_daily_predictions(
             db_path=Path(self.db_path),
             prediction_date=target_dt,
             model_version_id=prod_version_id,
             predictions=pred_df,
-            production_class_idx=production_class_idx,
+            production_class_idx=n_classes - 1,
+            cohort=cohort,
         )
-        logger.info(f"[Phase 8] Logged {n} predictions for {prod_version_id} on {target_date}")
+        logger.info(f"[Phase 8] Logged {n} '{cohort}' predictions for {prod_version_id} on {target_date}")
         return n
 
     def _maybe_run_quarterly_drift(self, target_date: str) -> Optional[dict]:

@@ -80,6 +80,7 @@ class ViewManager:
             self._create_v_d2_hydrated,
             self._create_v_d2_training,
             self._create_v_d3_deployment,
+            self._create_v_d3_prebreakout,
             self._create_v_screener_dashboard,
             self._refresh_screener_watchlist,
         ]
@@ -667,6 +668,146 @@ class ViewManager:
             ORDER BY d2.date DESC, d2.ticker
         """)
         print(f"   [OK] v_d3_deployment: Last 252 days (deferred — query to check row count)")
+
+    # ------------------------------------------------------------------
+    # VIEW 7b: v_d3_prebreakout — Pre-Breakout Cohort for Model Scoring
+    # ------------------------------------------------------------------
+
+    def _create_v_d3_prebreakout(self, con: duckdb.DuckDBPyConnection) -> None:
+        """Deployment view for the PRE-BREAKOUT cohort (trend_ok & !breakout_ok).
+
+        v_d3_deployment only carries SEPA *entries* (breakout_ok=TRUE), so it can't
+        score in-setup names. This view hydrates the pre-breakout cohort with the
+        SAME feature contract: t3_sepa_features base + delta renames (from the
+        pre-computed pct_chg columns, exactly as v_d1_candidates) + the fundamentals
+        as-of join + price-derived ratios (exactly as v_d2_features). Identical
+        column set ⇒ the prod model scores both cohorts with one feature list.
+
+        Windowed to the last 252 days for parity with v_d3_deployment.
+        """
+        has_shares = con.execute("""
+            SELECT COUNT(*) FROM information_schema.tables
+            WHERE table_name = 'shares_history'
+        """).fetchone()[0] > 0
+
+        if has_shares:
+            shares_col = "sh.shares_outstanding"
+            shares_join = """
+            LEFT JOIN shares_history sh
+                ON base.ticker = sh.ticker
+                AND sh.date = (
+                    SELECT MAX(date) FROM shares_history
+                    WHERE ticker = base.ticker AND date <= base.date
+                )"""
+        else:
+            shares_col = "cp.shares_outstanding"
+            shares_join = ""
+
+        con.execute(f"""
+            CREATE OR REPLACE VIEW v_d3_prebreakout AS
+            WITH ff_dedup AS (
+                SELECT
+                    ticker, filing_date, fiscal_period,
+                    revenue, net_income, eps_diluted, total_assets, total_equity,
+                    revenue_growth_yoy, eps_growth_yoy, net_income_growth_yoy,
+                    eps_accel, revenue_accel, revenue_cagr_3y, eps_stability_score,
+                    debt_to_equity, current_ratio, quick_ratio,
+                    gross_margin, operating_margin, net_margin, roe, roa, fcf_margin,
+                    earnings_quality_score, inventory_growth_yoy,
+                    inventory_vs_sales_spread, gross_margin_trend
+                FROM fundamental_features
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, filing_date
+                    ORDER BY fiscal_period DESC NULLS LAST
+                ) = 1
+            ),
+            -- Base: pre-breakout rows + delta renames (mirrors v_d1_candidates tail).
+            base AS (
+                SELECT
+                    f.*,
+                    c.sector,
+                    c.industry,
+                    f.natr_pct_chg / 100.0 AS natr_delta,
+                    f.vcp_ratio_pct_chg / 100.0 AS vcp_ratio_delta,
+                    f.consolidation_width_pct_chg / 100.0 AS consolidation_width_delta,
+                    f.price_vs_sma_50_pct_chg / 100.0 AS price_vs_sma_50_delta,
+                    f.price_vs_sma_150_pct_chg / 100.0 AS price_vs_sma_150_delta,
+                    f.price_vs_sma_200_pct_chg / 100.0 AS price_vs_sma_200_delta,
+                    f.rs_pct_chg / 100.0 AS rs_delta,
+                    f.rs_ma_pct_chg / 100.0 AS rs_ma_delta,
+                    f.dry_up_volume_pct_chg / 100.0 AS dry_up_volume_delta,
+                    f.high_52w_pct_chg / 100.0 AS high_52w_delta,
+                    f.low_52w_pct_chg / 100.0 AS low_52w_delta,
+                    f.lowest_low_20d_pct_chg / 100.0 AS lowest_low_20d_delta,
+                    f.highest_high_20d_pct_chg / 100.0 AS highest_high_20d_delta,
+                    f.rsi_14_pct_chg / 100.0 AS rsi_14_delta,
+                    f.dist_from_52w_high_pct_chg / 100.0 AS dist_from_52w_high_delta,
+                    f.dist_from_52w_low_pct_chg / 100.0 AS dist_from_52w_low_delta,
+                    f.dist_from_20d_low_pct_chg / 100.0 AS dist_from_20d_low_delta,
+                    f.dist_from_20d_high_pct_chg / 100.0 AS dist_from_20d_high_delta
+                FROM t3_sepa_features f
+                INNER JOIN company_profiles c ON f.ticker = c.ticker
+                WHERE f.feature_version = '{self.feature_version}'
+                  AND f.trend_ok = TRUE
+                  AND f.breakout_ok = FALSE
+                  AND f.date >= (
+                      SELECT MAX(date) - INTERVAL '252 days'
+                      FROM t3_sepa_features
+                      WHERE feature_version = '{self.feature_version}'
+                  )
+            )
+            SELECT
+                base.*,
+                ff.revenue,
+                ff.net_income,
+                ff.eps_diluted,
+                ff.total_assets,
+                ff.total_equity,
+                ff.revenue_growth_yoy,
+                ff.eps_growth_yoy,
+                ff.net_income_growth_yoy,
+                ff.eps_accel,
+                ff.revenue_accel,
+                ff.revenue_cagr_3y,
+                ff.eps_stability_score,
+                ff.debt_to_equity,
+                ff.current_ratio,
+                ff.quick_ratio,
+                ff.gross_margin,
+                ff.operating_margin,
+                ff.net_margin,
+                ff.roe,
+                ff.roa,
+                ff.fcf_margin,
+                ff.earnings_quality_score,
+                ff.inventory_growth_yoy,
+                ff.inventory_vs_sales_spread,
+                ff.gross_margin_trend,
+                ff.filing_date AS fundamental_filing_date,
+                ff.fiscal_period,
+                CAST(datediff('day', ff.filing_date, base.date) AS INTEGER) AS days_since_report,
+                cp.market_cap,
+                {shares_col} AS shares_outstanding,
+                CASE WHEN ABS(ff.eps_diluted) > 0.01
+                    THEN base.close / ff.eps_diluted END AS pe_ratio,
+                CASE WHEN ff.revenue > 0 AND {shares_col} > 0
+                    THEN (base.close * {shares_col}) / ff.revenue END AS ps_ratio,
+                CASE WHEN ff.total_equity > 0 AND {shares_col} > 0
+                    THEN (base.close * {shares_col}) / ff.total_equity END AS pb_ratio,
+                CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
+                    THEN (base.close / ff.eps_diluted) / ff.eps_growth_yoy END AS peg_adjusted
+            FROM base
+            LEFT JOIN company_profiles cp ON base.ticker = cp.ticker
+            {shares_join}
+            LEFT JOIN ff_dedup ff
+                ON base.ticker = ff.ticker
+                AND ff.filing_date = (
+                    SELECT MAX(filing_date) FROM ff_dedup
+                    WHERE ticker = base.ticker AND filing_date <= base.date
+                )
+            ORDER BY base.date DESC, base.ticker
+        """)
+        print(f"   [OK] v_d3_prebreakout: pre-breakout cohort, last 252d (same contract as v_d3_deployment)")
 
     # ------------------------------------------------------------------
     # VIEW 8: v_screener_dashboard — SEPA Screener Tracker

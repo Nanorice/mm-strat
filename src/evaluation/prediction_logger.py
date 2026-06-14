@@ -1,9 +1,12 @@
 """Daily prediction logger.
 
-Writes one row per (prediction_date, ticker, model_version_id) into
+Writes one row per (prediction_date, ticker, model_version_id, cohort) into
 `daily_predictions`. Rank is computed by descending production-class probability
-within `prediction_date`. Idempotent — re-running the same date overwrites
-previous rows (INSERT OR REPLACE).
+within (`prediction_date`, `cohort`). Idempotent — re-running the same date/cohort
+overwrites previous rows (INSERT OR REPLACE).
+
+`cohort` is 'breakout' (SEPA entries) or 'pre_breakout' (in-setup names); both
+are scored nightly under the prod model so the dashboard never scores live.
 
 Decisioning (`decision_taken`) stays NULL until the dashboard UI lands; that's
 intentional. The point of logging now is so the analysis history is already
@@ -28,18 +31,65 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent.parent
     / "scripts"
     / "migrations"
-    / "2026_05_24_create_daily_predictions.sql"
+    / "2026_06_12_add_cohort_to_daily_predictions.sql"
 )
 
 
+def _migrate_add_cohort(con: duckdb.DuckDBPyConnection) -> None:
+    """Fold `cohort` into daily_predictions + its PK when the column is missing.
+
+    DuckDB can't ALTER a primary key in place, so we rebuild: rename the old
+    table, recreate via the migration SQL (which carries the new PK), copy the
+    pre-cohort rows back as 'breakout', then drop the old table.
+    """
+    cols = {r[1] for r in con.execute("PRAGMA table_info('daily_predictions')").fetchall()}
+    if "cohort" in cols:
+        return  # already migrated
+
+    # Indexes depend on the table — drop before rename, the migration SQL recreates them.
+    for idx in ("idx_daily_predictions_date", "idx_daily_predictions_model",
+                "idx_daily_predictions_cohort"):
+        con.execute(f"DROP INDEX IF EXISTS {idx}")
+
+    con.execute("ALTER TABLE daily_predictions RENAME TO daily_predictions_old")
+    con.execute(_MIGRATION_PATH.read_text(encoding="utf-8"))
+    con.execute(
+        """
+        INSERT INTO daily_predictions
+            (prediction_date, ticker, model_version_id, cohort,
+             prob_class_0, prob_class_1, prob_class_2, prob_class_3,
+             predicted_class, rank_within_day,
+             decision_taken, taken_at, notes, ingested_at)
+        SELECT prediction_date, ticker, model_version_id, 'breakout',
+               prob_class_0, prob_class_1, prob_class_2, prob_class_3,
+               predicted_class, rank_within_day,
+               decision_taken, taken_at, notes, ingested_at
+        FROM daily_predictions_old
+        """
+    )
+    con.execute("DROP TABLE daily_predictions_old")
+
+
 def ensure_schema(db_path: Path) -> None:
-    """Apply the daily_predictions migration. Idempotent."""
+    """Apply the daily_predictions schema. Idempotent.
+
+    Three cases:
+      - no table          → run the migration SQL (fresh, cohort-aware table)
+      - legacy table       → rebuild via _migrate_add_cohort (adds cohort + PK)
+      - cohort-aware table → no-op
+    """
     if not _MIGRATION_PATH.exists():
         raise FileNotFoundError(f"migration file not found: {_MIGRATION_PATH}")
     sql = _MIGRATION_PATH.read_text(encoding="utf-8")
     con = duckdb.connect(str(db_path))
     try:
-        con.execute(sql)
+        exists = con.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'daily_predictions'"
+        ).fetchone()[0] > 0
+        if not exists:
+            con.execute(sql)  # fresh create — table + indexes both cohort-aware
+        else:
+            _migrate_add_cohort(con)  # rebuild iff legacy (no cohort) table present
     finally:
         con.close()
 
@@ -50,16 +100,20 @@ def log_daily_predictions(
     model_version_id: str,
     predictions: pd.DataFrame,
     production_class_idx: int = 3,
+    cohort: str = "breakout",
 ) -> int:
-    """Insert (or replace) daily predictions for `prediction_date`.
+    """Insert (or replace) daily predictions for (`prediction_date`, `cohort`).
 
     Required columns on `predictions`:
       - ticker
       - prob_class_0, prob_class_1, ..., prob_class_K (at least one)
       - predicted_class
 
+    `cohort` is 'breakout' or 'pre_breakout'. Rank is computed within the cohort.
     Returns the number of rows written.
     """
+    if cohort not in ("breakout", "pre_breakout"):
+        raise ValueError(f"cohort must be 'breakout' | 'pre_breakout', got {cohort!r}")
     ensure_schema(db_path)
 
     if predictions.empty:
@@ -97,11 +151,13 @@ def log_daily_predictions(
 
     df["prediction_date"] = prediction_date
     df["model_version_id"] = model_version_id
+    df["cohort"] = cohort
 
     out_cols = [
         "prediction_date",
         "ticker",
         "model_version_id",
+        "cohort",
         "prob_class_0",
         "prob_class_1",
         "prob_class_2",
@@ -115,14 +171,14 @@ def log_daily_predictions(
     try:
         con.register("_pred_batch", out)
         # INSERT OR REPLACE: the table has a composite PK so this overwrites
-        # any prior row for the same (date, ticker, model).
+        # any prior row for the same (date, ticker, model, cohort).
         con.execute(
             """
             INSERT OR REPLACE INTO daily_predictions
-                (prediction_date, ticker, model_version_id,
+                (prediction_date, ticker, model_version_id, cohort,
                  prob_class_0, prob_class_1, prob_class_2, prob_class_3,
                  predicted_class, rank_within_day)
-            SELECT prediction_date, ticker, model_version_id,
+            SELECT prediction_date, ticker, model_version_id, cohort,
                    prob_class_0, prob_class_1, prob_class_2, prob_class_3,
                    predicted_class, rank_within_day
             FROM _pred_batch
@@ -133,7 +189,7 @@ def log_daily_predictions(
         con.close()
 
     logger.info(
-        "log_daily_predictions: wrote %d rows for date=%s model=%s",
-        len(out), prediction_date, model_version_id,
+        "log_daily_predictions: wrote %d rows for date=%s model=%s cohort=%s",
+        len(out), prediction_date, model_version_id, cohort,
     )
     return int(len(out))
