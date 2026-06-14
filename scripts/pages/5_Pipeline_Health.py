@@ -42,6 +42,24 @@ STATUS_COLORS = {
 # z values picked so colorscale stops below render cleanly; missing cells = NaN ("(no run)").
 STATUS_NUMS = {"failed": 0.0, "warning": 0.34, "running": 0.67, "success": 1.0}
 
+def _phase_sort_key(phase_name: str) -> tuple:
+    """Natural execution order for phase_name like 'phase_7_4_scoring'.
+
+    Lexical sort mis-orders these ('phase_10' < 'phase_2', 'phase_7_4' vs
+    'phase_7_cache'). Parse the major number, an optional letter suffix (4b),
+    and a minor number so the heatmap rows follow real pipeline order.
+    Returns (major, letter, minor, name) — unparseable names sort last.
+    """
+    import re
+    m = re.match(r"phase_(\d+)([a-z]?)(?:_(\d+))?", phase_name)
+    if not m:
+        return (999, "", 0, phase_name)
+    major = int(m.group(1))
+    letter = m.group(2) or ""
+    minor = int(m.group(3)) if m.group(3) else 0
+    return (major, letter, minor, phase_name)
+
+
 FRESHNESS_TOLERANCE_DAYS = {
     # Phase 1 — daily ingestion
     "price_data":           2,
@@ -144,9 +162,12 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
     # only including dates that had runs).
     min_d, max_d = pivot_status.columns.min(), pivot_status.columns.max()
     full_dates = pd.date_range(min_d, max_d, freq="D").date
-    pivot_status = pivot_status.reindex(columns=full_dates).sort_index()
-    pivot_runtime = pivot_runtime.reindex(columns=full_dates).reindex(index=pivot_status.index)
-    pivot_errors = pivot_errors.reindex(columns=full_dates).reindex(index=pivot_status.index)
+    # Natural phase order (phase_1 → phase_10). With yaxis reversed below, the
+    # first row renders at the TOP, so phase_1 lands on top as expected.
+    phase_order = sorted(pivot_status.index, key=_phase_sort_key)
+    pivot_status = pivot_status.reindex(columns=full_dates).reindex(index=phase_order)
+    pivot_runtime = pivot_runtime.reindex(columns=full_dates).reindex(index=phase_order)
+    pivot_errors = pivot_errors.reindex(columns=full_dates).reindex(index=phase_order)
 
     z = pivot_status.map(lambda s: STATUS_NUMS.get(s, np.nan)).astype(float).values
 
@@ -220,14 +241,27 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
 
 def render_freshness(fresh: pd.DataFrame) -> None:
     st.subheader("Data Freshness")
+    st.caption(
+        "`fresh` means lag ≤ the table's tolerance, not lag = 0. Tolerances vary "
+        "by cadence: `fundamentals` = 95d (quarterly filings, so 14-day lag is "
+        "normal/fresh), `earnings_calendar` is negative (future-looking — max "
+        "date is ahead of today, so a −95 lag is expected). 🟡 stale = up to 2× "
+        "tolerance, 🔴 very stale beyond that."
+    )
     if fresh.empty:
         st.info("No tables registered.")
         return
 
+    def tol_for(table):
+        return FRESHNESS_TOLERANCE_DAYS.get(table, 7)
+
     def status_icon(row):
         if row["max_date"] is None or pd.isna(row["lag_days"]):
             return "⚪ no data"
-        tol = FRESHNESS_TOLERANCE_DAYS.get(row["table"], 7)
+        tol = tol_for(row["table"])
+        # Negative tolerance = future-looking table: fresh while max_date is ahead.
+        if tol < 0:
+            return "🟢 fresh" if row["lag_days"] <= abs(tol) else "🔴 very stale"
         if row["lag_days"] <= tol:
             return "🟢 fresh"
         if row["lag_days"] <= tol * 2:
@@ -236,15 +270,16 @@ def render_freshness(fresh: pd.DataFrame) -> None:
 
     f = fresh.copy()
     f["status"] = f.apply(status_icon, axis=1)
+    f["tolerance"] = f["table"].apply(tol_for)
     f = f.rename(columns={
         "table": "Table", "max_date": "Max Date",
-        "rows": "Rows", "lag_days": "Lag (days)", "status": "Status",
+        "rows": "Rows", "lag_days": "Lag (days)",
+        "tolerance": "Tolerance (days)", "status": "Status",
     })
+    f = f[["Table", "Max Date", "Rows", "Lag (days)", "Tolerance (days)", "Status"]]
     styled = f.style
-    if "Rows" in f.columns:
-        styled = styled.format("{:,.0f}", subset=["Rows"], na_rep="—")
-    if "Lag (days)" in f.columns:
-        styled = styled.format("{:.0f}", subset=["Lag (days)"], na_rep="—")
+    styled = styled.format("{:,.0f}", subset=["Rows"], na_rep="—")
+    styled = styled.format("{:.0f}", subset=["Lag (days)", "Tolerance (days)"], na_rep="—")
     st.dataframe(styled, use_container_width=True, hide_index=True, height=380)
 
 
@@ -329,7 +364,7 @@ def render_fundamentals_audit() -> None:
             st.caption(
                 f"30-day trend: "
                 + ", ".join(
-                    f"{r.target_date}={int(r.null_filing_written)}"
+                    f"{pd.to_datetime(r.target_date).date()}={int(r.null_filing_written)}"
                     for r in nfw.head(8).itertuples()
                 )
             )
@@ -450,11 +485,15 @@ def render_storage() -> None:
     st.subheader("Storage")
 
     items = [
-        ("market_data.duckdb", ROOT / "data" / "market_data.duckdb"),
-        ("models/",            ROOT / "models"),
-        ("data/backtest/",     ROOT / "data" / "backtest"),
-        ("docs/reports/",      ROOT / "docs" / "reports"),
-        ("logs/",              ROOT / "logs"),
+        ("market_data.duckdb (full)",  ROOT / "data" / "market_data.duckdb"),
+        ("dashboard.duckdb (slim)",    ROOT / "data" / "dashboard.duckdb"),
+        ("models/",                    ROOT / "models"),
+        ("model_cards/",               ROOT / "model_cards"),
+        ("data/backtest/",             ROOT / "data" / "backtest"),
+        ("data/audit_reports/",        ROOT / "data" / "audit_reports"),
+        ("logs/drift/ (quarterly)",    ROOT / "logs" / "drift"),
+        ("docs/reports/",              ROOT / "docs" / "reports"),
+        ("logs/",                      ROOT / "logs"),
     ]
 
     rows = []
