@@ -12,7 +12,6 @@ Auth model:
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -26,7 +25,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard_utils import DB_PATH as _DB_PATH  # noqa: F401 — imported for debug sidebar
 from dashboard_utils import (
     CLASS_COLORS,
     CLASS_LABELS,
@@ -38,35 +36,17 @@ from dashboard_utils import (
     classify_regime,
     exposure_band_label,
     load_daily_predictions_today,
-    load_deployment_features,
     load_past_decisions,
     load_pipeline_status,
-    load_pre_breakout,
     load_prod_model_version_id,
     load_regime,
     load_risk_5f,
+    load_scored_pre_breakout,
     load_scored_watchlist,
     load_sector_heat,
     load_watchlist,
-    score_features_df,
     update_decision_taken,
 )
-
-
-# ── M01 scoring on the active watchlist ──────────────────────────────────────
-
-def score_active_trades(
-    watchlist: pd.DataFrame, deployment: pd.DataFrame
-) -> pd.DataFrame:
-    active = watchlist[watchlist["status"] == "ACTIVE"].copy()
-    if active.empty or deployment.empty:
-        return active
-
-    latest_features = (
-        deployment.sort_values("date").groupby("ticker").last().reset_index()
-    )
-    merged = active.merge(latest_features, on="ticker", how="left", suffixes=("", "_feat"))
-    return score_features_df(merged)
 
 
 # ── Header components ────────────────────────────────────────────────────────
@@ -195,14 +175,13 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
                                        help="Leave blank to show all dates")
         st.form_submit_button("Apply filters", type="primary")
 
-    if status_filter == "ACTIVE" and not scored.empty:
-        display = scored.copy()
+    # `scored` carries the FULL watchlist (every ACTIVE + EXITED trade) joined to
+    # predictions — filter by status here, don't assume it's pre-filtered.
+    if status_filter == "ACTIVE":
+        display = scored[scored["status"] == "ACTIVE"].copy()
     elif status_filter == "EXITED":
-        display = watchlist[watchlist["status"] == "EXITED"].copy()
-    elif status_filter == "All":
-        exited = watchlist[watchlist["status"] == "EXITED"].copy()
-        display = pd.concat([scored, exited], ignore_index=True) if not scored.empty else exited
-    else:
+        display = scored[scored["status"] == "EXITED"].copy()
+    else:  # "All"
         display = scored.copy()
 
     if display.empty:
@@ -254,6 +233,14 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
 
     available_cols = [c for c in show_cols if c in display.columns]
     table = display[available_cols].copy()
+
+    # Cap rows before styling — pandas Styler errors past ~262K cells, and the
+    # EXITED/All views carry ~38K trades. The frame is already sorted, so the cap
+    # keeps the most relevant rows (top of the chosen sort).
+    MAX_ROWS = 2000
+    truncated = len(table) > MAX_ROWS
+    if truncated:
+        table = table.head(MAX_ROWS)
 
     # Ticker → Finviz link via LinkColumn. URL goes in the column; display_text
     # regex strips it back to the bare ticker for display.
@@ -315,23 +302,20 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
 
     st.dataframe(styled, use_container_width=True, height=500,
                  column_config=column_config)
-    st.caption(f"Showing {len(table)} trades · sorted by {sort_choice}")
+    cap_note = f" (capped at {MAX_ROWS:,} of {len(display):,})" if truncated else ""
+    st.caption(f"Showing {len(table)} trades{cap_note} · sorted by {sort_choice}")
 
 
 # ── Pre-breakout watch table ──────────────────────────────────────────────────
 
-def render_pre_breakout(pre: pd.DataFrame) -> None:
+def render_pre_breakout(scored: pd.DataFrame) -> None:
     st.subheader("Pre-Breakout Watch")
     st.caption("trend_ok = TRUE, breakout_ok = FALSE — names in setup, not yet triggered. "
-               "Scored live by the prod M01 model.")
+               "Scored nightly by the prod M01 model (materialized).")
 
-    if pre.empty:
+    if scored.empty:
         st.info("No pre-breakout candidates today.")
         return
-
-    # Live scoring — small cohort (<= 100), acceptable in request path for MVP.
-    # Mark as 'live' so the user knows this isn't snapshot-cached.
-    scored = score_features_df(pre)
 
     if P_HR_COL in scored.columns:
         scored = scored.sort_values(P_HR_COL, ascending=False, na_position="last")
@@ -368,7 +352,7 @@ def render_pre_breakout(pre: pd.DataFrame) -> None:
             styled = styled.format("{:.2f}", subset=[fcol])
 
     st.dataframe(styled, use_container_width=True, height=400)
-    st.caption(f"Showing {len(table)} candidates (live-scored)")
+    st.caption(f"Showing {len(table)} candidates (scored nightly)")
 
 
 # ── Sector heat ───────────────────────────────────────────────────────────────
@@ -709,9 +693,6 @@ def render_past_decisions() -> None:
 def page_today() -> None:
     st.title("Quantamental — Today")
 
-    # TEMP DEBUG — remove once cloud deploy is confirmed working
-    st.caption(f"DB: `{_DB_PATH}` | exists={_DB_PATH.exists()} | R2={bool(os.environ.get('R2_ACCOUNT_ID'))}")
-
     render_pipeline_status(load_pipeline_status())
     st.markdown("---")
 
@@ -733,8 +714,9 @@ def page_today() -> None:
 
     st.markdown("---")
 
-    # Pre-breakout watch
-    render_pre_breakout(load_pre_breakout(limit=100))
+    # Pre-breakout watch — scores from daily_predictions (no model file needed)
+    pre = load_scored_pre_breakout(version_id, limit=100) if version_id else pd.DataFrame()
+    render_pre_breakout(pre)
 
     st.markdown("---")
 
@@ -753,8 +735,8 @@ def page_today() -> None:
 
     st.markdown("---")
 
-    # Analytics
-    render_analytics(scored, watchlist)
+    # Analytics — `scored` is the full watchlist (all statuses) + scores
+    render_analytics(scored, scored)
 
 
 # ── Navigation ────────────────────────────────────────────────────────────────

@@ -36,6 +36,8 @@ REGIME_LABELS = {
 def discover_runs() -> pd.DataFrame:
     """Scan data/backtest/*/manifest.json, keep only manifest_version=v1."""
     rows = []
+    if not BACKTEST_DIR.exists():
+        return pd.DataFrame()  # not synced to this host (e.g. cloud) — caller shows info
     for d in sorted(BACKTEST_DIR.iterdir()):
         if not d.is_dir():
             continue

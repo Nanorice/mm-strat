@@ -39,12 +39,21 @@ def _model_card_slug(artifacts_path: str | None) -> str | None:
 
 
 def _resolve_artifacts_dir(artifacts_path: str | None) -> Path | None:
-    """Registry stores either an absolute path or a project-relative one."""
+    """Resolve artifacts_path to a local dir. Registry rows store either a
+    project-relative path or a Windows-absolute one (dev box). On any host we
+    re-anchor to ROOT by taking the path tail from the first 'models' segment,
+    so absolute dev-box paths resolve against the synced models/ tree on cloud.
+    """
     if not artifacts_path:
         return None
-    p = Path(artifacts_path)
-    if not p.is_absolute():
-        p = ROOT / artifacts_path
+    parts = Path(artifacts_path.replace("\\", "/")).parts
+    if "models" in parts:
+        rel = Path(*parts[parts.index("models"):])  # models/.../<ver>
+        p = ROOT / rel
+    else:
+        p = Path(artifacts_path)
+        if not p.is_absolute():
+            p = ROOT / artifacts_path
     return p if p.exists() else None
 
 

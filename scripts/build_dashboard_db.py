@@ -58,9 +58,10 @@ MANIFEST: list[tuple[str, str, dict]] = [
     #    swap the mode here to enable it.
     ("t2_screener_features", "window", {"date_col": "date"}),
     ("t3_sepa_features",     "window", {"date_col": "date"}),
-    # ── Deployment features — materialized from the view (dashboard reads it
-    #    via `SELECT * FROM v_d3_deployment`, table or view is transparent) ────
+    # ── Deployment features — materialized from the views (dashboard reads them
+    #    via `SELECT * FROM v_d3_*`, table or view is transparent) ──────────────
     ("v_d3_deployment",      "materialize_view",   {"view": "v_d3_deployment"}),
+    ("v_d3_prebreakout",     "materialize_view",   {"view": "v_d3_prebreakout"}),
     # ── Small tables copied whole ────────────────────────────────────────────
     ("company_profiles",     "full", {}),
     ("d2_training_cache",    "full", {}),

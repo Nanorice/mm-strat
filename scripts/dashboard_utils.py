@@ -6,16 +6,12 @@ rendering. Read-only DB access throughout.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from typing import Optional
 
 import duckdb
-import numpy as np
 import pandas as pd
 import streamlit as st
-import xgboost as xgb
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,17 +27,13 @@ try:
     for _k in _SECRET_KEYS:
         if _k not in os.environ and _k in st.secrets:
             os.environ[_k] = str(st.secrets[_k])
-except Exception as _e:
-    st.warning(f"[DEBUG] secrets bridge failed: {_e!r} | keys seen: {list(st.secrets.keys()) if hasattr(st, 'secrets') else 'N/A'}")
+except Exception:
+    pass  # no st.secrets (local run) — env vars already in os.environ
 
 # DB path is configurable so the same app runs against the full local DB or a
 # slim, remote-synced dashboard.duckdb. Set DASHBOARD_DB_PATH (absolute, or
 # relative to repo root) to point at the slim DB. Default: full local DB.
 _db_env = os.environ.get("DASHBOARD_DB_PATH")
-try:
-    st.write(f"[DEBUG] DASHBOARD_DB_PATH env='{_db_env}' | secret='{st.secrets.get('DASHBOARD_DB_PATH', 'NOT FOUND')}'")
-except Exception:
-    pass
 if _db_env:
     _db = Path(_db_env)
     DB_PATH = _db if _db.is_absolute() else ROOT / _db
@@ -49,40 +41,43 @@ else:
     DB_PATH = ROOT / "data" / "market_data.duckdb"
 
 
-def _ensure_local_db() -> None:
-    """Pull dashboard.duckdb from R2 when running on Streamlit Cloud.
+def _on_cloud() -> bool:
+    """True when R2 creds are present (Streamlit Cloud); False on local runs."""
+    return bool(os.environ.get("R2_ACCOUNT_ID") and os.environ.get("R2_ACCESS_KEY"))
 
-    Downloads when: file is missing, local size doesn't match R2, or file is
-    >23h old. Downloads atomically (temp file + rename) so a failed download
-    never leaves a truncated DB behind.
 
-    Env vars required (set in Streamlit Cloud secrets):
-        R2_ACCOUNT_ID, R2_ACCESS_KEY, R2_SECRET_KEY, R2_BUCKET_NAME
-        DASHBOARD_DB_PATH  — local path where the pulled file is written
-    """
-    if not os.environ.get("R2_ACCOUNT_ID") or not os.environ.get("R2_ACCESS_KEY"):
-        return  # local run — do nothing
-
-    if not _db_env:
-        return  # no explicit DB path configured, nothing to pull to
-
-    import time
-
+def _r2_client():
     import boto3
 
-    target = DB_PATH
     account_id = os.environ["R2_ACCOUNT_ID"]
     endpoint = os.environ.get("R2_JURI_ENDPOINT_URL") or f"https://{account_id}.r2.cloudflarestorage.com"
-    client = boto3.client(
+    return boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=os.environ["R2_ACCESS_KEY"],
         aws_secret_access_key=os.environ["R2_SECRET_KEY"],
         region_name="auto",
     )
+
+
+def _ensure_local_db() -> None:
+    """Pull dashboard.duckdb from R2 when running on Streamlit Cloud.
+
+    Downloads when: file is missing, local size doesn't match R2, or file is
+    >23h old. Downloads atomically (temp file + rename) so a failed download
+    never leaves a truncated DB behind. No-op on local runs.
+    """
+    if not _on_cloud():
+        return  # local run — do nothing
+    if not _db_env:
+        return  # no explicit DB path configured, nothing to pull to
+
+    import time
+
+    target = DB_PATH
+    client = _r2_client()
     bucket = os.environ["R2_BUCKET_NAME"]
 
-    # Check R2 object size
     head = client.head_object(Bucket=bucket, Key="latest/dashboard.duckdb")
     r2_size = head["ContentLength"]
 
@@ -94,7 +89,6 @@ def _ensure_local_db() -> None:
     ):
         return
 
-    # Download atomically: write to .tmp then rename
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".tmp")
     try:
@@ -106,7 +100,56 @@ def _ensure_local_db() -> None:
         raise
 
 
+# Disk-file dirs pulled from R2 on cloud boot. (local_dir, r2_prefix). Mirror of
+# sync_dashboard_db.ASSET_DIRS — pages that read these degrade gracefully if the
+# pull fails. data/backtest/ is intentionally not synced (WIP).
+_ASSET_DIRS: list[tuple[Path, str]] = [
+    (ROOT / "model_cards",            "model_cards"),
+    (ROOT / "data" / "audit_reports", "audit_reports"),
+    (ROOT / "docs" / "reports",       "docs_reports"),
+    (ROOT / "models",                 "model_artifacts"),
+]
+
+
+def _ensure_asset_dirs() -> None:
+    """Pull the dashboard's disk-file asset dirs from R2 on Streamlit Cloud.
+
+    Each dir is mirrored from latest/<prefix>/ preserving relative paths. Best-
+    effort and per-dir freshness-gated (>23h) so a cold start re-pulls but warm
+    reruns don't. Failures never block the app — the reading pages degrade to a
+    'not available' message. No-op on local runs.
+    """
+    if not _on_cloud():
+        return
+
+    import time
+
+    try:
+        client = _r2_client()
+        bucket = os.environ["R2_BUCKET_NAME"]
+    except Exception:
+        return
+
+    paginator = client.get_paginator("list_objects_v2")
+    for local_dir, prefix in _ASSET_DIRS:
+        try:
+            existing = [f for f in local_dir.rglob("*") if f.is_file()] if local_dir.exists() else []
+            if existing and (time.time() - max(f.stat().st_mtime for f in existing)) < 23 * 3600:
+                continue  # fresh — skip
+            for page in paginator.paginate(Bucket=bucket, Prefix=f"latest/{prefix}/"):
+                for obj in page.get("Contents", []):
+                    rel = obj["Key"].split(f"latest/{prefix}/", 1)[-1]
+                    if not rel:
+                        continue
+                    dest = local_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    client.download_file(bucket, obj["Key"], str(dest))
+        except Exception:
+            continue  # best-effort per dir
+
+
 _ensure_local_db()
+_ensure_asset_dirs()
 
 # ── M01 class taxonomy ────────────────────────────────────────────────────────
 
@@ -233,26 +276,41 @@ def load_watchlist() -> pd.DataFrame:
         con.close()
 
 
-@st.cache_data(ttl=300)
-def load_deployment_features() -> pd.DataFrame:
-    con = duckdb.connect(str(DB_PATH), read_only=True)
-    try:
-        return con.execute("SELECT * FROM v_d3_deployment").fetchdf()
-    finally:
-        con.close()
+def _attach_class_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Translate materialized prob_class_N / predicted_class → the label columns
+    the renderers expect (`m01_class`, `m01_class_id`, `p_<label>`).
+
+    This is the read-side mirror of score_features_df's output contract, so the
+    same render functions work whether scores come live (legacy) or from
+    daily_predictions (current). Rows with no score (NULL predicted_class) get
+    no label columns populated — NaN flows through formatting cleanly.
+    """
+    prob_cols = [f"prob_class_{i}" for i in range(len(CLASS_LABELS))]
+    if not all(c in df.columns for c in prob_cols):
+        return df
+    out = df.copy()
+    for i, label in enumerate(CLASS_LABELS):
+        out[f"p_{label}"] = out[f"prob_class_{i}"]
+    if "predicted_class" in out.columns:
+        out["m01_class_id"] = out["predicted_class"]
+        out["m01_class"] = out["predicted_class"].apply(
+            lambda c: CLASS_LABELS[int(c)] if pd.notna(c) else None
+        )
+    return out
 
 
 @st.cache_data(ttl=300)
 def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
-    """Watchlist rows joined with latest daily_predictions scores.
+    """Watchlist rows joined with latest daily_predictions scores (breakout cohort).
 
     Replaces live model scoring on the dashboard — scores are pre-computed by
-    the nightly universe scorer and stored in daily_predictions, so the model
-    file never needs to exist on the serving host.
+    the nightly pipeline (Phase 7.4) and stored in daily_predictions, so the model
+    file never needs to exist on the serving host. Output carries the `m01_class`
+    / `p_<label>` columns the watchlist renderer expects.
     """
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
-        return con.execute("""
+        df = con.execute("""
             SELECT
                 sw.ticker, sw.company_name, sw.sector, sw.industry,
                 sw.market_cap, sw.entry_date, sw.entry_price,
@@ -264,14 +322,65 @@ def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
             LEFT JOIN daily_predictions dp
                 ON dp.ticker = sw.ticker
                AND dp.model_version_id = ?
+               AND dp.cohort = 'breakout'
                AND dp.prediction_date = (
                    SELECT MAX(prediction_date) FROM daily_predictions
-                   WHERE model_version_id = ?
+                   WHERE model_version_id = ? AND cohort = 'breakout'
                )
             ORDER BY sw.entry_date DESC, sw.ticker
         """, [model_version_id, model_version_id]).fetchdf()
     finally:
         con.close()
+    return _attach_class_labels(df)
+
+
+@st.cache_data(ttl=300)
+def load_scored_pre_breakout(model_version_id: str, limit: int = 100) -> pd.DataFrame:
+    """Pre-breakout cohort (trend_ok & !breakout_ok) with materialized scores.
+
+    Reads v_d3_prebreakout (display features) LEFT JOINed to daily_predictions
+    (cohort='pre_breakout', latest scored date) — no live model scoring. Adds
+    company_name + days_in_setup for display. Output carries the `m01_class` /
+    `p_<label>` columns the renderer expects.
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        df = con.execute("""
+            WITH pb AS (
+                SELECT * FROM v_d3_prebreakout
+                WHERE date = (SELECT MAX(date) FROM v_d3_prebreakout)
+            ),
+            sepa_active AS (
+                SELECT ticker, MAX(entry_date) AS setup_started
+                FROM sepa_watchlist WHERE status = 'ACTIVE'
+                GROUP BY ticker
+            )
+            SELECT
+                pb.ticker, pb.sector, pb.close, pb.dist_from_20d_high,
+                pb.vol_ratio_50, pb.vcp_ratio, pb.date,
+                cp.name AS company_name,
+                CASE WHEN sa.setup_started IS NOT NULL
+                     THEN DATEDIFF('day', sa.setup_started, pb.date)
+                     ELSE NULL END AS days_in_setup,
+                dp.prob_class_0, dp.prob_class_1, dp.prob_class_2, dp.prob_class_3,
+                dp.predicted_class, dp.rank_within_day, dp.prediction_date
+            FROM pb
+            LEFT JOIN company_profiles cp ON cp.ticker = pb.ticker
+            LEFT JOIN sepa_active sa       ON sa.ticker = pb.ticker
+            LEFT JOIN daily_predictions dp
+                ON dp.ticker = pb.ticker
+               AND dp.model_version_id = ?
+               AND dp.cohort = 'pre_breakout'
+               AND dp.prediction_date = (
+                   SELECT MAX(prediction_date) FROM daily_predictions
+                   WHERE model_version_id = ? AND cohort = 'pre_breakout'
+               )
+            ORDER BY dp.rank_within_day NULLS LAST, pb.ticker
+            LIMIT ?
+        """, [model_version_id, model_version_id, int(limit)]).fetchdf()
+    finally:
+        con.close()
+    return _attach_class_labels(df)
 
 
 @st.cache_data(ttl=300)
@@ -482,50 +591,6 @@ def load_universe_trend(days: int = 60) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def load_pre_breakout(limit: int = 100) -> pd.DataFrame:
-    """Latest-day trend_ok=True AND breakout_ok=False tickers with t3 features.
-
-    Joins screener_features (broad) with t3_sepa_features (dense features needed
-    for scoring) so the model can run end-to-end on the cohort. Only tickers
-    that survive the join (i.e., already on the SEPA universe) are returned —
-    other trend_ok names that aren't in t3 are not scoreable yet.
-    """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
-    try:
-        return con.execute(f"""
-            WITH latest_t2 AS (
-                SELECT * FROM t2_screener_features
-                WHERE date = (SELECT MAX(date) FROM t2_screener_features)
-                  AND trend_ok = TRUE
-                  AND breakout_ok = FALSE
-            ),
-            t3_latest AS (
-                SELECT * FROM t3_sepa_features
-                WHERE date = (SELECT MAX(date) FROM t3_sepa_features)
-            ),
-            sepa_active AS (
-                SELECT ticker, MAX(entry_date) AS setup_started
-                FROM sepa_watchlist
-                WHERE status = 'ACTIVE'
-                GROUP BY ticker
-            )
-            SELECT t3.*,
-                   c.sector, c.industry, c.name AS company_name,
-                   sa.setup_started,
-                   CASE WHEN sa.setup_started IS NOT NULL
-                        THEN DATEDIFF('day', sa.setup_started, t3.date)
-                        ELSE NULL END AS days_in_setup
-            FROM t3_latest t3
-            JOIN latest_t2 lt2 ON lt2.ticker = t3.ticker
-            LEFT JOIN company_profiles c ON c.ticker = t3.ticker
-            LEFT JOIN sepa_active sa     ON sa.ticker = t3.ticker
-            LIMIT {int(limit)}
-        """).fetchdf()
-    finally:
-        con.close()
-
-
-@st.cache_data(ttl=300)
 def load_sector_heat(window_days: int = 1) -> pd.DataFrame:
     """Sector heat over a lookback window. window_days=1 → today only;
     window_days=5 → last 5 trading days averaged; etc.
@@ -680,73 +745,3 @@ def load_models_table() -> pd.DataFrame:
         """).fetchdf()
     finally:
         con.close()
-
-
-@st.cache_resource
-def load_prod_model() -> tuple[xgb.XGBClassifier, list[str]]:
-    """The prod M01 classifier + its valid_features list. Cached as a resource."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
-    try:
-        row = con.execute("""
-            SELECT artifacts_path
-            FROM models
-            WHERE status_flag = 'prod' AND model_type = 'classifier'
-            ORDER BY updated_at DESC LIMIT 1
-        """).fetchone()
-    finally:
-        con.close()
-
-    model_dir = ROOT / row[0] if row and row[0] else ROOT / "models" / "m01_baseline"
-    meta = json.loads((model_dir / "metadata.json").read_text())
-    features = meta["valid_features"]
-    model = xgb.XGBClassifier()
-    model.load_model(str(model_dir / "model.json"))
-    return model, features
-
-
-# ── M01 scoring helper (extracted so multiple pages can use it) ──────────────
-
-def score_features_df(features_df: pd.DataFrame) -> pd.DataFrame:
-    """Run M01 prod model on a features DataFrame and append class/proba columns.
-
-    features_df must have at least 'ticker' and the model's required feature
-    columns (case-insensitive). Returns the input plus m01_class, m01_class_id,
-    and p_<label> columns.
-    """
-    if features_df.empty:
-        return features_df
-
-    model, features = load_prod_model()
-
-    col_map = {c.lower(): c for c in features_df.columns}
-    available = []
-    for f in features:
-        col = col_map.get(f.lower())
-        if col:
-            available.append((f, col))
-
-    if not available:
-        return features_df
-
-    X = features_df[[col for _, col in available]].copy()
-    X.columns = [f for f, _ in available]
-    for f in features:
-        if f not in X.columns:
-            X[f] = np.nan
-    X = X[features]
-
-    for col in X.select_dtypes(include="object").columns:
-        try:
-            X[col] = X[col].astype(float)
-        except (ValueError, TypeError):
-            X[col] = X[col].astype("category")
-
-    probas = model.predict_proba(X)
-    preds = np.argmax(probas, axis=1)
-
-    out = features_df.copy()
-    out["m01_class"] = [CLASS_LABELS[p] for p in preds]
-    out["m01_class_id"] = preds
-    for i, label in enumerate(CLASS_LABELS):
-        out[f"p_{label}"] = probas[:, i]
-    return out
