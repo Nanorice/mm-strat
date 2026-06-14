@@ -154,6 +154,12 @@ def render_risk_5f_header(risk: pd.Series | None) -> None:
 
 def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
     st.subheader("Screener Watchlist")
+    st.caption(
+        "M01 scores are the breakout-cohort score from each name's entry day "
+        "(materialized, prod model). Blank when the trade has no in-window breakout "
+        "score — its SEPA session opened before the 252-day deployment window, or it "
+        "reached the watchlist without a breakout candidate row (new listing / no t3 features)."
+    )
 
     # Wrap filters in a form so the page only reruns on Apply / Enter — not on
     # every keystroke. The whole-page rerun (which includes live M01 scoring of

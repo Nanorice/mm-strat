@@ -1428,25 +1428,19 @@ class DailyPipelineOrchestrator:
 
         Skips silently (returns 0) if no prod model is registered or its artifact
         is missing. A failure on one cohort never blocks the other.
-        """
-        from pathlib import Path as _Path
-        from src.model_registry import ModelRegistry
 
-        registry = ModelRegistry(db_path=self.db_path)
-        prod_version_id = registry.get_prod_version()
-        if not prod_version_id:
-            logger.info("[Phase 8] No prod model registered — skipping prediction log.")
-            return 0
+        Scoring itself lives in the shared ScoreEngine (RAW softprob) so this and
+        the backfill util (scripts/backfill_daily_predictions.py) can't drift.
+        """
+        from src.evaluation.score_engine import ScoreEngine
 
         try:
-            artifacts_path = registry.get_artifacts_path(prod_version_id)
-        except ValueError:
-            logger.warning(f"[Phase 8] Prod model {prod_version_id} has no artifacts_path.")
+            engine = ScoreEngine.from_prod(self.db_path)
+        except (ValueError, FileNotFoundError) as e:
+            logger.warning(f"[Phase 8] Prod model not scorable: {e}")
             return 0
-
-        model_path = _Path(artifacts_path) / "model.json"
-        if not model_path.exists():
-            logger.warning(f"[Phase 8] Model artifact missing: {model_path}")
+        if engine is None:
+            logger.info("[Phase 8] No prod model registered — skipping prediction log.")
             return 0
 
         total = 0
@@ -1455,9 +1449,9 @@ class DailyPipelineOrchestrator:
             ("pre_breakout", self._fetch_pre_breakout_candidates(target_date)),
         ):
             try:
-                total += self._score_and_log_cohort(
-                    cohort, candidates, target_date, registry, prod_version_id, model_path
-                )
+                n = engine.score_and_log(candidates, target_date, cohort, self.db_path)
+                logger.info(f"[Phase 8] Logged {n} '{cohort}' predictions on {target_date}")
+                total += n
             except Exception as e:
                 logger.warning(f"[Phase 8] Scoring cohort '{cohort}' failed: {e}")
         return total
@@ -1494,53 +1488,6 @@ class DailyPipelineOrchestrator:
             return pd.DataFrame()
         finally:
             con.close()
-
-    def _score_and_log_cohort(
-        self, cohort, candidates, target_date, registry, prod_version_id, model_path
-    ) -> int:
-        """Score one cohort's candidate frame with the prod model and log it."""
-        from src.evaluation.prediction_logger import log_daily_predictions
-
-        if candidates.empty:
-            logger.info(f"[Phase 8] No '{cohort}' candidates on {target_date}.")
-            return 0
-
-        import numpy as np
-        import pandas as pd
-        import xgboost as xgb
-
-        booster = xgb.Booster()
-        booster.load_model(str(model_path))
-        feature_cols = self._resolve_prod_feature_cols(registry, prod_version_id, candidates)
-        if not feature_cols:
-            logger.warning(f"[Phase 8] Could not resolve prod feature columns for '{cohort}'.")
-            return 0
-
-        X = candidates[feature_cols].replace([float('inf'), float('-inf')], None)
-        for col in X.select_dtypes(include='object').columns:
-            X[col] = X[col].astype('category')
-        dmatrix = xgb.DMatrix(X, enable_categorical=True)
-        proba = np.asarray(booster.predict(dmatrix))
-        if proba.ndim == 1:
-            proba = np.column_stack([1 - proba, proba])
-
-        n_classes = proba.shape[1]
-        pred_df = candidates[["ticker"]].copy()
-        for i in range(n_classes):
-            pred_df[f"prob_class_{i}"] = proba[:, i]
-        pred_df["predicted_class"] = proba.argmax(axis=1)
-
-        target_dt = pd.to_datetime(target_date).date() if isinstance(target_date, str) else target_date
-        n = log_daily_predictions(
-            db_path=Path(self.db_path),
-            prediction_date=target_dt,
-            model_version_id=prod_version_id,
-            predictions=pred_df,
-            production_class_idx=n_classes - 1,
-            cohort=cohort,
-        )
-        logger.info(f"[Phase 8] Logged {n} '{cohort}' predictions for {prod_version_id} on {target_date}")
-        return n
 
     def _maybe_run_quarterly_drift(self, target_date: str) -> Optional[dict]:
         """Quarterly PSI drift report against the prod model's frozen baseline.
@@ -1605,29 +1552,6 @@ class DailyPipelineOrchestrator:
             sample = report["drifted_features"][:5]
             logger.warning(f"[Phase 8] Drifted features (top {len(sample)}): {sample}")
         return report
-
-    def _resolve_prod_feature_cols(self, registry, version_id: str, candidates_df) -> list[str]:
-        """Find which v_d3_deployment columns to feed the prod model.
-
-        Prefer the model's recorded feature_set_id from the models table;
-        intersect with columns actually present in candidates_df. Falls back to
-        an empty list (caller logs and skips).
-        """
-        try:
-            specs = registry.get_model_specs(version_id) or {}
-        except Exception:
-            specs = {}
-        feature_names = specs.get("features") or []
-        if not feature_names:
-            return []
-        # case-insensitive match
-        cols_lower = {c.lower(): c for c in candidates_df.columns}
-        resolved = []
-        for f in feature_names:
-            actual = cols_lower.get(f.lower())
-            if actual is not None:
-                resolved.append(actual)
-        return resolved
 
     def _check_filing_date_quality(self, tickers: list) -> None:
         """Two-part fundamentals DQ check.

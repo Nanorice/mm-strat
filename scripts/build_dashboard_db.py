@@ -58,6 +58,11 @@ MANIFEST: list[tuple[str, str, dict]] = [
     #    swap the mode here to enable it.
     ("t2_screener_features", "window", {"date_col": "date"}),
     ("t3_sepa_features",     "window", {"date_col": "date"}),
+    # price_data — windowed. The Pipeline Health freshness panel queries
+    # MAX(date) FROM price_data as the canonical daily-ingestion signal; without
+    # it the panel shows "no data" (Catalog Error swallowed). A flat window is
+    # plenty for a freshness check.
+    ("price_data",           "window", {"date_col": "date"}),
     # ── Deployment features — materialized from the views (dashboard reads them
     #    via `SELECT * FROM v_d3_*`, table or view is transparent) ──────────────
     ("v_d3_deployment",      "materialize_view",   {"view": "v_d3_deployment"}),

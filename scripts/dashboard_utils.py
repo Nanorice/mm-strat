@@ -332,34 +332,52 @@ def _attach_class_labels(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
-    """Watchlist rows joined with latest daily_predictions scores (breakout cohort).
+    """Watchlist rows joined with each row's OWN breakout-cohort score.
 
-    Replaces live model scoring on the dashboard — scores are pre-computed by
-    the nightly pipeline (Phase 7.4) and stored in daily_predictions, so the model
-    file never needs to exist on the serving host. Output carries the `m01_class`
-    / `p_<label>` columns the watchlist renderer expects.
+    Scores are pre-computed by the nightly pipeline (Phase 7.4) and backfilled
+    across the d3 window (scripts/backfill_daily_predictions.py), stored in
+    daily_predictions — so the model file never needs to exist on the serving host.
+
+    Each watchlist row is matched to the breakout score at the latest
+    prediction_date <= its entry_date (the score as the name actually broke out),
+    NOT the single global latest date — otherwise only tickers that broke out on
+    the most recent day would carry a score. Rows with no score at/before entry
+    (e.g. entries predating the d3 window) flow through with NULLs. Output carries
+    the `m01_class` / `p_<label>` columns the watchlist renderer expects.
     """
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
         df = con.execute("""
-            SELECT
-                sw.ticker, sw.company_name, sw.sector, sw.industry,
-                sw.market_cap, sw.entry_date, sw.entry_price,
-                sw.exit_date, sw.status, sw.close_price, sw.price_date,
-                sw.pct_return, sw.days_held, sw.refreshed_at,
-                dp.prob_class_0, dp.prob_class_1, dp.prob_class_2, dp.prob_class_3,
-                dp.predicted_class, dp.rank_within_day, dp.prediction_date
-            FROM screener_watchlist sw
-            LEFT JOIN daily_predictions dp
-                ON dp.ticker = sw.ticker
-               AND dp.model_version_id = ?
-               AND dp.cohort = 'breakout'
-               AND dp.prediction_date = (
-                   SELECT MAX(prediction_date) FROM daily_predictions
-                   WHERE model_version_id = ? AND cohort = 'breakout'
-               )
-            ORDER BY sw.entry_date DESC, sw.ticker
-        """, [model_version_id, model_version_id]).fetchdf()
+            WITH preds AS (
+                SELECT ticker, prediction_date,
+                       prob_class_0, prob_class_1, prob_class_2, prob_class_3,
+                       predicted_class, rank_within_day
+                FROM daily_predictions
+                WHERE model_version_id = ? AND cohort = 'breakout'
+            ),
+            scored AS (
+                SELECT sw.*,
+                       p.prob_class_0, p.prob_class_1, p.prob_class_2, p.prob_class_3,
+                       p.predicted_class, p.rank_within_day, p.prediction_date,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY sw.ticker, sw.entry_date
+                           ORDER BY p.prediction_date DESC
+                       ) AS rn
+                FROM screener_watchlist sw
+                LEFT JOIN preds p
+                    ON p.ticker = sw.ticker
+                   AND p.prediction_date <= sw.entry_date
+            )
+            SELECT ticker, company_name, sector, industry,
+                   market_cap, entry_date, entry_price,
+                   exit_date, status, close_price, price_date,
+                   pct_return, days_held, refreshed_at,
+                   prob_class_0, prob_class_1, prob_class_2, prob_class_3,
+                   predicted_class, rank_within_day, prediction_date
+            FROM scored
+            WHERE rn = 1            -- nearest score at/before entry per (ticker, entry_date)
+            ORDER BY entry_date DESC, ticker
+        """, [model_version_id]).fetchdf()
     finally:
         con.close()
     return _attach_class_labels(df)
