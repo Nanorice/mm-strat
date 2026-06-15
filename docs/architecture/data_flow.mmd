@@ -18,13 +18,17 @@ flowchart TD
         T1_M[("macro_data")]
         T1_TM[("t1_macro")]
     end
-    
+
     API_YF --> P1_PRICE --> T1_P
     API_YF --> P1_FUND
     P1_FUND --> T1_F & T1_EC
     API_YF --> P1_SHARES --> T1_S
     API_FRED & API_YF --> P1_MACRO
     P1_MACRO --> T1_M & T1_TM
+
+    %% ── Phase 1.5: Price Quality Gate ──
+    P15{{"1.5 Price Quality Gate<br/>read + conditional retry"}}
+    T1_P --> P15
 
     %% ── Phase 2: Screener Membership ──
     subgraph P2_Screener [Phase 2: Screener]
@@ -40,15 +44,19 @@ flowchart TD
     end
     T1_P & T1_TM & T2_SM --> P3 --> T2_SF
 
-    %% ── Phase 4: Regime & Phase 4b: SEPA ──
-    subgraph P4_Context [Phase 4: Regime & SEPA Watchlist]
+    %% ── Phase 4: Regime + 5F Risk · Phase 4b: SEPA Watchlist ──
+    subgraph P4_Context [Phase 4: Regime + 5F Risk & SEPA Watchlist]
         P4["M03 Regime"]
         T2_RS[("t2_regime_scores")]
-        
+
+        P4R["5F Risk Calculator"]
+        T2_RK[("t2_risk_scores")]
+
         P4B["SEPA Manager"]
         SW[("sepa_watchlist")]
     end
     T1_TM & T1_M --> P4 --> T2_RS
+    T1_M --> P4R --> T2_RK
     T2_SF --> P4B --> SW
 
     %% ── Phase 5: T3 Features ──
@@ -61,24 +69,25 @@ flowchart TD
     %% ── Phase 6: Views ──
     subgraph P6_Views [Phase 6: SQL Views]
         P6["View Manager"]
-        
+
         V_SEPA(["v_sepa_candidates"])
         V_D1(["v_d1_candidates"])
         V_D2F(["v_d2_features"])
         V_D2H(["v_d2_hydrated"])
         V_D2T(["v_d2_training"])
         V_D3D(["v_d3_deployment"])
+        V_D3P(["v_d3_prebreakout"])
         V_SD(["v_screener_dashboard"])
-        
+
         MAT_SW[("screener_watchlist")]
-        
+
         V_D1 --> V_D2F & V_D2H & V_SD
-        V_D2F --> V_D2T & V_D3D & V_D2H
+        V_D2F --> V_D2T & V_D3D & V_D3P & V_D2H
         V_D2H --> V_D2T
         V_SD --> MAT_SW
     end
     T3_SF & T1_P & T1_F & T1_S --> P6
-    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_SD
+    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_D3P & V_SD
 
     %% ── Phase 7: Cache Refresh ──
     subgraph P7_Cache [Phase 7: Cache]
@@ -87,29 +96,48 @@ flowchart TD
     end
     V_D2T --> P7 --> D2_CACHE
 
-    %% ── Phase 8: Monitoring ──
-    subgraph P8_Monitor [Phase 8: Monitoring]
-        MODELS[("models")]
-        P8["Monitoring & Alerts"]
+    %% ── Phase 7.4–7.6: Scoring & Serving ──
+    subgraph P74_Serving [Phase 7.4-7.6: Scoring & Serving]
+        P74["7.4 Prod-Model Scoring<br/>ScoreEngine · both cohorts"]
+        DP[("daily_predictions")]
+        P75["7.5 Slim DB Build"]
+        SLIM[("dashboard.duckdb")]
+        P76["7.6 R2 Sync"]
+        R2[("Cloudflare R2")]
+
+        P74 --> DP --> P75 --> SLIM --> P76 --> R2
     end
-    V_D3D & MODELS --> P8
+    V_D3D & V_D3P & MODELS --> P74
+    %% Slim build copies the serving tables into dashboard.duckdb
+    MAT_SW & T2_RS & T2_RK & T2_SF --> P75
+
+    %% ── Phase 8: Monitoring · Phase 10: Model Card ──
+    subgraph P8_Monitor [Phase 8 + 10: Monitoring & Model Card]
+        P8["Monitoring & Alerts"]
+        P10["10 Model-Card Rebuild<br/>(advisory)"]
+        CARD[/"model card (md/json)"/]
+        P10 --> CARD
+    end
+    V_D3D & MODELS & DP --> P8
+    MODELS --> P10
 
     %% ── Downstream Applications ──
     subgraph Downstream [Downstream Applications]
         ML_TRAIN["Model Training"]
         BT["Backtest Runner"]
         NB["Notebooks / Diagnostics"]
-        
-        %% Dashboard
-        DASH["Streamlit Dashboard"]
+        DASH["Streamlit Dashboard<br/>(local: full DB · cloud: R2 slim)"]
     end
-    
+
     D2_CACHE --> ML_TRAIN --> MODELS
     T3_SF & T1_P & MODELS --> BT
-    
-    %% Dashboard connections grouped
-    MAT_SW & V_D3D & MODELS & T2_RS & BT & T2_SF --> DASH
-    
+
+    %% Dashboard reads the MATERIALIZED serving DB — it never scores live.
+    %% Local serves from the full DB, Streamlit Cloud from the R2 slim copy.
+    SLIM --> DASH
+    R2 -.->|cloud pull-on-boot| DASH
+    CARD --> DASH
+
     %% Notebooks
     V_SEPA & V_D1 --> NB
 

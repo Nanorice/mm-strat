@@ -15,9 +15,14 @@ Maps each node in [`data_flow.mmd`](data_flow.mmd) to the Python module that pro
 | Phase 4 — Regime + 5F Risk | `src/regime_pipeline.py` · `RegimePipeline`<br>`src/pipeline/risk_5_factor.py` · `RiskFiveFactorCalculator` |
 | Phase 4b — SEPA Watchlist | `src/managers/sepa_watchlist_manager.py` · `SepaWatchlistManager` |
 | Phase 5 — T3 SEPA Features | `src/feature_pipeline.py` · `FeaturePipeline.compute_t3_features()` |
+| Phase 1.5 — Price Quality Gate | `src/orchestrators/daily_pipeline_orchestrator.py` · `_run_phase_1_5_quality_gate()` |
 | Phase 6 — Views | `src/managers/view_manager.py` · `ViewManager.create_all()` |
 | Phase 7 — Cache Refresh | `src/managers/view_manager.py` · `ViewManager.refresh_cache()` |
-| Phase 8 — Monitoring + Predictions | `src/orchestrators/daily_pipeline_orchestrator.py`<br>`src/evaluation/prediction_logger.py` |
+| Phase 7.4 — Prod-Model Scoring | `src/evaluation/score_engine.py` · `ScoreEngine`<br>`src/evaluation/prediction_logger.py` · `log_daily_predictions()` |
+| Phase 7.5 — Slim DB Build | `scripts/build_dashboard_db.py` |
+| Phase 7.6 — R2 Sync | `src/orchestrators/daily_pipeline_orchestrator.py` · `_run_phase_7_6_r2_sync()` |
+| Phase 8 — Monitoring | `src/orchestrators/daily_pipeline_orchestrator.py` |
+| Phase 10 — Model-Card Rebuild | `src/evaluation/model_card/builder.py` (advisory; WARN-only) |
 | Model Training | `scripts/train_mfe_classifier.py`<br>`src/model_registry.py` · `ModelRegistry` |
 | Backtest Runner | `src/backtest/runner.py` · `SEPABacktestRunner` |
 
@@ -40,7 +45,8 @@ Maps each node in [`data_flow.mmd`](data_flow.mmd) to the Python module that pro
 | `screener_watchlist` | 6 | Materialised `v_screener_dashboard` |
 | `d2_training_cache` | 7 | Materialised `v_d2_training` |
 | `models` | ML | Registry; written by `ModelRegistry.register()` |
-| `daily_predictions` | 8 | Prod-model scores logged per trading day |
+| `daily_predictions` | 7.4 | RAW-softprob prod-model scores per trading day; both cohorts (breakout + pre-breakout) |
+| `dashboard.duckdb` | 7.5 | Slim serving DB (subset of tables); copied to R2 for Streamlit Cloud |
 
 ## Dashboard pages
 
