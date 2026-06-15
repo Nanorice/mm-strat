@@ -293,6 +293,39 @@ def load_risk_5f() -> pd.Series | None:
 
 
 @st.cache_data(ttl=300)
+def load_regime_history(days: int | None = None) -> pd.DataFrame:
+    """M03 regime score + 3 pillars over time (date asc). `days=None` → full history."""
+    where = "" if days is None else f"WHERE date >= (SELECT MAX(date) FROM t2_regime_scores) - INTERVAL {int(days)} DAY"
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT date, m03_score, m03_pillar_trend, m03_pillar_liq, m03_pillar_risk
+            FROM t2_regime_scores
+            {where}
+            ORDER BY date
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_risk_history(days: int | None = None) -> pd.DataFrame:
+    """5F factor z-scores + weighted_z over time (date asc). `days=None` → full history."""
+    where = "" if days is None else f"AND date >= (SELECT MAX(date) FROM t2_risk_scores) - INTERVAL {int(days)} DAY"
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT date, z_vix, z_hy, z_term, z_trend, z_slope, weighted_z
+            FROM t2_risk_scores
+            WHERE target_exposure IS NOT NULL
+            {where}
+            ORDER BY date
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_watchlist() -> pd.DataFrame:
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:

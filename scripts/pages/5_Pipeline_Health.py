@@ -307,6 +307,13 @@ def render_t1_failures() -> None:
             "deactivation via `python tools/deactivate_tickers.py <TICKERS> --execute`."
         )
 
+    # Ticker → Finviz link via LinkColumn (mirror watchlist pattern); the
+    # display_text regex strips the URL back to the bare ticker.
+    fails = fails.copy()
+    fails["ticker"] = fails["ticker"].apply(
+        lambda t: f"https://finviz.com/quote.ashx?t={t}" if pd.notna(t) else None
+    )
+
     rename = {
         "ticker": "Ticker", "phase": "Phase", "error_type": "Error",
         "days_failing": "Days Failing",
@@ -314,7 +321,14 @@ def render_t1_failures() -> None:
         "sample_detail": "Sample Detail",
     }
     show = fails.rename(columns=rename)
-    st.dataframe(show, use_container_width=True, hide_index=True, height=380)
+    st.dataframe(
+        show, use_container_width=True, hide_index=True, height=380,
+        column_config={
+            "Ticker": st.column_config.LinkColumn(
+                "Ticker", display_text=r"finviz\.com/quote\.ashx\?t=(.+)$"
+            ),
+        },
+    )
     st.caption(f"Total: {len(fails)} (ticker, phase, error_type) tuples.")
 
 

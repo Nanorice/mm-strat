@@ -224,6 +224,35 @@ dashboard scores → dashboard P(HR) ≠ backtest P(HR) for the same model+date)
 
 ---
 
+## Deferred follow-ups (logged, not started)
+
+### F1 — watchlist ↔ deployment entry-date divergence (data integrity)
+`screener_watchlist` and the SEPA deployment views (`v_d1_candidates` →
+`v_d3_deployment`) disagree on "entry date". E.g. HPE: watchlist entry 2026-05-13
+vs v_d1 SEPA session-entry 2024-09-25 (its current breakout is a continuation of
+a session opened in 2024; v_d1 emits one row per session-entry day). Consequence:
+a watchlist row's entry_date often has no matching scored deployment row, so its
+M01 score is legitimately blank (captioned in the watchlist now). Affects any
+watchlist↔scored-data join. Decide which "entry" is canonical and reconcile the
+two sources. Pre-existing; out of scope for the dashboard sprint.
+
+### F2 — watchlist activity / exit tracking (FEATURE)
+No UI surfaces when a name leaves the watchlist. User example: LITE and AAOI were
+big performers and are now gone with no way to see the removal or inspect exit
+attributes. **Data already exists — mostly a rendering task, not new instrumentation:**
+- `screener_watchlist` carries every EXITED row with entry_date/exit_date/
+  pct_return/days_held/status. LITE = EXITED 2025-07-15→2026-05-28, +777%, 317d.
+- `screener_membership` tracks universe add/remove as a STATE (`is_active`,
+  `effective_date`, `consec_fail_days`) — not an event log, but exit timing is
+  derivable from `is_active` flips per effective_date.
+Build: a "Recent exits / activity" panel (status transitions in last N days,
+exit_date, realized return, days held, exit reason if derivable), Finviz links,
+sortable. Optionally a per-ticker history drill-down (the multi-row trade history
+above shows AAOI/LITE have many past round-trips).
+- **Data-integrity nit to resolve while here**: AAOI shows status=ACTIVE yet has
+  exit_date=2026-06-12 (+332%). ACTIVE-with-exit_date is contradictory — confirm
+  whether the watchlist materializer left a stale exit_date or mislabeled status.
+
 ## Recommended order this sprint
 1. **DESIGN SIGN-OFF** (above) — esp. calibrated-vs-raw stored contract.
 2. **Shared scorer extraction + watchlist backfill (Today #2)** — both cohorts, full d3 window.
