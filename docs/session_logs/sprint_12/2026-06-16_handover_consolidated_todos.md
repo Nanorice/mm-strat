@@ -110,7 +110,7 @@ inserted; the model card kept its "10" label. Documented in diagrams + memory
 - [x] **PN2 — Superseded by a redesign proposal.** Investigating the rename surfaced
   the root cause: phase keys are **positional + persisted**, scattered across
   orchestrator/config/`pipeline_runs`/heatmap. Wrote
-  `docs/architecture/pipeline_phase_keys.md` proposing a **stable-id phase registry**
+  `docs/session_logs/sprint_12/pipeline_phase_keys.md` proposing a **stable-id phase registry**
   (single source of truth; id ≠ order ≠ label).
 - 🔴 **NEW FINDING (flagged, NOT fixed): `config.py PIPELINE_FAILURE_MODES` has
   drifted from the real phase keys** — 9 orchestrator phases have no config entry,
@@ -213,7 +213,7 @@ PN1/PN2 (decided keep-10 + wrote phase-registry proposal).
 
 Remaining, in priority:
 1. **Phase-failure-mode drift fix** (needs your go — changes prod HALT/WARN) OR the
-   full phase-registry refactor. Spec: `docs/architecture/pipeline_phase_keys.md`.
+   full phase-registry refactor. Spec: `docs/session_logs/sprint_12/pipeline_phase_keys.md`.
 2. **Test-harness fix** — `tests/test_view_manager.py` is broken on HEAD (static
    calls to instance `_create_*` methods). Quick win; restores view-layer test cover.
 3. Reconcile **todo.md S1–S4** against git (S2/S3 likely already landed) and finish

@@ -358,7 +358,7 @@ class PipelineFailureMode(Enum):
 # the default — but the real halt/continue decision is ALSO hardcoded at each call
 # site, so this map is largely dead config today. Editing a value here may have NO
 # effect. Do not trust it as the control surface until the registry redesign lands.
-# See docs/architecture/pipeline_phase_keys.md.
+# See docs/session_logs/sprint_12/pipeline_phase_keys.md.
 PIPELINE_FAILURE_MODES = {
     # Phase 1: T1 Ingestion
     "phase_1_t1_price": PipelineFailureMode.HALT,         # CRITICAL - can't proceed without prices
