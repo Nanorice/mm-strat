@@ -16,10 +16,13 @@
 - [ ] Wire page 5 render: overview+pipeline+serving inline, full canonical in expander
 - [ ] Visually verify rendered layout on page 5
 
-### INFRA — view-layer cleanup (held pending go)
-- [ ] Delete dead view `v_d1_trades` (0 consumers, alias of v_d1_candidates)
-- [ ] Retire `v_d2r_hydrated` alias — migrate 2 scripts to `v_d2_hydrated`, drop alias
-- [ ] Re-run `ViewManager.create_all()` after the above
+### INFRA — view-layer cleanup
+- [x] Delete dead view `v_d1_trades` (0 consumers, alias of v_d1_candidates)
+- [x] Retire `v_d2r_hydrated` alias — repointed internal `v_d2_training` + migrated
+  `validate_stop_loss_logic.py` / `audit_fundamental_schema.py`, dropped alias.
+  `create_all()` now `DROP VIEW IF EXISTS` both retired views (CREATE OR REPLACE
+  never drops what it stops creating).
+- [x] Re-run `ViewManager.create_all()` — done by the daily pipeline (no manual run)
 
 ### INFRA — phase numbering gap (Phase 9 missing)
 - [ ] Orchestrator jumps Phase 8 → 10, **no Phase 9**. Renumber model card 10→9

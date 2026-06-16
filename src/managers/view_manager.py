@@ -55,9 +55,8 @@ class ViewManager:
     Views (Phase 5.1 - Updated to use t3_sepa_features):
         v_sepa_candidates      — Trend template (C1-C9) + metadata
         v_d1_candidates        — Full SEPA signal (C1-C11) with lags/deltas
-        v_d1_trades            — Alias for v_d1_candidates (standardized naming)
         v_d2_features          — D1 + fundamentals (point-in-time)
-        v_d2_hydrated          — D1 trades hydrated to SEPA exit (formerly v_d2r_hydrated)
+        v_d2_hydrated          — D1 trades hydrated to SEPA exit
         v_d2_training          — D2 features + outcomes + log transforms
         v_d3_deployment        — Last 252 days of SEPA candidates for scoring
         v_screener_dashboard   — SEPA screener tracker (entry date, return, company info)
@@ -75,7 +74,6 @@ class ViewManager:
             self._create_v_shares_combined,
             self._create_v_sepa_candidates,
             self._create_v_d1_candidates,
-            self._create_v_d1_trades,
             self._create_v_d2_features,
             self._create_v_d2_hydrated,
             self._create_v_d2_training,
@@ -86,6 +84,11 @@ class ViewManager:
         ]
         con = duckdb.connect(self.db_path)
         try:
+            # Retired views: CREATE OR REPLACE never drops what it stops creating,
+            # so explicitly remove the deprecated v_d1_trades alias and the
+            # v_d2r_hydrated back-compat alias on each run.
+            con.execute("DROP VIEW IF EXISTS v_d1_trades")
+            con.execute("DROP VIEW IF EXISTS v_d2r_hydrated")
             for fn in views:
                 fn(con)
             print("[OK] All views created successfully")
@@ -552,10 +555,7 @@ class ViewManager:
                 h.close < h.sl_level AS sl_hit
             FROM hydrated h
         """)
-        # Create backward-compatible alias
-        con.execute("CREATE OR REPLACE VIEW v_d2r_hydrated AS SELECT * FROM v_d2_hydrated")
         print(f"   [OK] v_d2_hydrated: SEPA-bounded hydration with SMA/ATR/stop-loss")
-        print(f"   [OK] v_d2r_hydrated: Alias created for backward compatibility")
 
     # ------------------------------------------------------------------
     # VIEW 5: v_d2_training — D2 Features + Outcomes + Log Transforms
@@ -578,7 +578,7 @@ class ViewManager:
                     MAX(sepa_exit_date) AS sepa_exit_date,
                     MAX(days_in_trade) AS holding_days,
                     COUNT(*) AS days_observed
-                FROM v_d2r_hydrated
+                FROM v_d2_hydrated
                 GROUP BY trade_id
             ),
             -- Stop-loss: first day close breached the adaptive SL level
@@ -588,7 +588,7 @@ class ViewManager:
                     h.ticker,
                     h.entry_price,
                     MIN(h.date) AS sl_date
-                FROM v_d2r_hydrated h
+                FROM v_d2_hydrated h
                 WHERE h.sl_hit
                   AND h.days_in_trade > 0  -- skip entry day itself
                 GROUP BY h.trade_id, h.ticker, h.entry_price
@@ -636,19 +636,6 @@ class ViewManager:
             LEFT JOIN sl_exits sl ON f.trade_id = sl.trade_id
         """)
         print("   [OK] v_d2_training: features + outcomes (deferred — query to check row count)")
-
-    # ------------------------------------------------------------------
-    # VIEW 6: v_d1_trades — Alias for v_d1_candidates (Standardized Naming)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _create_v_d1_trades(con: duckdb.DuckDBPyConnection) -> None:
-        """Phase 5.1: Alias for v_d1_candidates following v_dN_* naming convention."""
-        con.execute("""
-            CREATE OR REPLACE VIEW v_d1_trades AS
-            SELECT * FROM v_d1_candidates
-        """)
-        print("   [OK] v_d1_trades: Alias for v_d1_candidates (standardized naming)")
 
     # ------------------------------------------------------------------
     # VIEW 7: v_d3_deployment — Last 252 Days for Model Scoring

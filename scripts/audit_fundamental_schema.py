@@ -204,7 +204,7 @@ def generate_report(audit_result: dict):
     print(f"  1. [DONE] Schema audit complete (this script)")
     print(f"  2. [TODO] Document missing columns in reconciliation_plan.md")
     print(f"  3. [TODO] Add missing ratio columns (ALTER TABLE + UPDATE)")
-    print(f"  4. [TODO] Validate v_d2r_hydrated stop-loss logic (Milestone 2.3)")
+    print(f"  4. [TODO] Validate v_d2_hydrated stop-loss logic (Milestone 2.3)")
     print(f"  5. [TODO] Weekly FMP validation (Phase 7.1)")
 
 

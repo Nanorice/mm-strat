@@ -1,5 +1,5 @@
 """
-Milestone 2.3: Validate v_d2r_hydrated Stop-Loss Logic
+Milestone 2.3: Validate v_d2_hydrated Stop-Loss Logic
 
 Tests 5 critical edge cases:
 1. Gap-down below stop on entry day
@@ -96,7 +96,7 @@ def test_gap_down_entry_day(con: duckdb.DuckDBPyConnection) -> str:
     WITH test_trades AS (
         SELECT DISTINCT
             trade_id, ticker, entry_date, entry_price
-        FROM v_d2r_hydrated
+        FROM v_d2_hydrated
         WHERE days_in_trade = 0  -- entry day only
           AND close < sl_level    -- gap-down below stop
         LIMIT 5
@@ -112,7 +112,7 @@ def test_gap_down_entry_day(con: duckdb.DuckDBPyConnection) -> str:
         h.sl_hit,
         sl.sl_date IS NOT NULL AS sl_triggered_in_training
     FROM test_trades t
-    LEFT JOIN v_d2r_hydrated h
+    LEFT JOIN v_d2_hydrated h
         ON t.trade_id = h.trade_id AND h.days_in_trade = 0
     LEFT JOIN v_d2_training sl
         ON t.trade_id = sl.trade_id
@@ -152,7 +152,7 @@ def test_atr_vs_percent_stop(con: duckdb.DuckDBPyConnection) -> str:
                 THEN 'ATR dominant'
                 ELSE 'Pct dominant'
             END AS dominant_stop
-        FROM v_d2r_hydrated
+        FROM v_d2_hydrated
         WHERE days_in_trade = 1  -- first day after entry
           AND atr_20d IS NOT NULL
     )
@@ -192,7 +192,7 @@ def test_weekend_handling(con: duckdb.DuckDBPyConnection) -> str:
     WITH friday_entries AS (
         SELECT DISTINCT
             trade_id, ticker, entry_date, entry_price
-        FROM v_d2r_hydrated
+        FROM v_d2_hydrated
         WHERE DAYOFWEEK(entry_date) = 5  -- Friday = 5 (ISO)
           AND days_in_trade > 0
         LIMIT 10
@@ -206,7 +206,7 @@ def test_weekend_handling(con: duckdb.DuckDBPyConnection) -> str:
             h.days_in_trade,
             h.sl_hit
         FROM friday_entries f
-        INNER JOIN v_d2r_hydrated h
+        INNER JOIN v_d2_hydrated h
             ON f.trade_id = h.trade_id
         WHERE h.days_in_trade BETWEEN 1 AND 3
         ORDER BY f.trade_id, h.date
@@ -271,7 +271,7 @@ def test_exit_on_stop_day(con: duckdb.DuckDBPyConnection) -> str:
         MAX(h.date) AS last_hydrated_date,
         COUNT(DISTINCT h.date) AS total_hydrated_days
     FROM sl_trades s
-    LEFT JOIN v_d2r_hydrated h ON s.trade_id = h.trade_id
+    LEFT JOIN v_d2_hydrated h ON s.trade_id = h.trade_id
     GROUP BY s.trade_id, s.entry_date, s.sl_date, s.sl_exit_date, s.sl_pct
     """
     df = con.execute(query).df()

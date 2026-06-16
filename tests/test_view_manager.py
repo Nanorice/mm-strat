@@ -76,7 +76,7 @@ def _build_db(daily_features_rows: list[dict], profiles: list[dict] | None = Non
     df = pd.DataFrame(rows)
     con.execute("CREATE TABLE daily_features AS SELECT * FROM df")
 
-    # price_data (needed by v_d2r_hydrated)
+    # price_data (needed by v_d2_hydrated)
     price_rows = [
         {'ticker': r['ticker'], 'date': r['date'],
          'open': r.get('open', 100.0), 'high': r.get('high', 105.0),
@@ -415,7 +415,7 @@ class TestTradePrices(unittest.TestCase):
 
 
 class TestHydratedView(unittest.TestCase):
-    """Test v_d2r_hydrated exit detection."""
+    """Test v_d2_hydrated exit detection."""
 
     def test_exit_on_trend_break(self):
         """Trade should exit when trend_ok goes False."""
@@ -432,9 +432,9 @@ class TestHydratedView(unittest.TestCase):
 
         con = duckdb.connect(TEST_DB)
         ViewManager._create_v_d1_candidates(con)
-        ViewManager._create_v_d2r_hydrated(con)
+        ViewManager._create_v_d2_hydrated(con)
         exit_date = con.execute(
-            "SELECT sepa_exit_date FROM v_d2r_hydrated WHERE ticker='AAPL' LIMIT 1"
+            "SELECT sepa_exit_date FROM v_d2_hydrated WHERE ticker='AAPL' LIMIT 1"
         ).fetchone()[0]
         con.close()
         # Exit = next trading day after last trend_ok (day 11) = day 12
