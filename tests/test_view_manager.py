@@ -23,7 +23,7 @@ def _build_db(feature_rows: list[dict], profiles: list[dict] | None = None) -> s
     """Build a minimal DuckDB for view tests, matching the Phase 5.1 view sources.
 
     v_d1_candidates reads `t2_screener_features` (session/trend/breakout) and
-    `t3_sepa_features` (enriched features, INNER JOIN'd on ticker+date), plus
+    `t3_sepa_features` (enriched features, LEFT JOIN'd on ticker+date), plus
     `price_data` (entry/exit prices) and `company_profiles`. We seed all four
     from one row spec so a candidate actually materializes.
 
@@ -313,6 +313,50 @@ class TestSessionStateMachine(unittest.TestCase):
         finally:
             con.close()
         self.assertEqual(trigger_count, 1, f"Expected 1 trigger row, got {trigger_count}")
+
+    def test_missing_t3_row_keeps_trade_with_null_features(self):
+        """A t3 hole on the entry date must NOT delete the trade (LEFT JOIN guard).
+
+        t3_sepa_features is lazily materialized and can have transient (ticker,date)
+        holes. The entry-row join is LEFT (not INNER): a missing t3 row yields a
+        visible trade with NULL features instead of silently vanishing. Regression
+        guard for the v_d1_candidates trade-drop bug (F1).
+        """
+        dates = _dates('2024-01-02', 12)
+        rows = []
+        for i, d in enumerate(dates):
+            rows.append({
+                'ticker': 'HPE', 'date': d, 'close': 100.0 + i,
+                'trend_ok': True,
+                'breakout_ok': i == 4,           # entry on index 4
+                'rsi_14': 55.0,
+            })
+        _build_db(rows)
+
+        entry_date = dates[4]
+        con = duckdb.connect(TEST_DB)
+        try:
+            # Punch a hole: delete the t3 row on the entry date (t2 row stays).
+            con.execute(
+                "DELETE FROM t3_sepa_features WHERE ticker='HPE' AND date=?", [entry_date]
+            )
+        finally:
+            con.close()
+
+        vm = ViewManager(TEST_DB)
+        con = duckdb.connect(TEST_DB)
+        try:
+            vm._create_v_d1_candidates(con)
+            row = con.execute(
+                "SELECT entry_date, rsi_14, return_pct FROM v_d1_candidates "
+                "WHERE ticker='HPE'"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(len(row), 1, f"Trade must survive the t3 hole, got {len(row)} rows")
+        self.assertEqual(row[0][0], entry_date, "entry_date must come from candidates, not t3")
+        self.assertIsNone(row[0][1], "rsi_14 must be NULL (t3 row absent)")
+        self.assertIsNotNone(row[0][2], "return_pct comes from price_data, must be non-NULL")
 
     def test_no_liquidity_filter_in_view(self):
         """v_d1_candidates has NO liquidity filter (Phase 5.1+).

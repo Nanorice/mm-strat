@@ -13,7 +13,17 @@ Anything not listed here is either done (see commits / `DONE_*.md`) or explicitl
 
 **Branch:** `infra_uplift`.
 
-### Done in follow-up session (2026-06-16 cont.) — D1–D3, V1–V2, DB parity
+### Done in follow-up session (2026-06-16 cont.) — D1–D3, V1–V2, DB parity, F1
+- `<uncommitted>` **F1 — t3 hole bug (v_d1_candidates trade-drop).** Handover's
+  "entry-date divergence" was misdiagnosed — see §3 F1 for the full write-up. Root
+  cause: lazy t3 is materialized forward-only from global MAX(date), so late
+  `sepa_watchlist` admits leave permanent (ticker,date) holes behind the frontier;
+  `v_d1_candidates`' entry-row INNER JOIN to t3 then silently deletes whole trades.
+  Fix = self-healing Phase 5 hole-detector + INNER→LEFT guard on v_d1 +
+  one-time 12-quarter backfill. Verified 0 holes 2001→2026; HPE 8→9 rows, parity
+  with screener_watchlist. Touches `daily_pipeline_orchestrator.py`,
+  `view_manager.py`, `tests/test_view_manager.py`. **Not yet committed.**
+
 - `61a7d70` **D1+D2+D3** — page-5 Data Flow now renders **4 tabs** (Overview /
   Pipeline / Serving / **Full**=canonical `data_flow.mmd`) via reused
   `_render_mermaid_file`. The 3 drafts were already committed (`47b8085`), so D1
@@ -179,11 +189,26 @@ Status of that plan's items after this session:
 - [x] G1 data_flow.mmd reconcile — `83dea91` (+ overview/pipeline/serving drafts, see §1)
 
 **Still open from that plan (deferred follow-ups, were out of dashboard-sprint scope):**
-- [ ] **F1 — Watchlist ↔ deployment entry-date divergence (data integrity).**
-  `screener_watchlist` entry_date vs `v_d1_candidates` SEPA session-entry disagree
-  (e.g. HPE 2026-05-13 vs 2024-09-25). A watchlist row's entry_date often has no
-  matching scored deployment row → legitimately blank M01 score. Decide which
-  "entry" is canonical and reconcile.
+- [x] **F1 — Watchlist ↔ deployment entry-date divergence. ✅ DONE (root cause was
+  MISDIAGNOSED).** The two views do NOT disagree on entry-date *logic* — their
+  session-detection CTEs are byte-identical, HPE sessions 1-8 match exactly. The
+  "2026-05-13 vs 2024-09-25" was comparing the watchlist's newest (ACTIVE) entry
+  against v_d1's most recent *surviving* (EXITED) entry. **Real bug:** `v_d1_candidates`
+  INNER-JOINs the entry-date row to `t3_sepa_features` (lazily materialized). T3's
+  true universe is `sepa_watchlist ∩ t2_screener_features`, evaluated forward-only
+  from global `MAX(date)`; tickers admitted to sepa_watchlist over time never get
+  their earlier in-window history backfilled → permanent (ticker,date) holes →
+  INNER JOIN silently DELETES whole trades (and their M01 score). Quantified: 6,691
+  holes / 661 dates, 2023-09→2026-05. **Fix (3 parts):** (1) Phase 5's single-day,
+  breakout-only coverage check replaced with `_t3_holed_dates` (trailing 30d scan,
+  `sepa_watchlist ∩ t2` expected set — mirrors t3's real source) + `_recompute_t3_dates`
+  (DELETE+recompute span) → self-heals nightly. (2) `v_d1_candidates` entry-row join
+  INNER→LEFT (`f.* EXCLUDE (ticker,date)`, identity from `cand`): a missing t3 row
+  now yields a visible trade with NULL features instead of vanishing — defense in
+  depth. (3) One-time backfill of 2023-Q3→2026-Q2 (12 quarters, 8 min via
+  `backfill_t3_sepa_features.py`). **Verified:** 0 holes across 2001→2026; HPE now 9
+  rows in BOTH views (was 8 in v_d1), 2026-05-13 present with real `rsi_14=28.21`.
+  New regression test `test_missing_t3_row_keeps_trade_with_null_features`.
 - [x] **F2 — Watchlist activity / exit tracking (feature). ✅ DONE.** New
   **Watchlist Activity** section on the Today page (3 tabs: Recent exits /
   Activity feed / Ticker history) + a 7/14/30-day window. 3 cached loaders in
@@ -250,7 +275,13 @@ caption text says ≥14d. Align one to the other (`5_Pipeline_Health.py`).
 
 **Closed this session:** D1–D3 (diagrams), V1–V2 (view cleanup), 2b (DB parity),
 PN1/PN2 (decided keep-10 + wrote phase-registry proposal), test_view_manager fix,
-**phase-key registry (registry-only) + config-drift fix.**
+**phase-key registry (registry-only) + config-drift fix**, **F1 (t3 hole bug —
+self-heal + LEFT-JOIN guard + 12-quarter backfill; uncommitted).**
+
+**Loose end on F1:** the new Phase 5 self-heal was exercised via the methods
+directly, not through a full orchestrator run. Next nightly run will exercise it;
+optionally dry-run Phase 5 against today to confirm it reports "0 holes" before
+relying on it. F1 changes are **unstaged** — commit when ready.
 
 Remaining, in priority:
 1. ✅ **DONE — Phase-key convention change (FULL: registry + part b).** Stable-id

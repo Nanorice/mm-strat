@@ -1083,14 +1083,19 @@ class DailyPipelineOrchestrator:
         start_date = (pd.to_datetime(max_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
         if start_date > last_trading_day:
-            # Date is current, but check for coverage gaps
-            deficit = self._t3_coverage_deficit(last_trading_day)
-            if deficit > 0:
-                logger.warning(f"[Phase 5] Coverage gap: {deficit} breakout tickers missing for {last_trading_day} — recomputing")
-                rows = self.feature_pipeline.compute_t3_features(
-                    start_date=last_trading_day,
-                    end_date=last_trading_day
+            # Frontier is current — but the universe (sepa_watchlist) grows over time,
+            # and compute_t3_features only ever writes forward from MAX(date). A ticker
+            # admitted to sepa_watchlist late never gets its earlier in-window history
+            # backfilled, leaving permanent (ticker,date) holes BEHIND the frontier that
+            # silently delete trades from v_d1_candidates (entry-row INNER JOIN). Scan a
+            # trailing window for any such hole and re-materialize the affected dates.
+            holed_dates = self._t3_holed_dates(last_trading_day)
+            if holed_dates:
+                logger.warning(
+                    f"[Phase 5] Backfill: {len(holed_dates)} date(s) have t3 holes "
+                    f"({holed_dates[0]} .. {holed_dates[-1]}) — re-materializing full universe"
                 )
+                rows = self._recompute_t3_dates(holed_dates)
                 return {'rows_processed': rows}
             logger.info(f"[Phase 5] t3_sepa_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
             return {'rows_processed': 0}
@@ -1102,23 +1107,67 @@ class DailyPipelineOrchestrator:
         )
         return {'rows_processed': rows}
 
-    def _t3_coverage_deficit(self, target_date: str) -> int:
-        """Return number of breakout tickers missing from t3_sepa_features for target_date."""
+    # Trailing window (calendar days) scanned for t3 holes each daily run. Covers the
+    # recent past where late sepa_watchlist admissions create holes, without rescanning
+    # all history every night. ~30d comfortably spans a multi-day pipeline outage.
+    T3_BACKFILL_LOOKBACK_DAYS = 30
+
+    def _t3_holed_dates(self, target_date: str, lookback_days: int = None) -> list:
+        """Dates within the trailing window where t3 is missing rows it should have.
+
+        Expected universe per date = sepa_watchlist tickers that have a
+        `t2_screener_features` row on that date. This MUST mirror what
+        compute_t3_features actually materializes: its INSERT inner-joins
+        t2_screener_features (feature_pipeline.py), so a ticker with a raw
+        price_data bar but no t2 row is *legitimately* absent from t3 — using
+        price_data as the expected set would over-report stale-ticker edges as
+        holes and re-trigger recompute every night. A date is "holed" if any
+        expected (ticker,date) is absent from t3. Returns sorted date strings.
+        """
+        import pandas as pd
+        lookback = lookback_days if lookback_days is not None else self.T3_BACKFILL_LOOKBACK_DAYS
+        window_start = (
+            pd.to_datetime(target_date) - pd.Timedelta(days=lookback)
+        ).strftime('%Y-%m-%d')
         con = duckdb.connect(self.db_path, read_only=True)
         try:
-            expected = con.execute(f"""
-                SELECT COUNT(DISTINCT ticker)
-                FROM t2_screener_features
-                WHERE date = '{target_date}' AND trend_ok = TRUE AND breakout_ok = TRUE
-            """).fetchone()[0]
-            actual = con.execute(f"""
-                SELECT COUNT(DISTINCT ticker)
-                FROM t3_sepa_features
-                WHERE date = '{target_date}'
-            """).fetchone()[0]
-            return max(0, expected - actual)
+            rows = con.execute(f"""
+                WITH expected AS (
+                    SELECT t2.ticker, t2.date
+                    FROM t2_screener_features t2
+                    WHERE t2.date BETWEEN '{window_start}' AND '{target_date}'
+                      AND t2.ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)
+                )
+                SELECT DISTINCT e.date
+                FROM expected e
+                LEFT JOIN t3_sepa_features t3
+                    ON e.ticker = t3.ticker AND e.date = t3.date
+                WHERE t3.ticker IS NULL
+                ORDER BY e.date
+            """).fetchall()
         finally:
             con.close()
+        return [r[0].strftime('%Y-%m-%d') for r in rows]
+
+    def _recompute_t3_dates(self, dates: list) -> int:
+        """DELETE then re-materialize the given dates (full universe) over their span.
+
+        compute_t3_features uses a plain INSERT and requires an empty target window,
+        so we clear the whole [min,max] span first. Recomputing the full span (not just
+        the holed dates) is simpler and keeps the empty-window contract; the extra
+        already-present dates in between are cheap relative to the per-ticker warmup.
+        """
+        if not dates:
+            return 0
+        start_date, end_date = dates[0], dates[-1]
+        con = duckdb.connect(self.db_path)
+        try:
+            con.execute(
+                f"DELETE FROM t3_sepa_features WHERE date BETWEEN '{start_date}' AND '{end_date}'"
+            )
+        finally:
+            con.close()
+        return self.feature_pipeline.compute_t3_features(start_date=start_date, end_date=end_date)
 
     def _run_phase_6_views(self, target_date: str) -> Dict:
         """Phase 6: Refresh all views."""

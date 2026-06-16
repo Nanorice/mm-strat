@@ -349,9 +349,17 @@ class ViewManager:
             ),
             -- Step 6: Enrich with full features + lags computed across ALL days
             enriched AS (
-                -- v3.1+: pre-computed pct_chg features from t3_sepa_features (no lags needed)
+                -- v3.1+: pre-computed pct_chg features from t3_sepa_features (no lags needed).
+                -- LEFT JOIN (not INNER) to t3: T3 is lazily materialized and can have
+                -- transient (ticker,date) holes (e.g. a late sepa_watchlist admission).
+                -- An INNER JOIN silently DELETES the whole trade on a missing entry row;
+                -- LEFT keeps the trade with NULL features so it stays visible/scoreable.
+                -- ticker/date come from `cand` (always present) — EXCLUDE the t3 copies
+                -- so they don't surface as NULL when f is unmatched.
                 SELECT
-                    f.*,
+                    cand.ticker,
+                    cand.date,
+                    f.* EXCLUDE (ticker, date),
                     c.sector,
                     c.industry,
                     cand.trade_id,
@@ -364,11 +372,11 @@ class ViewManager:
                         THEN ((tp.exit_price / tp.entry_price) - 1.0) * 100.0
                     END AS return_pct
                 FROM candidates cand
-                INNER JOIN t3_sepa_features f
+                LEFT JOIN t3_sepa_features f
                     ON cand.ticker = f.ticker
                     AND cand.date = f.date
                     AND f.feature_version = '{self.feature_version}'
-                INNER JOIN company_profiles c ON f.ticker = c.ticker
+                INNER JOIN company_profiles c ON cand.ticker = c.ticker
                 INNER JOIN trade_prices tp ON cand.trade_id = tp.trade_id
             )
             SELECT
