@@ -71,10 +71,9 @@ Goal: carve out a `dashboard.duckdb` from the 72 GB main DB containing only what
   requirements, localhost-header revisited — `a4b2a0e`/`d5f3d12`/`02ae9cd`/`d84d467`.
   **Reconcile fix (`9d762f3`):** dashboard.py header named wrong R2 key vars
   (`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`); corrected to match code/.env.example.
-- [ ] **S4** spare-PC Task Scheduler runbook — **GENUINELY OPEN.** No runbook exists.
-  Needs hardware decisions (builder = dev box vs spare PC; wake-on-LAN vs BIOS wake)
-  + end-to-end verify (pipeline → 7.5 build → 7.6 upload → remote shows fresh data).
-  Blocked on user hardware choices; can scaffold the runbook on request.
+- [ ] **S4** Task Scheduler runbook — **OPEN.** No runbook exists. **DECIDED: builder =
+  current dev box** (no spare-PC migration / wake-on-LAN). Remaining: schtasks/XML for
+  nightly `run_daily_pipeline.py` + end-to-end verify + failure alert. Deferred to next session.
 
 ### T2: Model Card Phase 4 — Promotion Gate
 

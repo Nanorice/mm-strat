@@ -191,9 +191,12 @@ caption text says ≥14d. Align one to the other (`5_Pipeline_Health.py`).
 - [x] **S3** Streamlit Cloud shim + secrets bridge + duckdb req + localhost-header
   revisit — landed (`a4b2a0e`/`d5f3d12`/`02ae9cd`/`d84d467`). **Reconcile fix (`9d762f3`):**
   dashboard.py header named the wrong R2 secret var names → corrected.
-- [ ] **S4** spare-PC Task Scheduler runbook — **GENUINELY OPEN, no runbook exists.**
-  Blocked on hardware decisions (builder = dev box vs spare PC; wake-on-LAN vs BIOS
-  wake) + end-to-end verify. I can scaffold it; needs your hardware choices to finish.
+- [ ] **S4** Task Scheduler runbook — **OPEN, no runbook exists.** **DECIDED 2026-06-16:
+  builder = current dev box** (67 GB DB + .env already local; no migration, no spare-PC
+  wake-on-LAN needed). Remaining: write the Task Scheduler entry (schtasks/XML) for
+  nightly `run_daily_pipeline.py` (ends with Phase 7.5 build + 7.6 upload) + an
+  end-to-end verify (pipeline → slim rebuild → R2 upload → remote shows fresh data) +
+  failure alerting. Deferred to next session.
 - [ ] Daily: "try dashboard remote" + "figure out data sync" — folds into S4 verify.
 
 ### P1 — T4 Documentation (do after infra settles)
