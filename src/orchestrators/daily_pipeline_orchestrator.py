@@ -317,6 +317,11 @@ class DailyPipelineOrchestrator:
         # Phase 10: Advisory model-card rebuild for the prod model (WARN-only).
         # Skips when the card is already fresh; a failure here never halts the
         # daily pipeline (the card is informational, not a gate).
+        # NOTE: there is intentionally no Phase 9 — monitoring was "Phase 9" in the
+        # old layout and became Phase 8 when serving steps 7.4–7.6 were inserted;
+        # the card kept its "10". The phase keys are positional and persisted, so
+        # renumbering strands pipeline_runs history. See
+        # docs/architecture/pipeline_phase_keys.md for the proposed stable-id fix.
         phase_success, phase_stats = self._execute_phase(
             "phase_10_model_card",
             lambda: self._run_phase_10_model_card(target_date),

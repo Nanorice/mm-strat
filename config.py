@@ -350,6 +350,15 @@ class PipelineFailureMode(Enum):
 # HALT: Critical phases that must succeed (price data, daily_features)
 # WARN: Non-critical phases that can fail without blocking (fundamentals, macro)
 # SKIP: Optional phases (T3 lazy can lag by 1 day)
+#
+# ⚠️ KNOWN DRIFT (2026-06-16, flagged not fixed): several keys here no longer
+# match the orchestrator's actual phase keys (e.g. this map says phase_6_t3_lazy /
+# phase_7_views / phase_8_cache; the orchestrator uses phase_6_views / phase_7_cache
+# / phase_8_monitoring). _execute_phase does .get(key, HALT), so drifted phases hit
+# the default — but the real halt/continue decision is ALSO hardcoded at each call
+# site, so this map is largely dead config today. Editing a value here may have NO
+# effect. Do not trust it as the control surface until the registry redesign lands.
+# See docs/architecture/pipeline_phase_keys.md.
 PIPELINE_FAILURE_MODES = {
     # Phase 1: T1 Ingestion
     "phase_1_t1_price": PipelineFailureMode.HALT,         # CRITICAL - can't proceed without prices

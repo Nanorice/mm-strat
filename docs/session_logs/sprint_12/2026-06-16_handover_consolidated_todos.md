@@ -104,16 +104,20 @@ old 9-phase layout and was renumbered to 8 when serving phases 7.4–7.6 were
 inserted; the model card kept its "10" label. Documented in diagrams + memory
 `project_orchestrator_phase_list`. This is a naming smell, not a missing step.
 
-- [ ] **PN1 — Close the gap.** Pick one: (a) renumber model card 10 → 9, or
-  (b) leave 10 and add a comment marking 9 as intentionally retired. Recommend (a).
-- [ ] **PN2 — If renumbering (option a), update the ripple:** the string
-  `"phase_10_model_card"` is the phase **key persisted to `pipeline_runs`** and used
-  for idempotency (`run_manager.is_phase_completed` / `start_phase`) + `run_stats['phase_10']`.
-  Renaming the key means old completed-phase rows won't match → either migrate the
-  stored key or accept one re-run. Also fix the docstring phase list (line ~51) and
-  the `config.py` `phase_10_model_card: WARN` entry. Touch the 3 diagrams' captions.
-- Effort: ~20 min if option (b); ~45 min if option (a) incl. the persisted-key ripple.
-  **STILL OPEN** — not touched this session.
+- [x] **PN1 — Decided: keep Phase 10 as-is.** The gap is cosmetic (idempotency is
+  already skipped for it). Renumbering piecemeal is the exact pain the positional
+  scheme causes, so we don't. Documented the gap with a code comment at the call site.
+- [x] **PN2 — Superseded by a redesign proposal.** Investigating the rename surfaced
+  the root cause: phase keys are **positional + persisted**, scattered across
+  orchestrator/config/`pipeline_runs`/heatmap. Wrote
+  `docs/architecture/pipeline_phase_keys.md` proposing a **stable-id phase registry**
+  (single source of truth; id ≠ order ≠ label).
+- 🔴 **NEW FINDING (flagged, NOT fixed): `config.py PIPELINE_FAILURE_MODES` has
+  drifted from the real phase keys** — 9 orchestrator phases have no config entry,
+  and the map is largely **dead** because halt/continue is hardcoded per call site.
+  Editing a value there may do nothing. Fixing it changes prod HALT/WARN behavior →
+  **needs your review first** (you chose doc-only this session). Spec in the doc.
+- Commits: `<this session>` (doc + comments only, no behavior change).
 
 ---
 
@@ -204,11 +208,12 @@ tick off; the list below is what todo.md still shows open:
 
 ## 5. Suggested next-session order
 
-**Closed this session:** D1–D3 (diagrams), V1–V2 (view cleanup), 2b (DB parity).
+**Closed this session:** D1–D3 (diagrams), V1–V2 (view cleanup), 2b (DB parity),
+PN1/PN2 (decided keep-10 + wrote phase-registry proposal).
 
 Remaining, in priority:
-1. **PN1/PN2** — close the Phase-9 numbering gap (infra now unpaused; recommend
-   renumber 10→9 incl. the persisted `pipeline_runs` key ripple). ~45 min.
+1. **Phase-failure-mode drift fix** (needs your go — changes prod HALT/WARN) OR the
+   full phase-registry refactor. Spec: `docs/architecture/pipeline_phase_keys.md`.
 2. **Test-harness fix** — `tests/test_view_manager.py` is broken on HEAD (static
    calls to instance `_create_*` methods). Quick win; restores view-layer test cover.
 3. Reconcile **todo.md S1–S4** against git (S2/S3 likely already landed) and finish
