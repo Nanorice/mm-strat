@@ -46,9 +46,16 @@ committed and wired. Decision standing: keep layout **auto-rendered** — do NOT
 re-introduce invisible-edge / anchor-node ordering hacks (see memory
 `feedback_mermaid_dont_fight_layout`).
 
-**Known pre-existing breakage (not from this session):** `tests/test_view_manager.py`
-— 13 failures on plain HEAD; calls now-instance `_create_*` methods statically
-(+ a temp-file lock). Out of scope here; flag for a test-harness fix.
+**`tests/test_view_manager.py` — FIXED (`d2aae99`).** Was red since before Phase
+5.1 (never validated the current view). Rewrote the fixture to seed the real
+sources (`t2_screener_features` + `t3_sepa_features`), recomputed every
+expectation from the live SQL, and fixed the static-call connection leaks. 13/13.
+
+**Still-red test modules (pre-existing, NOT mine, out of scope):**
+`test_feature_pipeline`, `test_phase1_backfill` (7 failed + 26 errors), and 4
+import-error collections (`test_metrics`, `test_rehydration`,
+`test_feature_preprocessor`, `test_m01_evaluator`) referencing deleted modules
+(`src.features`, `src.evaluation.metrics`). Candidate for a separate test-rot sweep.
 
 ---
 
@@ -209,14 +216,20 @@ tick off; the list below is what todo.md still shows open:
 ## 5. Suggested next-session order
 
 **Closed this session:** D1–D3 (diagrams), V1–V2 (view cleanup), 2b (DB parity),
-PN1/PN2 (decided keep-10 + wrote phase-registry proposal).
+PN1/PN2 (decided keep-10 + wrote phase-registry proposal), test_view_manager fix.
 
 Remaining, in priority:
-1. **Phase-failure-mode drift fix** (needs your go — changes prod HALT/WARN) OR the
-   full phase-registry refactor. Spec: `docs/session_logs/sprint_12/pipeline_phase_keys.md`.
-2. **Test-harness fix** — `tests/test_view_manager.py` is broken on HEAD (static
-   calls to instance `_create_*` methods). Quick win; restores view-layer test cover.
-3. Reconcile **todo.md S1–S4** against git (S2/S3 likely already landed) and finish
+1. ⭐ **NEXT SESSION — Phase-key convention change (DECIDED to do next).** Implement
+   the stable-id phase registry from
+   `docs/session_logs/sprint_12/pipeline_phase_keys.md`: phase `id` decoupled from
+   order+label, single source of truth, so a mid-pipeline insert never renumbers /
+   strands persisted `pipeline_runs` keys. **Bundle the config-drift fix into this**
+   (the `PIPELINE_FAILURE_MODES` map is dead/mismatched — see §2 finding; it changes
+   prod HALT/WARN, so do it deliberately with the registry as the new control
+   surface). Needs a one-time `pipeline_runs.phase_name` migration (old→new id) or
+   an accepted heatmap seam. Est: half-day.
+2. Reconcile **todo.md S1–S4** against git (S2/S3 likely already landed) and finish
    remote-dashboard verify.
-4. **F2** (watchlist exit panel) — high user value, data already exists.
-5. **T4 docs** once infra settles.
+3. **F2** (watchlist exit panel) — high user value, data already exists.
+4. **T4 docs** once infra settles.
+5. (Optional) test-rot sweep — fix the pre-existing red modules listed in §0.
