@@ -119,9 +119,11 @@ buy_list_export.csv
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
 
-# R2 pull-on-boot sentinel markers (dashboard_utils._ensure_asset_dirs)
+# R2 pull-on-boot sentinel markers (dashboard_utils._ensure_asset_dirs / _ensure_local_db)
 .r2_synced
 **/.r2_synced
+*.r2etag
+**/*.r2etag
 
 # Auto-generated model artifacts and temp files
 models/m01_baseline_*/

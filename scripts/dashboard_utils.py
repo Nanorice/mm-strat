@@ -63,9 +63,12 @@ def _r2_client():
 def _ensure_local_db() -> None:
     """Pull dashboard.duckdb from R2 when running on Streamlit Cloud.
 
-    Downloads when: file is missing, local size doesn't match R2, or file is
-    >23h old. Downloads atomically (temp file + rename) so a failed download
-    never leaves a truncated DB behind. No-op on local runs.
+    Re-downloads when the R2 object's ETag differs from the one we last pulled
+    (recorded in a git-ignored sidecar marker), or as a >23h backstop. The ETag
+    is a content hash, so it flips on every nightly rebuild — unlike file SIZE,
+    which is ~793 MB every day and matched spuriously, leaving the app serving
+    yesterday's DB for up to the TTL. Downloads atomically (temp file + rename)
+    so a failed download never leaves a truncated DB behind. No-op on local runs.
     """
     if not _on_cloud():
         return  # local run — do nothing
@@ -75,16 +78,19 @@ def _ensure_local_db() -> None:
     import time
 
     target = DB_PATH
+    marker = target.with_suffix(".r2etag")  # git-ignored; last-pulled ETag
     client = _r2_client()
     bucket = os.environ["R2_BUCKET_NAME"]
 
     head = client.head_object(Bucket=bucket, Key="latest/dashboard.duckdb")
-    r2_size = head["ContentLength"]
+    r2_etag = head["ETag"].strip('"')
 
-    # Skip if local file matches R2 size and is fresh (<23h)
+    # Skip only if the local DB is present, its ETag marker matches R2's current
+    # ETag, AND it's fresh (<23h backstop in case the marker drifts from the DB).
     if (
         target.exists()
-        and target.stat().st_size == r2_size
+        and marker.exists()
+        and marker.read_text().strip() == r2_etag
         and (time.time() - target.stat().st_mtime) < 23 * 3600
     ):
         return
@@ -94,6 +100,7 @@ def _ensure_local_db() -> None:
     try:
         client.download_file(bucket, "latest/dashboard.duckdb", str(tmp))
         tmp.rename(target)
+        marker.write_text(r2_etag)
     except Exception:
         if tmp.exists():
             tmp.unlink()
