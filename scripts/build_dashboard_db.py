@@ -137,14 +137,27 @@ def build(source: Path, out: Path, window_days: int) -> None:
         print("-" * 58)
         total = 0
         for name, mode, spec in MANIFEST:
-            try:
-                n = _build_table(con, name, mode, spec, window_days)
-                total += n
-                print(f"{name:<24}{mode:<22}{n:>12,}")
-            except duckdb.Error as e:
-                print(f"{name:<24}{mode:<22}{'ERR':>12}  {e}")
+            # Fail-fast: a swallowed error would silently drop the table from the
+            # slim DB, leaving remote with a different layout than local (queries
+            # that work locally would throw on remote). Every manifest entry must
+            # build or the whole build aborts.
+            n = _build_table(con, name, mode, spec, window_days)
+            total += n
+            print(f"{name:<24}{mode:<22}{n:>12,}")
         print("-" * 58)
         print(f"{'TOTAL':<46}{total:>12,}")
+
+        # Layout invariant: every manifest object must now exist as a table in
+        # the slim DB. The remote DB is a byte-copy of this file, so this is the
+        # single guarantee that remote layout == the manifest (no silent drops).
+        built = {r[0] for r in con.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+        ).fetchall()}
+        expected = {name for name, _, _ in MANIFEST}
+        missing = expected - built
+        if missing:
+            raise RuntimeError(f"manifest objects missing from slim DB: {sorted(missing)}")
+
         con.execute("DETACH src")
     finally:
         con.close()
