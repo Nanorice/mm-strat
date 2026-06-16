@@ -1,0 +1,68 @@
+%% Scoring -> serving -> models -> downstream apps.
+%% Upstream data pipeline lives in data_flow_pipeline.mmd.
+%% The full single-graph view is data_flow.mmd (canonical).
+flowchart TD
+    %% ── Entry points produced upstream (see data_flow_pipeline.mmd) ──
+    subgraph Upstream [From the data pipeline]
+        direction LR
+        V_D3D(["v_d3_deployment"])
+        V_D3P(["v_d3_prebreakout"])
+        D2_CACHE[("d2_training_cache")]
+        T3_SF[("t3_sepa_features")]
+        T1_P[("price_data")]
+        MAT_SW[("screener_watchlist")]
+        T2_RS[("t2_regime_scores")]
+        T2_RK[("t2_risk_scores")]
+        T2_SF[("t2_screener_features")]
+    end
+
+    %% ── Model registry (trained offline) ──
+    ML_TRAIN["Model Training"]
+    MODELS[("models")]
+    D2_CACHE --> ML_TRAIN --> MODELS
+
+    %% ── Phase 7.4: Scoring ──
+    subgraph P74 [Phase 7.4: Prod-Model Scoring]
+        P74S["ScoreEngine<br/>both cohorts · RAW softprob"]
+        DP[("daily_predictions")]
+        P74S --> DP
+    end
+    V_D3D & V_D3P & MODELS --> P74S
+
+    %% ── Phase 8 + 10: Monitoring & Model Card ──
+    %% NOTE: phase numbering jumps 8 -> 10 (no Phase 9). Historical: monitoring
+    %% was "Phase 9" in the old 9-phase layout, renumbered to 8 when serving
+    %% phases 7.4-7.6 were inserted; the model card kept its "10" label. Gap is
+    %% a naming smell, not a missing step.
+    subgraph P8_10 [Phase 8 + 10: Monitoring & Model Card]
+        P8["8 Monitoring & Alerts"]
+        P10["10 Model-Card Rebuild (advisory)"]
+        CARD[/"model card (md/json)"/]
+        P10 --> CARD
+    end
+    V_D3D & MODELS & DP --> P8
+    MODELS --> P10
+
+    %% ── Phase 7.5 + 7.6: Serving ──
+    subgraph P75_76 [Phase 7.5-7.6: Serving]
+        P75["7.5 Slim DB Build"]
+        SLIM[("dashboard.duckdb")]
+        P76["7.6 R2 Sync"]
+        R2[("Cloudflare R2")]
+        P75 --> SLIM --> P76 --> R2
+    end
+    %% Slim build copies the serving tables (predictions + regime/risk + watchlist)
+    DP & MAT_SW & T2_RS & T2_RK & T2_SF --> P75
+
+    %% ── Downstream applications ──
+    subgraph Downstream [Downstream Applications]
+        BT["Backtest Runner"]
+        NB["Notebooks / Diagnostics"]
+        DASH["Streamlit Dashboard<br/>local: full DB · cloud: R2 slim"]
+    end
+    T3_SF & T1_P & MODELS --> BT
+
+    %% Dashboard reads the MATERIALIZED serving DB — never scores live.
+    SLIM --> DASH
+    R2 -.->|cloud pull-on-boot| DASH
+    CARD --> DASH

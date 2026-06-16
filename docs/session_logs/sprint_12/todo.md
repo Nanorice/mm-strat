@@ -1,6 +1,26 @@
 # Sprint 12 — Active To-Do
 
 > Update this file at the start/end of each session. Move completed items to a `DONE_*.md` file.
+>
+> **📌 Consolidated handover (2026-06-16):** see
+> [2026-06-16_handover_consolidated_todos.md](2026-06-16_handover_consolidated_todos.md)
+> — merges this file + the dashboard plan file + this session's diagram/view-cleanup
+> work into one tracker. Start there.
+
+---
+
+## NEW (2026-06-16 session) — see consolidated handover for detail
+
+### Data-flow diagrams (drafts uncommitted)
+- [ ] Commit `data_flow_{overview,pipeline,serving}.mmd`
+- [ ] Wire page 5 render: overview+pipeline+serving inline, full canonical in expander
+- [ ] Visually verify rendered layout on page 5
+
+### INFRA — view-layer cleanup (held pending go)
+- [ ] Delete dead view `v_d1_trades` (0 consumers, alias of v_d1_candidates)
+- [ ] Retire `v_d2r_hydrated` alias — migrate 2 scripts to `v_d2_hydrated`, drop alias
+- [ ] Re-run `ViewManager.create_all()` after the above
+- [ ] (optional) Phase numbering smell: orchestrator jumps 8→10, no Phase 9
 
 ---
 

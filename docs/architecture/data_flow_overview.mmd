@@ -1,0 +1,31 @@
+%% Schematic overview — all key stages, no table-level detail.
+%% Drill-down: data_flow_pipeline.mmd · data_flow_serving.mmd · data_flow.mmd (full).
+flowchart TD
+    SRC["External Sources<br/>yfinance / FMP · FRED"]
+
+    ING["Phase 1 · Ingestion + Quality Gate<br/>price · fundamentals · shares · macro"]
+    SCR["Phase 2-3 · Screener + T2 Features"]
+    CTX["Phase 4 · Regime + 5F Risk · SEPA Watchlist"]
+    T3["Phase 5 · T3 SEPA Features<br/>(ML source of truth)"]
+    VW["Phase 6-7 · Views + Training Cache"]
+
+    TRN["Model Training -> models registry"]
+    SCORE["Phase 7.4 · Prod-Model Scoring<br/>-> daily_predictions"]
+    SERVE["Phase 7.5-7.6 · Slim DB Build + R2 Sync"]
+    MON["Phase 8 + 10 · Monitoring + Model Card"]
+
+    APPS["Applications<br/>Dashboard · Backtest · Notebooks"]
+
+    SRC --> ING --> SCR --> CTX --> T3 --> VW
+    VW --> TRN --> SCORE
+    VW --> SCORE
+    SCORE --> SERVE
+    SCORE --> MON
+    SERVE --> APPS
+    MON --> APPS
+    VW --> APPS
+
+    classDef stage fill:#eef3fb,stroke:#5b8def,color:#1a2c4e;
+    classDef serve fill:#eafbf0,stroke:#3fb27f,color:#13402c;
+    class SRC,ING,SCR,CTX,T3,VW stage;
+    class TRN,SCORE,SERVE,MON,APPS serve;
