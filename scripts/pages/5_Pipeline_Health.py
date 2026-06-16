@@ -54,21 +54,28 @@ STATUS_COLORS = {
 STATUS_NUMS = {"failed": 0.0, "warning": 0.34, "running": 0.67, "success": 1.0}
 
 def _phase_sort_key(phase_name: str) -> tuple:
-    """Natural execution order for phase_name like 'phase_7_4_scoring'.
+    """Natural execution order for a phase row.
 
-    Lexical sort mis-orders these ('phase_10' < 'phase_2', 'phase_7_4' vs
-    'phase_7_cache'). Parse the major number, an optional letter suffix (4b),
-    and a minor number so the heatmap rows follow real pipeline order.
-    Returns (major, letter, minor, name) — unparseable names sort last.
+    Current runs write stable registry ids ('t2_screener', 'scoring', …) whose
+    order comes from the phase registry. Historical rows still hold the old
+    positional keys ('phase_7_4_scoring', 'phase_9_monitoring', …) during the
+    ~30d heatmap seam — parse the number out of those as a fallback so both
+    generations interleave in real pipeline order. Returns (order, name).
     """
+    from src.orchestrators.phase_registry import order_for
+
+    registry_order = order_for(phase_name)
+    if registry_order is not None:
+        return (registry_order, phase_name)
+
     import re
     m = re.match(r"phase_(\d+)([a-z]?)(?:_(\d+))?", phase_name)
     if not m:
-        return (999, "", 0, phase_name)
+        return (999.0, phase_name)
     major = int(m.group(1))
-    letter = m.group(2) or ""
-    minor = int(m.group(3)) if m.group(3) else 0
-    return (major, letter, minor, phase_name)
+    # letter suffix (4b) -> +0.5; trailing minor (7_4) -> +0.0N
+    minor = (0.5 if m.group(2) else 0.0) + (int(m.group(3)) / 100 if m.group(3) else 0.0)
+    return (major + minor, phase_name)
 
 
 FRESHNESS_TOLERANCE_DAYS = {

@@ -29,6 +29,7 @@ from src.managers.view_manager import ViewManager
 from src.managers.screener_manager import ScreenerManager
 from src.managers.sepa_watchlist_manager import SepaWatchlistManager
 from src.managers.pipeline_run_manager import PipelineRunManager, PipelineRunStatus
+from src.orchestrators.phase_registry import failure_mode_for, label_for
 
 # Import config
 from config import PIPELINE_FAILURE_MODES, PipelineFailureMode, PIPELINE_ALERT_THRESHOLDS
@@ -132,7 +133,7 @@ class DailyPipelineOrchestrator:
         if phase_3_only:
             logger.info("[Pipeline] Single-phase mode: Phase 3 only")
             phase_success, phase_stats = self._execute_phase(
-                "phase_3_t2_screener",
+                "t2_screener",
                 lambda: self._run_phase_3_t2_screener_incremental(actual_trading_day),
                 actual_trading_day,
                 skip_idempotency_check=True
@@ -142,7 +143,7 @@ class DailyPipelineOrchestrator:
         if phase_4_only:
             logger.info("[Pipeline] Single-phase mode: Phase 4 only")
             phase_success, phase_stats = self._execute_phase(
-                "phase_4_t2_regime",
+                "t2_regime",
                 lambda: self._run_phase_4_t2_regime(actual_trading_day),
                 actual_trading_day,
                 skip_idempotency_check=True
@@ -152,7 +153,7 @@ class DailyPipelineOrchestrator:
         if phase_5_only:
             logger.info("[Pipeline] Single-phase mode: Phase 5 only")
             phase_success, phase_stats = self._execute_phase(
-                "phase_5_t3_features",
+                "t3_features",
                 lambda: self._run_phase_5_t3_features_incremental(actual_trading_day),
                 actual_trading_day,
                 skip_idempotency_check=True
@@ -169,13 +170,15 @@ class DailyPipelineOrchestrator:
             # Phase 1: T1 Ingestion (PARALLEL)
             # Skip logic owned by update_cache: _get_stale_tickers returns [] when all fresh
             phase_success, phase_stats = self._execute_phase(
-                "phase_1_t1_ingestion",
+                "ingestion",
                 lambda: self._run_phase_1_t1_ingestion(target_date, actual_trading_day),
                 target_date,
                 skip_idempotency_check=True
             )
             run_stats['phase_1'] = phase_stats
-            if not phase_success and PIPELINE_FAILURE_MODES.get("phase_1_t1_price") == PipelineFailureMode.HALT:
+            # ingestion is a HALT phase: _execute_phase already returns False only
+            # when a HALT phase failed (price re-raises on HALT inside the lambda).
+            if not phase_success and self._is_critical("ingestion"):
                 critical_success = False
                 return False
 
@@ -190,12 +193,12 @@ class DailyPipelineOrchestrator:
 
         # Phase 2: Screener Membership
         phase_success, phase_stats = self._execute_phase(
-            "phase_2_screener_membership",
+            "screener_membership",
             lambda: self._run_phase_2_screener_membership(target_date),
             target_date
         )
         run_stats['phase_2'] = phase_stats
-        if not phase_success:
+        if not phase_success and self._is_critical("screener_membership"):
             critical_success = False
             return False
 
@@ -204,126 +207,141 @@ class DailyPipelineOrchestrator:
 
         # Phase 3: T2 Screener Features (incremental — auto-fills gaps)
         phase_success, phase_stats = self._execute_phase(
-            "phase_3_t2_screener",
+            "t2_screener",
             lambda: self._run_phase_3_t2_screener_incremental(actual_trading_day),
             target_date,
             skip_idempotency_check=True
         )
         run_stats['phase_3'] = phase_stats
-        if not phase_success:
+        if not phase_success and self._is_critical("t2_screener"):
             critical_success = False
             return False
         if phase_stats.get('rows_processed', 0) > 0:
-            self.run_manager.record_write('t2_screener_features', phase_stats['rows_processed'], 'phase_3_t2_screener')
+            self.run_manager.record_write('t2_screener_features', phase_stats['rows_processed'], 't2_screener')
 
         # Phase 4: T2 Regime Scores
         phase_success, phase_stats = self._execute_phase(
-            "phase_4_t2_regime",
+            "t2_regime",
             lambda: self._run_phase_4_t2_regime(target_date),
             target_date
         )
         run_stats['phase_4'] = phase_stats
-        # Non-critical, continue even if failed
+        if not phase_success and self._is_critical("t2_regime"):
+            critical_success = False
+            return False
 
         # Phase 4b: SEPA Watchlist Update — must run AFTER t2 features are written
         # (update_daily reads t2_screener_features for the target date) and BEFORE
         # T3 (compute_t3_features filters universe via sepa_watchlist).
         phase_success, phase_stats = self._execute_phase(
-            "phase_4b_sepa_watchlist",
+            "sepa_watchlist",
             lambda: self._run_phase_4b_sepa_watchlist(actual_trading_day),
             target_date
         )
         run_stats['phase_4b'] = phase_stats
-        if not phase_success:
+        if not phase_success and self._is_critical("sepa_watchlist"):
             critical_success = False
             return False
 
         # Phase 5: T3 SEPA Features (incremental — auto-fills gaps)
         phase_success, phase_stats = self._execute_phase(
-            "phase_5_t3_features",
+            "t3_features",
             lambda: self._run_phase_5_t3_features_incremental(actual_trading_day),
             target_date,
             skip_idempotency_check=True
         )
         run_stats['phase_5'] = phase_stats
-        if not phase_success:
+        if not phase_success and self._is_critical("t3_features"):
             critical_success = False
             return False
         if phase_stats.get('rows_processed', 0) > 0:
-            self.run_manager.record_write('t3_sepa_features', phase_stats['rows_processed'], 'phase_5_t3_features')
+            self.run_manager.record_write('t3_sepa_features', phase_stats['rows_processed'], 't3_features')
 
         # Phase 6: View Refresh
         phase_success, phase_stats = self._execute_phase(
-            "phase_6_views",
+            "views",
             lambda: self._run_phase_6_views(target_date),
             target_date
         )
         run_stats['phase_6'] = phase_stats
         if phase_success and phase_stats.get('rows_processed', 0) > 0:
-            self.run_manager.record_write('screener_watchlist', phase_stats['rows_processed'], 'phase_6_views')
-        # Non-critical, continue even if failed
+            self.run_manager.record_write('screener_watchlist', phase_stats['rows_processed'], 'views')
+        if not phase_success and self._is_critical("views"):
+            critical_success = False
+            return False
 
         # Phase 7: Training Cache Refresh
         phase_success, phase_stats = self._execute_phase(
-            "phase_7_cache",
+            "cache",
             lambda: self._run_phase_7_cache(target_date),
             target_date
         )
         run_stats['phase_7'] = phase_stats
         if phase_success and phase_stats.get('rows_processed', 0) > 0:
-            self.run_manager.record_write('d2_training_cache', phase_stats['rows_processed'], 'phase_7_cache')
-        # Non-critical, continue even if failed
+            self.run_manager.record_write('d2_training_cache', phase_stats['rows_processed'], 'cache')
+        if not phase_success and self._is_critical("cache"):
+            critical_success = False
+            return False
 
         # Phase 7.4: Prod-model scoring (best-effort). Materializes today's scores
         # into daily_predictions for BOTH cohorts BEFORE the slim DB is built/
         # uploaded, so the dashboard reads fresh, materialized scores (never live).
         phase_success, phase_stats = self._execute_phase(
-            "phase_7_4_scoring",
+            "scoring",
             lambda: self._run_phase_7_4_scoring(target_date),
             target_date,
             skip_idempotency_check=True,
         )
         run_stats['phase_7_4'] = phase_stats
-        # Non-critical, continue even if failed
+        if not phase_success and self._is_critical("scoring"):
+            critical_success = False
+            return False
 
         # Phase 7.5: Slim dashboard DB rebuild (best-effort; a slow rebuild must
         # never block the daily pipeline). Snapshots the freshly-refreshed cache
         # + latest features into data/dashboard.duckdb for cross-device sync.
         phase_success, phase_stats = self._execute_phase(
-            "phase_7_5_dashboard_db",
+            "dashboard_db",
             lambda: self._run_phase_7_5_dashboard_db(),
             target_date
         )
         run_stats['phase_7_5'] = phase_stats
-        # Non-critical, continue even if failed
+        if not phase_success and self._is_critical("dashboard_db"):
+            critical_success = False
+            return False
 
         # Phase 7.6: Upload slim DB to R2 (best-effort; skipped if R2 creds absent)
         phase_success, phase_stats = self._execute_phase(
-            "phase_7_6_r2_sync",
+            "r2_sync",
             lambda: self._run_phase_7_6_r2_sync(),
             target_date
         )
         run_stats['phase_7_6'] = phase_stats
-        # Non-critical, continue even if failed
+        if not phase_success and self._is_critical("r2_sync"):
+            critical_success = False
+            return False
 
         # Phase 8: Monitoring (ALWAYS RUN)
         phase_success, phase_stats = self._execute_phase(
-            "phase_8_monitoring",
+            "monitoring",
             lambda: self._run_phase_8_monitoring(target_date, run_stats),
             target_date
         )
         run_stats['phase_8'] = phase_stats
+        if not phase_success and self._is_critical("monitoring"):
+            critical_success = False
+            return False
 
-        # Phase 10: Advisory model-card rebuild for the prod model (WARN-only).
+        # Model card: Advisory model-card rebuild for the prod model (WARN-only).
         # Skips when the card is already fresh; a failure here never halts the
         # daily pipeline (the card is informational, not a gate).
-        # NOTE: there is intentionally no Phase 9 — monitoring was "Phase 9" in the
-        # old layout and became Phase 8 when serving steps 7.4–7.6 were inserted;
-        # the card kept its "10". The phase keys are positional and persisted, so
-        # renumbering strands pipeline_runs history. See
-        # docs/session_logs/sprint_12/pipeline_phase_keys.md for the proposed stable-id fix.
+        # The "Phase 10" label (with no Phase 9) is a cosmetic display artifact of
+        # the old positional scheme — it lives in the phase registry's `label`
+        # only. The stable `id` ("model_card") is order-independent, so this
+        # historical gap no longer leaks into persisted keys. See
+        # docs/session_logs/sprint_12/pipeline_phase_keys.md.
         phase_success, phase_stats = self._execute_phase(
-            "phase_10_model_card",
+            "model_card",
             lambda: self._run_phase_10_model_card(target_date),
             target_date,
             skip_idempotency_check=True,
@@ -346,7 +364,7 @@ class DailyPipelineOrchestrator:
         Execute a single phase with error handling and tracking.
 
         Args:
-            phase_name: Phase identifier (e.g., 'phase_1_t1_price')
+            phase_name: Stable phase id from the phase registry (e.g. 't2_screener')
             phase_func: Function to execute
             target_date: Date being processed
             skip_idempotency_check: If True, bypass pipeline_runs check (used for Phase 1 data freshness)
@@ -354,9 +372,8 @@ class DailyPipelineOrchestrator:
         Returns:
             (success: bool, stats: dict)
         """
-        # Human-readable label: "phase_3_t2_screener" -> "Phase 3"
-        phase_num = phase_name.split('_')[1] if '_' in phase_name else phase_name
-        label = f"Phase {phase_num}"
+        # Human-readable label from the registry: "t2_screener" -> "Phase 3 · T2 Features"
+        label = label_for(phase_name)
 
         # Check idempotency (skip if already completed and not force)
         if not skip_idempotency_check and not self.force and self.run_manager.is_phase_completed(target_date, phase_name):
@@ -393,7 +410,7 @@ class DailyPipelineOrchestrator:
                     error_message=error_msg
                 )
 
-            failure_mode = PIPELINE_FAILURE_MODES.get(phase_name, PipelineFailureMode.HALT)
+            failure_mode = failure_mode_for(phase_name)
 
             if failure_mode == PipelineFailureMode.HALT:
                 return False, {'status': 'failed', 'error': error_msg}
@@ -403,6 +420,10 @@ class DailyPipelineOrchestrator:
             else:  # SKIP
                 logger.info(f"[{label}] Optional, skipping")
                 return True, {'status': 'skipped', 'error': error_msg}
+
+    def _is_critical(self, phase_id: str) -> bool:
+        """True if a failure of this phase must abort the run (registry HALT)."""
+        return failure_mode_for(phase_id) == PipelineFailureMode.HALT
 
     # ========================================================================
     # HELPER METHODS (Data Freshness Checks)

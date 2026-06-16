@@ -114,17 +114,32 @@ inserted; the model card kept its "10" label. Documented in diagrams + memory
 - [x] **PN1 — Decided: keep Phase 10 as-is.** The gap is cosmetic (idempotency is
   already skipped for it). Renumbering piecemeal is the exact pain the positional
   scheme causes, so we don't. Documented the gap with a code comment at the call site.
-- [x] **PN2 — Superseded by a redesign proposal.** Investigating the rename surfaced
-  the root cause: phase keys are **positional + persisted**, scattered across
-  orchestrator/config/`pipeline_runs`/heatmap. Wrote
-  `docs/session_logs/sprint_12/pipeline_phase_keys.md` proposing a **stable-id phase registry**
-  (single source of truth; id ≠ order ≠ label).
-- 🔴 **NEW FINDING (flagged, NOT fixed): `config.py PIPELINE_FAILURE_MODES` has
-  drifted from the real phase keys** — 9 orchestrator phases have no config entry,
-  and the map is largely **dead** because halt/continue is hardcoded per call site.
-  Editing a value there may do nothing. Fixing it changes prod HALT/WARN behavior →
-  **needs your review first** (you chose doc-only this session). Spec in the doc.
-- Commits: `<this session>` (doc + comments only, no behavior change).
+- [x] **PN2 — IMPLEMENTED (registry-only).** The stable-id phase registry from
+  `pipeline_phase_keys.md` now exists: `src/orchestrators/phase_registry.py`
+  (`Phase(id, label, order)` + `PHASES` + `failure_mode_for/label_for/order_for`).
+  Stable ids (`ingestion`, `t2_screener`, `scoring`, `model_card`, …) decoupled
+  from order — a mid-pipeline insert never renumbers / strands `pipeline_runs`.
+  Orchestrator's 13 `_execute_phase` calls + `record_write` tags repointed to
+  stable ids; label now from `label_for()`. Heatmap `_phase_sort_key` uses
+  registry order with a regex fallback for old keys. New `tests/test_phase_registry.py`
+  (6 guardrails). Doc marked IMPLEMENTED.
+- [x] **Config drift FIXED (as a side effect).** `config.PIPELINE_FAILURE_MODES`
+  is now keyed by stable id; the stale `phase_6_t3_lazy`/`phase_7_views`/
+  `phase_8_cache` entries are gone. **Source-of-truth split (deliberate, to keep
+  config low-level + avoid a cycle):** failure mode lives in config, label/order
+  in the registry (which imports config; config does NOT import the registry).
+- [x] **Part (b) DONE (same session) — failure_mode is now the live control
+  surface.** Was behavior-PRESERVING: registry modes were set from observed
+  call-site behavior + `_execute_phase` already returns False only for HALT, so
+  this was consolidation not a semantics change. New `_is_critical(id)` helper;
+  every `_execute_phase` call followed by a uniform
+  `if not phase_success and self._is_critical("<id>"): return False`; the 5 critical
+  blocks + vestigial `phase_1_t1_price` lookup + 8 "non-critical" comments all
+  collapsed into it. Guardrails added (incl. end-to-end HALT-aborts/WARN-continues).
+- ⚠️ **Heatmap seam accepted (your scope choice):** no `pipeline_runs` migration.
+  Old `phase_N_*` rows age out of the 30d window; `_phase_sort_key` interleaves
+  both generations meanwhile. Sub-phase keys (`phase_1_t1_*`, gate keys) unchanged.
+- Commits: `<this session>` (registry + config + orchestrator + heatmap + test).
 
 ---
 
@@ -225,19 +240,16 @@ caption text says ≥14d. Align one to the other (`5_Pipeline_Health.py`).
 ## 5. Suggested next-session order
 
 **Closed this session:** D1–D3 (diagrams), V1–V2 (view cleanup), 2b (DB parity),
-PN1/PN2 (decided keep-10 + wrote phase-registry proposal), test_view_manager fix.
+PN1/PN2 (decided keep-10 + wrote phase-registry proposal), test_view_manager fix,
+**phase-key registry (registry-only) + config-drift fix.**
 
 Remaining, in priority:
-1. ⭐ **NEXT SESSION — Phase-key convention change (DECIDED to do next).** Implement
-   the stable-id phase registry from
-   `docs/session_logs/sprint_12/pipeline_phase_keys.md`: phase `id` decoupled from
-   order+label, single source of truth, so a mid-pipeline insert never renumbers /
-   strands persisted `pipeline_runs` keys. **Bundle the config-drift fix into this**
-   (the `PIPELINE_FAILURE_MODES` map is dead/mismatched — see §2 finding; it changes
-   prod HALT/WARN, so do it deliberately with the registry as the new control
-   surface). Needs a one-time `pipeline_runs.phase_name` migration (old→new id) or
-   an accepted heatmap seam. Est: half-day.
-2. **S4** spare-PC Task Scheduler runbook — the only open sync item (S1–S3 verified
+1. ✅ **DONE — Phase-key convention change (FULL: registry + part b).** Stable-id
+   registry; config drift fixed; `failure_mode` is the live control surface;
+   heatmap + guardrail tests wired. See §2 PN2. **Only optional follow-up left:**
+   the `pipeline_runs.phase_name` old→new id migration if the 30d heatmap seam is
+   undesirable (otherwise it self-heals). Spec'd in `pipeline_phase_keys.md`.
+2. **S4 - defer to late sprint or next sprint** spare-PC Task Scheduler runbook — the only open sync item (S1–S3 verified
    done this session; S1/S3 reconcile gaps fixed in `9d762f3`). Blocked on your
    hardware choices (builder PC, wake mechanism); ask me to scaffold the runbook.
 3. **F2** (watchlist exit panel) — high user value, data already exists.

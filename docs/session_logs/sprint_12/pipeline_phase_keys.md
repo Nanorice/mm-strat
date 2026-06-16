@@ -1,8 +1,51 @@
-# Pipeline phase keys — convention problem + proposed redesign
+# Pipeline phase keys — convention problem + redesign
 
-Status: **proposal only** (2026-06-16). No code changed. Documents why the
-current phase-key scheme is fragile and proposes a single-source-of-truth
-registry. Came out of the Phase-9-gap discussion (orchestrator jumps 8 → 10).
+Status: **IMPLEMENTED — full** (2026-06-16). The stable-id registry exists at
+`src/orchestrators/phase_registry.py` (single source of truth for id/label/order);
+`config.PIPELINE_FAILURE_MODES` is keyed by stable id (drift fixed); AND
+`failure_mode` is now the live control surface (part b — every call site routes
+through `_is_critical(id)`). Came out of the Phase-9-gap discussion (8 → 10).
+
+## What shipped (registry-only)
+
+- `src/orchestrators/phase_registry.py` — `Phase(id, label, order)` + `PHASES`
+  list + `PHASE_BY_ID` + `failure_mode_for/label_for/order_for`. **Stable ids**
+  (`ingestion`, `t2_screener`, `scoring`, `model_card`, …) decoupled from order.
+- **Source-of-truth split (to keep `config` low-level + cycle-free):** failure
+  mode lives in `config.PIPELINE_FAILURE_MODES` (keyed by stable id, drift gone);
+  label/order live in the registry, which imports the failure modes. config does
+  NOT import the registry.
+- Orchestrator: all 13 `_execute_phase(...)` calls use stable ids; `record_write`
+  tags updated to match; label derived via `label_for` (was `split('_')[1]`).
+- Heatmap `_phase_sort_key`: registry `order_for` first, regex fallback for old
+  persisted keys during the seam.
+- `tests/test_phase_registry.py` — consistency guardrails (config↔registry↔
+  orchestrator) so drift can't silently return.
+
+### Part (b) — live control surface (landed same session)
+Turned out to be **behavior-preserving**, not behavior-changing: the registry
+`failure_mode`s were set from the call sites' observed behavior, and
+`_execute_phase` already returns `False` only for HALT phases (WARN/SKIP always
+return `True`). So this was a consolidation, not a semantics change:
+- New `_is_critical(phase_id)` helper = `failure_mode_for(id) == HALT`.
+- Every `_execute_phase` call is followed by a uniform
+  `if not phase_success and self._is_critical("<id>"): return False`. The 5
+  copy-pasted critical blocks + the vestigial `phase_1_t1_price` lookup + the 8
+  `# Non-critical, continue` comments all collapse into this one pattern.
+- `_execute_phase` itself now resolves its mode via `failure_mode_for` (registry).
+- Guardrail tests: `_is_critical` matches config for all phases; every
+  orchestrated call has a guard; end-to-end WARN-continues / HALT-aborts.
+- The map is now genuinely the control surface — flipping a phase's mode in
+  config changes real run behavior (and a test makes that visible).
+
+### Deliberately NOT done (scope decision 2026-06-16)
+- **No `pipeline_runs` migration — heatmap seam accepted.** Old `phase_N_*` rows
+  age out of the 30d window; `_phase_sort_key` interleaves both generations
+  meanwhile. Sub-phase keys (`phase_1_t1_*`, gate keys) intentionally unchanged.
+
+---
+
+## Original proposal (kept for rationale)
 
 ## The core problem: phase identity is positional
 

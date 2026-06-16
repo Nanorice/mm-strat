@@ -346,46 +346,40 @@ class PipelineFailureMode(Enum):
     SKIP = "skip"       # Skip phase, continue (optional phase)
 
 
-# Pipeline failure modes per phase
-# HALT: Critical phases that must succeed (price data, daily_features)
-# WARN: Non-critical phases that can fail without blocking (fundamentals, macro)
-# SKIP: Optional phases (T3 lazy can lag by 1 day)
+# Pipeline failure modes per phase, keyed by STABLE phase id.
 #
-# ⚠️ KNOWN DRIFT (2026-06-16, flagged not fixed): several keys here no longer
-# match the orchestrator's actual phase keys (e.g. this map says phase_6_t3_lazy /
-# phase_7_views / phase_8_cache; the orchestrator uses phase_6_views / phase_7_cache
-# / phase_8_monitoring). _execute_phase does .get(key, HALT), so drifted phases hit
-# the default — but the real halt/continue decision is ALSO hardcoded at each call
-# site, so this map is largely dead config today. Editing a value here may have NO
-# effect. Do not trust it as the control surface until the registry redesign lands.
-# See docs/session_logs/sprint_12/pipeline_phase_keys.md.
+# This is the single source of truth for failure handling. src.orchestrators.
+# phase_registry imports this map and attaches display labels + sort order — the
+# registry is the source of truth for label/order, this dict for failure mode.
+# (config must stay low-level: it does NOT import the registry, to avoid a cycle.)
+#
+# The "sub-phase" keys (phase_1_t1_*, etc.) are bookkeeping tags written via
+# record_write/record_errors, not orchestrated phases. phase_1_t1_price is read
+# by the orchestrator's price-ingestion HALT check, so it must stay HALT.
 PIPELINE_FAILURE_MODES = {
-    # Phase 1: T1 Ingestion
-    "phase_1_t1_price": PipelineFailureMode.HALT,         # CRITICAL - can't proceed without prices
+    # --- Sub-phase bookkeeping keys (not orchestrated phases) ---
+    "phase_1_t1_price": PipelineFailureMode.HALT,         # CRITICAL - drives Phase 1 ingestion HALT check
     "phase_1_t1_fundamentals": PipelineFailureMode.WARN,  # Non-critical - stale data OK
     "phase_1_t1_shares": PipelineFailureMode.WARN,        # Non-critical - use previous shares
     "phase_1_t1_macro": PipelineFailureMode.WARN,         # Non-critical - M03 will use previous scores
     "phase_1_cik_map_refresh": PipelineFailureMode.WARN,         # Non-critical - cik_map staleness only delays new SEC filings
     "phase_1_filing_date_backfill": PipelineFailureMode.WARN,    # Non-critical - fills NULL filing_dates from SEC EDGAR
+    "phase_1_earnings_calendar_refresh": PipelineFailureMode.WARN,  # Non-critical - weekly cadence
 
-    # Phase 2-3: T2 Screener
-    "phase_2_screener_membership": PipelineFailureMode.HALT,  # CRITICAL - needed for T2 features
-    "phase_3_t2_screener": PipelineFailureMode.HALT,          # CRITICAL - needed for T3
-
-    # Phase 4: T2 Regime
-    "phase_4_t2_regime": PipelineFailureMode.WARN,        # Non-critical - daily_features will use NULLs
-
-    # Phase 5: daily_features
-    "phase_5_daily_features": PipelineFailureMode.HALT,   # CRITICAL - needed for T3
-
-    # Phase 6-8: T3 + Views
-    "phase_6_t3_lazy": PipelineFailureMode.WARN,          # Non-critical - T3 can lag by 1 day
-    "phase_7_views": PipelineFailureMode.WARN,            # Non-critical - views are recreatable
-    "phase_8_cache": PipelineFailureMode.WARN,            # Non-critical - cache is optional
-
-    # Phase 10: Advisory model-card rebuild for the prod model. ALWAYS WARN —
-    # a slow/failed card build must never block the daily price/feature pipeline.
-    "phase_10_model_card": PipelineFailureMode.WARN,
+    # --- Orchestrated phases (stable ids; order+label live in phase_registry) ---
+    "ingestion":           PipelineFailureMode.HALT,
+    "screener_membership": PipelineFailureMode.HALT,
+    "t2_screener":         PipelineFailureMode.HALT,
+    "t2_regime":           PipelineFailureMode.WARN,
+    "sepa_watchlist":      PipelineFailureMode.HALT,
+    "t3_features":         PipelineFailureMode.HALT,
+    "views":               PipelineFailureMode.WARN,
+    "cache":               PipelineFailureMode.WARN,
+    "scoring":             PipelineFailureMode.WARN,
+    "dashboard_db":        PipelineFailureMode.WARN,
+    "r2_sync":             PipelineFailureMode.WARN,
+    "monitoring":          PipelineFailureMode.WARN,
+    "model_card":          PipelineFailureMode.WARN,
 }
 
 # Alert thresholds
