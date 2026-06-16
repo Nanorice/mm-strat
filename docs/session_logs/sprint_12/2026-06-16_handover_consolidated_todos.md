@@ -184,11 +184,20 @@ Status of that plan's items after this session:
   (e.g. HPE 2026-05-13 vs 2024-09-25). A watchlist row's entry_date often has no
   matching scored deployment row → legitimately blank M01 score. Decide which
   "entry" is canonical and reconcile.
-- [ ] **F2 — Watchlist activity / exit tracking (feature).** No UI shows when a name
-  leaves the watchlist (e.g. LITE +777% EXITED, AAOI gone). Data exists in
-  `screener_watchlist` (exit rows) + `screener_membership` (is_active flips). Build
-  a "Recent exits / activity" panel + per-ticker history drill-down. **Data-integrity
-  nit to resolve while here:** AAOI status=ACTIVE yet has exit_date=2026-06-12 — contradictory.
+- [x] **F2 — Watchlist activity / exit tracking (feature). ✅ DONE.** New
+  **Watchlist Activity** section on the Today page (3 tabs: Recent exits /
+  Activity feed / Ticker history) + a 7/14/30-day window. 3 cached loaders in
+  `dashboard_utils.py` (`load_recent_exits`, `load_ticker_history`,
+  `load_activity_feed`); `load_activity_feed` UNIONs `screener_watchlist` EXITED
+  rows (`TRADE_EXIT`) with `screener_membership` is_active flips
+  (`UNIVERSE_ADD`/`UNIVERSE_REMOVE`) into one timeline. All 3 tables already in the
+  slim-DB MANIFEST → no build/parity change; verified identical vs live + slim DB.
+  **The "data-integrity nit" was NOT a bug:** an ACTIVE row's `exit_date` =
+  latest `price_date` (prospective trend-break boundary, view_manager.py:876), not
+  a realized exit — it advances daily while the trend holds. Fixed in the *display*
+  layer (blank exit_date for ACTIVE rows) in the ticker-history drill-down +
+  `render_past_decisions`; no backfill. **Deferred:** watchlist *entry* events in
+  the feed (only exits + universe flips for now).
 
 **Minor caption nit (optional):** G4 chronic-offender warning fires at ≥10d but
 caption text says ≥14d. Align one to the other (`5_Pipeline_Health.py`).
@@ -252,6 +261,7 @@ Remaining, in priority:
 2. **S4 - defer to late sprint or next sprint** spare-PC Task Scheduler runbook — the only open sync item (S1–S3 verified
    done this session; S1/S3 reconcile gaps fixed in `9d762f3`). Blocked on your
    hardware choices (builder PC, wake mechanism); ask me to scaffold the runbook.
-3. **F2** (watchlist exit panel) — high user value, data already exists.
+3. ✅ **DONE — F2** (watchlist activity / exit feed + per-ticker history +
+   ACTIVE-row exit_date display fix). See §3.
 4. **T4 docs** once infra settles.
 5. (Optional) test-rot sweep — fix the pre-existing red modules listed in §0.

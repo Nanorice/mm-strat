@@ -416,6 +416,107 @@ def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
     return _attach_class_labels(df)
 
 
+# ── F2: watchlist activity / exit tracking ────────────────────────────────────
+#
+# `screener_watchlist` is the materialized trade log (every ACTIVE + EXITED
+# session). `screener_membership` is the append-only universe event log (one row
+# per is_active flip). These loaders surface "what left the watchlist / universe
+# recently" — a gap the status-filtered watchlist table didn't expose.
+#
+# NOTE on ACTIVE rows: an ACTIVE watchlist row's `exit_date` equals its
+# `price_date` (the prospective trend-break boundary, not a realized exit). These
+# loaders only ever read EXITED rows for the exit/feed surfaces, so that quirk
+# never leaks here.
+
+@st.cache_data(ttl=300)
+def load_recent_exits(days: int = 30) -> pd.DataFrame:
+    """EXITED watchlist trades whose exit fell in the last `days` (by exit_date).
+
+    Surfaces realized winners/losers that left the watchlist — e.g. LITE +777%,
+    AXTI +1369%. Ordered most-recent-exit first.
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute("""
+            WITH max_d AS (SELECT MAX(price_date) AS d FROM screener_watchlist)
+            SELECT ticker, company_name, sector,
+                   entry_date, exit_date, days_held, pct_return
+            FROM screener_watchlist, max_d
+            WHERE status = 'EXITED'
+              AND exit_date >= max_d.d - INTERVAL (?) DAY
+            ORDER BY exit_date DESC, pct_return DESC
+        """, [int(days)]).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_ticker_history(ticker: str) -> pd.DataFrame:
+    """Every screener_watchlist session for one ticker (all entry→exit cycles)."""
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute("""
+            SELECT ticker, company_name, sector,
+                   entry_date, entry_price, exit_date, status,
+                   close_price, pct_return, days_held
+            FROM screener_watchlist
+            WHERE ticker = ?
+            ORDER BY entry_date
+        """, [ticker.strip().upper()]).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_activity_feed(days: int = 14) -> pd.DataFrame:
+    """Unified recent-activity timeline merging two event sources:
+
+      - TRADE_EXIT     : a screener_watchlist session closed (status=EXITED)
+      - UNIVERSE_ADD   : a screener_membership is_active=TRUE flip
+      - UNIVERSE_REMOVE: a screener_membership is_active=FALSE flip
+
+    One row per event, newest first. `detail` is a pre-formatted human string so
+    the renderer stays dumb. Company name comes from company_profiles (membership
+    carries ticker only).
+    """
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute("""
+            WITH exits AS (
+                     SELECT
+                         sw.exit_date              AS event_date,
+                         sw.ticker,
+                         sw.company_name,
+                         'TRADE_EXIT'              AS event_type,
+                         printf('%+.1f%% over %dd', sw.pct_return, sw.days_held) AS detail
+                     FROM screener_watchlist sw
+                     WHERE sw.status = 'EXITED'
+                       AND sw.exit_date >= (
+                           SELECT MAX(price_date) FROM screener_watchlist
+                       ) - INTERVAL (?) DAY
+                 ),
+                 flips AS (
+                     SELECT
+                         m.effective_date          AS event_date,
+                         m.ticker,
+                         cp.name                   AS company_name,
+                         CASE WHEN m.is_active THEN 'UNIVERSE_ADD'
+                              ELSE 'UNIVERSE_REMOVE' END AS event_type,
+                         printf('$%.2f', m.last_price) AS detail
+                     FROM screener_membership m
+                     LEFT JOIN company_profiles cp ON cp.ticker = m.ticker
+                     WHERE m.effective_date >= (
+                           SELECT MAX(effective_date) FROM screener_membership
+                       ) - INTERVAL (?) DAY
+                 )
+            SELECT event_date, ticker, company_name, event_type, detail
+            FROM (SELECT * FROM exits UNION ALL SELECT * FROM flips)
+            ORDER BY event_date DESC, event_type, ticker
+        """, [int(days), int(days)]).fetchdf()
+    finally:
+        con.close()
+
+
 @st.cache_data(ttl=300)
 def load_scored_pre_breakout(model_version_id: str, limit: int = 100) -> pd.DataFrame:
     """Pre-breakout cohort (trend_ok & !breakout_ok) with materialized scores.

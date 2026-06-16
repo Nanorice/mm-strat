@@ -37,10 +37,12 @@ from dashboard_utils import (
     VETO_THRESHOLD,
     classify_regime,
     exposure_band_label,
+    load_activity_feed,
     load_daily_predictions_today,
     load_past_decisions,
     load_pipeline_status,
     load_prod_model_version_id,
+    load_recent_exits,
     load_regime,
     load_regime_history,
     load_risk_5f,
@@ -48,6 +50,7 @@ from dashboard_utils import (
     load_scored_pre_breakout,
     load_scored_watchlist,
     load_sector_heat,
+    load_ticker_history,
     load_watchlist,
     update_decision_taken,
 )
@@ -434,6 +437,124 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     st.caption(f"Showing {len(table)} trades{cap_note} · sorted by {sort_choice}")
 
 
+# ── Watchlist activity / exits (F2) ───────────────────────────────────────────
+
+def _finviz(t):
+    return f"https://finviz.com/quote.ashx?t={t}" if pd.notna(t) else None
+
+
+_FINVIZ_LINK = st.column_config.LinkColumn(
+    "Ticker", help="Open Finviz quote",
+    display_text=r"finviz\.com/quote\.ashx\?t=(.+)$",
+)
+
+
+def _style_return_col(styled, col: str):
+    def _c(val):
+        if pd.isna(val):
+            return ""
+        return f"color: {'#2e7d32' if val >= 0 else '#c62828'}"
+    return styled.map(_c, subset=[col]).format("{:+.2f}%", subset=[col], na_rep="—")
+
+
+def render_activity_feed() -> None:
+    st.subheader("Watchlist Activity")
+    st.caption(
+        "What recently left the watchlist (realized trade exits) and the universe "
+        "(screener add/remove flips). Use the per-ticker lookup for full session history."
+    )
+
+    window = st.radio(
+        "Window", [7, 14, 30], index=1, horizontal=True,
+        format_func=lambda d: f"Last {d}d", key="activity_window",
+    )
+
+    tab_exits, tab_feed, tab_ticker = st.tabs(
+        ["Recent exits", "Activity feed", "Ticker history"]
+    )
+
+    # ── Recent trade exits ─────────────────────────────────────────────
+    with tab_exits:
+        exits = load_recent_exits(days=int(window))
+        if exits.empty:
+            st.info(f"No trade exits in the last {window} days.")
+        else:
+            tbl = exits.copy()
+            tbl["ticker"] = tbl["ticker"].apply(_finviz)
+            tbl = tbl.rename(columns={
+                "ticker": "Ticker", "company_name": "Company", "sector": "Sector",
+                "entry_date": "Entered", "exit_date": "Exited",
+                "days_held": "Days", "pct_return": "Return %",
+            })
+            styled = _style_return_col(tbl.style, "Return %")
+            styled = styled.format("{:.0f}", subset=["Days"], na_rep="—")
+            st.dataframe(
+                styled, use_container_width=True, hide_index=True, height=420,
+                column_config={"Ticker": _FINVIZ_LINK},
+            )
+            st.caption(f"{len(exits)} exits · sorted by exit date (newest first)")
+
+    # ── Unified activity feed ──────────────────────────────────────────
+    with tab_feed:
+        feed = load_activity_feed(days=int(window))
+        if feed.empty:
+            st.info(f"No activity in the last {window} days.")
+        else:
+            type_opts = sorted(feed["event_type"].unique().tolist())
+            picked = st.multiselect(
+                "Event types", type_opts, default=type_opts, key="activity_types",
+            )
+            view = feed[feed["event_type"].isin(picked)] if picked else feed
+            badge = {
+                "TRADE_EXIT": "🔴 Trade exit",
+                "UNIVERSE_ADD": "🟢 Universe add",
+                "UNIVERSE_REMOVE": "⚪ Universe remove",
+            }
+            disp = view.copy()
+            disp["event_type"] = disp["event_type"].map(lambda t: badge.get(t, t))
+            disp["ticker"] = disp["ticker"].apply(_finviz)
+            disp = disp.rename(columns={
+                "event_date": "Date", "ticker": "Ticker", "company_name": "Company",
+                "event_type": "Event", "detail": "Detail",
+            })
+            st.dataframe(
+                disp, use_container_width=True, hide_index=True, height=420,
+                column_config={"Ticker": _FINVIZ_LINK},
+            )
+            st.caption(f"{len(view)} events in the last {window} days")
+
+    # ── Per-ticker session history ─────────────────────────────────────
+    with tab_ticker:
+        tk = st.text_input(
+            "Ticker", "", placeholder="e.g. AAOI (press Enter)",
+            key="activity_ticker_lookup",
+        ).strip().upper()
+        if not tk:
+            st.info("Enter a ticker to see every SEPA session it has run.")
+        else:
+            hist = load_ticker_history(tk)
+            if hist.empty:
+                st.info(f"No watchlist sessions found for {tk}.")
+            else:
+                name = hist["company_name"].dropna().iloc[0] if hist["company_name"].notna().any() else ""
+                st.markdown(f"**{tk}** — {name} · {len(hist)} session(s)")
+                h = hist.copy()
+                # An ACTIVE row's exit_date is the as-of date, not a realized exit.
+                h.loc[h["status"] == "ACTIVE", "exit_date"] = pd.NaT
+                h = h.rename(columns={
+                    "entry_date": "Entered", "entry_price": "Entry $",
+                    "exit_date": "Exited", "status": "Status",
+                    "close_price": "Last $", "pct_return": "Return %",
+                    "days_held": "Days",
+                })
+                show = ["Entered", "Entry $", "Exited", "Status",
+                        "Last $", "Return %", "Days"]
+                styled = _style_return_col(h[show].style, "Return %")
+                styled = styled.format("${:.2f}", subset=["Entry $", "Last $"], na_rep="—")
+                styled = styled.format("{:.0f}", subset=["Days"], na_rep="—")
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
 # ── Pre-breakout watch table ──────────────────────────────────────────────────
 
 def render_pre_breakout(scored: pd.DataFrame) -> None:
@@ -777,6 +898,11 @@ def render_past_decisions() -> None:
         st.info("No past decisions yet. Toggle Decision above to start logging.")
         return
 
+    # An ACTIVE session's exit_date is the as-of price date (prospective trend
+    # boundary), not a realized exit — blank it so "Exited" reads honestly.
+    past = past.copy()
+    past.loc[past["status"] == "ACTIVE", "exit_date"] = pd.NaT
+
     show = past[[
         "prediction_date", "ticker", "decision_taken", "p_home_run",
         "predicted_class", "entry_date", "exit_date", "status",
@@ -842,6 +968,11 @@ def page_today() -> None:
     version_id = load_prod_model_version_id()
     scored = load_scored_watchlist(version_id) if version_id else load_watchlist()
     render_watchlist_table(scored, scored)
+
+    st.markdown("---")
+
+    # Watchlist activity / exits (F2) — what recently left the watchlist + universe
+    render_activity_feed()
 
     st.markdown("---")
 
