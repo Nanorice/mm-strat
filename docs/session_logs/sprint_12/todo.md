@@ -61,11 +61,20 @@ Goal: carve out a `dashboard.duckdb` from the 72 GB main DB containing only what
 - [~] Set up sync mechanism — **PLANNED** (not built). See [dashboard_sync_deploy_plan.md](dashboard_sync_deploy_plan.md). Decisions locked: existing repo (Nanorice/mm-strat, verified no DB ever committed), Cloudflare R2, Streamlit Community Cloud, spare-PC nightly job. Phases S1-S4 below.
 - [x] Wire nightly rebuild — orchestrator Phase 7.5 (`_run_phase_7_5_dashboard_db`), best-effort, tested live.
 
-#### T1 Sync sub-phases (next, from dashboard_sync_deploy_plan.md)
-- [ ] **S1** GitHub push (code only; add `.env.example`; decide model-artifact policy)
-- [ ] **S2** R2 bucket + `scripts/sync_dashboard_db.py` upload → wire as orchestrator Phase 7.6
-- [ ] **S3** Streamlit Cloud deploy + Google-email auth + R2-pull-on-boot shim; revisit localhost-only header comment
-- [ ] **S4** spare-PC Task Scheduler runbook (wake-on-LAN, builder-PC clarification, end-to-end verify)
+#### T1 Sync sub-phases (reconciled against git 2026-06-16)
+- [x] **S1** GitHub push — `.env.example` present, `.env`+lock gitignored (`0da7f13`).
+  **Reconcile fix (`9d762f3`):** a stray 274 KB `market_data.duckdb` stub WAS tracked
+  at repo root (plan's "no DB committed" claim was wrong); untracked it + added
+  `*.duckdb` to `.gitignore`. Model-artifact policy: model.json filtered from R2 sync.
+- [x] **S2** R2 sync script + orchestrator **Phase 7.6** (`_run_phase_7_6_r2_sync`) — `c783641`.
+- [x] **S3** Streamlit Cloud shim (`_ensure_local_db`, `st.secrets` bridge), duckdb in
+  requirements, localhost-header revisited — `a4b2a0e`/`d5f3d12`/`02ae9cd`/`d84d467`.
+  **Reconcile fix (`9d762f3`):** dashboard.py header named wrong R2 key vars
+  (`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`); corrected to match code/.env.example.
+- [ ] **S4** spare-PC Task Scheduler runbook — **GENUINELY OPEN.** No runbook exists.
+  Needs hardware decisions (builder = dev box vs spare PC; wake-on-LAN vs BIOS wake)
+  + end-to-end verify (pipeline → 7.5 build → 7.6 upload → remote shows fresh data).
+  Blocked on user hardware choices; can scaffold the runbook on request.
 
 ### T2: Model Card Phase 4 — Promotion Gate
 

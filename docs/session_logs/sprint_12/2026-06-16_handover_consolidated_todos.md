@@ -182,13 +182,19 @@ caption text says ≥14d. Align one to the other (`5_Pipeline_Health.py`).
 
 ## 4. From `todo.md` (sprint-12 active list) — still open
 
-### P1 — T1 Dashboard Sync (mostly done; sync sub-phases remain)
-Note: S2/S3 appear **already landed** in git history (`c783641` R2 sync + Phase 7.6,
-`a4b2a0e` pull-on-boot shim, `02ae9cd` R2 download). Verify against todo.md and
-tick off; the list below is what todo.md still shows open:
-- [ ] **S1** GitHub push (code only; `.env.example`; model-artifact policy) — likely partly done (`0da7f13`)
-- [ ] **S4** spare-PC Task Scheduler runbook (wake-on-LAN, end-to-end verify)
-- [ ] Daily: "try dashboard remote" + "figure out data sync" — overlaps S3/S4
+### P1 — T1 Dashboard Sync — RECONCILED against git (2026-06-16)
+- [x] **S1** GitHub push — landed (`0da7f13`). **Reconcile found a real gap:** a stray
+  274 KB `market_data.duckdb` stub was tracked at repo root (the plan's "no DB ever
+  committed" decision was WRONG — `.gitignore` only had `data/`). Fixed in `9d762f3`:
+  untracked + added `*.duckdb`. Model-artifact policy resolved (model.json filtered from sync).
+- [x] **S2** R2 sync script + orchestrator Phase 7.6 — landed (`c783641`).
+- [x] **S3** Streamlit Cloud shim + secrets bridge + duckdb req + localhost-header
+  revisit — landed (`a4b2a0e`/`d5f3d12`/`02ae9cd`/`d84d467`). **Reconcile fix (`9d762f3`):**
+  dashboard.py header named the wrong R2 secret var names → corrected.
+- [ ] **S4** spare-PC Task Scheduler runbook — **GENUINELY OPEN, no runbook exists.**
+  Blocked on hardware decisions (builder = dev box vs spare PC; wake-on-LAN vs BIOS
+  wake) + end-to-end verify. I can scaffold it; needs your hardware choices to finish.
+- [ ] Daily: "try dashboard remote" + "figure out data sync" — folds into S4 verify.
 
 ### P1 — T4 Documentation (do after infra settles)
 - [ ] Model-dev lifecycle section in `docs/comprehensive_methodology.md`
@@ -228,8 +234,9 @@ Remaining, in priority:
    prod HALT/WARN, so do it deliberately with the registry as the new control
    surface). Needs a one-time `pipeline_runs.phase_name` migration (old→new id) or
    an accepted heatmap seam. Est: half-day.
-2. Reconcile **todo.md S1–S4** against git (S2/S3 likely already landed) and finish
-   remote-dashboard verify.
+2. **S4** spare-PC Task Scheduler runbook — the only open sync item (S1–S3 verified
+   done this session; S1/S3 reconcile gaps fixed in `9d762f3`). Blocked on your
+   hardware choices (builder PC, wake mechanism); ask me to scaffold the runbook.
 3. **F2** (watchlist exit panel) — high user value, data already exists.
 4. **T4 docs** once infra settles.
 5. (Optional) test-rot sweep — fix the pre-existing red modules listed in §0.
