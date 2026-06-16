@@ -31,8 +31,18 @@ from dashboard_utils import (
 )
 
 AUDIT_DIR = ROOT / "data" / "audit_reports"
-DATA_FLOW_MMD = ROOT / "docs" / "architecture" / "data_flow.mmd"
-DATA_FLOW_LEGEND = ROOT / "docs" / "architecture" / "data_flow_legend.md"
+ARCH_DIR = ROOT / "docs" / "architecture"
+DATA_FLOW_MMD = ARCH_DIR / "data_flow.mmd"
+DATA_FLOW_LEGEND = ARCH_DIR / "data_flow_legend.md"
+
+# Tab label -> .mmd source. Overview/pipeline/serving are the drill-down split;
+# "Full" is the canonical all-in-one diagram (also referenced by manual_for_me.md).
+DATA_FLOW_VIEWS = [
+    ("Overview", ARCH_DIR / "data_flow_overview.mmd"),
+    ("Pipeline", ARCH_DIR / "data_flow_pipeline.mmd"),
+    ("Serving",  ARCH_DIR / "data_flow_serving.mmd"),
+    ("Full",     DATA_FLOW_MMD),
+]
 
 STATUS_COLORS = {
     "failed":  "#c62828",  # red
@@ -86,36 +96,65 @@ FRESHNESS_TOLERANCE_DAYS = {
 
 # ── Architecture diagram ─────────────────────────────────────────────────────
 
-def render_data_flow_diagram() -> None:
-    st.subheader("Data Flow")
-    st.caption(
-        f"Source: `{DATA_FLOW_MMD.relative_to(ROOT)}` — also referenced by "
-        "`docs/manual_for_me.md`. Edit the `.mmd` file to update both."
-    )
-
-    if not DATA_FLOW_MMD.exists():
-        st.warning(f"Diagram source not found at `{DATA_FLOW_MMD}`.")
+def _render_mermaid_file(path: Path) -> None:
+    if not path.exists():
+        st.warning(f"Diagram source not found at `{path.relative_to(ROOT)}`.")
         return
-
     try:
-        mermaid_src = DATA_FLOW_MMD.read_text(encoding="utf-8")
+        mermaid_src = path.read_text(encoding="utf-8")
     except OSError as e:
         st.error(f"Could not read diagram: {e}")
         return
 
-    # Mermaid JS via CDN. Escape the .mmd content so it survives transport
-    # through the HTML literal (Mermaid parses it back inside the <pre>).
+    # Hold the source in a hidden <pre> (escaped so it survives the HTML literal)
+    # and render on demand. Mermaid's startOnLoad fires once at page load — but
+    # in st.tabs the inactive tabs are display:none, which collapses the
+    # component's iframe to zero width. Mermaid then measures a 0-width box and
+    # throws a misleading "Syntax error in text" bomb. We defer mermaid.render()
+    # until the iframe actually has width (its tab is shown). A display:none
+    # ancestor in the PARENT collapses the iframe, so body.offsetWidth==0 is the
+    # reliable "hidden" signal inside the iframe; a ResizeObserver fires when the
+    # tab is opened and width becomes nonzero.
     escaped = html_lib.escape(mermaid_src)
     page = f"""
-    <div class="mermaid">
-{escaped}
-    </div>
+    <pre id="src" style="display:none">{escaped}</pre>
+    <div id="out"></div>
     <script type="module">
       import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-      mermaid.initialize({{ startOnLoad: true, theme: 'default', securityLevel: 'loose' }});
+      mermaid.initialize({{ startOnLoad: false, theme: 'default', securityLevel: 'loose' }});
+      const src = document.getElementById('src').textContent;
+      const out = document.getElementById('out');
+      let drawn = false;
+      async function draw() {{
+        if (drawn || document.body.offsetWidth === 0) return;   // skip while hidden
+        drawn = true;
+        try {{
+          const {{ svg }} = await mermaid.render('g' + Date.now(), src);
+          out.innerHTML = svg;
+        }} catch (e) {{
+          out.innerHTML = '<pre style="color:#c62828">' + e.message + '</pre>';
+          drawn = false;
+        }}
+      }}
+      new ResizeObserver(draw).observe(document.body);
+      draw();  // active tab: already has width
     </script>
     """
     components.html(page, height=900, scrolling=True)
+
+
+def render_data_flow_diagram() -> None:
+    st.subheader("Data Flow")
+    st.caption(
+        f"Sources in `{ARCH_DIR.relative_to(ROOT)}/`. **Full** is the canonical "
+        "all-in-one diagram (also referenced by `docs/manual_for_me.md`); the other "
+        "tabs are drill-down splits. Edit the `.mmd` files to update."
+    )
+
+    tabs = st.tabs([label for label, _ in DATA_FLOW_VIEWS])
+    for tab, (_, path) in zip(tabs, DATA_FLOW_VIEWS):
+        with tab:
+            _render_mermaid_file(path)
 
     if DATA_FLOW_LEGEND.exists():
         with st.expander("Legend — node ↦ implementing module", expanded=False):
