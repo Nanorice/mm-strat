@@ -47,6 +47,8 @@ data/
 database/
 *.parquet
 *.db
+*.duckdb
+*.duckdb.wal
 *.sqlite
 *.sqlite3
 

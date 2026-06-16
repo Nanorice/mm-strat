@@ -6,8 +6,9 @@ scripts/pages/ and auto-mount via st.navigation.
 Auth model:
   Local: localhost-only (no --server.address 0.0.0.0), no auth needed.
   Streamlit Cloud: viewer allowlist by Google email (set in Community Cloud
-  settings). R2_ACCOUNT_ID + R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY +
-  R2_BUCKET_NAME + DASHBOARD_DB_PATH must be set as Streamlit secrets.
+  settings). R2_ACCOUNT_ID + R2_ACCESS_KEY + R2_SECRET_KEY + R2_BUCKET_NAME
+  (+ optional R2_JURI_ENDPOINT_URL) + DASHBOARD_DB_PATH must be set as
+  Streamlit secrets. Key names must match .env.example / dashboard_utils.py.
 """
 
 from __future__ import annotations
