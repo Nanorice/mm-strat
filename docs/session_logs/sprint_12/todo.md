@@ -20,7 +20,13 @@
 - [ ] Delete dead view `v_d1_trades` (0 consumers, alias of v_d1_candidates)
 - [ ] Retire `v_d2r_hydrated` alias — migrate 2 scripts to `v_d2_hydrated`, drop alias
 - [ ] Re-run `ViewManager.create_all()` after the above
-- [ ] (optional) Phase numbering smell: orchestrator jumps 8→10, no Phase 9
+
+### INFRA — phase numbering gap (Phase 9 missing)
+- [ ] Orchestrator jumps Phase 8 → 10, **no Phase 9**. Renumber model card 10→9
+  (recommended) OR comment 9 as retired. If renumbering: `"phase_10_model_card"`
+  is a persisted `pipeline_runs` key used for idempotency — handle the ripple
+  (migrate key or accept re-run) + update docstring/config/diagram captions.
+  See handover §2.
 
 ---
 

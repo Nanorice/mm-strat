@@ -70,10 +70,24 @@ not waste* — do NOT denormalize to reduce diagram edges. The only real cruft i
 - [ ] **V3 — Re-run `ViewManager.create_all()`** after V1/V2 so the DB reflects the change.
 - Effort: ~30 min, isolated to `view_manager.py` + 2 scripts. **Held pending explicit go** (user paused infra changes this session).
 
-**Related naming smell (found, not a view):** orchestrator phases jump **8 → 10,
-no Phase 9** (monitoring was Phase 9 in the old layout, renumbered to 8 when
-serving phases 7.4–7.6 were inserted; model card kept "10"). Documented in
-diagrams + memory `project_orchestrator_phase_list`. Optional renumber later.
+### Phase numbering gap — Phase 9 is missing (orchestrator jumps 8 → 10)
+
+`daily_pipeline_orchestrator.py` runs Phase 8 (monitoring) then **Phase 10**
+(advisory model card) — **there is no Phase 9.** Monitoring was "Phase 9" in the
+old 9-phase layout and was renumbered to 8 when serving phases 7.4–7.6 were
+inserted; the model card kept its "10" label. Documented in diagrams + memory
+`project_orchestrator_phase_list`. This is a naming smell, not a missing step.
+
+- [ ] **PN1 — Close the gap.** Pick one: (a) renumber model card 10 → 9, or
+  (b) leave 10 and add a comment marking 9 as intentionally retired. Recommend (a).
+- [ ] **PN2 — If renumbering (option a), update the ripple:** the string
+  `"phase_10_model_card"` is the phase **key persisted to `pipeline_runs`** and used
+  for idempotency (`run_manager.is_phase_completed` / `start_phase`) + `run_stats['phase_10']`.
+  Renaming the key means old completed-phase rows won't match → either migrate the
+  stored key or accept one re-run. Also fix the docstring phase list (line ~51) and
+  the `config.py` `phase_10_model_card: WARN` entry. Touch the 3 diagrams' captions.
+- Effort: ~20 min if option (b); ~45 min if option (a) incl. the persisted-key ripple.
+  **Held pending go** (infra paused this session).
 
 ---
 
