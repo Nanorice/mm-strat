@@ -11,36 +11,59 @@ Anything not listed here is either done (see commits / `DONE_*.md`) or explicitl
 
 ## 0. State at handover
 
-**Branch:** `infra_uplift`. **Committed this session:**
+**Branch:** `infra_uplift`.
+
+### Done in follow-up session (2026-06-16 cont.) — D1–D3, V1–V2, DB parity
+- `61a7d70` **D1+D2+D3** — page-5 Data Flow now renders **4 tabs** (Overview /
+  Pipeline / Serving / **Full**=canonical `data_flow.mmd`) via reused
+  `_render_mermaid_file`. The 3 drafts were already committed (`47b8085`), so D1
+  was a no-op. **Root-caused the mermaid "Syntax error in text" bomb**: NOT a
+  diagram-syntax issue (all 3 parse clean) — `st.tabs` hides inactive panels with
+  `display:none`, collapsing the component iframe to 0 width, so mermaid's
+  `startOnLoad` measured a 0-box and threw. Fixed by deferring `mermaid.render()`
+  until the tab has width (ResizeObserver gate). Verified headlessly + in-browser.
+- `b258aee` **V1+V2** — deleted `v_d1_trades` (0 consumers); retired
+  `v_d2r_hydrated` alias. **Handover undercounted V2**: `v_d2_training` reads it
+  *internally* (outcomes + sl_events CTEs) — repointed those to `v_d2_hydrated`,
+  migrated `validate_stop_loss_logic.py` + `audit_fundamental_schema.py`.
+  `create_all()` now `DROP VIEW IF EXISTS` both retired views (CREATE OR REPLACE
+  never drops what it stops creating). V3 left to the daily pipeline (no manual run).
+- `6d8a1fa` **Local/remote DB parity** (new ask) — `build_dashboard_db.py` is now
+  **fail-fast**: removed the per-table `except duckdb.Error` that silently dropped
+  a table from remote, added a post-build invariant asserting every MANIFEST
+  object exists. Audit confirmed the dashboard reads only manifest tables (none of
+  the 18 full-only objects) → no manifest additions needed. New comparison doc
+  `docs/architecture/local_vs_remote_db.md`. Contract: **remote ≡ local slim
+  byte-for-byte; no bespoke remote content; row-windowing OK, silent drops throw.**
+
+### Earlier this session
 - `e8c0999` watchlist M01 score backfill across d3 window (Today #2)
 - `bd16ae1` macro/5F history charts + G4 Finviz links (Today #1 + G4)
 - `83dea91` data_flow.mmd reconciled with real orchestrator phases (G1)
 
-**Uncommitted working-tree drafts (this session, NOT wired in):**
-- `docs/architecture/data_flow_overview.mmd` — schematic, all key stages
-- `docs/architecture/data_flow_pipeline.mmd` — data side (sources → ingestion → features → views → cache)
-- `docs/architecture/data_flow_serving.mmd` — scoring → serving → models → apps
+The 3 drill-down `.mmd` drafts (`data_flow_overview/pipeline/serving.mmd`) are
+committed and wired. Decision standing: keep layout **auto-rendered** — do NOT
+re-introduce invisible-edge / anchor-node ordering hacks (see memory
+`feedback_mermaid_dont_fight_layout`).
 
-All three parse/render clean under mermaid@10. Decision standing: keep layout
-**auto-rendered** — do NOT re-introduce invisible-edge / anchor-node ordering
-hacks (see memory `feedback_mermaid_dont_fight_layout`).
-
----
-
-## 1. This session — immediate follow-ups (diagrams)
-
-- [ ] **D1 — Commit the three draft `.mmd` files** as docs (currently untracked).
-- [ ] **D2 — Wire page 5 to render the new diagrams.** `render_data_flow_diagram()`
-  in `scripts/pages/5_Pipeline_Health.py`. Agreed UX: **overview + pipeline +
-  serving inline; canonical `data_flow.mmd` in a collapsed expander.** ~15 LOC,
-  one render helper reused 4×. (Only code touch in the diagram workstream.)
-- [ ] **D3 — Visually verify rendered layout on page 5** before considering done.
-  Parse-valid ≠ de-crossed; eyeball it (`streamlit run scripts/dashboard.py` →
-  Pipeline Health). Sources sub-phase L-R order is whatever auto-layout picks (accepted).
+**Known pre-existing breakage (not from this session):** `tests/test_view_manager.py`
+— 13 failures on plain HEAD; calls now-instance `_create_*` methods statically
+(+ a temp-file lock). Out of scope here; flag for a test-harness fix.
 
 ---
 
-## 2. INFRA — View-layer cleanup (the "remove some views" work)
+## 1. This session — immediate follow-ups (diagrams) ✅ DONE (`61a7d70`)
+
+- [x] **D1 — Commit the three draft `.mmd` files** — already committed in `47b8085`.
+- [x] **D2 — Wire page 5 to render the new diagrams.** Shipped as **tabs**
+  (Overview / Pipeline / Serving / Full) per updated UX, not inline+expander.
+  Reused `_render_mermaid_file` helper.
+- [x] **D3 — Visually verify** — confirmed in-browser. Fixed the hidden-tab mermaid
+  bomb (see §0). render() errors now surface as real mermaid text, not the generic bomb.
+
+---
+
+## 2. INFRA — View-layer cleanup ✅ V1+V2 DONE (`b258aee`)
 
 Came out of the data-flow review. **Premise correction kept on record:** cross-phase
 reads of a base table (e.g. `price_data` → phases 2/3/5/6/app) are *normalization,
@@ -62,13 +85,16 @@ not waste* — do NOT denormalize to reduce diagram edges. The only real cruft i
 | **`v_d1_trades`** | **0** | 🔴 **DELETE** — pure alias of `v_d1_candidates`, zero consumers (`view_manager.py:645`) |
 | **`v_d2r_hydrated`** | 2 (alias) | 🟡 **RETIRE** — back-compat alias of `v_d2_hydrated` (`view_manager.py:556`) |
 
-- [ ] **V1 — Delete `v_d1_trades`.** Remove `_create_v_d1_trades` + its registration
-  in `create_all()`. Zero consumers → safe.
-- [ ] **V2 — Retire `v_d2r_hydrated` alias.** First migrate 2 stragglers
-  (`scripts/audit_fundamental_schema.py`, `scripts/validate_stop_loss_logic.py`)
-  to `v_d2_hydrated`, then drop the alias line.
-- [ ] **V3 — Re-run `ViewManager.create_all()`** after V1/V2 so the DB reflects the change.
-- Effort: ~30 min, isolated to `view_manager.py` + 2 scripts. **Held pending explicit go** (user paused infra changes this session).
+- [x] **V1 — Delete `v_d1_trades`.** Done — method + registration removed.
+- [x] **V2 — Retire `v_d2r_hydrated` alias.** Done. **Correction:** it was NOT just
+  2 straggler scripts — `v_d2_training` consumed it internally; repointed those to
+  `v_d2_hydrated` too. Migrated both scripts. `create_all()` now drops both retired
+  views explicitly.
+- [x] **V3 — Re-run `ViewManager.create_all()`** — deferred to the daily pipeline
+  (user: no manual run). Until it next runs, the old views still physically exist
+  in the live DB but are dead (no longer recreated).
+- ⚠️ The `view_manager.py:645` / `:556` line refs in the table above are now stale
+  (lines shifted after deletion).
 
 ### Phase numbering gap — Phase 9 is missing (orchestrator jumps 8 → 10)
 
@@ -87,7 +113,30 @@ inserted; the model card kept its "10" label. Documented in diagrams + memory
   stored key or accept one re-run. Also fix the docstring phase list (line ~51) and
   the `config.py` `phase_10_model_card: WARN` entry. Touch the 3 diagrams' captions.
 - Effort: ~20 min if option (b); ~45 min if option (a) incl. the persisted-key ripple.
-  **Held pending go** (infra paused this session).
+  **STILL OPEN** — not touched this session.
+
+---
+
+## 2b. Local ↔ Remote DB parity ✅ DONE (`6d8a1fa`)
+
+New ask this session: eliminate any layout/content divergence between local and
+remote so there's no bespoke remote content (→ simpler sync + future dev).
+
+**Finding:** remote is not a separate build — `sync_dashboard_db.py` uploads the
+slim `dashboard.duckdb` **verbatim**, so remote ≡ local slim byte-for-byte. Zero
+bespoke remote content already; all 22 shared tables have identical schema. The 3
+big tables are windowed to 252d (~4.5% of rows) — kept (that's the slim DB's point;
+layout parity, not full-content parity). 18 full-only objects exist but the
+dashboard reads none of them → nothing to add.
+
+**Done:** `build_dashboard_db.py` is fail-fast (removed the silent per-table
+`except duckdb.Error`; added a post-build invariant that every MANIFEST object
+exists). New `docs/architecture/local_vs_remote_db.md` (topology + row-count table
++ regen query). Memory `project_dashboard_remote_parity` updated.
+
+**Contract going forward:** a new dashboard page that reads a full-only object will
+work locally and **throw** on remote by design — add it to the MANIFEST + rebuild,
+never special-case the remote.
 
 ---
 
@@ -154,8 +203,15 @@ tick off; the list below is what todo.md still shows open:
 ---
 
 ## 5. Suggested next-session order
-1. **D1–D3** — commit + wire + visually verify the diagrams (closes the workstream we were mid-flight on).
-2. **V1–V3** — view-layer cleanup (quick, isolated; needs your go).
-3. Reconcile **todo.md S1–S4** against git (some already landed) and finish remote-dashboard verify.
+
+**Closed this session:** D1–D3 (diagrams), V1–V2 (view cleanup), 2b (DB parity).
+
+Remaining, in priority:
+1. **PN1/PN2** — close the Phase-9 numbering gap (infra now unpaused; recommend
+   renumber 10→9 incl. the persisted `pipeline_runs` key ripple). ~45 min.
+2. **Test-harness fix** — `tests/test_view_manager.py` is broken on HEAD (static
+   calls to instance `_create_*` methods). Quick win; restores view-layer test cover.
+3. Reconcile **todo.md S1–S4** against git (S2/S3 likely already landed) and finish
+   remote-dashboard verify.
 4. **F2** (watchlist exit panel) — high user value, data already exists.
-5. **T4 docs** once infra above settles.
+5. **T4 docs** once infra settles.
