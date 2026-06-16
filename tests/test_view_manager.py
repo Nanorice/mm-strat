@@ -16,11 +16,19 @@ from src.managers.view_manager import ViewManager
 TEST_DB = os.path.join(tempfile.gettempdir(), 'test_view_manager.duckdb')
 
 
-def _build_db(daily_features_rows: list[dict], profiles: list[dict] | None = None) -> str:
-    """Build a minimal DuckDB with daily_features + company_profiles for view tests.
+FEATURE_VERSION = 'v3.1'
 
-    Each row in daily_features_rows must have at minimum:
-        ticker, date, trend_ok, breakout_ok, close, vol_avg_20
+
+def _build_db(feature_rows: list[dict], profiles: list[dict] | None = None) -> str:
+    """Build a minimal DuckDB for view tests, matching the Phase 5.1 view sources.
+
+    v_d1_candidates reads `t2_screener_features` (session/trend/breakout) and
+    `t3_sepa_features` (enriched features, INNER JOIN'd on ticker+date), plus
+    `price_data` (entry/exit prices) and `company_profiles`. We seed all four
+    from one row spec so a candidate actually materializes.
+
+    Each row in `feature_rows` must have at minimum:
+        ticker, date, trend_ok, breakout_ok, close
     Missing feature columns are filled with safe defaults.
     """
     if os.path.exists(TEST_DB):
@@ -65,31 +73,48 @@ def _build_db(daily_features_rows: list[dict], profiles: list[dict] | None = Non
         'price_accel_10d': 0.005, 'immediate_thrust': 0.3,
         'close_above_sma200': True,
         'trend_ok': False, 'breakout_ok': False,
-        'feature_version': 'v3.0',
+        'feature_version': FEATURE_VERSION,
+        # v3.1 pct_chg columns — v_d1_candidates' final SELECT converts each to a
+        # *_delta ratio, so they must exist on t3_sepa_features.
+        'natr_pct_chg': 0.0, 'vcp_ratio_pct_chg': 0.0,
+        'consolidation_width_pct_chg': 0.0,
+        'price_vs_sma_50_pct_chg': 0.0, 'price_vs_sma_150_pct_chg': 0.0,
+        'price_vs_sma_200_pct_chg': 0.0,
+        'rs_pct_chg': 0.0, 'rs_ma_pct_chg': 0.0, 'dry_up_volume_pct_chg': 0.0,
+        'high_52w_pct_chg': 0.0, 'low_52w_pct_chg': 0.0,
+        'lowest_low_20d_pct_chg': 0.0, 'highest_high_20d_pct_chg': 0.0,
+        'rsi_14_pct_chg': 0.0,
+        'dist_from_52w_high_pct_chg': 0.0, 'dist_from_52w_low_pct_chg': 0.0,
+        'dist_from_20d_low_pct_chg': 0.0, 'dist_from_20d_high_pct_chg': 0.0,
     }
 
     rows = []
-    for r in daily_features_rows:
+    for r in feature_rows:
         row = {**defaults, **r}
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    con.execute("CREATE TABLE daily_features AS SELECT * FROM df")
+    # t2_screener_features: session/trend source for v_d1_candidates. The view
+    # reads ticker, date, trend_ok, breakout_ok, close, sma_50/150/200.
+    con.execute("CREATE TABLE t2_screener_features AS SELECT * FROM df")
+    # t3_sepa_features: enriched feature source (INNER JOIN'd in v_d1_candidates'
+    # `enriched` CTE on ticker+date+feature_version). Same rows/columns.
+    con.execute("CREATE TABLE t3_sepa_features AS SELECT * FROM df")
 
-    # price_data (needed by v_d2_hydrated)
+    # price_data (entry/exit prices + v_d2_hydrated hydration)
     price_rows = [
         {'ticker': r['ticker'], 'date': r['date'],
          'open': r.get('open', 100.0), 'high': r.get('high', 105.0),
          'low': r.get('low', 95.0), 'close': r.get('close', 100.0),
          'volume': r.get('volume', 5_000_000)}
-        for r in daily_features_rows
+        for r in feature_rows
     ]
     pdf = pd.DataFrame(price_rows)
     con.execute("CREATE TABLE price_data AS SELECT * FROM pdf")
 
     # company_profiles
     if profiles is None:
-        tickers = list({r['ticker'] for r in daily_features_rows})
+        tickers = list({r['ticker'] for r in feature_rows})
         profiles = [
             {'ticker': t, 'sector': 'Tech', 'industry': 'Software',
              'is_active': True, 'market_cap': 1e9, 'shares_outstanding': 1e7}
@@ -149,34 +174,43 @@ class TestSessionStateMachine(unittest.TestCase):
 
         vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        vm._create_v_d1_candidates(con)
-        trade_ids = con.execute(
-            "SELECT DISTINCT trade_id FROM v_d1_candidates WHERE ticker='AAPL'"
-        ).fetchall()
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            trade_ids = con.execute(
+                "SELECT DISTINCT trade_id FROM v_d1_candidates WHERE ticker='AAPL'"
+            ).fetchall()
+        finally:
+            con.close()
         self.assertEqual(len(trade_ids), 1, f"Expected 1 trade, got {len(trade_ids)}: {trade_ids}")
 
     def test_broken_trend_two_trades(self):
-        """Trend breaks between 2 breakout events -> 2 trade_ids."""
+        """Session (C1+C2+C6) breaks between 2 breakouts -> 2 trade_ids.
+
+        Sessions are bounded by trend_c8 = close > sma_50/150/200, NOT by
+        trend_ok. To split the session, drop close below sma_50 (=98) on days
+        8-9, then recover. A breakout in each session => 2 trades.
+        """
         dates = _dates('2024-01-02', 20)
         rows = []
         for i, d in enumerate(dates):
-            # trend_ok: True for first 8 days, False for day 9-10, True for 11-20
-            trend = i < 8 or i >= 10
+            in_session = not (8 <= i <= 9)        # close dips below SMA on 8-9
+            close = 110.0 + i if in_session else 90.0
             rows.append({
-                'ticker': 'MSFT', 'date': d, 'close': 100.0 + i,
-                'trend_ok': trend,
-                'breakout_ok': i in (2, 12),  # One breakout in each session
+                'ticker': 'MSFT', 'date': d, 'close': close,
+                'trend_ok': True,
+                'breakout_ok': i in (2, 12),       # one breakout per session
             })
         _build_db(rows)
 
         vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        vm._create_v_d1_candidates(con)
-        trade_ids = con.execute(
-            "SELECT DISTINCT trade_id FROM v_d1_candidates WHERE ticker='MSFT'"
-        ).fetchall()
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            trade_ids = con.execute(
+                "SELECT DISTINCT trade_id FROM v_d1_candidates WHERE ticker='MSFT'"
+            ).fetchall()
+        finally:
+            con.close()
         self.assertEqual(len(trade_ids), 2, f"Expected 2 trades, got {len(trade_ids)}: {trade_ids}")
 
     def test_entry_date_is_first_breakout(self):
@@ -193,11 +227,13 @@ class TestSessionStateMachine(unittest.TestCase):
 
         vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        vm._create_v_d1_candidates(con)
-        entry = con.execute(
-            "SELECT DISTINCT entry_date FROM v_d1_candidates WHERE ticker='TSLA'"
-        ).fetchone()[0]
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            entry = con.execute(
+                "SELECT DISTINCT entry_date FROM v_d1_candidates WHERE ticker='TSLA'"
+            ).fetchone()[0]
+        finally:
+            con.close()
         expected = dates[5]
         self.assertEqual(entry, expected, f"Entry should be {expected}, got {entry}")
 
@@ -215,11 +251,13 @@ class TestSessionStateMachine(unittest.TestCase):
 
         vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        vm._create_v_d1_candidates(con)
-        count = con.execute(
-            "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='GOOG'"
-        ).fetchone()[0]
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            count = con.execute(
+                "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='GOOG'"
+            ).fetchone()[0]
+        finally:
+            con.close()
         self.assertEqual(count, 0, f"Expected 0 rows, got {count}")
 
     def test_only_entry_row_in_candidates(self):
@@ -234,18 +272,21 @@ class TestSessionStateMachine(unittest.TestCase):
             })
         _build_db(rows)
 
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        row_count = con.execute(
-            "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='NVDA'"
-        ).fetchone()[0]
-        trade_count = con.execute(
-            "SELECT COUNT(DISTINCT trade_id) FROM v_d1_candidates WHERE ticker='NVDA'"
-        ).fetchone()[0]
-        min_date = con.execute(
-            "SELECT MIN(date) FROM v_d1_candidates WHERE ticker='NVDA'"
-        ).fetchone()[0]
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            row_count = con.execute(
+                "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='NVDA'"
+            ).fetchone()[0]
+            trade_count = con.execute(
+                "SELECT COUNT(DISTINCT trade_id) FROM v_d1_candidates WHERE ticker='NVDA'"
+            ).fetchone()[0]
+            min_date = con.execute(
+                "SELECT MIN(date) FROM v_d1_candidates WHERE ticker='NVDA'"
+            ).fetchone()[0]
+        finally:
+            con.close()
         self.assertEqual(row_count, 1, f"Expected 1 row, got {row_count}")
         self.assertEqual(trade_count, 1, f"Expected 1 trade, got {trade_count}")
         self.assertEqual(min_date, dates[7], f"Entry row should be {dates[7]}, got {min_date}")
@@ -264,15 +305,23 @@ class TestSessionStateMachine(unittest.TestCase):
 
         vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        vm._create_v_d1_candidates(con)
-        trigger_count = con.execute(
-            "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='META' AND is_new_trigger=1"
-        ).fetchone()[0]
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            trigger_count = con.execute(
+                "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='META' AND is_new_trigger=1"
+            ).fetchone()[0]
+        finally:
+            con.close()
         self.assertEqual(trigger_count, 1, f"Expected 1 trigger row, got {trigger_count}")
 
-    def test_liquidity_filter_applied(self):
-        """Rows with vol_avg_20 < 500000 should be excluded even if trend_ok."""
+    def test_no_liquidity_filter_in_view(self):
+        """v_d1_candidates has NO liquidity filter (Phase 5.1+).
+
+        Liquidity screening moved upstream to screener_membership, so an
+        otherwise-valid breakout still produces a candidate regardless of
+        volume. (Previously this view filtered vol_avg_20 < 500k; that filter
+        was removed.) Regression guard against silently re-adding it.
+        """
         dates = _dates('2024-01-02', 10)
         rows = []
         for i, d in enumerate(dates):
@@ -280,25 +329,34 @@ class TestSessionStateMachine(unittest.TestCase):
                 'ticker': 'TINY', 'date': d, 'close': 100.0 + i,
                 'trend_ok': True,
                 'breakout_ok': i == 3,
-                'vol_avg_20': 100_000,  # Below threshold
+                'vol_avg_20': 100_000,   # low volume — no longer filtered here
             })
         _build_db(rows)
 
         vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        vm._create_v_d1_candidates(con)
-        count = con.execute(
-            "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='TINY'"
-        ).fetchone()[0]
-        con.close()
-        self.assertEqual(count, 0, f"Expected 0 (illiquid), got {count}")
+        try:
+            vm._create_v_d1_candidates(con)
+            count = con.execute(
+                "SELECT COUNT(*) FROM v_d1_candidates WHERE ticker='TINY'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(count, 1, f"Expected 1 candidate (no liquidity filter), got {count}")
 
 
 class TestTradePrices(unittest.TestCase):
-    """Test entry_price, exit_price, exit_date, return_pct on v_d1_candidates."""
+    """Test entry_price, exit_price, exit_date, return_pct on v_d1_candidates.
 
-    def test_entry_price_is_next_day_open(self):
-        """entry_price should be the open of the day after entry_date."""
+    Phase 5.1 semantics: entry_price = close ON entry_date (`pe.close`), exit
+    is the first trading day AFTER the session (C1+C2+C6) breaks, exit_price =
+    that day's close, return_pct = ((exit/entry) - 1) * 100 (percentage).
+    Sessions are bounded by close vs sma_50/150/200, so tests break a session
+    by dropping close below sma_50 (=98).
+    """
+
+    def test_entry_price_is_entry_day_close(self):
+        """entry_price should be the close on entry_date (not next-day open)."""
         dates = _dates('2024-01-02', 15)
         rows = []
         for i, d in enumerate(dates):
@@ -310,89 +368,92 @@ class TestTradePrices(unittest.TestCase):
             })
         _build_db(rows)
 
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        entry_price = con.execute(
-            "SELECT DISTINCT entry_price FROM v_d1_candidates WHERE ticker='AAPL'"
-        ).fetchone()[0]
-        con.close()
-        # Entry at index 3, next-day open = 50.0 + 4 = 54.0
-        self.assertAlmostEqual(entry_price, 54.0)
+        try:
+            vm._create_v_d1_candidates(con)
+            entry_price = con.execute(
+                "SELECT DISTINCT entry_price FROM v_d1_candidates WHERE ticker='AAPL'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        # Entry at index 3, close = 100.0 + 3 = 103.0
+        self.assertAlmostEqual(entry_price, 103.0)
 
-    def test_exit_date_is_next_day_after_last_trend(self):
-        """exit_date should be the next trading day after the last trend_ok day."""
-        dates = _dates('2024-01-02', 20)
+    @staticmethod
+    def _session_break_rows(ticker: str, dates: list, break_at: int) -> list[dict]:
+        """Rows where close stays above sma_50 (=98) until index `break_at`,
+        then drops below — so the C1+C2+C6 session ends at break_at-1. Breakout
+        at index 3. open is offset from close so we can tell them apart."""
         rows = []
         for i, d in enumerate(dates):
-            trend = i < 12  # Last trend_ok day is index 11
+            in_session = i < break_at
+            close = 100.0 + i if in_session else 90.0
             rows.append({
-                'ticker': 'AAPL', 'date': d,
-                'open': 50.0 + i, 'close': 100.0 + i,
-                'trend_ok': trend,
+                'ticker': ticker, 'date': d,
+                'open': close - 50.0, 'close': close,
+                'trend_ok': True,
                 'breakout_ok': i == 3,
             })
-        _build_db(rows)
+        return rows
 
+    def test_exit_date_is_next_day_after_session_break(self):
+        """exit_date = first trading day after the last in-session day."""
+        dates = _dates('2024-01-02', 20)
+        _build_db(self._session_break_rows('AAPL', dates, break_at=12))
+
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        exit_date = con.execute(
-            "SELECT DISTINCT exit_date FROM v_d1_candidates WHERE ticker='AAPL'"
-        ).fetchone()[0]
-        con.close()
+        try:
+            vm._create_v_d1_candidates(con)
+            exit_date = con.execute(
+                "SELECT DISTINCT exit_date FROM v_d1_candidates WHERE ticker='AAPL'"
+            ).fetchone()[0]
+        finally:
+            con.close()
         if hasattr(exit_date, 'date'):
             exit_date = exit_date.date()
-        # Last trend_ok day = dates[11], next trading day = dates[12]
+        # Last in-session day = dates[11], next trading day = dates[12]
         self.assertEqual(exit_date, dates[12])
 
-    def test_exit_price_is_exit_day_open(self):
-        """exit_price should be the open on exit_date."""
+    def test_exit_price_is_exit_day_close(self):
+        """exit_price = close on exit_date (COALESCE(next_close, close))."""
         dates = _dates('2024-01-02', 20)
-        rows = []
-        for i, d in enumerate(dates):
-            trend = i < 12
-            rows.append({
-                'ticker': 'AAPL', 'date': d,
-                'open': 50.0 + i, 'close': 100.0 + i,
-                'trend_ok': trend,
-                'breakout_ok': i == 3,
-            })
-        _build_db(rows)
+        _build_db(self._session_break_rows('AAPL', dates, break_at=12))
 
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        exit_price = con.execute(
-            "SELECT DISTINCT exit_price FROM v_d1_candidates WHERE ticker='AAPL'"
-        ).fetchone()[0]
-        con.close()
-        # Exit day = dates[12] (index 12), open = 50.0 + 12 = 62.0
-        self.assertAlmostEqual(exit_price, 62.0)
+        try:
+            vm._create_v_d1_candidates(con)
+            exit_price = con.execute(
+                "SELECT DISTINCT exit_price FROM v_d1_candidates WHERE ticker='AAPL'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        # Exit day = dates[12], close = 90.0 (out-of-session value)
+        self.assertAlmostEqual(exit_price, 90.0)
 
     def test_return_pct_correct(self):
-        """return_pct = (exit_price / entry_price) - 1."""
+        """return_pct = ((exit_price / entry_price) - 1) * 100."""
         dates = _dates('2024-01-02', 20)
-        rows = []
-        for i, d in enumerate(dates):
-            trend = i < 12
-            rows.append({
-                'ticker': 'AAPL', 'date': d,
-                'open': 50.0 + i, 'close': 100.0 + i,
-                'trend_ok': trend,
-                'breakout_ok': i == 3,
-            })
-        _build_db(rows)
+        _build_db(self._session_break_rows('AAPL', dates, break_at=12))
 
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        return_pct = con.execute(
-            "SELECT DISTINCT return_pct FROM v_d1_candidates WHERE ticker='AAPL'"
-        ).fetchone()[0]
-        con.close()
-        # entry_price = 54.0 (index 4 open), exit_price = 62.0 (index 12 open)
-        expected = (62.0 / 54.0) - 1.0
+        try:
+            vm._create_v_d1_candidates(con)
+            return_pct = con.execute(
+                "SELECT DISTINCT return_pct FROM v_d1_candidates WHERE ticker='AAPL'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        # entry_price = close@3 = 103.0, exit_price = close@12 = 90.0
+        expected = ((90.0 / 103.0) - 1.0) * 100.0
         self.assertAlmostEqual(return_pct, expected, places=6)
 
-    def test_exit_date_null_when_trend_never_breaks(self):
-        """If trend_ok is True through end of data, exit_date should be NULL."""
+    def test_exit_date_falls_back_when_session_never_breaks(self):
+        """If the session runs to the end of data, there's no next day after the
+        last in-session date, so exit_date COALESCEs to last_trend_date itself."""
         dates = _dates('2024-01-02', 15)
         rows = []
         for i, d in enumerate(dates):
@@ -404,40 +465,50 @@ class TestTradePrices(unittest.TestCase):
             })
         _build_db(rows)
 
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        exit_date = con.execute(
-            "SELECT DISTINCT exit_date FROM v_d1_candidates WHERE ticker='AAPL'"
-        ).fetchone()[0]
-        con.close()
-        # No day after last trend_ok in price_data -> NULL
-        self.assertIsNone(exit_date)
+        try:
+            vm._create_v_d1_candidates(con)
+            exit_date = con.execute(
+                "SELECT DISTINCT exit_date FROM v_d1_candidates WHERE ticker='AAPL'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        if hasattr(exit_date, 'date'):
+            exit_date = exit_date.date()
+        # No next day after the last in-session date -> COALESCE to last_trend_date
+        self.assertEqual(exit_date, dates[-1])
 
 
 class TestHydratedView(unittest.TestCase):
     """Test v_d2_hydrated exit detection."""
 
-    def test_exit_on_trend_break(self):
-        """Trade should exit when trend_ok goes False."""
+    def test_exit_on_session_break(self):
+        """sepa_exit_date should propagate v_d1_candidates.exit_date (first day
+        after the C1+C2+C6 session breaks)."""
         dates = _dates('2024-01-02', 20)
         rows = []
         for i, d in enumerate(dates):
-            trend = i < 12
+            in_session = i < 12          # session ends at index 11
+            close = 100.0 + i if in_session else 90.0
             rows.append({
-                'ticker': 'AAPL', 'date': d, 'close': 100.0 + i,
-                'trend_ok': trend,
+                'ticker': 'AAPL', 'date': d, 'close': close,
+                'trend_ok': True,
                 'breakout_ok': i == 3,
             })
         _build_db(rows)
 
+        vm = ViewManager(TEST_DB)
         con = duckdb.connect(TEST_DB)
-        ViewManager._create_v_d1_candidates(con)
-        ViewManager._create_v_d2_hydrated(con)
-        exit_date = con.execute(
-            "SELECT sepa_exit_date FROM v_d2_hydrated WHERE ticker='AAPL' LIMIT 1"
-        ).fetchone()[0]
-        con.close()
-        # Exit = next trading day after last trend_ok (day 11) = day 12
+        try:
+            vm._create_v_d1_candidates(con)
+            vm._create_v_d2_hydrated(con)
+            exit_date = con.execute(
+                "SELECT sepa_exit_date FROM v_d2_hydrated WHERE ticker='AAPL' LIMIT 1"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        # Exit = next trading day after last in-session day (11) = day 12
         if hasattr(exit_date, 'date'):
             exit_date = exit_date.date()
         self.assertEqual(exit_date, dates[12])
