@@ -42,6 +42,9 @@ from dashboard_utils import (
     load_past_decisions,
     load_pipeline_status,
     load_prod_model_version_id,
+    load_rank_cohorts,
+    load_rank_history,
+    load_rank_history_bounds,
     load_recent_exits,
     load_regime,
     load_regime_history,
@@ -280,10 +283,11 @@ def render_risk_position(risk: pd.Series | None) -> None:
 def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
     st.subheader("Screener Watchlist")
     st.caption(
-        "M01 scores are the breakout-cohort score from each name's entry day "
-        "(materialized, prod model). Blank when the trade has no in-window breakout "
-        "score — its SEPA session opened before the 252-day deployment window, or it "
-        "reached the watchlist without a breakout candidate row (new listing / no t3 features)."
+        "M01 scores are the prod model's P(Home Run), materialized nightly. "
+        "ACTIVE trades show the LATEST score (tracks the name while held); EXITED "
+        "trades show the score as of their entry day. Blank when the name has no "
+        "score in any cohort — its SEPA session predates the 252-day deployment "
+        "window, or it is a new listing with no t3 features."
     )
 
     # Wrap filters in a form so the page only reruns on Apply / Enter — not on
@@ -457,16 +461,11 @@ def _style_return_col(styled, col: str):
     return styled.map(_c, subset=[col]).format("{:+.2f}%", subset=[col], na_rep="—")
 
 
-def render_activity_feed() -> None:
+def render_activity_feed(model_version_id: str | None = None) -> None:
     st.subheader("Watchlist Activity")
     st.caption(
         "What recently left the watchlist (realized trade exits) and the universe "
         "(screener add/remove flips). Use the per-ticker lookup for full session history."
-    )
-
-    window = st.radio(
-        "Window", [7, 14, 30], index=1, horizontal=True,
-        format_func=lambda d: f"Last {d}d", key="activity_window",
     )
 
     tab_exits, tab_feed, tab_ticker = st.tabs(
@@ -475,6 +474,10 @@ def render_activity_feed() -> None:
 
     # ── Recent trade exits ─────────────────────────────────────────────
     with tab_exits:
+        window = st.radio(
+            "Window", [7, 14, 30], index=1, horizontal=True,
+            format_func=lambda d: f"Last {d}d", key="exits_window",
+        )
         exits = load_recent_exits(days=int(window))
         if exits.empty:
             st.info(f"No trade exits in the last {window} days.")
@@ -496,6 +499,10 @@ def render_activity_feed() -> None:
 
     # ── Unified activity feed ──────────────────────────────────────────
     with tab_feed:
+        window = st.radio(
+            "Window", [7, 14, 30], index=1, horizontal=True,
+            format_func=lambda d: f"Last {d}d", key="feed_window",
+        )
         feed = load_activity_feed(days=int(window))
         if feed.empty:
             st.info(f"No activity in the last {window} days.")
@@ -532,7 +539,7 @@ def render_activity_feed() -> None:
         if not tk:
             st.info("Enter a ticker to see every SEPA session it has run.")
         else:
-            hist = load_ticker_history(tk)
+            hist = load_ticker_history(tk, model_version_id)
             if hist.empty:
                 st.info(f"No watchlist sessions found for {tk}.")
             else:
@@ -545,14 +552,19 @@ def render_activity_feed() -> None:
                     "entry_date": "Entered", "entry_price": "Entry $",
                     "exit_date": "Exited", "status": "Status",
                     "close_price": "Last $", "pct_return": "Return %",
-                    "days_held": "Days",
+                    "days_held": "Days", "entry_score": "Entry P(HR)",
                 })
-                show = ["Entered", "Entry $", "Exited", "Status",
+                show = ["Entered", "Entry $", "Entry P(HR)", "Exited", "Status",
                         "Last $", "Return %", "Days"]
+                show = [c for c in show if c in h.columns]
                 styled = _style_return_col(h[show].style, "Return %")
                 styled = styled.format("${:.2f}", subset=["Entry $", "Last $"], na_rep="—")
                 styled = styled.format("{:.0f}", subset=["Days"], na_rep="—")
+                if "Entry P(HR)" in show:
+                    styled = styled.format("{:.2f}", subset=["Entry P(HR)"], na_rep="—")
                 st.dataframe(styled, use_container_width=True, hide_index=True)
+                st.caption("Entry P(HR) = prod M01 P(Home Run) as the signal fired "
+                           "(NULL for sessions predating the scored window).")
 
 
 # ── Pre-breakout watch table ──────────────────────────────────────────────────
@@ -602,6 +614,118 @@ def render_pre_breakout(scored: pd.DataFrame) -> None:
 
     st.dataframe(styled, use_container_width=True, height=400)
     st.caption(f"Showing {len(table)} candidates (scored nightly)")
+
+
+# ── Daily rank bump chart (2b) ────────────────────────────────────────────────
+
+_RANK_TOP_N = [5, 10, 20, 50]
+
+
+def _rank_metric_for(model_version_id: str) -> str:
+    """Score column carrying P(Home Run) for this model — binary uses class_1,
+    the 4-class prototype uses class_3. Rank itself comes from rank_within_day;
+    this only picks the probability shown on hover."""
+    return "prob_class_1" if "binary" in model_version_id.lower() else "prob_class_3"
+
+
+def render_rank_bump_chart(model_version_id: str | None) -> None:
+    st.subheader("Daily Rank Bump — top P(Home Run) names over time")
+    if not model_version_id:
+        st.info("No prod model registered — nothing to rank.")
+        return
+
+    cohorts = load_rank_cohorts(model_version_id)
+    if not cohorts:
+        st.info("No daily predictions for the prod model yet.")
+        return
+    lo, hi = load_rank_history_bounds(model_version_id)
+
+    st.caption(
+        "Each line is one ticker; y = its prod-model P(Home Run) rank that day "
+        "(1 = best, on top). Membership is per-day top-N, so lines enter/leave as "
+        "ranks shift. A segment connects two days only when the ticker is top-N on "
+        "both — isolated days render as points. The breakout cohort is fresh "
+        "breakouts (turns over daily → mostly points); pre_breakout names persist "
+        "as they set up → more crossing lines."
+    )
+
+    # pre_breakout shows persistence, so prefer it when available.
+    default_cohort = "pre_breakout" if "pre_breakout" in cohorts else cohorts[0]
+    # Form: controls only fire on Apply (avoids the per-keystroke whole-page rerun).
+    with st.form("rank_bump_controls", border=False):
+        bc1, bc2, bc3 = st.columns([1, 1, 2])
+        with bc1:
+            cohort = st.selectbox(
+                "Cohort", cohorts, index=cohorts.index(default_cohort),
+                key="rank_bump_cohort",
+            )
+        with bc2:
+            top_n = st.selectbox("Top-N", _RANK_TOP_N, index=1, key="rank_bump_top_n")
+        with bc3:
+            dr = st.date_input(
+                "Date range", value=(hi - pd.Timedelta(days=60), hi),
+                min_value=lo, max_value=hi, key="rank_bump_date_range",
+            )
+        st.form_submit_button("Apply", type="primary")
+
+    if not (isinstance(dr, (list, tuple)) and len(dr) == 2):
+        st.info("Pick a start and end date.")
+        return
+    start, end = dr
+
+    metric = _rank_metric_for(model_version_id)
+    df = load_rank_history(model_version_id, top_n=int(top_n),
+                           start=start, end=end, metric=metric, cohort=cohort)
+    if df.empty:
+        st.info("No ranked names in this range.")
+        return
+
+    df = df.copy()
+    df["prediction_date"] = pd.to_datetime(df["prediction_date"])
+
+    # Adjacency: only consecutive entries on calendar-adjacent prediction dates
+    # (no top-N gap day between them) get a connecting segment. Index each
+    # distinct date so a one-step gap in position == adjacent.
+    dates = sorted(df["prediction_date"].unique())
+    date_pos = {d: i for i, d in enumerate(dates)}
+    df["dpos"] = df["prediction_date"].map(date_pos)
+
+    fig = go.Figure()
+    palette = px.colors.qualitative.Alphabet + px.colors.qualitative.Light24
+    for i, (tk, g) in enumerate(df.groupby("ticker", sort=False)):
+        g = g.sort_values("dpos")
+        color = palette[i % len(palette)]
+        # Split into runs of consecutive (adjacent) dates; isolated runs of
+        # length 1 draw as a marker, runs >=2 draw as a connected line.
+        run_id = (g["dpos"].diff() != 1).cumsum()
+        last_x = g["prediction_date"].iloc[-1]
+        last_y = g["rank_within_day"].iloc[-1]
+        for _, run in g.groupby(run_id):
+            mode = "lines+markers" if len(run) >= 2 else "markers"
+            fig.add_trace(go.Scatter(
+                x=run["prediction_date"], y=run["rank_within_day"],
+                name=tk, legendgroup=tk, mode=mode,
+                line=dict(color=color, width=1.6),
+                marker=dict(color=color, size=6),
+                showlegend=False,
+                customdata=run[["score"]],
+                hovertemplate=(f"<b>{tk}</b><br>%{{x|%Y-%m-%d}}<br>"
+                               "rank %{y}<br>P(HR) %{customdata[0]:.3f}<extra></extra>"),
+            ))
+        # End-of-line label so the dense chart stays readable without a legend.
+        fig.add_trace(go.Scatter(
+            x=[last_x], y=[last_y], mode="text", text=[tk],
+            textposition="middle right", textfont=dict(size=9, color=color),
+            showlegend=False, hoverinfo="skip",
+        ))
+
+    fig.update_layout(
+        height=560, margin=dict(l=30, r=60, t=20, b=30),
+        xaxis=dict(title="date"),
+        yaxis=dict(title="rank (1 = best)", autorange="reversed",
+                   dtick=1 if top_n <= 20 else 5),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ── Sector heat ───────────────────────────────────────────────────────────────
@@ -972,7 +1096,7 @@ def page_today() -> None:
     st.markdown("---")
 
     # Watchlist activity / exits (F2) — what recently left the watchlist + universe
-    render_activity_feed()
+    render_activity_feed(version_id)
 
     st.markdown("---")
 
@@ -989,6 +1113,11 @@ def page_today() -> None:
 
     # Past decisions performance
     render_past_decisions()
+
+    st.markdown("---")
+
+    # Daily rank bump chart (2b) — top-N P(Home Run) rank trajectories over time
+    render_rank_bump_chart(version_id)
 
     st.markdown("---")
 

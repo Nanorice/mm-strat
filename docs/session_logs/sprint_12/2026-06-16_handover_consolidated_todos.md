@@ -248,6 +248,12 @@ caption text says ≥14d. Align one to the other (`5_Pipeline_Health.py`).
   failure alerting. Deferred to next session.
 - [ ] Daily: "try dashboard remote" + "figure out data sync" — folds into S4 verify.
 
+### Fixes
+- [ ] the activity section in dashboard, when selecting between windowed history and ticker history, the page flickers, and sometimes have to select the ticker history twice
+- [ ] would be good to have also the score for the ticker in ticker history table, using prod model, for the day signal is generated
+- [ ] watchlist table: (a) still some tickers with no score, we dealt with these before can you remind me why we left as is? (b) I noticed the LPTH score is constant at 0.7 recently, do we not update the scores every day?
+
+
 ### P1 — T4 Documentation (do after infra settles)
 - [ ] Model-dev lifecycle section in `docs/comprehensive_methodology.md`
 - [ ] Refresh `comprehensive_methodology.md` stale sections + timestamp

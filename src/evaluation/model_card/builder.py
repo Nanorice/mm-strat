@@ -93,6 +93,7 @@ class ModelCardBuilder:
         section_g_n_bootstrap: int = 500,
         section_g_block_size_days: int = 60,
         skip_benchmarks: bool = False,
+        apply_calibration: bool = False,
     ):
         self.model_id = model_id
         self.model_path = Path(model_path)
@@ -110,6 +111,7 @@ class ModelCardBuilder:
         self.section_g_n_bootstrap = section_g_n_bootstrap
         self.section_g_block_size_days = section_g_block_size_days
         self.skip_benchmarks = skip_benchmarks
+        self.apply_calibration = apply_calibration
 
     def build(self) -> ModelCard:
         t0 = time.perf_counter()
@@ -122,6 +124,7 @@ class ModelCardBuilder:
             end_date=self.end_date,
             apply_trend_ok_filter=self.apply_trend_ok_filter,
             feature_version=self.feature_version,
+            apply_calibration=self.apply_calibration,
         )
         logger.info(
             "Eval data: n=%d, prevalence=%.4f, dates %s..%s",
@@ -151,6 +154,7 @@ class ModelCardBuilder:
                 feature_version=self.feature_version,
                 cache_dir=self.mode_b_cache_dir,
                 force_recompute=self.mode_b_force_recompute,
+                apply_calibration=self.apply_calibration,
             )
             logger.info("Mode B pool: %d rows", len(mode_b_pool))
 

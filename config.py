@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env. Anchor to this file's directory so the
+# vars load regardless of CWD — Task Scheduler runs with CWD=C:\Windows\System32,
+# where a bare load_dotenv() finds nothing and silently leaves R2 creds unset.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ==============================================================================
 # DIRECTORY PATHS

@@ -66,6 +66,17 @@ class ScoreEngine:
             return None
         return cls.from_version(db_path, version_id)
 
+    @classmethod
+    def from_shadow(cls, db_path: str) -> Optional["ScoreEngine"]:
+        """Build for the designated shadow model, or None if none designated."""
+        from src.model_registry import ModelRegistry
+
+        registry = ModelRegistry(db_path=db_path)
+        version_id = registry.get_shadow_version()
+        if not version_id:
+            return None
+        return cls.from_version(db_path, version_id)
+
     # ── scoring ────────────────────────────────────────────────────────────────
 
     def _load(self):

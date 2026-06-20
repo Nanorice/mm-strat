@@ -23,18 +23,10 @@ STATUS_COLOR = {
 }
 
 VERDICT_COLOR = {
-    "PASS": "#2e7d32",
-    "MARGINAL": "#f9a825",
-    "REJECT": "#c62828",
+    "OK": "#2e7d32",
+    "WARNING": "#f9a825",
+    "LIMITATION": "#c62828",
     "PENDING": "#757575",
-}
-
-BAND_COLOR = {
-    "STRONG": "#1b5e20",
-    "ACCEPTABLE": "#558b2f",
-    "WEAK": "#f9a825",
-    "BROKEN": "#c62828",
-    "INSUFFICIENT": "#757575",
 }
 
 STYLE = """
@@ -263,8 +255,8 @@ def _header_html(card) -> str:
 
 
 def _verdict_html(card) -> str:
-    band = card.aggregate.get("band", "—")
-    band_badge = _badge(band, BAND_COLOR.get(band, "#555"))
+    score_val = card.aggregate.get("total", 0)
+    score_bar = f"<div style='width: 100%; background: #e0e0e0; height: 12px; border-radius: 6px; margin: 8px 0; overflow: hidden;'><div style='width: {score_val}%; background: #1f77b4; height: 100%;'></div></div>"
     reasons_map = getattr(card, "use_case_reasons", {}) or {}
     rows = []
     for use_case, verdict in card.use_case_verdicts.items():
@@ -283,10 +275,7 @@ def _verdict_html(card) -> str:
             f"<div>{_badge(verdict, color)}</div>"
             f"<div class='detail'>{sub_html}</div>"
         )
-    score_line = (
-        f"Aggregate: <strong>{card.aggregate.get('total')}"
-        f" / {card.aggregate.get('max')}</strong> {band_badge}"
-    )
+    score_line = f"Overall Score: <strong>{score_val} / 100</strong>{score_bar}"
     per_section_rows = []
     per_section = card.aggregate.get("per_section", {})
     for sec, score in per_section.items():

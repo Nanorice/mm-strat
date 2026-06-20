@@ -103,16 +103,24 @@ def anchored_walk_forward(
     test_end: date,
     step: str = "1Y",
     min_train_years: int = 3,
+    embargo_days: int = 0,
 ) -> Iterator[FoldSpec]:
     """Yield FoldSpecs over (test_start, test_end] in `step`-sized windows.
 
-    train_start is fixed; train_end = current test_start - 1 day; test window
-    is [current test_start, current test_start + step].
+    train_start is fixed; train_end = current test_start - 1 - embargo_days; test
+    window is [current test_start, current test_start + step].
+
+    embargo_days purges training rows whose forward-looking target window would
+    overlap the test period. For overlapping H-day targets (e.g. m02 forward-21d
+    MFE/MAE), set embargo_days >= H so no training label reaches into the test
+    fold. Default 0 preserves the original no-gap classification behaviour.
     """
     if test_start <= train_start:
         raise ValueError("test_start must be after train_start")
     if test_end <= test_start:
         raise ValueError("test_end must be after test_start")
+    if embargo_days < 0:
+        raise ValueError("embargo_days must be >= 0")
 
     dates = pd.to_datetime(df[date_col])
     min_date, max_date = dates.min().date(), dates.max().date()
@@ -126,7 +134,7 @@ def anchored_walk_forward(
     cur_test_start = test_start
     while cur_test_start < test_end:
         cur_test_end = min(_advance(cur_test_start, step), test_end)
-        cur_train_end = cur_test_start - timedelta(days=1)
+        cur_train_end = cur_test_start - timedelta(days=1 + embargo_days)
 
         train_years = (cur_train_end - train_start).days / 365.25
         if train_years < min_train_years:

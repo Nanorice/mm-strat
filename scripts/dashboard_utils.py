@@ -372,51 +372,56 @@ def _attach_class_labels(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
-    """Watchlist rows joined with each row's OWN breakout-cohort score.
+    """Watchlist rows joined with the prod-model score that matters for each row.
 
     Scores are pre-computed by the nightly pipeline (Phase 7.4) and backfilled
     across the d3 window (scripts/backfill_daily_predictions.py), stored in
     daily_predictions — so the model file never needs to exist on the serving host.
 
-    Each watchlist row is matched to the breakout score at the latest
-    prediction_date <= its entry_date (the score as the name actually broke out),
-    NOT the single global latest date — otherwise only tickers that broke out on
-    the most recent day would carry a score. Rows with no score at/before entry
-    (e.g. entries predating the d3 window) flow through with NULLs. Output carries
-    the `m01_class` / `p_<label>` columns the watchlist renderer expects.
+    Same-day score, no carry-forward (lifecycle scoring makes carry-forward
+    obsolete — the daily pipeline now scores the whole held + setup population every
+    day, so each watchlist row has a genuine same-day score). The join is on the
+    watchlist row's as-of date (`price_date`):
+      - ACTIVE  → `price_date` is the latest trading day, so this is today's score —
+                  the name's score as the position ages, refreshed daily.
+      - EXITED  → `price_date` is the exit day, so this is its score on the exit day
+                  (the last `removed` row). "Now" is meaningless for a closed trade.
+
+    A name with no `daily_predictions` row on its `price_date` flows through with
+    NULLs — a real signal that it fell out of the scoring population (e.g. left t3),
+    NOT a silently stale value from a prior day. Cohort-agnostic: any tag's row for
+    that (ticker, date) is the same prod-model score on the same feature set. Output
+    carries the `m01_class` / `p_<label>` columns the watchlist renderer expects.
     """
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
         df = con.execute("""
             WITH preds AS (
+                -- One score per (ticker, date) across tags. A held name re-setting up
+                -- is written under one tag/day (active > removed > pre_breakout), but
+                -- guard against any overlap by taking the best-ranked row.
                 SELECT ticker, prediction_date,
                        prob_class_0, prob_class_1, prob_class_2, prob_class_3,
                        predicted_class, rank_within_day
                 FROM daily_predictions
-                WHERE model_version_id = ? AND cohort = 'breakout'
-            ),
-            scored AS (
-                SELECT sw.*,
-                       p.prob_class_0, p.prob_class_1, p.prob_class_2, p.prob_class_3,
-                       p.predicted_class, p.rank_within_day, p.prediction_date,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY sw.ticker, sw.entry_date
-                           ORDER BY p.prediction_date DESC
-                       ) AS rn
-                FROM screener_watchlist sw
-                LEFT JOIN preds p
-                    ON p.ticker = sw.ticker
-                   AND p.prediction_date <= sw.entry_date
+                WHERE model_version_id = ?   -- any cohort
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, prediction_date
+                    ORDER BY rank_within_day
+                ) = 1
             )
-            SELECT ticker, company_name, sector, industry,
-                   market_cap, entry_date, entry_price,
-                   exit_date, status, close_price, price_date,
-                   pct_return, days_held, refreshed_at,
-                   prob_class_0, prob_class_1, prob_class_2, prob_class_3,
-                   predicted_class, rank_within_day, prediction_date
-            FROM scored
-            WHERE rn = 1            -- nearest score at/before entry per (ticker, entry_date)
-            ORDER BY entry_date DESC, ticker
+            SELECT sw.ticker, sw.company_name, sw.sector, sw.industry,
+                   sw.market_cap, sw.entry_date, sw.entry_price,
+                   sw.exit_date, sw.status, sw.close_price, sw.price_date,
+                   sw.pct_return, sw.days_held, sw.refreshed_at,
+                   p.prob_class_0, p.prob_class_1, p.prob_class_2, p.prob_class_3,
+                   p.predicted_class, p.rank_within_day, p.prediction_date
+            FROM screener_watchlist sw
+            LEFT JOIN preds p
+                ON p.ticker = sw.ticker
+               -- Same-day score: the watchlist row's as-of date. No carry-forward.
+               AND p.prediction_date = sw.price_date
+            ORDER BY sw.entry_date DESC, sw.ticker
         """, [model_version_id]).fetchdf()
     finally:
         con.close()
@@ -458,18 +463,54 @@ def load_recent_exits(days: int = 30) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def load_ticker_history(ticker: str) -> pd.DataFrame:
-    """Every screener_watchlist session for one ticker (all entry→exit cycles)."""
+def load_ticker_history(ticker: str, model_version_id: str | None = None) -> pd.DataFrame:
+    """Every screener_watchlist session for one ticker (all entry→exit cycles).
+
+    When `model_version_id` is given, each session carries the prod-model
+    P(Home Run) score (`prob_class_3`) as of the day the signal fired — the latest
+    prediction (any cohort) at/before entry_date. Sessions predating the d3 window
+    have a NULL score. Closed sessions are historical, so we always anchor on
+    entry_date here (no ACTIVE "current" carve-out — that lives in the watchlist
+    table).
+    """
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
+        if model_version_id is None:
+            return con.execute("""
+                SELECT ticker, company_name, sector,
+                       entry_date, entry_price, exit_date, status,
+                       close_price, pct_return, days_held
+                FROM screener_watchlist
+                WHERE ticker = ?
+                ORDER BY entry_date
+            """, [ticker.strip().upper()]).fetchdf()
         return con.execute("""
+            WITH preds AS (
+                SELECT prediction_date, prob_class_3
+                FROM daily_predictions
+                WHERE model_version_id = ? AND ticker = ?
+            ),
+            scored AS (
+                SELECT sw.ticker, sw.company_name, sw.sector,
+                       sw.entry_date, sw.entry_price, sw.exit_date, sw.status,
+                       sw.close_price, sw.pct_return, sw.days_held,
+                       p.prob_class_3 AS entry_score,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY sw.entry_date
+                           ORDER BY p.prediction_date DESC
+                       ) AS rn
+                FROM screener_watchlist sw
+                LEFT JOIN preds p ON p.prediction_date <= sw.entry_date
+                WHERE sw.ticker = ?
+            )
             SELECT ticker, company_name, sector,
                    entry_date, entry_price, exit_date, status,
-                   close_price, pct_return, days_held
-            FROM screener_watchlist
-            WHERE ticker = ?
+                   close_price, pct_return, days_held, entry_score
+            FROM scored
+            WHERE rn = 1
             ORDER BY entry_date
-        """, [ticker.strip().upper()]).fetchdf()
+        """, [model_version_id, ticker.strip().upper(),
+              ticker.strip().upper()]).fetchdf()
     finally:
         con.close()
 
@@ -857,6 +898,104 @@ def load_daily_predictions_today(model_version_id: str) -> pd.DataFrame:
               )
             ORDER BY rank_within_day NULLS LAST, ticker
         """, [model_version_id, model_version_id]).fetchdf()
+    finally:
+        con.close()
+
+
+# Score-column map for the rank bump chart. `rank_within_day` is the canonical
+# rank (1 = best P(Home Run)) for any model, but the underlying probability lives
+# in a different column per architecture: the 4-class prototype reads P(Home Run)
+# off prob_class_3, the binary model off prob_class_1. We surface that probability
+# as the hover value only — never as the rank source — so the chart works
+# unchanged when the binary model is promoted. Default tolerates either.
+RANK_METRIC_COLUMNS: dict[str, str] = {
+    "prob_class_3": "prob_class_3",   # 4-class prototype P(Home Run)
+    "prob_class_1": "prob_class_1",   # binary P(Home Run)
+}
+
+
+@st.cache_data(ttl=300)
+def load_rank_history(
+    model_version_id: str,
+    top_n: int = 10,
+    start=None,
+    end=None,
+    metric: str = "prob_class_3",
+    cohort: str = "breakout",
+) -> pd.DataFrame:
+    """Per-day top-N rank trajectory for the bump chart (read-only).
+
+    Pulls every (date, ticker) whose `rank_within_day` <= `top_n` within
+    [start, end] for one model + cohort. Membership is per-day: a ticker appears
+    on a given date only if it cleared top-N that day, so the set changes over
+    time. `score` carries the model's P(Home Run) (column chosen by `metric`) for
+    hover; rank itself always comes from the materialized `rank_within_day`.
+
+    `start`/`end` are date-like (or None → unbounded). Returns columns:
+    prediction_date, ticker, rank_within_day, score. Empty df if nothing matches.
+    """
+    score_col = RANK_METRIC_COLUMNS.get(metric)
+    if score_col is None:
+        raise ValueError(
+            f"metric must be one of {sorted(RANK_METRIC_COLUMNS)}, got {metric!r}"
+        )
+
+    where = ["model_version_id = ?", "cohort = ?",
+             "rank_within_day IS NOT NULL", "rank_within_day <= ?"]
+    params: list = [model_version_id, cohort, int(top_n)]
+    if start is not None:
+        where.append("prediction_date >= ?")
+        params.append(start)
+    if end is not None:
+        where.append("prediction_date <= ?")
+        params.append(end)
+
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        return con.execute(f"""
+            SELECT prediction_date, ticker, rank_within_day,
+                   {score_col} AS score
+            FROM daily_predictions
+            WHERE {' AND '.join(where)}
+            ORDER BY prediction_date, rank_within_day
+        """, params).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_rank_history_bounds(model_version_id: str, cohort: str | None = None) -> tuple:
+    """(min_date, max_date) of daily_predictions for a model, optionally scoped to
+    one cohort. (None, None) when nothing is logged."""
+    where = ["model_version_id = ?"]
+    params: list = [model_version_id]
+    if cohort is not None:
+        where.append("cohort = ?")
+        params.append(cohort)
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        row = con.execute(f"""
+            SELECT MIN(prediction_date), MAX(prediction_date)
+            FROM daily_predictions
+            WHERE {' AND '.join(where)}
+        """, params).fetchone()
+        return (row[0], row[1]) if row else (None, None)
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_rank_cohorts(model_version_id: str) -> list[str]:
+    """Cohorts that actually have predictions for this model (e.g. binary has only
+    'breakout' until it's scored on the pre_breakout universe). Ordered."""
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        rows = con.execute("""
+            SELECT DISTINCT cohort FROM daily_predictions
+            WHERE model_version_id = ? AND cohort IS NOT NULL
+            ORDER BY cohort
+        """, [model_version_id]).fetchall()
+        return [r[0] for r in rows]
     finally:
         con.close()
 

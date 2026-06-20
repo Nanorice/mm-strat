@@ -81,7 +81,12 @@ class ViewManager:
             self._create_v_d3_prebreakout,
             self._create_v_screener_dashboard,
             self._refresh_screener_watchlist,
+            self._create_v_d3_lifecycle,  # after watchlist table — it joins it
         ]
+        # NOTE: t3_training_cache (v_t3_training materialization) is NOT in this list.
+        # Its ASOF joins cost ~215s and its inputs (fundamentals/shares) change weekly at
+        # most, so it is refreshed on a weekly cadence via refresh_t3_training_cache(),
+        # not on every create_all() run. See docs/.../v2_regression_model_design.md.
         con = duckdb.connect(self.db_path)
         try:
             # Retired views: CREATE OR REPLACE never drops what it stops creating,
@@ -805,6 +810,198 @@ class ViewManager:
         print(f"   [OK] v_d3_prebreakout: pre-breakout cohort, last 252d (same contract as v_d3_deployment)")
 
     # ------------------------------------------------------------------
+    # VIEW 7c: v_d3_lifecycle — MECE lifecycle population for daily scoring
+    # ------------------------------------------------------------------
+
+    # `removed` window: a name shows for ~20 trading days (≈28 calendar days)
+    # after exit, then drops out. Calendar approximation (design 4c, confirmed).
+    REMOVED_WINDOW_CALENDAR_DAYS = 28
+
+    def _create_v_d3_lifecycle(self, con: duckdb.DuckDBPyConnection) -> None:
+        """Lifecycle-tagged scoring population (supersedes status-gated cohorts).
+
+        Replaces the breakout/pre_breakout split with the MECE union of the three
+        SEPA lifecycle states, each row carrying a derived `cohort` tag:
+
+            pre_breakout — trend_ok=TRUE AND breakout_ok=FALSE (in setup, not entered)
+            active       — screener_watchlist.status='ACTIVE'  (C1+C2+C6 holds)
+            removed      — status='EXITED' AND exit_date within last ~20 trading days
+
+        Tag priority per ticker per day: active > removed > pre_breakout (a held
+        name re-setting up is reported as a held position first). Hydrated with the
+        SAME feature contract as v_d3_prebreakout/v_d3_deployment so the prod model
+        scores all three tags with one feature list.
+
+        Note: a name is `active`/`removed` only if it has a t3 row that day. Held
+        names that left the candidate frontier are force-materialized by the Phase 5
+        self-heal (see _t3_holed_dates) so they remain scorable.
+        """
+        has_shares = con.execute("""
+            SELECT COUNT(*) FROM information_schema.tables
+            WHERE table_name = 'shares_history'
+        """).fetchone()[0] > 0
+
+        if has_shares:
+            shares_col = "sh.shares_outstanding"
+            shares_join = """
+            LEFT JOIN shares_history sh
+                ON base.ticker = sh.ticker
+                AND sh.date = (
+                    SELECT MAX(date) FROM shares_history
+                    WHERE ticker = base.ticker AND date <= base.date
+                )"""
+        else:
+            shares_col = "cp.shares_outstanding"
+            shares_join = ""
+
+        con.execute(f"""
+            CREATE OR REPLACE VIEW v_d3_lifecycle AS
+            WITH ff_dedup AS (
+                SELECT
+                    ticker, filing_date, fiscal_period,
+                    revenue, net_income, eps_diluted, total_assets, total_equity,
+                    revenue_growth_yoy, eps_growth_yoy, net_income_growth_yoy,
+                    eps_accel, revenue_accel, revenue_cagr_3y, eps_stability_score,
+                    debt_to_equity, current_ratio, quick_ratio,
+                    gross_margin, operating_margin, net_margin, roe, roa, fcf_margin,
+                    earnings_quality_score, inventory_growth_yoy,
+                    inventory_vs_sales_spread, gross_margin_trend
+                FROM fundamental_features
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, filing_date
+                    ORDER BY fiscal_period DESC NULLS LAST
+                ) = 1
+            ),
+            -- Per-(ticker,date) lifecycle membership off the watchlist, resolved by
+            -- TRADE INTERVAL so a historical t3 date gets the tag it had on that day
+            -- (correct for the backfill, not just today). For each t3 row we find the
+            -- watchlist trade whose interval covers f.date and tag it:
+            --   active  : entry_date <= f.date <= exit_date          (trade open)
+            --   removed : exit_date <  f.date <= exit_date + window   (recently closed)
+            -- active wins if a row sits in both (re-entry overlap). One tag per row.
+            wl AS (
+                SELECT ticker, date, cohort FROM (
+                    SELECT
+                        f.ticker, f.date,
+                        CASE
+                            WHEN f.date BETWEEN sw.entry_date AND sw.exit_date THEN 'active'
+                            ELSE 'removed'
+                        END AS cohort,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY f.ticker, f.date
+                            -- active (interval-open) ranked ahead of removed
+                            ORDER BY CASE WHEN f.date BETWEEN sw.entry_date AND sw.exit_date
+                                          THEN 0 ELSE 1 END,
+                                     sw.exit_date DESC
+                        ) AS rn
+                    FROM (SELECT DISTINCT ticker, date FROM t3_sepa_features
+                          WHERE feature_version = '{self.feature_version}'
+                            AND date >= (
+                                SELECT MAX(date) - INTERVAL '252 days'
+                                FROM t3_sepa_features
+                                WHERE feature_version = '{self.feature_version}')) f
+                    JOIN screener_watchlist sw
+                        ON f.ticker = sw.ticker
+                       AND f.date >= sw.entry_date
+                       AND f.date <= sw.exit_date
+                                     + INTERVAL '{self.REMOVED_WINDOW_CALENDAR_DAYS}' DAY
+                ) WHERE rn = 1
+            ),
+            -- Base population: t3 rows tagged by lifecycle state. A row qualifies if
+            -- it is pre_breakout (flags) OR the name is active/recently-removed that day.
+            base AS (
+                SELECT
+                    f.*,
+                    c.sector,
+                    c.industry,
+                    COALESCE(wl.cohort, 'pre_breakout') AS cohort,
+                    f.natr_pct_chg / 100.0 AS natr_delta,
+                    f.vcp_ratio_pct_chg / 100.0 AS vcp_ratio_delta,
+                    f.consolidation_width_pct_chg / 100.0 AS consolidation_width_delta,
+                    f.price_vs_sma_50_pct_chg / 100.0 AS price_vs_sma_50_delta,
+                    f.price_vs_sma_150_pct_chg / 100.0 AS price_vs_sma_150_delta,
+                    f.price_vs_sma_200_pct_chg / 100.0 AS price_vs_sma_200_delta,
+                    f.rs_pct_chg / 100.0 AS rs_delta,
+                    f.rs_ma_pct_chg / 100.0 AS rs_ma_delta,
+                    f.dry_up_volume_pct_chg / 100.0 AS dry_up_volume_delta,
+                    f.high_52w_pct_chg / 100.0 AS high_52w_delta,
+                    f.low_52w_pct_chg / 100.0 AS low_52w_delta,
+                    f.lowest_low_20d_pct_chg / 100.0 AS lowest_low_20d_delta,
+                    f.highest_high_20d_pct_chg / 100.0 AS highest_high_20d_delta,
+                    f.rsi_14_pct_chg / 100.0 AS rsi_14_delta,
+                    f.dist_from_52w_high_pct_chg / 100.0 AS dist_from_52w_high_delta,
+                    f.dist_from_52w_low_pct_chg / 100.0 AS dist_from_52w_low_delta,
+                    f.dist_from_20d_low_pct_chg / 100.0 AS dist_from_20d_low_delta,
+                    f.dist_from_20d_high_pct_chg / 100.0 AS dist_from_20d_high_delta
+                FROM t3_sepa_features f
+                INNER JOIN company_profiles c ON f.ticker = c.ticker
+                LEFT JOIN wl ON f.ticker = wl.ticker AND f.date = wl.date
+                WHERE f.feature_version = '{self.feature_version}'
+                  AND f.date >= (
+                      SELECT MAX(date) - INTERVAL '252 days'
+                      FROM t3_sepa_features
+                      WHERE feature_version = '{self.feature_version}'
+                  )
+                  AND (
+                      -- pre_breakout by flags, OR active/removed per the trade interval
+                      (f.trend_ok = TRUE AND f.breakout_ok = FALSE)
+                      OR wl.cohort IS NOT NULL
+                  )
+            )
+            SELECT
+                base.*,
+                ff.revenue,
+                ff.net_income,
+                ff.eps_diluted,
+                ff.total_assets,
+                ff.total_equity,
+                ff.revenue_growth_yoy,
+                ff.eps_growth_yoy,
+                ff.net_income_growth_yoy,
+                ff.eps_accel,
+                ff.revenue_accel,
+                ff.revenue_cagr_3y,
+                ff.eps_stability_score,
+                ff.debt_to_equity,
+                ff.current_ratio,
+                ff.quick_ratio,
+                ff.gross_margin,
+                ff.operating_margin,
+                ff.net_margin,
+                ff.roe,
+                ff.roa,
+                ff.fcf_margin,
+                ff.earnings_quality_score,
+                ff.inventory_growth_yoy,
+                ff.inventory_vs_sales_spread,
+                ff.gross_margin_trend,
+                ff.filing_date AS fundamental_filing_date,
+                ff.fiscal_period,
+                CAST(datediff('day', ff.filing_date, base.date) AS INTEGER) AS days_since_report,
+                cp.market_cap,
+                {shares_col} AS shares_outstanding,
+                CASE WHEN ABS(ff.eps_diluted) > 0.01
+                    THEN base.close / ff.eps_diluted END AS pe_ratio,
+                CASE WHEN ff.revenue > 0 AND {shares_col} > 0
+                    THEN (base.close * {shares_col}) / ff.revenue END AS ps_ratio,
+                CASE WHEN ff.total_equity > 0 AND {shares_col} > 0
+                    THEN (base.close * {shares_col}) / ff.total_equity END AS pb_ratio,
+                CASE WHEN ff.eps_growth_yoy > 0 AND ABS(ff.eps_diluted) > 0.01
+                    THEN (base.close / ff.eps_diluted) / ff.eps_growth_yoy END AS peg_adjusted
+            FROM base
+            LEFT JOIN company_profiles cp ON base.ticker = cp.ticker
+            {shares_join}
+            LEFT JOIN ff_dedup ff
+                ON base.ticker = ff.ticker
+                AND ff.filing_date = (
+                    SELECT MAX(filing_date) FROM ff_dedup
+                    WHERE ticker = base.ticker AND filing_date <= base.date
+                )
+            ORDER BY base.date DESC, base.ticker
+        """)
+        print(f"   [OK] v_d3_lifecycle: MECE lifecycle population (pre_breakout|active|removed), last 252d")
+
+    # ------------------------------------------------------------------
     # VIEW 8: v_screener_dashboard — SEPA Screener Tracker
     # ------------------------------------------------------------------
 
@@ -974,6 +1171,45 @@ class ViewManager:
             logger.error(f"screener_watchlist refresh failed: {e}")
             if verbose:
                 print(f"   [ERROR] screener_watchlist refresh failed: {e}")
+            raise
+        finally:
+            con.close()
+
+    def _refresh_t3_training_cache(self, con: duckdb.DuckDBPyConnection) -> None:
+        """Materialise v_t3_training (t3 features + ASOF-joined fundamentals/shares +
+        derived valuation ratios) into the t3_training_cache table.
+
+        v_t3_training is a VIEW whose two ASOF joins re-execute on every query (~80s).
+        This table pays that cost once per pipeline run so all consumers (m02 training,
+        universe scorer, EDA, backtests) read instantly. The view definition is owned by
+        UniverseScorer.create_view — ensure it exists before materialising."""
+        from src.backtest.universe_scorer import UniverseScorer
+
+        has_view = con.execute("""
+            SELECT COUNT(*) FROM information_schema.views WHERE table_name = 'v_t3_training'
+        """).fetchone()[0] > 0
+        if not has_view:
+            UniverseScorer.create_view(self.db_path)
+
+        start = time.time()
+        con.execute("""
+            CREATE OR REPLACE TABLE t3_training_cache AS
+            SELECT *, CURRENT_TIMESTAMP AS cached_at
+            FROM v_t3_training
+        """)
+        elapsed = time.time() - start
+        n = con.execute("SELECT COUNT(*) FROM t3_training_cache").fetchone()[0]
+        print(f"   [OK] t3_training_cache: {n:,} rows materialized [{elapsed:.1f}s]")
+
+    def refresh_t3_training_cache(self, verbose: bool = True) -> None:
+        """Public API: refresh t3_training_cache table (standalone call)."""
+        con = duckdb.connect(self.db_path)
+        try:
+            self._refresh_t3_training_cache(con)
+        except Exception as e:
+            logger.error(f"t3_training_cache refresh failed: {e}")
+            if verbose:
+                print(f"   [ERROR] t3_training_cache refresh failed: {e}")
             raise
         finally:
             con.close()

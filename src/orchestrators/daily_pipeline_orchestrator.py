@@ -1112,31 +1112,67 @@ class DailyPipelineOrchestrator:
     # all history every night. ~30d comfortably spans a multi-day pipeline outage.
     T3_BACKFILL_LOOKBACK_DAYS = 30
 
+    # `removed` lifecycle window (≈20 trading days ≈ 28 calendar days). Kept in sync
+    # with ViewManager.REMOVED_WINDOW_CALENDAR_DAYS so the self-heal force-materializes
+    # exactly the EXITED names that v_d3_lifecycle still tags as `removed`.
+    LIFECYCLE_REMOVED_WINDOW_DAYS = 28
+
     def _t3_holed_dates(self, target_date: str, lookback_days: int = None) -> list:
         """Dates within the trailing window where t3 is missing rows it should have.
 
-        Expected universe per date = sepa_watchlist tickers that have a
-        `t2_screener_features` row on that date. This MUST mirror what
-        compute_t3_features actually materializes: its INSERT inner-joins
-        t2_screener_features (feature_pipeline.py), so a ticker with a raw
-        price_data bar but no t2 row is *legitimately* absent from t3 — using
-        price_data as the expected set would over-report stale-ticker edges as
-        holes and re-trigger recompute every night. A date is "holed" if any
-        expected (ticker,date) is absent from t3. Returns sorted date strings.
+        Expected universe per date is the union of two sets that must have a t3 row:
+
+          1. **Candidate frontier** — sepa_watchlist tickers with a
+             `t2_screener_features` row on that date. This mirrors what
+             compute_t3_features materializes (its INSERT inner-joins
+             t2_screener_features), so a ticker with a raw price_data bar but no t2
+             row is *legitimately* absent — using price_data as the expected set
+             would over-report stale-ticker edges as holes and recompute nightly.
+          2. **Held / recently-removed names** (lifecycle-scoring requirement, 4e) —
+             ACTIVE or recently-EXITED `screener_watchlist` tickers that have a t2
+             row on that date. A held name can drift behind the candidate frontier
+             (lazy materialization leaves holes), and the lifecycle scorer can only
+             score a name with a t3 row that day. Same t2-row gate, so we never
+             demand t3 for a date the name has no features for.
+
+        A date is "holed" if any expected (ticker,date) is absent from t3.
+        Returns sorted date strings.
         """
         import pandas as pd
         lookback = lookback_days if lookback_days is not None else self.T3_BACKFILL_LOOKBACK_DAYS
         window_start = (
             pd.to_datetime(target_date) - pd.Timedelta(days=lookback)
         ).strftime('%Y-%m-%d')
+        removed_cutoff = (
+            pd.to_datetime(target_date)
+            - pd.Timedelta(days=self.LIFECYCLE_REMOVED_WINDOW_DAYS)
+        ).strftime('%Y-%m-%d')
         con = duckdb.connect(self.db_path, read_only=True)
         try:
             rows = con.execute(f"""
-                WITH expected AS (
+                WITH lifecycle_tickers AS (
+                    -- ACTIVE held names + names exited within the removed window.
+                    -- Latest trade per ticker decides current lifecycle membership.
+                    SELECT ticker
+                    FROM (
+                        SELECT ticker, status, exit_date,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY ticker ORDER BY entry_date DESC
+                               ) AS rn
+                        FROM screener_watchlist
+                    )
+                    WHERE rn = 1
+                      AND (status = 'ACTIVE'
+                           OR (status = 'EXITED' AND exit_date >= '{removed_cutoff}'))
+                ),
+                expected AS (
                     SELECT t2.ticker, t2.date
                     FROM t2_screener_features t2
                     WHERE t2.date BETWEEN '{window_start}' AND '{target_date}'
-                      AND t2.ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)
+                      AND (
+                          t2.ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)
+                          OR t2.ticker IN (SELECT ticker FROM lifecycle_tickers)
+                      )
                 )
                 SELECT DISTINCT e.date
                 FROM expected e
@@ -1199,6 +1235,13 @@ class DailyPipelineOrchestrator:
             n = self._log_prod_model_predictions(target_date)
         except Exception as e:
             logger.warning(f"[Phase 7.4] Prediction logging skipped: {e}")
+        # Shadow pass (Module B): score the shadow model on the same breakout
+        # candidates and materialize the ranking-divergence verdict. Fully
+        # isolated — a shadow failure never affects prod scoring or the run.
+        try:
+            self._log_shadow_predictions_and_divergence(target_date)
+        except Exception as e:
+            logger.warning(f"[Phase 7.4] Shadow comparison skipped: {e}")
         return {'rows_processed': n}
 
     def _run_phase_7_5_dashboard_db(self) -> Dict:
@@ -1246,8 +1289,15 @@ class DailyPipelineOrchestrator:
         import subprocess
         import sys
 
+        # config.py anchors load_dotenv() to the project root, so creds are
+        # present on any run where .env exists and is filled in. A miss here now
+        # means a real misconfig (no .env / incomplete keys) — not an expected
+        # local run — so warn loudly rather than skipping silently.
         if not os.environ.get("R2_ACCOUNT_ID"):
-            logger.info("[Phase 7.6] R2 credentials absent; skipping upload")
+            logger.warning(
+                "[Phase 7.6] R2_ACCOUNT_ID not set; skipping upload. Remote "
+                "dashboard will go stale. Check .env at project root."
+            )
             return {'rows_processed': 0}
 
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -1495,14 +1545,19 @@ class DailyPipelineOrchestrator:
         }
 
     def _log_prod_model_predictions(self, target_date: str) -> int:
-        """Score `target_date` candidates with the prod model and log predictions.
+        """Score `target_date`'s lifecycle population with the prod model and log it.
 
-        Scores TWO cohorts so the dashboard never has to score live:
-        - 'breakout'      — SEPA entries from v_d3_deployment (breakout_ok=TRUE)
-        - 'pre_breakout'  — in-setup names (trend_ok=TRUE AND breakout_ok=FALSE)
+        One MECE pass over the SEPA lifecycle (supersedes the old breakout +
+        pre_breakout status-gated split). v_d3_lifecycle carries a derived `cohort`
+        tag per row; we split by tag and log each (rank is computed within each tag).
+
+        Tags written: 'pre_breakout' | 'active' | 'removed'. The 'breakout' cohort is
+        dropped from the prod path — a name is 'active' from the day it breaks out, so
+        breakout surfaced nothing active didn't. (Shadow still scores 'breakout'; see
+        _log_shadow_predictions_and_divergence — a separate concern.)
 
         Skips silently (returns 0) if no prod model is registered or its artifact
-        is missing. A failure on one cohort never blocks the other.
+        is missing. A failure on one tag never blocks the others.
 
         Scoring itself lives in the shared ScoreEngine (RAW softprob) so this and
         the backfill util (scripts/backfill_daily_predictions.py) can't drift.
@@ -1518,11 +1573,14 @@ class DailyPipelineOrchestrator:
             logger.info("[Phase 8] No prod model registered — skipping prediction log.")
             return 0
 
+        population = self._fetch_lifecycle_candidates(target_date)
+        if population.empty:
+            logger.info(f"[Phase 8] No lifecycle candidates on {target_date}.")
+            return 0
+
         total = 0
-        for cohort, candidates in (
-            ("breakout", self._fetch_breakout_candidates(target_date)),
-            ("pre_breakout", self._fetch_pre_breakout_candidates(target_date)),
-        ):
+        # Rank within each tag (per-cohort), so split before scoring.
+        for cohort, candidates in population.groupby("cohort", sort=False):
             try:
                 n = engine.score_and_log(candidates, target_date, cohort, self.db_path)
                 logger.info(f"[Phase 8] Logged {n} '{cohort}' predictions on {target_date}")
@@ -1530,6 +1588,59 @@ class DailyPipelineOrchestrator:
             except Exception as e:
                 logger.warning(f"[Phase 8] Scoring cohort '{cohort}' failed: {e}")
         return total
+
+    def _log_shadow_predictions_and_divergence(self, target_date: str) -> int:
+        """Module B: score the shadow model + write today's divergence verdict.
+
+        Scores only the 'breakout' cohort (the list actually acted on) into
+        daily_predictions under the shadow's model_version_id — additive, never
+        touches prod rows. Then loads both models' breakout scores for
+        target_date and upserts the ranking-divergence row into shadow_divergence.
+
+        Best-effort and self-contained: returns 0 (and logs) if no shadow is
+        designated or its artifact is missing.
+        """
+        from src.evaluation.score_engine import ScoreEngine
+        from src.evaluation.shadow_compare import (
+            compare_day,
+            load_cohort_scores,
+            write_day_divergence,
+        )
+        from src.model_registry import ModelRegistry
+
+        try:
+            engine = ScoreEngine.from_shadow(self.db_path)
+        except (ValueError, FileNotFoundError) as e:
+            logger.warning(f"[Phase 7.4] Shadow model not scorable: {e}")
+            return 0
+        if engine is None:
+            logger.info("[Phase 7.4] No shadow model designated — skipping shadow pass.")
+            return 0
+
+        cohort = "breakout"
+        candidates = self._fetch_breakout_candidates(target_date)
+        n = engine.score_and_log(candidates, target_date, cohort, self.db_path)
+        logger.info(f"[Phase 7.4] Logged {n} shadow '{cohort}' predictions on {target_date}")
+
+        prod_id = ModelRegistry(db_path=self.db_path).get_prod_version()
+        if not prod_id:
+            logger.info("[Phase 7.4] No prod model — skipping divergence verdict.")
+            return n
+
+        prod_day = load_cohort_scores(self.db_path, prod_id, cohort, target_date, target_date)
+        shadow_day = load_cohort_scores(self.db_path, engine.version_id, cohort, target_date, target_date)
+        day = compare_day(prod_day, shadow_day)
+        if day is None:
+            logger.info("[Phase 7.4] No overlapping prod/shadow scores on %s — no verdict.", target_date)
+            return n
+        write_day_divergence(
+            self.db_path, target_date, prod_id, engine.version_id, cohort, day
+        )
+        logger.info(
+            "[Phase 7.4] Shadow divergence %s: spearman=%.3f jaccard@10=%.3f disagree=%d",
+            target_date, day.spearman, day.jaccard_at_10, day.n_disagreements,
+        )
+        return n
 
     def _fetch_breakout_candidates(self, target_date: str):
         """SEPA breakout entries for target_date (v_d3_deployment)."""
@@ -1545,20 +1656,20 @@ class DailyPipelineOrchestrator:
         finally:
             con.close()
 
-    def _fetch_pre_breakout_candidates(self, target_date: str):
-        """In-setup names (trend_ok AND NOT breakout_ok) for target_date.
+    def _fetch_lifecycle_candidates(self, target_date: str):
+        """MECE lifecycle population for target_date (v_d3_lifecycle).
 
-        Reads v_d3_prebreakout, which hydrates the pre-breakout cohort with the
-        SAME feature contract as v_d3_deployment (deltas + fundamentals), so the
-        prod model scores both cohorts with one feature list.
+        Returns the union of pre_breakout / active / removed names with the SAME
+        feature contract as v_d3_deployment plus a derived `cohort` column per row.
+        The caller splits by cohort and logs each tag (rank within tag).
         """
         con = duckdb.connect(self.db_path, read_only=True)
         try:
             return con.execute(
-                "SELECT * FROM v_d3_prebreakout WHERE date = ?", [target_date]
+                "SELECT * FROM v_d3_lifecycle WHERE date = ?", [target_date]
             ).df()
         except duckdb.Error as e:
-            logger.warning(f"[Phase 8] Could not query v_d3_prebreakout: {e}")
+            logger.warning(f"[Phase 8] Could not query v_d3_lifecycle: {e}")
             import pandas as pd
             return pd.DataFrame()
         finally:

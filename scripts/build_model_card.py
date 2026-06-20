@@ -79,6 +79,8 @@ def main() -> int:
     parser.add_argument("--register-version", default=None, metavar="VERSION_ID",
                         help="Write the card path + build time back to the given "
                              "models.version_id row (advisory metadata).")
+    parser.add_argument("--apply-calibration", action="store_true",
+                        help="Load calibrator.joblib and calibrate probabilities (or ad-hoc calibrate for 4-class)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -108,6 +110,7 @@ def main() -> int:
         section_g_n_bootstrap=args.section_g_bootstrap,
         section_g_block_size_days=args.section_g_block_days,
         skip_benchmarks=args.skip_benchmarks,
+        apply_calibration=args.apply_calibration,
     )
     card = builder.build()
     html_path, json_path = builder.render(

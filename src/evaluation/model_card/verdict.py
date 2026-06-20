@@ -24,12 +24,12 @@ def _section_verdict(section: SectionResult | None) -> str:
     if section is None or section.not_implemented:
         return "PENDING"
     if section.has_blocking_failure:
-        return "REJECT"
+        return "LIMITATION"
     if section.scored and section.aggregate_score is not None and section.aggregate_score == 0:
-        return "REJECT"
+        return "LIMITATION"
     if section.scored and section.aggregate_score is not None and section.aggregate_score == 1:
-        return "MARGINAL"
-    return "PASS"
+        return "WARNING"
+    return "OK"
 
 
 def _d_subscore_verdict(d_section: SectionResult | None, sub_key: str) -> str:
@@ -43,15 +43,15 @@ def _d_subscore_verdict(d_section: SectionResult | None, sub_key: str) -> str:
     if d_section is None or d_section.not_implemented:
         return "PENDING"
     if d_section.has_blocking_failure:
-        return "REJECT"
+        return "LIMITATION"
     score = d_section.rubric_scores.get(sub_key)
     if score is None:
         return "PENDING"
     if score == 0:
-        return "REJECT"
+        return "LIMITATION"
     if score == 1:
-        return "MARGINAL"
-    return "PASS"
+        return "WARNING"
+    return "OK"
 
 
 def use_case_verdicts(sections: dict[str, SectionResult]) -> dict[str, str]:
@@ -85,39 +85,48 @@ def use_case_verdicts_with_reasons(
                 v = _section_verdict(sections.get(key))
             per_section.append({"section": key, "verdict": v})
         verdicts = [r["verdict"] for r in per_section]
-        if "REJECT" in verdicts:
-            agg = "REJECT"
+        if "LIMITATION" in verdicts:
+            agg = "LIMITATION"
         elif "PENDING" in verdicts:
             agg = "PENDING"
-        elif "MARGINAL" in verdicts:
-            agg = "MARGINAL"
+        elif "WARNING" in verdicts:
+            agg = "WARNING"
         else:
-            agg = "PASS"
+            agg = "OK"
         out[use_case] = {"verdict": agg, "reasons": per_section}
     return out
 
 
 def aggregate_score(sections: dict[str, SectionResult]) -> dict[str, Any]:
-    """Sum scored sections' aggregate_score, project to band.
-
-    Section D is split into D_binary and D_magnitude — each contributes 3 to
-    the max, since the framework rubric (§3.D) lists independent bands for
-    both halves. Other sections contribute their single section-level min
-    rubric score out of 3.
+    """Calculate a 100-point continuous score using specific weights.
+    
+    Weights (max 100):
+    - D_binary: 12.5 (Ranker)
+    - D_magnitude: 12.5 (Ranker)
+    - B: 20 (Discrimination)
+    - E: 20 (Threshold)
+    - C: 15 (Calibration)
+    - F: 10 (Robustness)
+    - G: 10 (Stats Edge)
     """
+    weights = {
+        "D_binary": 12.5, "D_magnitude": 12.5,
+        "B": 20.0, "C": 15.0, "E": 20.0, "F": 10.0, "G": 10.0
+    }
+    
     per_section: dict[str, int | None] = {}
-    total = 0
-    max_total = 0
+    total_score = 0.0
+    max_score = 0.0
 
-    # Special-case section D: pull D_binary + D_magnitude individually.
     d_section = sections.get("D")
     if d_section is not None and not d_section.not_implemented:
         for sub_key in ("D_binary", "D_magnitude"):
             score = d_section.rubric_scores.get(sub_key)
             per_section[sub_key] = int(score) if score is not None else None
             if score is not None:
-                total += int(score)
-                max_total += 3
+                # rubric score is out of 3
+                total_score += (int(score) / 3.0) * weights[sub_key]
+                max_score += weights[sub_key]
     else:
         per_section["D_binary"] = None
         per_section["D_magnitude"] = None
@@ -128,28 +137,20 @@ def aggregate_score(sections: dict[str, SectionResult]) -> dict[str, Any]:
             per_section[key] = None
             continue
         per_section[key] = sec.aggregate_score
-        total += sec.aggregate_score
-        max_total += 3
+        total_score += (sec.aggregate_score / 3.0) * weights[key]
+        max_score += weights[key]
 
-    if max_total == 0:
-        return {"total": 0, "max": 0, "band": "INSUFFICIENT",
-                "per_section": per_section}
+    if max_score == 0:
+        return {"total": 0, "max": 100, "band": "N/A", "per_section": per_section}
 
-    # Bands per framework §4 (max=21 when full).
-    ratio = total / max_total
-    if ratio <= 6 / 21:
-        band = "BROKEN"
-    elif ratio <= 12 / 21:
-        band = "WEAK"
-    elif ratio <= 17 / 21:
-        band = "ACCEPTABLE"
-    else:
-        band = "STRONG"
+    # Project the achieved score to a 100-point scale based on what was actually evaluated
+    projected_total = (total_score / max_score) * 100.0
+    
     return {
-        "total": int(total),
-        "max": int(max_total),
+        "total": round(projected_total, 1),
+        "max": 100,
         "per_section": per_section,
-        "band": band,
+        "band": f"{round(projected_total, 1)} / 100",
     }
 
 

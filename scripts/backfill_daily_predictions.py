@@ -15,11 +15,15 @@ path as the orchestrator's Phase 7.4, so the two cannot drift. Idempotent
 the slim dashboard DB to propagate.
 
 Usage:
-    python scripts/backfill_daily_predictions.py                 # prod, full d3 window, both cohorts
+    python scripts/backfill_daily_predictions.py                 # prod, full window, lifecycle pop.
     python scripts/backfill_daily_predictions.py --start 2025-10-03 --end 2026-06-12
-    python scripts/backfill_daily_predictions.py --cohort breakout
+    python scripts/backfill_daily_predictions.py --cohort breakout   # legacy shadow cohort
     python scripts/backfill_daily_predictions.py --model-version-id <id>
     python scripts/backfill_daily_predictions.py --dry-run        # count dates, score nothing
+
+Default `--cohort lifecycle` pulls v_d3_lifecycle (one MECE pass tagging each row
+pre_breakout/active/removed) and logs per (date, tag) — matching the orchestrator's
+Phase 7.4. `breakout`/`pre_breakout` remain for the shadow path and legacy re-scores.
 """
 
 from __future__ import annotations
@@ -42,11 +46,13 @@ logger = logging.getLogger("backfill_daily_predictions")
 
 DB_PATH = str(config.DATA_DIR / "market_data.duckdb")
 
-# (cohort, source view). Both views carry the same feature contract as the model.
+# Single-cohort views (each row's tag = the view name). The lifecycle view is
+# handled separately — it carries a per-row `cohort` column rather than one tag.
 COHORT_VIEWS = {
     "breakout": "v_d3_deployment",
     "pre_breakout": "v_d3_prebreakout",
 }
+LIFECYCLE_VIEW = "v_d3_lifecycle"
 
 
 def _pull_window(view: str, start: str | None, end: str | None):
@@ -98,13 +104,59 @@ def backfill_cohort(engine: ScoreEngine, cohort: str, view: str,
                 cohort, total, len(dates), time.time() - t0)
 
 
+def backfill_lifecycle(engine: ScoreEngine, start: str | None, end: str | None,
+                       dry_run: bool) -> None:
+    """Backfill the MECE lifecycle population (one view, per-row `cohort` tag).
+
+    Scores v_d3_lifecycle once, then logs per (date, tag) so rank_within_day is a
+    true per-tag rank — identical semantics to the orchestrator's Phase 7.4 pass.
+    """
+    t0 = time.time()
+    frame = _pull_window(LIFECYCLE_VIEW, start, end)
+    dates = sorted(frame["date"].unique()) if not frame.empty else []
+    cohorts = sorted(frame["cohort"].unique()) if not frame.empty else []
+
+    logger.info("[lifecycle] %d rows over %d dates (%s → %s), tags=%s · pulled in %.1fs",
+                len(frame), len(dates),
+                dates[0] if dates else "—", dates[-1] if dates else "—",
+                cohorts, time.time() - t0)
+    if dry_run:
+        logger.info("[lifecycle] DRY RUN — scored nothing.")
+        return
+    if frame.empty:
+        return
+
+    scored = engine.predict_frame(frame)
+    scored["date"] = frame["date"].values
+    scored["cohort"] = frame["cohort"].values
+
+    total = 0
+    for i, d in enumerate(dates, 1):
+        day = scored[scored["date"] == d]
+        for cohort, grp in day.groupby("cohort", sort=False):
+            try:
+                total += engine.log_predictions(
+                    grp.drop(columns=["date", "cohort"]), d, cohort, DB_PATH
+                )
+            except Exception as e:  # one bad (date, tag) never aborts the run
+                logger.warning("[lifecycle] %s/%s failed: %s", d, cohort, e)
+        if i % 40 == 0 or i == len(dates):
+            logger.info("[lifecycle] %d/%d dates · %d rows", i, len(dates), total)
+    logger.info("[lifecycle] DONE — %d rows across %d dates in %.1fs",
+                total, len(dates), time.time() - t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Backfill daily_predictions (raw scores).")
     ap.add_argument("--model-version-id", default=None,
                     help="Model to score with. Default: current prod model.")
     ap.add_argument("--start", default=None, help="Inclusive start date YYYY-MM-DD (default: view min).")
     ap.add_argument("--end", default=None, help="Inclusive end date YYYY-MM-DD (default: view max).")
-    ap.add_argument("--cohort", choices=["breakout", "pre_breakout", "both"], default="both")
+    ap.add_argument("--cohort",
+                    choices=["lifecycle", "breakout", "pre_breakout", "both"],
+                    default="lifecycle",
+                    help="lifecycle (default) = MECE pre_breakout/active/removed pass; "
+                         "breakout/pre_breakout/both = legacy single-cohort views.")
     ap.add_argument("--dry-run", action="store_true", help="List dates per cohort; score nothing.")
     args = ap.parse_args()
 
@@ -118,9 +170,12 @@ def main() -> int:
     logger.info("Scoring with model_version_id=%s (%d features)",
                 engine.version_id, len(engine.feature_names))
 
-    cohorts = ["breakout", "pre_breakout"] if args.cohort == "both" else [args.cohort]
-    for cohort in cohorts:
-        backfill_cohort(engine, cohort, COHORT_VIEWS[cohort], args.start, args.end, args.dry_run)
+    if args.cohort == "lifecycle":
+        backfill_lifecycle(engine, args.start, args.end, args.dry_run)
+    else:
+        cohorts = ["breakout", "pre_breakout"] if args.cohort == "both" else [args.cohort]
+        for cohort in cohorts:
+            backfill_cohort(engine, cohort, COHORT_VIEWS[cohort], args.start, args.end, args.dry_run)
     return 0
 
 

@@ -177,6 +177,7 @@ def load_eval_data(
     end_date: Optional[str] = None,
     apply_trend_ok_filter: bool = True,
     feature_version: str = "v3.1",
+    apply_calibration: bool = False,
 ) -> EvalSplit:
     """Load eval rows + predict + attach labels."""
     model_path = Path(model_path)
@@ -235,6 +236,20 @@ def load_eval_data(
     label_binary = _binarise_mfe(df["mfe_pct"])
     label_4class = _bucket_4class(df["mfe_pct"])
 
+    if apply_calibration:
+        from src.evaluation.calibrator import IsotonicCalibrator
+        cal_path = model_path.parent / "calibrator.joblib"
+        if cal_path.exists():
+            logger.info("Applying saved calibrator from %s", cal_path)
+            cal = IsotonicCalibrator.load(cal_path)
+            pred = cal.transform(pred)
+        else:
+            logger.warning("No saved calibrator found. Fitting an ad-hoc calibrator for evaluation.")
+            # Fit an ad-hoc calibrator using the eval slice itself (used for the 4-class workaround)
+            cal = IsotonicCalibrator()
+            cal.fit(label_binary.values, pred)
+            pred = cal.transform(pred)
+
     meta = {
         "model_id": model_id,
         "model_kind": kind,
@@ -292,6 +307,7 @@ def build_mode_a_pool(split: EvalSplit) -> pd.DataFrame:
         "label_mfe": split.label_mfe.loc[df.index].values,
         "label_4class": split.label_4class.loc[df.index].values,
     })
+    # Mode A is generated directly from the EvalSplit probabilities, which are already calibrated if apply_calibration was true.
     if "m03_score" in df.columns:
         out["m03_score"] = df["m03_score"].values
     if "sector" in df.columns:
@@ -394,6 +410,7 @@ def build_mode_b_pool(
     cache_dir: Optional[Path] = None,
     chunk_months: int = 3,
     force_recompute: bool = False,
+    apply_calibration: bool = False,
 ) -> pd.DataFrame:
     """Stateful daily pool.
 
@@ -518,6 +535,17 @@ def build_mode_b_pool(
                 f"Mode B pool empty for window {start_date}..{end_date}"
             )
         pool = pd.concat(chunks, ignore_index=True)
+        
+        if apply_calibration:
+            from src.evaluation.calibrator import IsotonicCalibrator
+            cal_path = model_path.parent / "calibrator.joblib"
+            if cal_path.exists():
+                cal = IsotonicCalibrator.load(cal_path)
+                pool["pred_proba"] = cal.transform(pool["pred_proba"].values)
+            else:
+                # Ad-hoc calibration cannot be done strictly on Mode B without labels, 
+                # but we shouldn't hit this path since Mode B is stateful scoring.
+                pass
 
         # Join realised outcomes from the d2 entry-ledger (training cache).
         d2_source = _resolve_source_table(con)

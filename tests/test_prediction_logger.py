@@ -154,6 +154,26 @@ def test_two_cohorts_coexist_same_date_ticker(tmp_path: Path):
     assert cohorts == {"breakout", "pre_breakout"}
 
 
+def test_lifecycle_cohorts_accepted(tmp_path: Path):
+    """The prod path's lifecycle tags coexist as distinct rows (rank per tag)."""
+    db = tmp_path / "pred.duckdb"
+    preds = _make_predictions(n=5, seed=7)
+    for tag in ("pre_breakout", "active", "removed"):
+        log_daily_predictions(db_path=db, prediction_date=date(2026, 6, 18),
+                              model_version_id="M01_v0.1", predictions=preds, cohort=tag)
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        cohorts = {r[0] for r in con.execute(
+            "SELECT DISTINCT cohort FROM daily_predictions").fetchall()}
+        # rank_within_day restarts per tag → each tag has a rank==1 row
+        n_rank1 = con.execute(
+            "SELECT COUNT(*) FROM daily_predictions WHERE rank_within_day = 1").fetchone()[0]
+    finally:
+        con.close()
+    assert cohorts == {"pre_breakout", "active", "removed"}
+    assert n_rank1 == 3  # one rank-1 per tag
+
+
 def test_invalid_cohort_raises(tmp_path: Path):
     db = tmp_path / "pred.duckdb"
     with pytest.raises(ValueError, match="cohort must be"):

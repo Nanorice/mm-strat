@@ -23,10 +23,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = PROJECT_ROOT / "data" / "dashboard.duckdb"
+
+# Anchor to project root so creds load regardless of CWD (standalone runs from
+# Task Scheduler launch with CWD=C:\Windows\System32).
+load_dotenv(PROJECT_ROOT / ".env")
 
 # Disk-file dirs the dashboard pages read but that aren't in the DB. Each is
 # mirrored (recursively) under latest/<r2_prefix>/ on R2, filtered to render

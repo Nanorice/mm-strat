@@ -141,8 +141,10 @@ class ModelRegistry:
         model_name: Optional[str] = None,
         model_version: Optional[str] = None,
     ) -> None:
-        if status not in ("test", "prod", "archived"):
-            raise ValueError(f"Invalid status: {status}. Must be test/prod/archived")
+        if status not in ("test", "prod", "shadow", "archived"):
+            raise ValueError(
+                f"Invalid status: {status}. Must be test/prod/shadow/archived"
+            )
 
         if artifacts_path is None:
             artifacts_path = str(ARTIFACTS_BASE / version_id)
@@ -442,6 +444,51 @@ class ModelRegistry:
                 "SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1"
             ).fetchone()
             return result[0] if result else None
+        finally:
+            con.close()
+
+    def get_shadow_version(self) -> Optional[str]:
+        """version_id of the single shadow model, or None if none designated."""
+        con = duckdb.connect(self.db_path)
+        try:
+            result = con.execute(
+                "SELECT version_id FROM models WHERE status_flag = 'shadow' LIMIT 1"
+            ).fetchone()
+            return result[0] if result else None
+        finally:
+            con.close()
+
+    def set_shadow(self, version_id: str) -> None:
+        """Designate a version as the single shadow model for parallel scoring.
+
+        Unlike set_prod(), no evaluation gates are enforced — a shadow exists to
+        be evaluated, not trusted. Demotes any existing shadow to 'test', then
+        flags this version 'shadow'. At most one shadow at a time. Refuses to
+        shadow the current prod version (a model cannot be its own shadow).
+        """
+        con = duckdb.connect(self.db_path)
+        try:
+            row = con.execute(
+                "SELECT status_flag FROM models WHERE version_id = ?", [version_id]
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Model version not found: {version_id}")
+            if row[0] == "prod":
+                raise ValueError(
+                    f"{version_id} is the prod model and cannot also be shadow."
+                )
+            # Demote prior shadow, promote this one — single-shadow invariant.
+            con.execute(
+                "UPDATE models SET status_flag = 'test', updated_at = CURRENT_TIMESTAMP "
+                "WHERE status_flag = 'shadow'"
+            )
+            con.execute(
+                "UPDATE models SET status_flag = 'shadow', updated_at = CURRENT_TIMESTAMP "
+                "WHERE version_id = ?",
+                [version_id],
+            )
+            logger.info(f"[OK] Designated {version_id} as SHADOW")
+            print(f"[OK] {version_id} is now SHADOW")
         finally:
             con.close()
 

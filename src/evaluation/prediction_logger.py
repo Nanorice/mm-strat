@@ -5,8 +5,9 @@ Writes one row per (prediction_date, ticker, model_version_id, cohort) into
 within (`prediction_date`, `cohort`). Idempotent — re-running the same date/cohort
 overwrites previous rows (INSERT OR REPLACE).
 
-`cohort` is 'breakout' (SEPA entries) or 'pre_breakout' (in-setup names); both
-are scored nightly under the prod model so the dashboard never scores live.
+`cohort` is a SEPA lifecycle tag — 'pre_breakout' (in-setup), 'active' (held), or
+'removed' (recently exited) — scored nightly under the prod model so the dashboard
+never scores live. ('breakout' is retained for the shadow-divergence path only.)
 
 Decisioning (`decision_taken`) stays NULL until the dashboard UI lands; that's
 intentional. The point of logging now is so the analysis history is already
@@ -24,6 +25,10 @@ import duckdb
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Lifecycle tags written by the prod path (pre_breakout/active/removed) plus
+# 'breakout' retained for the shadow-divergence path (the acted-on entry list).
+_VALID_COHORTS = frozenset({"breakout", "pre_breakout", "active", "removed"})
 
 # Path is resolved from the package, not the cwd, so the writer works whether
 # called from notebooks, the orchestrator, or a test harness.
@@ -109,11 +114,14 @@ def log_daily_predictions(
       - prob_class_0, prob_class_1, ..., prob_class_K (at least one)
       - predicted_class
 
-    `cohort` is 'breakout' or 'pre_breakout'. Rank is computed within the cohort.
-    Returns the number of rows written.
+    `cohort` is a lifecycle tag ('pre_breakout' | 'active' | 'removed') for the prod
+    path, or 'breakout' for the shadow-divergence path. Rank is computed within the
+    cohort. Returns the number of rows written.
     """
-    if cohort not in ("breakout", "pre_breakout"):
-        raise ValueError(f"cohort must be 'breakout' | 'pre_breakout', got {cohort!r}")
+    if cohort not in _VALID_COHORTS:
+        raise ValueError(
+            f"cohort must be one of {sorted(_VALID_COHORTS)}, got {cohort!r}"
+        )
     ensure_schema(db_path)
 
     if predictions.empty:
