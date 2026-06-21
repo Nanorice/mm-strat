@@ -6,12 +6,46 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = Path("data/market_data.duckdb")
-ARTIFACTS_BASE = Path("models/artifacts")
+# Anchor artifact resolution to the project tree, not the CWD or the box a model
+# was trained on. All model artifacts live under <project>/models/, so paths are
+# stored project-relative and re-rooted on the 'models/' segment at read time —
+# this keeps the registry portable across machines.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "market_data.duckdb"
+ARTIFACTS_BASE = PROJECT_ROOT / "models" / "artifacts"
+
+
+def _models_relative(path) -> Optional[str]:
+    """Return the 'models/...'-anchored portion of a path (POSIX), or None.
+
+    Handles absolute paths from any machine and either separator style.
+    """
+    parts = Path(str(path)).parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i].lower() == "models":
+            return Path(*parts[i:]).as_posix()
+    return None
+
+
+def _resolve_artifacts_path(stored: str) -> Path:
+    """Resolve a stored artifacts_path to this machine's project tree.
+
+    Stored paths may be project-relative (current) or absolute paths from another
+    dev box (legacy). Re-root on the 'models/' segment so scoring works regardless
+    of where the model was trained.
+    """
+    p = Path(stored)
+    if p.is_absolute() and p.exists():
+        return p
+    rel = _models_relative(stored)
+    if rel:
+        return PROJECT_ROOT / rel
+    return p if p.is_absolute() else PROJECT_ROOT / p
 
 
 class PromotionError(RuntimeError):
@@ -28,7 +62,7 @@ class ModelRegistry:
         self._create_forced_promotions_table()
 
     def _create_forced_promotions_table(self) -> None:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute(
                 """
@@ -49,7 +83,7 @@ class ModelRegistry:
     # ------------------------------------------------------------------
 
     def _create_feature_catalog_tables(self) -> None:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             self._migrate_models_table(con)
             con.execute("""
@@ -147,15 +181,17 @@ class ModelRegistry:
             )
 
         if artifacts_path is None:
-            artifacts_path = str(ARTIFACTS_BASE / version_id)
-            Path(artifacts_path).mkdir(parents=True, exist_ok=True)
+            full = ARTIFACTS_BASE / version_id
+            full.mkdir(parents=True, exist_ok=True)
+            artifacts_path = _models_relative(full) or str(full)
         else:
-            artifacts_path = str(artifacts_path)
+            # Store project-relative so the registry stays portable across machines.
+            artifacts_path = _models_relative(artifacts_path) or str(artifacts_path)
 
         training_date = training_date or date.today()
         specs_json = json.dumps(specs)
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute(
                 """
@@ -184,7 +220,7 @@ class ModelRegistry:
             con.close()
 
     def get_model_specs(self, version_id: str) -> Dict[str, Any]:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             result = con.execute(
                 "SELECT specs_json FROM models WHERE version_id = ?", [version_id]
@@ -225,7 +261,7 @@ class ModelRegistry:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         params.append(version_id)
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute(
                 f"UPDATE models SET {', '.join(updates)} WHERE version_id = ?", params
@@ -250,7 +286,7 @@ class ModelRegistry:
         are logged to the `forced_promotions` table.
         """
         # 1. Existence check first — fail fast on typos.
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             exists = con.execute(
                 "SELECT COUNT(*) FROM models WHERE version_id = ?", [version_id]
@@ -330,7 +366,7 @@ class ModelRegistry:
         self._warn_on_adverse_card(version_id)
 
         # 4. Proceed with original promotion logic.
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute(
                 "UPDATE models SET status_flag = 'archived' WHERE status_flag = 'prod'"
@@ -399,7 +435,7 @@ class ModelRegistry:
         failed_gates: List[Dict[str, Any]],
         promoted_by: Optional[str],
     ) -> None:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute(
                 """
@@ -419,7 +455,7 @@ class ModelRegistry:
     def list_versions(
         self, status: Optional[str] = None, limit: int = 20
     ) -> pd.DataFrame:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             where = "WHERE status_flag = ?" if status else ""
             params = [status, limit] if status else [limit]
@@ -438,7 +474,7 @@ class ModelRegistry:
             con.close()
 
     def get_prod_version(self) -> Optional[str]:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             result = con.execute(
                 "SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1"
@@ -501,7 +537,7 @@ class ModelRegistry:
         CURRENT_TIMESTAMP if not supplied (pass the card's own built_at to keep
         them aligned).
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             if built_at is None:
                 con.execute(
@@ -530,7 +566,7 @@ class ModelRegistry:
         monitoring artifact and must NOT overwrite model_card_path, which is the
         full-history promotion-gate card.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             if built_at is None:
                 con.execute(
@@ -552,7 +588,7 @@ class ModelRegistry:
 
     def get_drift_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
         """Return {'path', 'built_at'} for the version's drift card, or None."""
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             row = con.execute(
                 "SELECT model_card_drift_path, model_card_drift_built_at FROM models "
@@ -567,7 +603,7 @@ class ModelRegistry:
 
     def get_model_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
         """Return {'path', 'built_at'} for the version's card, or None if unset."""
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             row = con.execute(
                 "SELECT model_card_path, model_card_built_at FROM models "
@@ -581,14 +617,14 @@ class ModelRegistry:
             con.close()
 
     def get_artifacts_path(self, version_id: str) -> Path:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             result = con.execute(
                 "SELECT artifacts_path FROM models WHERE version_id = ?", [version_id]
             ).fetchone()
             if not result:
                 raise ValueError(f"Model version not found: {version_id}")
-            return Path(result[0])
+            return _resolve_artifacts_path(result[0])
         finally:
             con.close()
 
@@ -599,7 +635,7 @@ class ModelRegistry:
         (maps to models/<name>/<version>/model.json) and yields a clean card
         filename — unlike a raw file path or the timestamped version_id.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             row = con.execute(
                 "SELECT model_name, model_version FROM models WHERE version_id = ?",
@@ -634,7 +670,7 @@ class ModelRegistry:
             for i, f in enumerate(features)
         ]
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.executemany(
                 "INSERT OR IGNORE INTO model_feature_sets "
@@ -650,7 +686,7 @@ class ModelRegistry:
 
         Joins models → model_feature_sets → feature_catalog.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             result = con.execute(
                 "SELECT feature_set_id, git_sha, model_type, feature_version "

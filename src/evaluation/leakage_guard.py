@@ -328,7 +328,7 @@ class LeakageGuard:
         price_table
             Where to fetch prices from. Defaults to `price_data`.
         """
-        import duckdb
+        from src import db
 
         required = {"ticker", "date", label_def.target_col}
         missing_cols = required - set(labels_df.columns)
@@ -343,7 +343,7 @@ class LeakageGuard:
         missing_price_rows: List[Dict[str, Any]] = []
         max_observed_horizon = 0
 
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = db.connect(str(db_path), read_only=True)
         try:
             for row in labels_df.itertuples(index=False):
                 ticker = getattr(row, "ticker")
@@ -482,7 +482,7 @@ class LeakageGuard:
         Catches the m01_rank class of bug where deployment encodes categoricals
         differently from training.
         """
-        import duckdb
+        from src import db
         import time
 
         t0 = time.perf_counter()
@@ -492,7 +492,7 @@ class LeakageGuard:
             train_view, deploy_view, feature_set_id, sample_n,
         )
 
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = db.connect(str(db_path), read_only=True)
         try:
             feature_rows = con.execute(
                 """

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ class SharesEngine:
         self.db_path = str(db_path or DEFAULT_DB_PATH)
 
     def ensure_table(self) -> None:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute("""
                 CREATE TABLE IF NOT EXISTS shares_history (
@@ -100,7 +101,7 @@ class SharesEngine:
         if df.empty:
             return 0
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute("""
                 INSERT INTO shares_history (ticker, date, shares_outstanding)
@@ -143,7 +144,7 @@ class SharesEngine:
         record_date = latest_trading_day or today.strftime("%Y-%m-%d")
         cutoff = (today - pd.Timedelta(days=self.FRESHNESS_DAYS)).strftime("%Y-%m-%d")
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             fresh = set(r[0] for r in con.execute(
                 "SELECT DISTINCT ticker FROM shares_history WHERE date >= ?", [cutoff]

@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import duckdb
+from src import db
 import pandas as pd
 import requests
 
@@ -139,7 +140,7 @@ class EDGAREngine:
     # =========================================================================
 
     def _ensure_tables(self) -> None:
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cik_map (
@@ -164,7 +165,7 @@ class EDGAREngine:
             return 0
 
         df['refreshed_at'] = datetime.utcnow()
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.register('_cik_batch', df)
             conn.execute("""
@@ -189,7 +190,7 @@ class EDGAREngine:
 
     def get_cik(self, ticker: str) -> Optional[int]:
         """Look up CIK for one ticker. Returns None if not in the map."""
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             row = conn.execute(
                 "SELECT cik FROM cik_map WHERE ticker = ?", [ticker]
@@ -202,7 +203,7 @@ class EDGAREngine:
         """Bulk CIK lookup. Returns {ticker: cik} only for tickers in the map."""
         if not tickers:
             return {}
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             conn.register('_t', pd.DataFrame({'ticker': tickers}))
             rows = conn.execute(
@@ -312,7 +313,7 @@ class EDGAREngine:
         Returns {ticker: rows_updated}. Tickers with 0 updates are omitted.
         """
         # 1) Identify (ticker, period_end) targets
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             where_null = "AND filing_date IS NULL" if only_null else ""
             if tickers:
@@ -397,7 +398,7 @@ class EDGAREngine:
 
         # 4) Apply updates in one UPDATE
         update_df = pd.DataFrame(all_mappings)
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.register('_edgar_fd', update_df)
             where_null = "AND f.filing_date IS NULL" if only_null else ""

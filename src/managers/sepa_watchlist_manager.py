@@ -40,6 +40,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 import duckdb
+from src import db
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ class SepaWatchlistManager:
 
     def __init__(self, db_path: str):
         self.db_path = str(db_path)
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             self._ensure_schema(conn)
 
     # ------------------------------------------------------------------
@@ -102,7 +103,7 @@ class SepaWatchlistManager:
         Returns:
             {'sessions': int, 'tickers': int, 'active': int, 'cooldown': int, 'exited': int}
         """
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             if start_date is None:
                 start_date = conn.execute(
                     "SELECT MIN(date)::VARCHAR FROM t2_screener_features"
@@ -349,7 +350,7 @@ class SepaWatchlistManager:
         Returns:
             {'opened': int, 'closed': int, 'cooldown_to_exited': int, 'active': int}
         """
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             # Verify target_date has t2 data
             n_t2 = conn.execute(
                 f"SELECT COUNT(*) FROM t2_screener_features WHERE date = '{target_date}'"
@@ -473,7 +474,7 @@ class SepaWatchlistManager:
 
     def get_universe(self) -> list[str]:
         """All tickers that have ever entered a SEPA session — the T3 universe."""
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT DISTINCT ticker FROM sepa_watchlist ORDER BY ticker"
             ).fetchall()
@@ -481,7 +482,7 @@ class SepaWatchlistManager:
 
     def get_stats(self) -> dict:
         """Quick summary for monitoring."""
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             row = conn.execute("""
                 SELECT
                     COUNT(*)                                  AS sessions,

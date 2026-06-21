@@ -10,10 +10,18 @@ Responsibilities:
 """
 
 import logging
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import duckdb
+from src import db
+
+try:
+    import psutil
+except ImportError:  # telemetry is best-effort; never break the pipeline over it
+    psutil = None
 
 # Import layers
 from src.data_engine import DataRepository
@@ -35,6 +43,62 @@ from src.orchestrators.phase_registry import failure_mode_for, label_for
 from config import PIPELINE_FAILURE_MODES, PipelineFailureMode, PIPELINE_ALERT_THRESHOLDS
 
 logger = logging.getLogger(__name__)
+
+
+class _MemorySampler:
+    """Background RSS sampler (process + children) for per-phase peak memory.
+
+    Subprocess phases (dashboard build, model card) hold their working set in a
+    child process, so children(recursive) are summed in — that is the number that
+    actually decides whether the box stays under budget for a parallel agent.
+    Degrades to 0.0 GB if psutil is unavailable.
+    """
+
+    def __init__(self, interval: float = 0.5):
+        self._interval = interval
+        self._proc = psutil.Process() if psutil else None
+        self._peak = 0          # since last reset() — per phase
+        self._global_peak = 0   # since start() — whole run
+        self._stop = threading.Event()
+        self._thread = None
+
+    def _rss(self) -> int:
+        if not self._proc:
+            return 0
+        try:
+            total = self._proc.memory_info().rss
+            for child in self._proc.children(recursive=True):
+                try:
+                    total += child.memory_info().rss
+                except psutil.Error:
+                    pass
+            return total
+        except psutil.Error:
+            return 0
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            rss = self._rss()
+            self._peak = max(self._peak, rss)
+            self._global_peak = max(self._global_peak, rss)
+
+    def start(self) -> None:
+        if not self._proc or self._thread:
+            return
+        self._peak = self._global_peak = self._rss()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def reset(self) -> None:
+        self._peak = self._rss()
+
+    @property
+    def peak_gb(self) -> float:
+        return self._peak / 1024 ** 3
+
+    @property
+    def global_peak_gb(self) -> float:
+        return self._global_peak / 1024 ** 3
 
 
 class DailyPipelineOrchestrator:
@@ -98,6 +162,9 @@ class DailyPipelineOrchestrator:
         # Universe backfill (only used when run_pipeline(universe_refresh=True))
         self.universe_backfill = UniverseBackfillEngine(self.db_path)
 
+        # Per-phase peak-RSS telemetry (started in run_pipeline)
+        self._mem_sampler = _MemorySampler()
+
     def run_pipeline(self, target_date: str = None, phase_1_only: bool = False, phase_2_only: bool = False, phase_3_only: bool = False, phase_4_only: bool = False, phase_5_only: bool = False, universe_refresh: bool = False) -> bool:
         """
         Execute full 8-phase pipeline.
@@ -124,6 +191,8 @@ class DailyPipelineOrchestrator:
         actual_trading_day = self._get_last_trading_day(target_date)
 
         logger.info(f"[Pipeline] START | Trading Day: {actual_trading_day}")
+        self._mem_sampler.start()
+        pipeline_t0 = time.monotonic()
 
         # Track overall success (CRITICAL phases only)
         critical_success = True
@@ -349,7 +418,12 @@ class DailyPipelineOrchestrator:
         run_stats['phase_10'] = phase_stats
 
         phases_run = len(run_stats)
-        logger.info(f"[Pipeline] DONE | {phases_run} phases | {'OK' if critical_success else 'FAILED'}")
+        logger.info(
+            f"[Pipeline] DONE | {phases_run} phases | "
+            f"{'OK' if critical_success else 'FAILED'} | "
+            f"{time.monotonic() - pipeline_t0:.0f}s wall | "
+            f"peak RSS {self._mem_sampler.global_peak_gb:.1f} GB"
+        )
 
         return critical_success
 
@@ -375,9 +449,14 @@ class DailyPipelineOrchestrator:
         # Human-readable label from the registry: "t2_screener" -> "Phase 3 · T2 Features"
         label = label_for(phase_name)
 
-        # Check idempotency (skip if already completed and not force)
+        # Title banner so each phase's output is visually delimited in the log.
+        logger.info(f"========== {label} ==========")
+
+        # Check idempotency (skip if already completed and not force).
+        # INFO (not DEBUG) so every phase leaves a trace — a skipped phase is
+        # otherwise indistinguishable from one that never ran in the log.
         if not skip_idempotency_check and not self.force and self.run_manager.is_phase_completed(target_date, phase_name):
-            logger.debug(f"[{label}] SKIPPED (already completed for {target_date})")
+            logger.info(f"[{label}] skipped (already completed for {target_date})")
             return True, {'status': 'skipped', 'reason': 'already_completed'}
 
         # Start phase tracking
@@ -385,6 +464,9 @@ class DailyPipelineOrchestrator:
         if not self.dry_run:
             run_id = self.run_manager.start_phase(target_date, phase_name)
         self._current_run_id = run_id
+
+        t0 = time.monotonic()
+        self._mem_sampler.reset()
 
         try:
             stats = phase_func()
@@ -397,11 +479,19 @@ class DailyPipelineOrchestrator:
                     rows_processed=stats.get('rows_processed')
                 )
 
+            logger.info(
+                f"[{label}] done in {time.monotonic() - t0:.1f}s | "
+                f"peak RSS {self._mem_sampler.peak_gb:.1f} GB"
+            )
             return True, stats
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"[{label}] FAILED: {error_msg}", exc_info=True)
+            logger.error(
+                f"[{label}] FAILED after {time.monotonic() - t0:.1f}s "
+                f"(peak RSS {self._mem_sampler.peak_gb:.1f} GB): {error_msg}",
+                exc_info=True,
+            )
 
             if not self.dry_run:
                 self.run_manager.complete_phase(
@@ -474,7 +564,7 @@ class DailyPipelineOrchestrator:
         """
         from config import EARNINGS_CALENDAR_REFRESH_DAYS
 
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             row = conn.execute("""
                 SELECT MAX(completed_at)
@@ -533,7 +623,7 @@ class DailyPipelineOrchestrator:
         staleness check but is exactly what Phase 1.5 must re-ingest. The two
         definitions differ by design; only the THRESHOLD numbers are centralised.
         """
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             total, covered = conn.execute("""
                 SELECT
@@ -549,7 +639,7 @@ class DailyPipelineOrchestrator:
 
     def _get_missing_price_tickers(self, trading_day: str) -> List[str]:
         """Active tickers with no price row on trading_day."""
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             rows = conn.execute("""
                 SELECT cp.ticker
@@ -631,7 +721,7 @@ class DailyPipelineOrchestrator:
         # Resolve active tickers (blacklisted tickers already purged from company_profiles)
         # equity_tickers excludes ETF/INDEX/UNKNOWN — used for fundamentals/earnings
         # which yfinance cannot provide for non-equity instruments.
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             active_tickers = [t[0] for t in conn.execute(
                 "SELECT ticker FROM company_profiles WHERE is_active = TRUE ORDER BY ticker"
@@ -801,13 +891,13 @@ class DailyPipelineOrchestrator:
 
             # Diff macro_data row count to get true inserted count (update_macro_cache
             # returns per-series total cache size, not inserts).
-            conn = duckdb.connect(self.db_path, read_only=True)
+            conn = db.connect(self.db_path, read_only=True)
             try:
                 md_before = conn.execute("SELECT COUNT(*) FROM macro_data").fetchone()[0]
             finally:
                 conn.close()
             self.macro_engine.update_macro_cache(force=False, write_db=True)
-            conn = duckdb.connect(self.db_path, read_only=True)
+            conn = db.connect(self.db_path, read_only=True)
             try:
                 md_after = conn.execute("SELECT COUNT(*) FROM macro_data").fetchone()[0]
             finally:
@@ -842,7 +932,7 @@ class DailyPipelineOrchestrator:
         """
         from config import CIK_MAP_REFRESH_DAYS
 
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             row = conn.execute("""
                 SELECT MAX(completed_at)
@@ -898,7 +988,7 @@ class DailyPipelineOrchestrator:
             FILING_BACKFILL_MIN_AGE_DAYS,
         )
 
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             candidates = conn.execute(f"""
                 SELECT f.ticker, COUNT(*) AS missing
@@ -974,7 +1064,7 @@ class DailyPipelineOrchestrator:
         """Phase 3 incremental: detect gap in t2_screener_features, compute missing dates only."""
         import pandas as pd
 
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             max_date_row = con.execute("SELECT MAX(date) FROM t2_screener_features").fetchone()
             max_date = max_date_row[0] if max_date_row[0] else None
@@ -990,7 +1080,7 @@ class DailyPipelineOrchestrator:
 
         if start_date > last_trading_day:
             # Date is current, but check for coverage gaps (partial ingestion)
-            coverage = self._t2_coverage_deficit(last_trading_day, con_factory=lambda: duckdb.connect(self.db_path, read_only=True))
+            coverage = self._t2_coverage_deficit(last_trading_day, con_factory=lambda: db.connect(self.db_path, read_only=True))
             if coverage > 0:
                 logger.warning(f"[Phase 3] Coverage gap: {coverage} tickers missing for {last_trading_day} — recomputing")
                 rows = self.feature_pipeline.compute_t2_screener_features(
@@ -1010,7 +1100,7 @@ class DailyPipelineOrchestrator:
 
     def _t2_coverage_deficit(self, target_date: str, con_factory=None) -> int:
         """Return number of tickers missing from t2_screener_features for target_date."""
-        con = con_factory() if con_factory else duckdb.connect(self.db_path, read_only=True)
+        con = con_factory() if con_factory else db.connect(self.db_path, read_only=True)
         try:
             expected = con.execute(f"""
                 SELECT COUNT(DISTINCT p.ticker)
@@ -1069,7 +1159,7 @@ class DailyPipelineOrchestrator:
         """Phase 5 incremental: detect gap in t3_sepa_features, compute missing dates only."""
         import pandas as pd
 
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             max_date = con.execute("SELECT MAX(date) FROM t3_sepa_features").fetchone()[0]
         finally:
@@ -1147,7 +1237,7 @@ class DailyPipelineOrchestrator:
             pd.to_datetime(target_date)
             - pd.Timedelta(days=self.LIFECYCLE_REMOVED_WINDOW_DAYS)
         ).strftime('%Y-%m-%d')
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             rows = con.execute(f"""
                 WITH lifecycle_tickers AS (
@@ -1196,7 +1286,7 @@ class DailyPipelineOrchestrator:
         if not dates:
             return 0
         start_date, end_date = dates[0], dates[-1]
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute(
                 f"DELETE FROM t3_sepa_features WHERE date BETWEEN '{start_date}' AND '{end_date}'"
@@ -1306,9 +1396,12 @@ class DailyPipelineOrchestrator:
             logger.warning(f"[Phase 7.6] Sync script not found: {sync_script}")
             return {'rows_processed': 0}
 
+        # 1200s ceiling: the ~764 MB slim DB is the only large upload (asset dirs
+        # now skip unchanged files), and a slow home uplink can legitimately need
+        # well over 5 min. Phase is best-effort, so a generous timeout is safe.
         proc = subprocess.run(
             [sys.executable, str(sync_script)],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=1200,
             cwd=str(project_root),
         )
         if proc.returncode != 0:
@@ -1567,10 +1660,10 @@ class DailyPipelineOrchestrator:
         try:
             engine = ScoreEngine.from_prod(self.db_path)
         except (ValueError, FileNotFoundError) as e:
-            logger.warning(f"[Phase 8] Prod model not scorable: {e}")
+            logger.warning(f"[Phase 7.4] Prod model not scorable: {e}")
             return 0
         if engine is None:
-            logger.info("[Phase 8] No prod model registered — skipping prediction log.")
+            logger.info("[Phase 7.4] No prod model registered — skipping prediction log.")
             return 0
 
         population = self._fetch_lifecycle_candidates(target_date)
@@ -1583,10 +1676,10 @@ class DailyPipelineOrchestrator:
         for cohort, candidates in population.groupby("cohort", sort=False):
             try:
                 n = engine.score_and_log(candidates, target_date, cohort, self.db_path)
-                logger.info(f"[Phase 8] Logged {n} '{cohort}' predictions on {target_date}")
+                logger.info(f"[Phase 7.4] Logged {n} '{cohort}' predictions on {target_date}")
                 total += n
             except Exception as e:
-                logger.warning(f"[Phase 8] Scoring cohort '{cohort}' failed: {e}")
+                logger.warning(f"[Phase 7.4] Scoring cohort '{cohort}' failed: {e}")
         return total
 
     def _log_shadow_predictions_and_divergence(self, target_date: str) -> int:
@@ -1644,13 +1737,13 @@ class DailyPipelineOrchestrator:
 
     def _fetch_breakout_candidates(self, target_date: str):
         """SEPA breakout entries for target_date (v_d3_deployment)."""
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             return con.execute(
                 "SELECT * FROM v_d3_deployment WHERE date = ?", [target_date]
             ).df()
         except duckdb.Error as e:
-            logger.warning(f"[Phase 8] Could not query v_d3_deployment: {e}")
+            logger.warning(f"[Phase 7.4] Could not query v_d3_deployment: {e}")
             import pandas as pd
             return pd.DataFrame()
         finally:
@@ -1663,13 +1756,13 @@ class DailyPipelineOrchestrator:
         feature contract as v_d3_deployment plus a derived `cohort` column per row.
         The caller splits by cohort and logs each tag (rank within tag).
         """
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             return con.execute(
                 "SELECT * FROM v_d3_lifecycle WHERE date = ?", [target_date]
             ).df()
         except duckdb.Error as e:
-            logger.warning(f"[Phase 8] Could not query v_d3_lifecycle: {e}")
+            logger.warning(f"[Phase 7.4] Could not query v_d3_lifecycle: {e}")
             import pandas as pd
             return pd.DataFrame()
         finally:
@@ -1768,7 +1861,7 @@ class DailyPipelineOrchestrator:
         from config import FUNDAMENTAL_STALENESS_DAYS, EXPECTED_NEXT_FILING_LAG_DAYS
 
         ticker_df = pd.DataFrame({'ticker': tickers})
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             con.register('_dq_tickers', ticker_df)
 
@@ -1851,7 +1944,7 @@ class DailyPipelineOrchestrator:
         actual tickers in t2_screener_features and t3_sepa_features. Gaps
         indicate partial ingestion (e.g., API rate limits during Phase 1).
         """
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         alerts = []
         details = {}
 

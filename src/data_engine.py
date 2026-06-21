@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import duckdb
+from src import db
 import requests
 import json
 import time
@@ -204,7 +205,7 @@ class DataRepository:
         Blacklisted tickers are already removed from company_profiles, so no
         additional filtering is needed here.
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             cutoff = (pd.Timestamp(latest_trading_day) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
 
@@ -247,7 +248,7 @@ class DataRepository:
 
     def _get_all_active_tickers(self) -> List[str]:
         """All active tickers from company_profiles. Used by force=True path."""
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             return [r[0] for r in conn.execute(
                 "SELECT ticker FROM company_profiles WHERE is_active = TRUE ORDER BY ticker"
@@ -518,7 +519,7 @@ class DataRepository:
         # Calculate optimal start date for incremental fetch
         # (Skip this logic if force_from_date is True - user wants full historical data)
         if not force_from_date:
-            conn = duckdb.connect(self.db_path)
+            conn = db.connect(self.db_path)
             try:
                 result = conn.execute(
                     "SELECT MAX(date) FROM price_data WHERE ticker = ?", [ticker]
@@ -1176,7 +1177,7 @@ class DataRepository:
         # corrupt pre-2000 rows (e.g. 1970-01-01 from bad yfinance data).
         # yfinance returns all available data from `start` onward per ticker,
         # so tickers that are already ahead simply get no new rows (INSERT OR IGNORE).
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             result = conn.execute("""
                 SELECT MIN(max_date) FROM (
@@ -1309,7 +1310,7 @@ class DataRepository:
         if issues:
             self._log_quality_issues(issues, run_date)
 
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.execute("""
                 INSERT OR IGNORE INTO price_data (ticker, date, open, high, low, close, volume)

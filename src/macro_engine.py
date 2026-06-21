@@ -10,6 +10,7 @@ import threading
 import time
 import logging
 import duckdb
+from src import db
 import yfinance as yf
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -270,7 +271,7 @@ class MacroEngine:
         if feed.empty:
             return 0
 
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS macro_data (
                     date    DATE     NOT NULL,
@@ -521,7 +522,7 @@ class MacroEngine:
             logger.warning("Empty DataFrame, nothing to write")
             return 0
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Ensure table exists
             con.execute("""
@@ -581,7 +582,7 @@ class MacroEngine:
         Returns:
             Number of rows inserted
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Determine start_date
             if force or start_date:

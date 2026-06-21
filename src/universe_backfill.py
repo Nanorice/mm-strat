@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 import yfinance as yf
 from yfinance import EquityQuery
@@ -43,7 +44,7 @@ class UniverseBackfillEngine:
     # ------------------------------------------------------------------
 
     def ensure_tables(self) -> None:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Phase 1: Production tables (no backfill suffix)
             con.execute("""
@@ -107,7 +108,7 @@ class UniverseBackfillEngine:
     # ------------------------------------------------------------------
 
     def _load_blacklist(self) -> set:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             rows = con.execute("SELECT ticker FROM ticker_blacklist").fetchall()
             return {r[0] for r in rows}
@@ -118,7 +119,7 @@ class UniverseBackfillEngine:
         """Insert tickers into ticker_blacklist (idempotent)."""
         if not tickers:
             return 0
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             df = pd.DataFrame({
                 "ticker": tickers,
@@ -139,7 +140,7 @@ class UniverseBackfillEngine:
 
         Returns counts of rows deleted per table.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             counts = {}
             for table in ("company_profiles", "price_data", "shares_history"):
@@ -156,7 +157,7 @@ class UniverseBackfillEngine:
         These are SPACs, warrants, shells — FMP has no financials for them.
         Returns number of tickers added to blacklist.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             rows = con.execute("""
                 SELECT ticker FROM company_profiles
@@ -442,7 +443,7 @@ class UniverseBackfillEngine:
         if df.empty:
             return 0
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Ensure all required columns exist in table
             con.execute("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS beta DOUBLE")
@@ -528,7 +529,7 @@ class UniverseBackfillEngine:
 
     def _get_pending_tickers(self, data_type: str) -> List[str]:
         target_table = "price_data" if data_type == "price" else "shares_history"
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             existing = set()
             try:
@@ -655,7 +656,7 @@ class UniverseBackfillEngine:
     def _write_price_batch(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute("""
                 INSERT INTO price_data (ticker, date, open, high, low, close, volume)
@@ -724,7 +725,7 @@ class UniverseBackfillEngine:
     def _write_shares_batch(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute("""
                 INSERT INTO shares_history (ticker, date, shares_outstanding)
@@ -751,7 +752,7 @@ class UniverseBackfillEngine:
 
         # Get existing tickers
         print("   Loading existing tickers...", end=" ", flush=True)
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             existing = set(con.execute("SELECT ticker FROM company_profiles").fetchall())
             existing = {r[0] for r in existing}
@@ -790,7 +791,7 @@ class UniverseBackfillEngine:
     # ------------------------------------------------------------------
 
     def get_status(self) -> Dict:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             def _safe_count(query: str) -> int:
                 try:
@@ -817,7 +818,7 @@ class UniverseBackfillEngine:
             con.close()
 
     def validate_backfill(self) -> Dict:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             stats = con.execute("""
                 SELECT

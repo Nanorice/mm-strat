@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import duckdb
+from src import db
 import numpy as np
 import pandas as pd
 
@@ -107,7 +108,7 @@ class FeaturePipeline:
             return
 
         # Ensure t3 table exists (create if missing, recreate if requested)
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
             if recreate_t3 or 't3_sepa_features' not in tables:
@@ -142,7 +143,7 @@ class FeaturePipeline:
             end_date = date_cls.today().strftime('%Y-%m-%d')
 
         logger.info(f"[T2] Computing screener features (full universe, {start_date} -> {end_date}, warmup={warmup_days}d)...")
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         fetch_start_date = (pd.to_datetime(start_date) - pd.Timedelta(days=warmup_days)).strftime('%Y-%m-%d')
 
@@ -614,7 +615,7 @@ class FeaturePipeline:
         fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=365)).strftime('%Y-%m-%d')
 
         logger.info(f"[T3] Computing SEPA features for {start_date} to {end_date}...")
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             before_count = con.execute("SELECT COUNT(*) FROM t3_sepa_features").fetchone()[0]
@@ -930,7 +931,7 @@ class FeaturePipeline:
         # 90-day warmup is plenty for 50d rolling std (need ~50 trading days = ~70 calendar days)
         fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=90)).strftime('%Y-%m-%d')
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             df = con.execute(f"""
                 SELECT
@@ -996,7 +997,7 @@ class FeaturePipeline:
 
         self._ensure_alpha_columns_exist(target_table, EMA_COLS)
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=warmup_days)).strftime('%Y-%m-%d')
         end_filter = f"AND p.date <= '{end_date}'" if end_date else ""
         try:
@@ -1133,7 +1134,7 @@ class FeaturePipeline:
     def _load_data_for_alphas(
         self, start_date: str, warmup_days: int = 365, end_date: str = None, target_table: str = 't2_screener_features'
     ) -> pd.DataFrame:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         fetch_start_date = (pd.to_datetime(start_date) - pd.Timedelta(days=warmup_days)).strftime('%Y-%m-%d')
         end_filter = f"AND p.date <= '{end_date}'" if end_date else ""
         try:
@@ -1151,7 +1152,7 @@ class FeaturePipeline:
             con.close()
 
     def _ensure_alpha_columns_exist(self, target_table: str, cols: List[str]) -> None:
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             existing = {r[0] for r in con.execute(f"DESCRIBE {target_table}").fetchall()}
             for col in cols:
@@ -1169,7 +1170,7 @@ class FeaturePipeline:
         """
         if alpha_df.empty:
             return
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             min_date = alpha_df['date'].min()
             max_date = alpha_df['date'].max()
@@ -1409,7 +1410,7 @@ class FeaturePipeline:
 
     def compute_cross_sectional_ranks(self, target_table: str = 't2_screener_features', start_date: str = None, end_date: str = None) -> None:
         logger.info(f"[C] Computing cross-sectional ranks -> {target_table}...")
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             existing = {r[0] for r in con.execute(f"DESCRIBE {target_table}").fetchall()}

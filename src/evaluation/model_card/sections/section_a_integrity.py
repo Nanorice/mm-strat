@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 
 import duckdb
+from src import db
 import pandas as pd
 
 from ..data_loader import (
@@ -90,7 +91,7 @@ def _check_a3_sepa_match(split: EvalSplit, db_path: Path, skip: bool = False) ->
             blocking=False,
         )
     try:
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = db.connect(str(db_path), read_only=True)
         try:
             row = con.execute(
                 "SELECT MIN(date), MAX(date), COUNT(*) FROM v_d3_deployment"

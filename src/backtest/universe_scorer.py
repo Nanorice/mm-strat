@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 import duckdb
+from src import db
 
 import config
 from src.utils import get_model_features
@@ -217,7 +218,7 @@ class UniverseScorer:
         if 'ticker_type' in df.columns:
             mask = df['ticker_type'] == 'EQUITY'
         else:
-            with duckdb.connect(str(db_path), read_only=True) as con:
+            with db.connect(str(db_path), read_only=True) as con:
                 non_eq = {r[0] for r in con.execute("""
                     SELECT ticker FROM company_profiles
                     WHERE ticker_type IN ('ETF', 'INDEX', 'UNKNOWN')
@@ -261,7 +262,7 @@ class UniverseScorer:
         if self.m01_model is None:
             self.load_model()
 
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = db.connect(str(db_path), read_only=True)
         try:
             df = con.execute("""
                 SELECT * FROM d2_training_cache
@@ -313,7 +314,7 @@ class UniverseScorer:
                                 
                 if cats is None:
                     # Fallback: query from company_profiles
-                    con_tmp = duckdb.connect(str(db_path), read_only=True)
+                    con_tmp = db.connect(str(db_path), read_only=True)
                     try:
                         cats = con_tmp.execute(f"SELECT DISTINCT {col} FROM company_profiles WHERE {col} IS NOT NULL ORDER BY {col}").df()[col].astype(str).tolist()
                     finally:
@@ -396,7 +397,7 @@ class UniverseScorer:
         the underlying tables are refreshed.
         """
         db_path = db_path or DEFAULT_DB_PATH
-        con = duckdb.connect(str(db_path), read_only=False)
+        con = db.connect(str(db_path), read_only=False)
         try:
             has_shares = con.execute("""
                 SELECT COUNT(*) FROM information_schema.tables
@@ -474,7 +475,7 @@ class UniverseScorer:
         if self.m01_model is None:
             self.load_model()
 
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = db.connect(str(db_path), read_only=True)
         try:
             # Check v_t3_training view exists — create it if not
             has_view = con.execute("""
@@ -486,7 +487,7 @@ class UniverseScorer:
                 con.close()
                 logger.info("v_t3_training not found — creating it now...")
                 UniverseScorer.create_view(db_path)
-                con = duckdb.connect(str(db_path), read_only=True)
+                con = db.connect(str(db_path), read_only=True)
 
             df = con.execute("""
                 SELECT * FROM v_t3_training
@@ -558,7 +559,7 @@ class UniverseScorer:
                                 
                 if cats is None:
                     # Fallback: query from company_profiles
-                    con_tmp = duckdb.connect(str(db_path), read_only=True)
+                    con_tmp = db.connect(str(db_path), read_only=True)
                     try:
                         cats = con_tmp.execute(f"SELECT DISTINCT {col} FROM company_profiles WHERE {col} IS NOT NULL ORDER BY {col}").df()[col].astype(str).tolist()
                     finally:

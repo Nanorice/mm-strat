@@ -20,6 +20,7 @@ import backtrader as bt
 import pandas as pd
 
 import duckdb
+from src import db
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -137,7 +138,7 @@ class SEPABacktestRunner:
 
     def _load_regime_from_duckdb(self) -> pd.DataFrame:
         """Load regime data from t2_regime_scores table."""
-        con = duckdb.connect(str(self.db_path), read_only=True)
+        con = db.connect(str(self.db_path), read_only=True)
         try:
             df = con.execute("""
                 SELECT
@@ -170,7 +171,7 @@ class SEPABacktestRunner:
         end_str = self.end_date.strftime('%Y-%m-%d')
         late_start_cutoff = self.start_date + pd.Timedelta(days=60)
 
-        con = duckdb.connect(str(self.db_path), read_only=True)
+        con = db.connect(str(self.db_path), read_only=True)
         try:
             placeholders = ','.join([f"'{t}'" for t in tickers])
             df_all = con.execute(f"""
@@ -753,7 +754,7 @@ class SEPABacktestRunner:
         derived from the path when no registry row matches."""
         parent_dir = Path(model_path).parent
         try:
-            con = duckdb.connect(str(self.db_path), read_only=True)
+            con = db.connect(str(self.db_path), read_only=True)
             try:
                 rows = con.execute(
                     "SELECT version_id, artifacts_path FROM models"

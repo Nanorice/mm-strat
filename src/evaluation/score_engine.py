@@ -20,6 +20,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from src.evaluation.categorical_encoding import encode_categoricals, load_categorical_map
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,10 +32,21 @@ class ScoreEngine:
     so the registry lookup + artifact resolution live in one place.
     """
 
-    def __init__(self, version_id: str, model_path: Path, feature_names: list[str]):
+    def __init__(
+        self,
+        version_id: str,
+        model_path: Path,
+        feature_names: list[str],
+        categorical_map: Optional[dict[str, list[str]]] = None,
+    ):
         self.version_id = version_id
         self.model_path = Path(model_path)
         self.feature_names = feature_names
+        # Frozen training vocabulary per categorical feature (industry, sector).
+        # XGBoost stores categoricals as integer codes with no string map, so the
+        # inference frame MUST be encoded against this exact vocab or codes drift
+        # and out-of-vocab values are rejected. Empty = fall back to per-frame codes.
+        self.categorical_map = categorical_map or {}
         self._booster = None  # lazy: loaded on first score
 
     # ── constructors ─────────────────────────────────────────────────────────
@@ -53,7 +66,11 @@ class ScoreEngine:
         feature_names = specs.get("features") or []
         if not feature_names:
             raise ValueError(f"model {version_id} has no recorded feature set")
-        return cls(version_id, model_path, feature_names)
+
+        # Frozen categorical vocabulary persisted alongside the model at train time.
+        # Absent for older models → predict_frame falls back to per-frame encoding.
+        cat_map = load_categorical_map(artifacts_path)
+        return cls(version_id, model_path, feature_names, categorical_map=cat_map)
 
     @classmethod
     def from_prod(cls, db_path: str) -> Optional["ScoreEngine"]:
@@ -111,8 +128,7 @@ class ScoreEngine:
             )
 
         X = candidates[feature_cols].replace([np.inf, -np.inf], None)
-        for col in X.select_dtypes(include="object").columns:
-            X[col] = X[col].astype("category")
+        X = encode_categoricals(X, feature_cols, self.categorical_map)
 
         proba = np.asarray(self._load().predict(xgb.DMatrix(X, enable_categorical=True)))
         if proba.ndim == 1:  # binary:logistic → P(class=1); expand to 2-col

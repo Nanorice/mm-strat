@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 import duckdb
+from src import db
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
@@ -79,7 +80,7 @@ def _attach_target_exposure(working: pd.DataFrame, db_path: Path) -> pd.Series:
     dates = working["date"].drop_duplicates()
     if dates.empty:
         return pd.Series([], dtype=float)
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = db.connect(str(db_path), read_only=True)
     try:
         risk = con.execute(
             "SELECT date, target_exposure FROM t2_risk_scores"

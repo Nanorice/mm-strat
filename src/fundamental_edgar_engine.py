@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import duckdb
+from src import db
 import pandas as pd
 import requests
 
@@ -201,7 +202,7 @@ class FundamentalEdgarEngine:
         fund_rows = 0
         shares_rows = 0
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             if overwrite_edgar and (fund_frames or shares_frames):
                 ticker_list = "', '".join(tickers)

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import duckdb
+from src import db
 import numpy as np
 import pandas as pd
 
@@ -178,7 +179,7 @@ class VectorizedSEPABacktest:
             # Use cached raw prices; filter to requested tickers
             df = self._prices[self._prices['ticker'].isin(tickers)].copy()
         else:
-            con = duckdb.connect(str(self.db_path), read_only=True)
+            con = db.connect(str(self.db_path), read_only=True)
             try:
                 df = con.execute("""
                     SELECT ticker, date, open, high, low, close

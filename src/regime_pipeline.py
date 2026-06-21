@@ -12,6 +12,7 @@ Architecture:
 
 import logging
 import duckdb
+from src import db
 import pandas as pd
 from pathlib import Path
 from typing import Optional
@@ -159,7 +160,7 @@ class RegimePipeline:
             logger.warning("Empty DataFrame, nothing to write")
             return 0
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Ensure table exists
             self._ensure_table_exists(con)
@@ -212,7 +213,7 @@ class RegimePipeline:
         Returns:
             Number of new rows written
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Ensure table exists
             self._ensure_table_exists(con)
@@ -290,7 +291,7 @@ class RegimePipeline:
         logger.info(f"Loaded {len(parquet_df)} rows from parquet")
 
         # Load from DuckDB
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             db_df = con.execute("""
                 SELECT date, m03_score

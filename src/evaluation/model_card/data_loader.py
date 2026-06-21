@@ -19,9 +19,12 @@ from pathlib import Path
 from typing import Optional
 
 import duckdb
+from src import db
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+
+from src.evaluation.categorical_encoding import encode_categoricals, load_categorical_map
 
 logger = logging.getLogger(__name__)
 
@@ -139,15 +142,6 @@ def _bucket_4class(mfe: pd.Series) -> pd.Series:
     return pd.cut(mfe, bins=edges, labels=False, include_lowest=True).astype(int)
 
 
-def _coerce_categoricals(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
-    """sector/industry come back as VARCHAR; XGBoost needs categorical dtype."""
-    out = df.copy()
-    for col in ("sector", "industry"):
-        if col in feature_cols and col in out.columns:
-            out[col] = out[col].astype("category")
-    return out
-
-
 def _resolve_source_table(con: duckdb.DuckDBPyConnection) -> str:
     """Prefer the materialized cache (d2_training_cache) over the view.
 
@@ -208,7 +202,7 @@ def load_eval_data(
         where_clauses.append(f"date <= DATE '{end_date}'")
     where_sql = " AND ".join(where_clauses)
 
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = db.connect(str(db_path), read_only=True)
     try:
         source = _resolve_source_table(con)
         logger.info("Reading eval data from %s", source)
@@ -230,7 +224,8 @@ def load_eval_data(
             f"{missing_features[:5]}..."
         )
 
-    df_for_predict = _coerce_categoricals(df, feature_cols)
+    categorical_map = load_categorical_map(model_path)
+    df_for_predict = encode_categoricals(df, feature_cols, categorical_map)
     pred = _predict_home_run_proba(booster, df_for_predict[feature_cols], kind)
 
     label_binary = _binarise_mfe(df["mfe_pct"])
@@ -444,9 +439,10 @@ def build_mode_b_pool(
     booster = xgb.Booster()
     booster.load_model(str(model_path))
     kind, _ = _detect_model_kind(booster)
+    categorical_map = load_categorical_map(model_path)
 
     needed_cols = list(dict.fromkeys(_MODE_B_KEEP_COLS + feature_cols))
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = db.connect(str(db_path), read_only=True)
     try:
         t3_cols = {
             r[0] for r in con.execute(
@@ -520,7 +516,7 @@ def build_mode_b_pool(
             chunk = con.execute(sql).fetchdf()
             if chunk.empty:
                 continue
-            for_predict = _coerce_categoricals(chunk, feature_cols)
+            for_predict = encode_categoricals(chunk, feature_cols, categorical_map)
             dmat = xgb.DMatrix(for_predict[feature_cols], enable_categorical=True)
             raw = booster.predict(dmat)
             if kind == "binary":

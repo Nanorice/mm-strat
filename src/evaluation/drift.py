@@ -174,14 +174,14 @@ def quarterly_drift_report(
     snap = json.loads(snap_path.read_text())
 
     if current_df is None:
-        import duckdb
+        from src import db
         feature_cols = list(snap.get("features", {}).keys())
         if not feature_cols:
             raise ValueError(f"reference snapshot {snap_path} has no features")
         # Quote identifiers — feature names may collide with reserved words
         # or contain mixed case (e.g. RS_Sector_Rank).
         select_cols = ", ".join(f'"{c}"' for c in feature_cols)
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = db.connect(str(db_path), read_only=True)
         try:
             current_df = con.execute(
                 f"SELECT {select_cols} FROM {current_view}"

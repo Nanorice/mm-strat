@@ -34,8 +34,13 @@ logging.basicConfig(
         logging.StreamHandler(stream=open(1, 'w', encoding='utf-8', closefd=False))
     ]
 )
-for _noisy in ("yfinance", "urllib3", "requests", "peewee"):
+for _noisy in ("urllib3", "requests", "peewee"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+# yfinance logs expected "possibly delisted" / "no earnings dates" events at ERROR,
+# which sail past a WARNING filter and bury real signal (50+ lines/run). These are
+# already captured + classified in pipeline_error_log, so silence the duplicate
+# console/file spam at CRITICAL. --verbose lifts this back to DEBUG below.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 logger = logging.getLogger(__name__)
 

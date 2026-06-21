@@ -16,6 +16,7 @@ Performance targets:
 """
 
 import duckdb
+from src import db
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
@@ -85,7 +86,7 @@ class DuckDBDataLoader:
         Returns:
             List of ticker symbols meeting criteria
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             if as_of_date is None:
@@ -131,7 +132,7 @@ class DuckDBDataLoader:
         Returns:
             DataFrame with SEPA candidates and features
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             if as_of_date is None:
@@ -194,7 +195,7 @@ class DuckDBDataLoader:
         Returns:
             Dict mapping ticker to DataFrame with OHLCV data (and features if requested)
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             # Default date range
@@ -288,7 +289,7 @@ class DuckDBDataLoader:
         Returns:
             DataFrame with latest fundamentals per ticker (as of as_of_date)
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             ticker_list = ','.join([f"'{t}'" for t in tickers])
@@ -334,7 +335,7 @@ class DuckDBDataLoader:
         Returns:
             DataFrame with macro series (wide format: date, WALCL, WTREGEN, RRPONTSYD, BAMLH0A0HYM2, VIX)
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             if end_date is None:
@@ -389,7 +390,7 @@ class DuckDBDataLoader:
         Returns:
             Latest date as string (YYYY-MM-DD)
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             latest_date = con.execute("SELECT MAX(date) FROM price_data").fetchone()[0]
@@ -436,7 +437,7 @@ class DuckDBDataLoader:
         Returns:
             Dict with stats (total_candidates, avg_rs, avg_market_cap, etc.)
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
 
         try:
             if as_of_date is None:

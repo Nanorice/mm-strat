@@ -26,12 +26,16 @@ Manifest modes:
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 
 import duckdb
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from src import db
+
 SOURCE_DB = ROOT / "data" / "market_data.duckdb"
 OUT_DB = ROOT / "data" / "dashboard.duckdb"
 
@@ -128,7 +132,7 @@ def build(source: Path, out: Path, window_days: int) -> None:
         out.unlink()  # idempotent: rebuild from scratch
 
     t0 = time.time()
-    con = duckdb.connect(str(out))
+    con = db.connect(str(out))
     try:
         con.execute(f"ATTACH '{source}' AS src (READ_ONLY)")
         print(f"[BUILD] {out.name} from {source.name} "

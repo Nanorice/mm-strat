@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 import requests
 
@@ -262,7 +263,7 @@ class FundamentalFmpEngine:
         write_cols = all_cols + ["fetched_at", "updated_at"]
         col_list = ", ".join(write_cols)
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Add fetched_at if it doesn't exist yet (one-time migration)
             con.execute("ALTER TABLE fundamentals ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP")

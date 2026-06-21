@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 
 DEFAULT_DB_PATH = str(Path(__file__).resolve().parent.parent / "data" / "market_data.duckdb")
@@ -32,7 +33,7 @@ class ScreenerDiagnostics:
         self.db_path = db_path
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
-        return duckdb.connect(self.db_path, read_only=True)
+        return db.connect(self.db_path, read_only=True)
 
     def get_data_freshness(self, ticker: str) -> Dict:
         con = self._connect()

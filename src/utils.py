@@ -208,9 +208,9 @@ def get_model_features(model_name: str = 'M01', db_path: str = 'data/market_data
     Raises:
         RuntimeError: If model_feature_sets table is empty or no prod model found.
     """
-    import duckdb as _duckdb
+    from src import db
 
-    con = _duckdb.connect(db_path)
+    con = db.connect(db_path)
     try:
         result = con.execute(
             """

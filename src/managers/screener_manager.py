@@ -19,6 +19,7 @@ import logging
 from typing import Optional
 
 import duckdb
+from src import db
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class ScreenerManager:
 
     def __init__(self, db_path: str):
         self.db_path = str(db_path)
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             self._ensure_schema(conn)
 
     # ------------------------------------------------------------------
@@ -93,7 +94,7 @@ class ScreenerManager:
     # ------------------------------------------------------------------
 
     def _get_active_criteria(self, target_date: str) -> dict:
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             row = conn.execute("""
                 SELECT version_id, min_price, min_volume_20d,
                        COALESCE(min_market_cap, 0)
@@ -247,7 +248,7 @@ class ScreenerManager:
         Returns:
             {'entered': int, 'exited': int, 'total_events': int, 'active': int}
         """
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             if start_date is None:
                 start_date = conn.execute(
                     "SELECT MIN(date)::VARCHAR FROM price_data"
@@ -265,7 +266,7 @@ class ScreenerManager:
 
         events_sql = self._build_evaluation_sql(start_date, end_date, criteria)
 
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             before = conn.execute("SELECT COUNT(*) FROM screener_membership").fetchone()[0]
 
             conn.execute(f"""
@@ -324,7 +325,7 @@ class ScreenerManager:
         version_id = criteria['version_id']
 
         # Warmup window: need enough history for 20d vol + grace period
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             warmup_start = conn.execute(f"""
                 SELECT MIN(date)::VARCHAR FROM (
                     SELECT date FROM price_data
@@ -416,7 +417,7 @@ class ScreenerManager:
 
         Idempotent: skips tickers that already have any membership row.
         """
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             existing_in_screener = {r[0] for r in conn.execute(
                 "SELECT DISTINCT ticker FROM screener_membership"
             ).fetchall()}
@@ -459,7 +460,7 @@ class ScreenerManager:
 
     def get_active_tickers(self, as_of_date: Optional[str] = None) -> list[str]:
         """Active tickers as of a given date (point-in-time correct)."""
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             if as_of_date is None:
                 as_of_date = conn.execute(
                     "SELECT MAX(effective_date)::VARCHAR FROM screener_membership"
@@ -483,7 +484,7 @@ class ScreenerManager:
     # ------------------------------------------------------------------
 
     def get_membership_stats(self) -> dict:
-        with duckdb.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             stats = conn.execute("""
                 WITH latest AS (
                     SELECT ticker, is_active, last_price, avg_volume_20d,

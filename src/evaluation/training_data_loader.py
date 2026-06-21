@@ -20,6 +20,7 @@ import logging
 from typing import Literal
 
 import duckdb
+from src import db
 import numpy as np
 import pandas as pd
 
@@ -95,7 +96,7 @@ def load_pretrain_data(
         DataFrame with lowercased column names. "trades" mode is ordered
         (date, ticker) to match model_proto.ipynb exactly.
     """
-    con = duckdb.connect(db_path, read_only=True)
+    con = db.connect(db_path, read_only=True)
     try:
         if mode == "dense":
             df = con.execute(

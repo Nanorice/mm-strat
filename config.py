@@ -35,6 +35,19 @@ for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, EARNINGS_DI
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # ==============================================================================
+# DUCKDB RESOURCE LIMITS
+# ==============================================================================
+# Single source of truth for DuckDB memory/thread governance. DuckDB otherwise
+# defaults to ~80% of physical RAM and one thread per core. On a shared 16GB box
+# two ungoverned DuckDB processes (the orchestrator + the dashboard-build
+# subprocess) can exhaust RAM and starve a parallel agent. With a memory_limit
+# set, heavy window-function queries spill to temp_directory instead of OOMing.
+# Override per-machine via environment variables.
+DUCKDB_MEMORY_LIMIT = os.getenv('DUCKDB_MEMORY_LIMIT', '6GB')
+DUCKDB_THREADS = int(os.getenv('DUCKDB_THREADS', '4'))
+DUCKDB_TEMP_DIR = os.getenv('DUCKDB_TEMP_DIR', str(DATA_DIR / '.duckdb_tmp'))
+
+# ==============================================================================
 # DATA SETTINGS
 # ==============================================================================
 BENCHMARK_TICKER = 'SPY'

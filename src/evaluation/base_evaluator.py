@@ -229,8 +229,8 @@ class BaseEvaluator(ABC):
         if self.db_path is None:
             return None
         try:
-            import duckdb
-            con = duckdb.connect(str(self.db_path), read_only=True)
+            from src import db
+            con = db.connect(str(self.db_path), read_only=True)
             try:
                 row = con.execute(
                     "SELECT MAX(run_id) FROM pipeline_runs WHERE status = 'COMPLETED'"

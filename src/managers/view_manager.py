@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class ViewManager:
         # Its ASOF joins cost ~215s and its inputs (fundamentals/shares) change weekly at
         # most, so it is refreshed on a weekly cadence via refresh_t3_training_cache(),
         # not on every create_all() run. See docs/.../v2_regression_model_design.md.
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             # Retired views: CREATE OR REPLACE never drops what it stops creating,
             # so explicitly remove the deprecated v_d1_trades alias and the
@@ -1164,7 +1165,7 @@ class ViewManager:
 
     def refresh_screener_watchlist(self, verbose: bool = True) -> None:
         """Public API: refresh screener_watchlist table (standalone call)."""
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             self._refresh_screener_watchlist(con)
         except Exception as e:
@@ -1225,7 +1226,7 @@ class ViewManager:
         Purpose: Speed up model training data loads from 5-10s → <1s.
         Usage: Call refresh_cache() after feature pipeline completion.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             con.execute("""
                 CREATE TABLE IF NOT EXISTS d2_training_cache (
@@ -1257,7 +1258,7 @@ class ViewManager:
         """
         import time
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             if verbose:
                 print("   [CACHE] Refreshing d2_training_cache...")
@@ -1296,7 +1297,7 @@ class ViewManager:
         Returns:
             dict with keys: row_count, cached_at, age_hours
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             result = con.execute("""
                 SELECT

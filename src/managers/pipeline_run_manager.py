@@ -16,6 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Tuple
 import duckdb
+from src import db
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class PipelineRunManager:
 
     def _ensure_table(self) -> None:
         """Create pipeline_runs, table_write_log, and pipeline_error_log tables if not exists."""
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS pipeline_runs (
@@ -124,7 +125,7 @@ class PipelineRunManager:
         Returns:
             run_id: Unique ID for this execution
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             # Get next run_id
             max_id = conn.execute("SELECT COALESCE(MAX(run_id), 0) FROM pipeline_runs").fetchone()[0]
@@ -160,7 +161,7 @@ class PipelineRunManager:
             rows_processed: Number of rows affected (optional)
             error_message: Error details if FAILED (optional)
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             # Calculate runtime
             runtime = conn.execute("""
@@ -196,7 +197,7 @@ class PipelineRunManager:
         """
         if run_id is None or not extra:
             return
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             row = conn.execute(
                 "SELECT metadata FROM pipeline_runs WHERE run_id = ?", [run_id]
@@ -228,7 +229,7 @@ class PipelineRunManager:
         Returns:
             True if phase completed successfully today
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             result = conn.execute("""
                 SELECT COUNT(*) > 0
@@ -260,7 +261,7 @@ class PipelineRunManager:
                 'total_runs': 30
             }
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             result = conn.execute("""
                 SELECT
@@ -312,7 +313,7 @@ class PipelineRunManager:
                 'runtime_anomalies': [...]
             }
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             # Check data freshness
             freshness = conn.execute("""
@@ -411,7 +412,7 @@ class PipelineRunManager:
             rows_written: Number of rows written in this operation
             phase_name: Pipeline phase that triggered the write (optional)
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             # DuckDB doesn't have native UPSERT — delete + insert
             conn.execute("DELETE FROM table_write_log WHERE table_name = ?", [table_name])
@@ -484,7 +485,7 @@ class PipelineRunManager:
         if not errors:
             return 0
 
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             max_id = conn.execute(
                 "SELECT COALESCE(MAX(error_id), 0) FROM pipeline_error_log"
@@ -514,7 +515,7 @@ class PipelineRunManager:
 
     def _count_breakout_drought(self) -> int:
         """Count consecutive days with 0 new T3 breakouts (from most recent date backwards)."""
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             # Get daily breakout counts (last 30 days)
             result = conn.execute("""

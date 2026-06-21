@@ -21,6 +21,7 @@ import logging
 import numpy as np
 import pandas as pd
 import duckdb
+from src import db
 from pathlib import Path
 from typing import Optional
 
@@ -260,7 +261,7 @@ class RiskFiveFactorCalculator:
         Returns:
             DataFrame indexed by date with all factor columns.
         """
-        con = duckdb.connect(self.db_path, read_only=True)
+        con = db.connect(self.db_path, read_only=True)
         try:
             logger.info("Loading 5-factor model inputs from DuckDB...")
             df = self._load_inputs(con)
@@ -341,7 +342,7 @@ class RiskFiveFactorCalculator:
             logger.warning("No scored rows to write")
             return 0
 
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             self._ensure_table(con)
             before = con.execute("SELECT COUNT(*) FROM t2_risk_scores").fetchone()[0]
@@ -381,7 +382,7 @@ class RiskFiveFactorCalculator:
         Returns:
             Number of new rows written.
         """
-        con = duckdb.connect(self.db_path)
+        con = db.connect(self.db_path)
         try:
             self._ensure_table(con)
             max_date = con.execute(

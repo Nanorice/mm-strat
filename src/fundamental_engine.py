@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import duckdb
+from src import db
 import pandas as pd
 import yfinance as yf
 
@@ -151,7 +152,7 @@ class FundamentalEngine:
 
     def _ensure_tables(self) -> None:
         """Create fundamentals and earnings_calendar tables if not exist."""
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS fundamentals (
@@ -389,7 +390,7 @@ class FundamentalEngine:
 
         own_conn = conn is None
         if own_conn:
-            conn = duckdb.connect(self.db_path)
+            conn = db.connect(self.db_path)
         try:
             conn.register('_fund_batch', df)
             conn.execute(sql)
@@ -434,7 +435,7 @@ class FundamentalEngine:
 
         own_conn = conn is None
         if own_conn:
-            conn = duckdb.connect(self.db_path)
+            conn = db.connect(self.db_path)
         try:
             before = conn.execute("SELECT COUNT(*) FROM fundamentals WHERE ticker = ?", [ticker]).fetchone()[0]
             conn.register('_fund_batch', df)
@@ -476,7 +477,7 @@ class FundamentalEngine:
                     logger.info(f"[Backfill] Fetch progress: {done}/{len(tickers)}")
 
         logger.info(f"[Backfill] Writing inserts (no-overwrite mode)")
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             for ticker, df in fetched.items():
                 if df is None:
@@ -501,7 +502,7 @@ class FundamentalEngine:
         mapping suitable for the filing-date backfill. period_ends pulled from the
         existing fundamentals rows we already have for this ticker.
         """
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             rows = conn.execute("""
                 SELECT period_end FROM fundamentals
@@ -547,7 +548,7 @@ class FundamentalEngine:
 
         Returns {ticker: rows_updated}. Tickers with 0 updates are omitted.
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             ticker_filter = ""
             if tickers:
@@ -656,7 +657,7 @@ class FundamentalEngine:
             return results
 
         # Stage 2: yfinance fallback — only for tickers that still have NULLs
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             conn.register('_bf_tickers', pd.DataFrame({'ticker': tickers}))
             remaining = [r[0] for r in conn.execute("""
@@ -694,7 +695,7 @@ class FundamentalEngine:
                 if done % 100 == 0:
                     logger.info(f"[FilingBackfill/yf] Fetch progress: {done}/{len(remaining)}")
 
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             for ticker, pe_to_fd in fetched.items():
                 if not pe_to_fd:
@@ -746,7 +747,7 @@ class FundamentalEngine:
 
     def _get_tickers_needing_earnings_refresh(self, tickers: List[str]) -> List[str]:
         """Return tickers that don't already have a known future unconfirmed earnings date."""
-        conn = duckdb.connect(self.db_path, read_only=True)
+        conn = db.connect(self.db_path, read_only=True)
         try:
             conn.register('_all_tickers', pd.DataFrame({'ticker': tickers}))
             rows = conn.execute("""
@@ -831,7 +832,7 @@ class FundamentalEngine:
         # Phase 2: Sequential write (single DuckDB connection)
         combined = pd.concat(fetched, ignore_index=True)
         total = len(combined)
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.register('_ec_batch', combined)
             # is_confirmed is intentionally NOT updated on conflict.
@@ -866,7 +867,7 @@ class FundamentalEngine:
         A 24-hour updated_at cooldown prevents the same ticker being re-fetched
         within one calendar day when an upstream provider (yfinance) hasn't
         actually published a new quarter yet."""
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             conn.register('_ticker_list', pd.DataFrame({'ticker': tickers}))
             rows = conn.execute(f"""
@@ -899,7 +900,7 @@ class FundamentalEngine:
 
         These are the tickers that need a fundamental data pull today.
         """
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             rows = conn.execute("""
                 SELECT DISTINCT ticker
@@ -980,7 +981,7 @@ class FundamentalEngine:
                 if done % 100 == 0:
                     logger.debug(f"Fundamentals fetch progress: {done}/{len(to_fetch)}")
 
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             for ticker, df in fetched.items():
                 if df is None:
@@ -1024,7 +1025,7 @@ class FundamentalEngine:
         """Mark all unconfirmed earnings on or before target_date as confirmed."""
         own_conn = conn is None
         if own_conn:
-            conn = duckdb.connect(self.db_path)
+            conn = db.connect(self.db_path)
         try:
             conn.execute("""
                 UPDATE earnings_calendar
@@ -1056,7 +1057,7 @@ class FundamentalEngine:
 
     def _get_from_duckdb(self, ticker: str) -> Optional[pd.DataFrame]:
         """Read fundamental rows for ticker from DuckDB, formatted for FundamentalMerger."""
-        conn = duckdb.connect(self.db_path)
+        conn = db.connect(self.db_path)
         try:
             df = conn.execute("""
                 SELECT
@@ -1262,7 +1263,7 @@ class FundamentalEngine:
     def get_available_tickers(self) -> List[str]:
         """Return tickers that have fundamental data (DuckDB or parquet depending on source)."""
         if self.source == 'yfinance':
-            conn = duckdb.connect(self.db_path)
+            conn = db.connect(self.db_path)
             try:
                 rows = conn.execute("SELECT DISTINCT ticker FROM fundamentals ORDER BY ticker").fetchall()
                 return [r[0] for r in rows]

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import duckdb
+from src import db
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ def ensure_schema(db_path: Path) -> None:
     if not _MIGRATION_PATH.exists():
         raise FileNotFoundError(f"migration file not found: {_MIGRATION_PATH}")
     sql = _MIGRATION_PATH.read_text(encoding="utf-8")
-    con = duckdb.connect(str(db_path))
+    con = db.connect(str(db_path))
     try:
         exists = con.execute(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'daily_predictions'"
@@ -175,7 +176,7 @@ def log_daily_predictions(
     ]
     out = df[out_cols]
 
-    con = duckdb.connect(str(db_path))
+    con = db.connect(str(db_path))
     try:
         con.register("_pred_batch", out)
         # INSERT OR REPLACE: the table has a composite PK so this overwrites
