@@ -1,6 +1,6 @@
 # Conceptual Architecture
 
-> Last updated: 2026-06-11 — EDGAR engine, instrument reclassification, macro fix, model card Phase 4, slim dashboard DB.
+> Last updated: 2026-06-21 — Prefect scheduling on ITX. Prior: EDGAR engine, instrument reclassification, macro fix, model card Phase 4, slim dashboard DB.
 
 > Naming convention: t1 is raw data in phase 1. t2 is filtered data for investible universe, with lightweight and alpha (because it uses crossectional features so need a larger universe). t3 is furthered filter for SEPA entry criterias.
 
@@ -74,6 +74,25 @@ python scripts/run_daily_pipeline.py --phase-5-only     # T3 SEPA features incre
 python scripts/run_daily_pipeline.py --force            # Ignore idempotency
 python scripts/run_daily_pipeline.py --dry-run          # Validate only
 ```
+
+**Scheduling (Prefect, on ITX):** the nightly run is scheduled by a self-hosted
+Prefect server + scheduler. The flow (`flows/daily_pipeline_flow.py`) just shells
+out to the CLI above — coarse wrap, one execution path. Deployment
+`daily-pipeline/daily` runs **22:00 Europe/London, Mon-Fri** (~1h after US close;
+DST auto-handled by the IANA tz). UI at http://127.0.0.1:4200.
+
+```powershell
+# kick off a manual run (UI: Deployments -> daily-pipeline/daily -> Quick run)
+prefect deployment run 'daily-pipeline/daily'   # needs PREFECT_API_URL=http://127.0.0.1:4200/api
+
+# change the time: edit CRON in flows/daily_pipeline_flow.py, then restart serve
+Stop-ScheduledTask  -TaskName 'PrefectDailyPipelineServe'
+Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
+```
+
+Boot tasks `PrefectServer` + `PrefectDailyPipelineServe` (register via
+`scripts/register_prefect_tasks.ps1` in an **elevated** shell). Full detail:
+`docs/session_logs/sprint_12/s4_prefect_orchestration_runbook.md`.
 
 ---
 
@@ -1480,13 +1499,15 @@ python scripts/enrich_ticker_types_edgar.py --execute    # apply; audit at logs/
 - [ ] **Parameterise deep-rigor scripts** — `run_bootstrap_ci.py` / `run_permutation_null.py` / `run_decile_analysis.py` hard-code `MODEL_DIR`; add `--model-dir` arg.
 
 ### Infrastructure
-- [ ] **Dashboard sync S1–S4** — GitHub push → R2 upload → Streamlit Cloud deploy → spare-PC Task Scheduler. See `docs/session_logs/sprint_12/dashboard_sync_deploy_plan.md`.
+- [x] **Daily pipeline scheduling (Prefect)** — DONE 2026-06-21. Self-hosted Prefect on ITX; deployment `daily-pipeline/daily`, cron `0 22 * * 1-5` Europe/London. Coarse flow wrapping the CLI. Runbook: `docs/session_logs/sprint_12/s4_prefect_orchestration_runbook.md`.
+- [ ] **Dashboard sync S1–S4** — GitHub push → R2 upload → Streamlit Cloud deploy. The nightly run (incl. Phase 7.5 slim-DB build + 7.6 R2 upload) is now driven by Prefect, **not** the spare-PC Task Scheduler. See `docs/session_logs/sprint_12/dashboard_sync_deploy_plan.md`.
 - [ ] **DuckDB VACUUM** — main DB is ~95% dead/unvacuumed rows (t2 has 173M dead). Run `VACUUM` during a maintenance window; expect significant size reduction.
 
 ---
 
 ## Resolved
 
+- ~~Daily pipeline run by hand~~ → **Prefect scheduling on ITX** (2026-06-21). Self-hosted server + serve scheduler; coarse `@flow` (`flows/daily_pipeline_flow.py`) shells out to the CLI (one execution path). Deployment `daily-pipeline/daily`, cron `0 22 * * 1-5` Europe/London (DST auto-handled by IANA tz), `retries=1`. Boot tasks `PrefectServer` + `PrefectDailyPipelineServe`. Verified end-to-end (14 phases, 335s). Supersedes the Task Scheduler plan. Runbook: `docs/session_logs/sprint_12/s4_prefect_orchestration_runbook.md`.
 - ~~Backtest parquet dependency~~ → DuckDB-native (2026-03-27)
 - ~~Universe discovery~~ → `--discover-fmp` via `UniverseBackfillEngine`
 - ~~Historical fundamentals backfill~~ → FMP backfill complete (297K rows)

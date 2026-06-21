@@ -1,5 +1,11 @@
 # S4 — Task Scheduler Automation Runbook
 
+> **⚠️ SUPERSEDED (2026-06-21)** by `s4_prefect_orchestration_runbook.md`. The
+> nightly pipeline is now scheduled by self-hosted Prefect on ITX, not Windows
+> Task Scheduler. The **dotenv-at-project-root** fix below still applies to every
+> entrypoint and remains the authoritative reference for the R2-staleness root
+> cause — keep this doc for that history.
+
 *Sprint 12. Automates the nightly `run_daily_pipeline.py` (which includes Phase
 7.5 slim-DB build + Phase 7.6 R2 sync) on the dev box, fixing the stale remote
 dashboard.*

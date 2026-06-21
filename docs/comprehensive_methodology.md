@@ -1,6 +1,6 @@
 # Comprehensive Methodological Guide to the Quantamental SEPA Framework
 
-> Last updated: 2026-06-11. Authoritative reference for replication. Cross-checked against `docs/manual_for_me.md`.
+> Last updated: 2026-06-21 — Prefect scheduling (ITX ops box). Authoritative reference for replication. Cross-checked against `docs/manual_for_me.md`.
 
 ---
 
@@ -559,6 +559,33 @@ python scripts/run_daily_pipeline.py --force                # Ignore idempotency
 python scripts/run_daily_pipeline.py --dry-run              # Validate only
 ```
 
+### 10.1.1 Scheduling & Orchestration (Prefect)
+
+The daily run is scheduled on the ITX ops box via a **self-hosted Prefect (3.x)**
+server + scheduler. Prefect owns only the outer ring — schedule, crash-level
+retry (`retries=1`), run history, and the UI. The 9-phase business logic stays in
+`DailyPipelineOrchestrator`; the flow (`flows/daily_pipeline_flow.py`) shells out
+to the CLI above, so there is exactly **one** execution path (no per-phase Prefect
+tasks — that would duplicate the phase registry and `pipeline_runs` health, with
+no parallelism to gain on a single-writer DuckDB).
+
+- **Deployment**: `daily-pipeline/daily`, cron `0 22 * * 1-5` in `Europe/London`
+  (~1h after the US close). The IANA tz (not a fixed offset) makes 22:00 track the
+  BST/GMT switch automatically — no DST edits. Env-overridable via `PIPELINE_CRON`
+  / `PIPELINE_CRON_TZ`. The schedule's source of truth is `CRON` in the flow file
+  (`serve` re-registers it on startup; UI edits are transient).
+- **Process model**: two boot tasks keep it alive — `PrefectServer`
+  (API + UI at http://127.0.0.1:4200) and `PrefectDailyPipelineServe` (scheduler).
+  Launchers + idempotent registration in `scripts/start_prefect_server.ps1`,
+  `scripts/start_prefect_serve.ps1`, `scripts/register_prefect_tasks.ps1`
+  (registration needs an elevated shell). State lives in `~/.prefect` (outside the
+  repo); launcher logs in `logs/prefect/`.
+- **Manual run**: UI → Deployments → Quick run, or
+  `prefect deployment run 'daily-pipeline/daily'`.
+
+Full operational detail: `docs/session_logs/sprint_12/s4_prefect_orchestration_runbook.md`.
+This **supersedes** the earlier Windows Task Scheduler approach.
+
 ### 10.2 View Chain
 
 `src/managers/view_manager.py` (`ViewManager`) manages the SQL views that transform T3 features into trade-level training and deployment data.
@@ -1008,7 +1035,7 @@ Sequenced by risk-adjusted leverage. Full detail and acceptance criteria in `doc
 - Structured JSON logging per phase
 - `sepa_watchlist.update_daily()` idempotency via `INSERT ... ON CONFLICT DO NOTHING`
 - Nightly DuckDB backup to OneDrive/S3
-- Prefect (local) for scheduling with retry semantics
+- ~~Prefect (local) for scheduling with retry semantics~~ — **DONE 2026-06-21**: self-hosted Prefect on ITX, deployment `daily-pipeline/daily` (cron `0 22 * * 1-5` Europe/London), coarse flow wrapping the CLI. See `docs/session_logs/sprint_12/s4_prefect_orchestration_runbook.md`.
 
 **P3 — Dashboard expansion:**
 - Pipeline Health, Ticker Deep Dive, Model Lab, Backtest Studio pages (Streamlit multipage)

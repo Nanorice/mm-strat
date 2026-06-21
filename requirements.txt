@@ -50,3 +50,6 @@ plotly>=5.18.0
 
 # Backtesting
 vectorbt>=0.28.0
+
+# Orchestration (daily pipeline scheduling)
+prefect>=3.0.0
