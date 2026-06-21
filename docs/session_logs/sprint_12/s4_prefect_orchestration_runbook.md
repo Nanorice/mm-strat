@@ -56,6 +56,8 @@ Change `CRON` in the flow, then restart the serve task.
 | `scripts/start_prefect_server.ps1` | Self-anchored launcher for the local server (API + UI at :4200). |
 | `scripts/start_prefect_serve.ps1` | Self-anchored launcher for the scheduler. Waits for server health, sets `PREFECT_API_URL`, runs `--serve`. |
 | `scripts/register_prefect_tasks.ps1` | Idempotent registration of the two boot tasks (`PrefectServer`, `PrefectDailyPipelineServe`), AtLogOn trigger. |
+| `scripts/register_prefect_wake_task.ps1` | Registers `PrefectPipelineWake` — wakes the box (`-WakeToRun`) Mon-Fri at 21:55. |
+| `scripts/wake_for_pipeline.ps1` | Wake-task action: holds the box awake ~10 min across the 22:00 trigger; logs to `logs/prefect/wake_*.log`. |
 
 State lives in `~/.prefect` (SQLite, **outside** the repo). Launcher logs in
 `logs/prefect/` (gitignored, pruned >30 days). Per-run pipeline logs remain at
@@ -112,6 +114,50 @@ A real end-to-end run was verified 2026-06-21: deployment trigger → serve → 
 → CLI → orchestrator, flow run `Completed`, pipeline `DONE | 14 phases | OK |
 335s wall`. Idempotency confirmed live (phases already done for the target
 trading day were skipped; scoring still wrote predictions).
+
+## Power — sleep between runs, wake before
+
+The box may sleep most of the day to save power. Prefect **cannot wake** a sleeping
+machine, so a small Task Scheduler task handles the wake, and the flow handles the
+sleep — a clean split:
+
+1. **Wake** — `PrefectPipelineWake` (`-WakeToRun`) fires Mon-Fri at 21:55 and runs
+   `wake_for_pipeline.ps1`, which holds the box awake ~10 min so a short idle-sleep
+   timeout can't re-suspend it before 22:00.
+2. **Run** — Prefect's 22:00 cron fires; the pipeline keeps the CPU busy (~6 min).
+3. **Sleep** — the flow's `on_completion`/`on_failure` hook calls `_suspend_pc()`
+   when `sleep_after=True`. The scheduled deployment sets that param; **ad-hoc
+   `python flows/daily_pipeline_flow.py` runs do NOT sleep the box.** A failing run
+   still gets its one retry *before* sleeping (hook fires only on terminal state).
+
+Setup (the registration needs the **elevated** shell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register_prefect_wake_task.ps1
+# then restart serve so the deployment picks up sleep_after=True:
+Stop-ScheduledTask -TaskName 'PrefectDailyPipelineServe'; Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
+```
+
+Also enable **Power Options → Sleep → "Allow wake timers" = Enabled** (and on a
+laptop, keep it enabled on battery). Confirm the box woke: `logs/prefect/wake_*.log`.
+
+**Caveats:**
+- `-WakeToRun` wakes from **sleep/hibernate (S1-S4)**, NOT from a full **shutdown
+  (S5)**. For shutdown recovery, set a BIOS "Resume by RTC Alarm" + auto-login.
+- A manual UI **Quick run** of the `daily` deployment inherits `sleep_after=True`
+  and *will* sleep the box — use the ad-hoc CLI for a no-sleep manual run.
+
+## R2 remote-dashboard sync (verified 2026-06-21)
+
+Phases 7.5 (build slim `dashboard.duckdb`) + 7.6 (R2 upload) refresh the remote
+dashboard. Verified working from a System32 CWD (dotenv-at-root fix holds): creds
+load, the conditional upload pushes the changed slim DB and skips unchanged assets.
+The `.env` keys are `R2_ACCOUNT_ID`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`,
+`R2_BUCKET_NAME`, `R2_JURI_ENDPOINT_URL`. Standalone check:
+
+```powershell
+.venv\Scripts\python.exe scripts\sync_dashboard_db.py --dry-run   # -> [OK] Sync complete
+```
 
 ## Troubleshooting
 

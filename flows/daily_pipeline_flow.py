@@ -50,8 +50,39 @@ def _python() -> str:
     return str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
 
 
-@flow(name="daily-pipeline", retries=1, retry_delay_seconds=600)
-def daily_pipeline(date: str | None = None, force: bool = False, dry_run: bool = False) -> None:
+def _suspend_pc() -> None:
+    """Put Windows to sleep (S3; hibernate if enabled). Safe because the 21:55
+    Task Scheduler wake task brings the box back before the next scheduled run."""
+    try:
+        subprocess.run(
+            ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], timeout=30
+        )
+    except Exception:
+        pass
+
+
+def _sleep_after_run(flow, flow_run, state) -> None:
+    """Flow state hook: suspend the PC once the run is terminal, but ONLY when
+    called with sleep_after=True (the scheduled nightly run). Manual/ad-hoc runs
+    leave the box awake. Fires after retries are exhausted, so a failing run still
+    gets its one retry before the box sleeps."""
+    if flow_run.parameters.get("sleep_after"):
+        _suspend_pc()
+
+
+@flow(
+    name="daily-pipeline",
+    retries=1,
+    retry_delay_seconds=600,
+    on_completion=[_sleep_after_run],
+    on_failure=[_sleep_after_run],
+)
+def daily_pipeline(
+    date: str | None = None,
+    force: bool = False,
+    dry_run: bool = False,
+    sleep_after: bool = False,
+) -> None:
     """Run the full daily pipeline via its CLI; raise on non-zero exit.
 
     Idempotency in the orchestrator makes the single retry cheap — already-
@@ -102,6 +133,9 @@ def _serve() -> None:
     daily_pipeline.serve(
         name="daily",
         schedule=Cron(CRON, timezone=CRON_TZ),
+        # The scheduled nightly run sleeps the box when done (paired with the
+        # 21:55 Task Scheduler wake task). Ad-hoc `python flows/...` runs do not.
+        parameters={"sleep_after": True},
     )
 
 
