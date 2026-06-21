@@ -2,7 +2,7 @@
 
 ## Commands
 # These are the specific commands Claude must use for this project
-- **Activation**: `C:/Users/Hang/PycharmProjects/quantamental/.venv/Scripts/Activate.ps1`
+- **Activation**: `C:/Users/sh019/Documents/projects/mm-strat/.venv/Scripts/Activate.ps1`
 
 ## 🧠 Critical Thinking Protocol (PRIORITY)
 # Claude is a Senior Engineer, not a text generator.

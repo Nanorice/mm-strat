@@ -2,12 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Excel temp files
-~$*.xlsx
-~$*.xls
 *.so
 .Python
+
+# Packaging / build
 build/
 develop-eggs/
 dist/
@@ -21,26 +19,36 @@ sdist/
 var/
 wheels/
 *.egg-info/
-.installed.cfg
 *.egg
+.installed.cfg
+pip-wheel-metadata/
 
 # Virtual Environment
+.venv/
 venv/
-ENV/
 env/
+ENV/
 
 # Environment Variables
 .env
 
-# IDEs
+# IDEs / Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Jupyter Notebook
+# Jupyter
 .ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Excel temp files
+~$*.xlsx
+~$*.xls
 
 # Data - DO NOT COMMIT MARKET DATA
 data/
@@ -52,18 +60,11 @@ database/
 *.sqlite
 *.sqlite3
 
-# OS
-.DS_Store
-Thumbs.db
-
 # Logs
 *.log
 logs/data_quality/*.log
 
-# Scratch / ephemeral probe scripts
-scratch/
-
-# Reports
+# Reports (generated)
 reports/
 *.html
 *.pdf
@@ -71,8 +72,11 @@ training_output.txt
 commit_message*.txt
 nul
 
-# archive
+# Scratch / archive / ephemeral
+scratch/
 archive/
+buy_list_export.csv
+*.backup
 
 # Test coverage
 htmlcov/
@@ -80,41 +84,20 @@ htmlcov/
 .coverage.*
 .pytest_cache/
 
-# Distribution / packaging
-pip-wheel-metadata/
-
 # ML Models and Evaluation (generated artifacts)
-# models/*.json
 models/*.pkl
 models/artifacts/
+models/m01_baseline_*/
+models/m01_prototype*/
+models/m01_prototyoe*/
+models/m02_prototype*/
 evaluation/*.png
 evaluation/*.jpg
 sepa_xgboost_model.json
 model_config.json
-
-# Debug and temporary files
-# debug_*.py
-# test_*.py
-# check_*.py
-# verify_*.py
-# fix_*.py
-# analyze_*.py
-# apply_*.py
-# rebuild_*.py
-# scan_*.py
-# validate_*.py
-# init_*.py
-# move_*.py
-# investigate_*.py
-# add_*.py
-# *_debug_output.txt
-# comparison_*.txt
-buy_list_export.csv
-*.backup
-
-# Temporary documentation (commit finalized docs only)
-# Keep: documented fixes and summaries that are final
-# Ignore: work-in-progress investigation notes
+test.json
+test_field/
+error.txt
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
@@ -124,11 +107,3 @@ buy_list_export.csv
 **/.r2_synced
 *.r2etag
 **/*.r2etag
-
-# Auto-generated model artifacts and temp files
-models/m01_baseline_*/
-models/m01_prototype*/
-models/m01_prototyoe*/
-test.json
-test_field/
-error.txt

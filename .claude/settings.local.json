@@ -55,7 +55,16 @@
       "Bash(git log:*)",
       "WebFetch(domain:ranaroussi.github.io)",
       "WebFetch(domain:algotrading101.com)",
-      "Bash(duckdb data/market_data.duckdb \"SELECT COUNT\\(*\\) as profile_count FROM company_profiles;\")"
+      "Bash(duckdb data/market_data.duckdb \"SELECT COUNT\\(*\\) as profile_count FROM company_profiles;\")",
+      "Bash(ls /c/Python*)",
+      "Read(//c/Users/sh019/AppData/Local/Programs/**)",
+      "Bash(reg query *)",
+      "Read(//c/Users/sh019/AppData/Local/**)",
+      "Read(//c/Users/sh019/scoop/**)",
+      "Bash(find /c/Users/sh019 -name \"python3*.exe\" 2>/dev/null | grep -v \".venv\" | head -10; find /c/Windows -name \"python*.exe\" 2>/dev/null | head -5)",
+      "Bash(winget show *)",
+      "Bash(/c/Users/sh019/AppData/Local/Programs/Python/Python312/python.exe -m venv .venv)",
+      "Bash(/c/Users/sh019/Documents/projects/mm-strat/.venv/Scripts/python.exe --version)"
     ],
     "deny": [],
     "ask": [],
