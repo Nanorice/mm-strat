@@ -1,0 +1,150 @@
+# Daily Pipeline — 9-Phase Architecture
+
+**Entry point:** [scripts/run_daily_pipeline.py](file:///c:/Users/Hang/PycharmProjects/quantamental/scripts/run_daily_pipeline.py)  
+**Orchestrator:** [src/orchestrators/daily_pipeline_orchestrator.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py) → [DailyPipelineOrchestrator](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#36-637)
+
+---
+
+## CLI Arguments (current)
+
+| Arg | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `--date` | `YYYY-MM-DD` | Yesterday | Target processing date |
+| `--dry-run` | flag | off | Validate only, no DB writes |
+| `--force` | flag | off | Re-run even if already completed |
+| `--db` | path | [data/market_data.duckdb](file:///c:/Users/Hang/PycharmProjects/quantamental/data/market_data.duckdb) | DuckDB database path |
+| `--verbose` | flag | off | DEBUG log level |
+
+**Potential future CLI inputs:** `--tickers` (override universe), `--phases` (run subset), `--start-date`/`--end-date` (backfill range), `--max-workers` (parallelism), `--alert-webhook` (notification endpoint).
+
+---
+
+## Phase Map
+
+### Phase 1 — T1 Ingestion *(PARALLEL, CRITICAL)*
+| | |
+|---|---|
+| **Purpose** | Refresh raw market data from external sources |
+| **Input** | `target_date`, cached tickers from `price_data`, active tickers from [screener_members](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#498-510) |
+| **Output** | Updated `price_data`, `fundamentals_cache`, `shares_outstanding`, `macro_data` tables |
+| **Classes** | `DataRepository`, `FundamentalEngine` (cache-only), `SharesEngine`, `MacroEngine` |
+| **Scripts** | [src/data_engine.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/data_engine.py), [src/fundamental_engine.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/fundamental_engine.py), [src/shares_engine.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/shares_engine.py), [src/macro_engine.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/macro_engine.py) |
+| **Acceptable input** | Any valid date; auto-skipped if all tickers already fresh. Could accept `--tickers` list or `--source` (yfinance/FMP) |
+
+---
+
+### Phase 2 — Screener Membership *(CRITICAL)*
+| | |
+|---|---|
+| **Purpose** | Determine which tickers qualify for the active screener universe |
+| **Input** | `target_date`, `price_data` |
+| **Output** | [screener_members](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#498-510) table (added/removed/active counts) |
+| **Classes** | `ScreenerManager` |
+| **Scripts** | [src/managers/screener_manager.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/managers/screener_manager.py) |
+| **Acceptable input** | Date + optional `--min-price`, `--min-volume`, `--universe-file` filter overrides |
+
+---
+
+### Phase 3 — T2 Screener Features *(CRITICAL)*
+| | |
+|---|---|
+| **Purpose** | Compute lightweight SQL-based features for screener candidates |
+| **Input** | `start_date`, [screener_members](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#498-510), `price_data` |
+| **Output** | `t2_screener_features` table |
+| **Classes** | `FeaturePipeline` |
+| **Scripts** | [src/feature_pipeline.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/feature_pipeline.py) |
+| **Acceptable input** | Date range (`start_date`/`end_date`), ticker subset |
+
+---
+
+### Phase 4 — T2 Regime Scores *(non-critical)*
+| | |
+|---|---|
+| **Purpose** | Compute M03 market regime scores (macro/breadth context) |
+| **Input** | `macro_data`, `price_data` (incremental) |
+| **Output** | `t2_regime_scores` / M03 table |
+| **Classes** | `RegimePipeline` |
+| **Scripts** | [src/regime_pipeline.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/regime_pipeline.py) |
+| **Acceptable input** | No extra args now; could accept `--regime-lookback` window or `--regime-model` variant |
+
+---
+
+### Phase 5 — daily_features Rebuild *(TRANSACTIONAL, CRITICAL)*
+| | |
+|---|---|
+| **Purpose** | Full rebuild of daily_features table (Phases A–E: base, technical, fundamental, labeling, cross-sectional) |
+| **Input** | `price_data`, `fundamentals_cache`, `shares_outstanding`, `t2_regime_scores`, [screener_members](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#498-510) |
+| **Output** | [daily_features](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#527-557) table (commit on success, rollback on failure) |
+| **Classes** | `FeaturePipeline` |
+| **Scripts** | [src/feature_pipeline.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/feature_pipeline.py), [src/features.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/features.py), [src/alpha_factors.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/alpha_factors.py), [src/cross_sectional_features.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/cross_sectional_features.py) |
+| **Acceptable input** | `--incremental` / `--full-rebuild` toggle, `--skip-phases` (e.g. skip labeling) |
+
+---
+
+### Phase 6 — T3 Lazy Materialization *(non-critical)*
+| | |
+|---|---|
+| **Purpose** | Materialize new SEPA breakout candidates (event-driven, date-bounded) |
+| **Input** | [daily_features](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#527-557), `start_date`, `end_date` |
+| **Output** | `t3_breakouts` / SEPA breakout table |
+| **Classes** | `FeaturePipeline` |
+| **Scripts** | [src/feature_pipeline.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/feature_pipeline.py) |
+| **Acceptable input** | `--start-date`/`--end-date` for backfill; `--breakout-threshold` parameter |
+
+---
+
+### Phase 7 — View Refresh *(non-critical)*
+| | |
+|---|---|
+| **Purpose** | Recreate all DuckDB views so downstream queries see latest data |
+| **Input** | All materialized tables |
+| **Output** | Refreshed SQL views (count returned) |
+| **Classes** | `ViewManager` |
+| **Scripts** | [src/managers/view_manager.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/managers/view_manager.py) |
+| **Acceptable input** | `--views` (subset list); no date dependency |
+
+---
+
+### Phase 8 — Training Cache Refresh *(non-critical)*
+| | |
+|---|---|
+| **Purpose** | Materialize `d2_training_cache` for fast ML model training |
+| **Input** | [daily_features](file:///c:/Users/Hang/PycharmProjects/quantamental/src/orchestrators/daily_pipeline_orchestrator.py#527-557), views |
+| **Output** | `d2_training_cache` table (row count returned) |
+| **Classes** | `ViewManager` |
+| **Scripts** | [src/managers/view_manager.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/managers/view_manager.py) |
+| **Acceptable input** | `--cache-start-date` (limit training window), `--label-col` override |
+
+---
+
+### Phase 9 — Monitoring *(always runs)*
+| | |
+|---|---|
+| **Purpose** | Log health metrics and fire alerts on anomalies |
+| **Input** | `run_stats` from phases 1–8, `pipeline_runs` table, `PIPELINE_ALERT_THRESHOLDS` config |
+| **Output** | Log entries, alert messages; no DB writes |
+| **Classes** | `PipelineRunManager` |
+| **Scripts** | [src/managers/pipeline_run_manager.py](file:///c:/Users/Hang/PycharmProjects/quantamental/src/managers/pipeline_run_manager.py), [config.py](file:///c:/Users/Hang/PycharmProjects/quantamental/config.py) |
+| **Acceptable input** | `--alert-webhook`, `--alert-email`, `--drought-threshold` override |
+
+---
+
+## Dependency & Criticality Summary
+
+```
+Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener)
+                                                      │
+                                       ┌──────────────┴──────────────┐
+                                       ▼                             ▼
+                               Phase 3 (T2 features)       Phase 4 (regime scores) [non-crit]
+                                       │
+                               Phase 5 (daily_features) ──CRITICAL / TRANSACTIONAL
+                                       │
+                               Phase 6 (T3 breakouts) [non-crit]
+                                       │
+                               Phase 7 (views) [non-crit]
+                                       │
+                               Phase 8 (training cache) [non-crit]
+                                       │
+                               Phase 9 (monitoring) [always]
+```

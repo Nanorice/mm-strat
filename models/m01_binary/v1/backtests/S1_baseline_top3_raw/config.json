@@ -1,0 +1,9 @@
+{
+  "id": "S1_baseline_top3",
+  "description": "Baseline: top-3 daily, regime caps, default exits.",
+  "strategy_kwargs": {
+    "entry_mode": "top_n",
+    "entry_top_n": 3,
+    "rank_by": "daily"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "model_name": "M02",
+  "model_type": "classification",
+  "created_at": "2026-02-01T22:24:23.053237",
+  "feature_columns": [
+    "RS",
+    "alpha011",
+    "Dist_From_20D_Low",
+    "Price_vs_SMA_200",
+    "alpha054",
+    "Vol_Ratio",
+    "VCP_Ratio",
+    "volume_acceleration",
+    "rs_velocity",
+    "RS_Delta",
+    "price_momentum_curve",
+    "breakout_momentum",
+    "Dist_From_52W_High_Delta",
+    "Dry_Up_Volume_Delta",
+    "log_volume_velocity",
+    "alpha046",
+    "alpha051",
+    "alpha101",
+    "alpha009",
+    "alpha013",
+    "alpha006",
+    "alpha001",
+    "alpha015",
+    "alpha002",
+    "alpha004",
+    "alpha012",
+    "Dist_From_52W_High",
+    "consolidation_duration",
+    "Breakout",
+    "Consolidation_Width_Delta",
+    "Dist_From_20D_High",
+    "Dist_From_52W_Low",
+    "RSI_14_Delta",
+    "RS_Lag1",
+    "VCP_Ratio_Lag1",
+    "Dist_From_20D_Low_Lag1",
+    "Price_vs_SMA_200_Lag1",
+    "Dist_From_52W_High_Lag1"
+  ],
+  "validation_metrics": [
+    {
+      "test_year": 2021,
+      "train_samples": 4168,
+      "test_samples": 2863,
+      "accuracy": 0.5532658050995459,
+      "precision": 0.36135593220338985,
+      "recall": 0.6126436781609196,
+      "selection_edge": 0.0
+    },
+    {
+      "test_year": 2022,
+      "train_samples": 5809,
+      "test_samples": 956,
+      "accuracy": 0.6893305439330544,
+      "precision": 0.4913294797687861,
+      "recall": 0.584192439862543,
+      "selection_edge": 0.0
+    },
+    {
+      "test_year": 2023,
+      "train_samples": 5259,
+      "test_samples": 2000,
+      "accuracy": 0.5375,
+      "precision": 0.3292361720807726,
+      "recall": 0.6996268656716418,
+      "selection_edge": 0.0
+    }
+  ],
+  "barrier_params": {
+    "k_sl": 2.0,
+    "k_tp": 2.0,
+    "min_tp": 0.2,
+    "max_time": 30
+  }
+}

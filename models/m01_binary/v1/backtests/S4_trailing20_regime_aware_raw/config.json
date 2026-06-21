@@ -1,0 +1,10 @@
+{
+  "id": "S4_trailing20_regime_aware",
+  "description": "20-day trailing percentile + min_prob_elite=0.25.",
+  "strategy_kwargs": {
+    "entry_mode": "top_n",
+    "entry_top_n": 5,
+    "rank_by": "trailing",
+    "min_prob_elite": 0.25
+  }
+}

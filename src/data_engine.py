@@ -1,24 +1,24 @@
 """
 Data Engine - DataRepository Class
-Handles universe management, data downloading, and Parquet caching.
+Handles universe management, data downloading, and DuckDB price ingestion.
 """
 
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import duckdb
+from src import db
 import requests
 import json
 import time
 import concurrent.futures
 import threading
-import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
 import logging
 from tqdm import tqdm
-import pyarrow.parquet as pq
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 import config
@@ -58,23 +58,30 @@ class DataRepository:
     Implements smart Parquet caching to minimize API calls and bandwidth.
     """
 
-    def __init__(self, enable_validation: bool = True):
-        self.price_dir = config.PRICE_DATA_DIR
+    def __init__(self, db_path: str = None, enable_validation: bool = True):
+        if db_path is None:
+            db_path = str(Path(__file__).parent.parent / "data" / "market_data.duckdb")
+        self.db_path = db_path
+        self.price_dir = config.PRICE_DATA_DIR  # read-only cold backup; not written to
         self.benchmark_ticker = config.BENCHMARK_TICKER
         self.cache_days = config.DATA_CACHE_DAYS
 
         # API call tracking for rate limiting (300 calls/minute like fundamentals)
         self._call_timestamps = []
-        self._rate_limit_lock = threading.Lock()  # Thread-safe lock
-        self.rate_limit = 300  # FMP Starter tier rate limit
+        self._rate_limit_lock = threading.Lock()
+        self.rate_limit = 250  # FMP Starter tier is 300, use 250 for safety margin
 
-        # Per-file locks for parallel safety (allows concurrent writes to different files)
-        self._file_locks = {}  # Dict mapping file path -> lock
-        self._file_locks_lock = threading.Lock()  # Lock for modifying the locks dict itself
+        # Global cooldown for 429 errors - when set, all workers wait
+        self._global_cooldown_until = 0
+        self._cooldown_lock = threading.Lock()
 
         # IPO validation settings
         self.enable_validation = enable_validation
         self._ipo_cache = {}  # Cache for IPO dates to avoid repeated API calls
+
+        # Error tracking: populated after each update_cache() call
+        # List of (ticker, error_detail) for tickers that failed
+        self.last_errors: List[Tuple[str, Optional[str]]] = []
 
     def get_screener_universe(self) -> List[str]:
         """
@@ -144,8 +151,10 @@ class DataRepository:
                 price_files = list(self.price_dir.glob('*.parquet'))
                 if price_files:
                     tickers_from_files = [f.stem for f in price_files]
-                    # Filter out benchmark if present
-                    tickers_from_files = [t for t in tickers_from_files if t != self.benchmark_ticker]
+                    # Filter out benchmark and universe files if present
+                    tickers_from_files = [t for t in tickers_from_files 
+                                          if t != self.benchmark_ticker 
+                                          and not t.startswith('universe_')]
                     logger.info(f"Found {len(tickers_from_files)} tickers from price folder")
                     return tickers_from_files
                 else:
@@ -188,13 +197,72 @@ class DataRepository:
             return ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA',
                     'AMD', 'PLTR', 'SMCI', 'JPM', 'V', 'MA', 'LLY', 'AVGO']
 
-    def _is_cache_stale(self, file_path: Path, 
+    def _get_stale_tickers(self, latest_trading_day: str) -> List[str]:
+        """
+        Active tickers in company_profiles missing a price row for latest_trading_day,
+        but only those with at least one valid row in the last 45 days.
+
+        Blacklisted tickers are already removed from company_profiles, so no
+        additional filtering is needed here.
+        """
+        conn = db.connect(self.db_path)
+        try:
+            cutoff = (pd.Timestamp(latest_trading_day) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
+
+            rows = conn.execute("""
+                SELECT cp.ticker
+                FROM company_profiles cp
+                INNER JOIN (
+                    SELECT DISTINCT ticker
+                    FROM price_data
+                    WHERE date >= ?
+                ) recent ON cp.ticker = recent.ticker
+                LEFT JOIN (
+                    SELECT DISTINCT ticker
+                    FROM price_data
+                    WHERE date = ?
+                ) fresh ON cp.ticker = fresh.ticker
+                WHERE cp.is_active = TRUE
+                  AND fresh.ticker IS NULL
+                ORDER BY cp.ticker
+            """, [cutoff, latest_trading_day]).fetchall()
+
+            stale = [r[0] for r in rows]
+
+            fresh_count = conn.execute(
+                "SELECT COUNT(DISTINCT ticker) FROM price_data WHERE date = ?",
+                [latest_trading_day]
+            ).fetchone()[0]
+            total = conn.execute(
+                "SELECT COUNT(*) FROM company_profiles WHERE is_active = TRUE"
+            ).fetchone()[0]
+
+            if stale:
+                logger.info(f"[Phase 1] Staleness: {len(stale)}/{total} stale (target={latest_trading_day})")
+                logger.debug(f"[Phase 1] Stale sample: {', '.join(stale[:10])}")
+            else:
+                logger.info(f"[Phase 1] All {total} tickers fresh for {latest_trading_day}")
+            return stale
+        finally:
+            conn.close()
+
+    def _get_all_active_tickers(self) -> List[str]:
+        """All active tickers from company_profiles. Used by force=True path."""
+        conn = db.connect(self.db_path)
+        try:
+            return [r[0] for r in conn.execute(
+                "SELECT ticker FROM company_profiles WHERE is_active = TRUE ORDER BY ticker"
+            ).fetchall()]
+        finally:
+            conn.close()
+
+    def _is_cache_stale(self, file_path: Path,
                         mode: CacheMode = None,
                         date_range: Optional[Tuple[str, str]] = None,
                         # Legacy parameters (for backward compatibility)
                         current_market_date: Optional[pd.Timestamp] = None,
                         min_date: str = '2000-01-01', check_min_date: bool = False,
-                        required_end_date: Optional[pd.Timestamp] = None, 
+                        required_end_date: Optional[pd.Timestamp] = None,
                         force_cache_only: bool = False) -> bool:
         """
         Check if cached data is stale based on access mode.
@@ -286,43 +354,50 @@ class DataRepository:
             logger.debug(f"Cache staleness check failed for {file_path.stem}: {e}")
             return True    
     
+    def _trigger_global_cooldown(self, duration_seconds: float = 5.0):
+        """
+        Trigger a brief cooldown if we hit 429 (shouldn't happen with fixed-rate throttling).
+        """
+        with self._cooldown_lock:
+            new_cooldown = time.time() + duration_seconds
+            if new_cooldown > self._global_cooldown_until:
+                self._global_cooldown_until = new_cooldown
+    
+    def _wait_for_cooldown(self):
+        """Wait if there's an active cooldown."""
+        with self._cooldown_lock:
+            cooldown_until = self._global_cooldown_until
+        
+        now = time.time()
+        if cooldown_until > now:
+            time.sleep(cooldown_until - now)
+    
     def _rate_limit_check(self):
         """
-        Enforce rate limiting for FMP API (300 calls/minute for Starter tier).
-        Uses sliding window approach - pauses only when necessary.
-        Thread-safe for parallel execution.
+        Fixed-rate throttling for FMP API at 300 calls/minute.
         
-        CRITICAL: Lock is ONLY held when checking/updating timestamps, NOT during sleep.
-        This allows multiple workers to proceed in parallel while respecting the rate limit.
+        Simple approach: Each request waits 0.2 seconds (5 requests/second = 300/minute).
+        This is more predictable than reactive backoff and avoids 429 errors entirely.
         """
-        # Phase 1: Check if we need to wait (acquire lock briefly)
+        # Check for any active cooldown from 429 errors
+        self._wait_for_cooldown()
+        
+        # Fixed delay: 0.2 seconds = 5 requests/second = 300/minute
+        # Use lock to ensure consistent pacing across workers
         with self._rate_limit_lock:
             now = time.time()
+            if self._call_timestamps:
+                last_call = self._call_timestamps[-1]
+                elapsed = now - last_call
+                min_interval = 0.2  # 300 calls/minute = 5 calls/second
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
             
-            # Remove timestamps older than 60 seconds (sliding window)
-            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
-            
-            # Check if we're at capacity
-            if len(self._call_timestamps) >= self.rate_limit:
-                # Calculate sleep time
-                oldest_call = self._call_timestamps[0]
-                time_since_oldest = now - oldest_call
-                sleep_time = 60.0 - time_since_oldest + 0.1  # Add 0.1s buffer
-            else:
-                sleep_time = 0
-        
-        # Phase 2: Sleep OUTSIDE the lock (if needed) so other workers can proceed
-        if sleep_time > 0:
-            logger.debug(f"Rate limit reached, sleeping {sleep_time:.1f}s")
-            time.sleep(sleep_time)
-        
-        # Phase 3: Record this call (acquire lock briefly again)
-        with self._rate_limit_lock:
-            now = time.time()
-            # Re-clean after potential sleep
-            self._call_timestamps = [ts for ts in self._call_timestamps if now - ts < 60]
             # Record this call
-            self._call_timestamps.append(now)
+            self._call_timestamps.append(time.time())
+            # Keep only last 10 timestamps to avoid memory growth
+            if len(self._call_timestamps) > 10:
+                self._call_timestamps = self._call_timestamps[-10:]
 
     def _get_ipo_date(self, ticker: str) -> Optional[pd.Timestamp]:
         """
@@ -416,76 +491,24 @@ class DataRepository:
 
         return df
 
-    def _safe_write_parquet(self, df: pd.DataFrame, file_path: Path, ticker: str,
-                           merge_with_existing: bool = False) -> bool:
+
+    def _fetch_fmp_historical(self, ticker: str, from_date: str = None, max_retries: int = 5, force_from_date: bool = False) -> Optional[dict]:
         """
-        Thread-safe parquet file write with validation.
-        Uses per-file locks to allow parallel writes to different files.
-
-        Args:
-            df: DataFrame to write
-            file_path: Destination file path
-            ticker: Stock symbol (for logging)
-            merge_with_existing: If True, merge with existing cache file (for incremental updates)
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            # Get or create a lock for this specific file
-            file_key = str(file_path)
-            with self._file_locks_lock:
-                if file_key not in self._file_locks:
-                    self._file_locks[file_key] = threading.Lock()
-                file_lock = self._file_locks[file_key]
-            
-            # Use per-file lock (only blocks writes to the SAME file, not all files)
-            with file_lock:
-                # If merging, load existing cache inside the lock (thread-safe)
-                if merge_with_existing and file_path.exists():
-                    try:
-                        old_df = pd.read_parquet(file_path)
-                        df = pd.concat([old_df, df])
-                        # Drop duplicates by index (date), keeping last (newer data)
-                        df = df[~df.index.duplicated(keep='last')]
-                        # Ensure chronological order
-                        df = df.sort_index()
-                        logger.debug(f"{ticker}: Merged new data with existing cache")
-                    except Exception as e:
-                        logger.warning(f"{ticker}: Could not merge with existing cache: {e}. Using new data only.")
-                        # Continue with new data only if merge fails
-
-                # Validate data before writing
-                validated_df = self._validate_and_trim_data(df, ticker)
-
-                if validated_df is None:
-                    logger.error(f"{ticker}: Validation failed, not saving")
-                    return False
-
-                # Write to parquet
-                validated_df.to_parquet(file_path)
-                logger.debug(f"{ticker}: Successfully saved to {file_path.name}")
-                return True
-
-        except Exception as e:
-            logger.error(f"{ticker}: Failed to write parquet: {e}")
-            return False
-
-    def _fetch_fmp_historical(self, ticker: str, from_date: str = None, max_retries: int = 3, force_from_date: bool = False) -> Optional[dict]:
-        """
-        Fetch historical OHLCV data from FMP API for a single ticker with retry logic.
+        Fetch historical OHLCV data from FMP API for a single ticker with smart retry logic.
         Implements INCREMENTAL fetching - only downloads data since last cached date.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
 
         Args:
             ticker: Single ticker symbol
             from_date: Start date for historical data (default: DEFAULT_HISTORICAL_START_DATE)
-            max_retries: Maximum number of retries for 429 errors (default: 3)
+            max_retries: Maximum number of retries for transient errors (default: 5)
             force_from_date: If True, use from_date directly without checking cache (for full historical fetch)
 
         Returns:
             JSON response dict with historical data, or None if failed
         """
+        import random
+        
         if not config.FMP_API_KEY:
             raise ValueError("FMP_API_KEY not set in environment")
 
@@ -493,20 +516,21 @@ class DataRepository:
         if from_date is None:
             from_date = DEFAULT_HISTORICAL_START_DATE
 
-        # Determine cache file path for this ticker
-        cache_file = self.price_dir / f"{ticker}.parquet"
-
         # Calculate optimal start date for incremental fetch
         # (Skip this logic if force_from_date is True - user wants full historical data)
-        if not force_from_date and cache_file.exists():
+        if not force_from_date:
+            conn = db.connect(self.db_path)
             try:
-                df = pd.read_parquet(cache_file, columns=[])
-                last_date = df.index.max()
-                from_date = (last_date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
-            except:
-                from_date = DEFAULT_HISTORICAL_START_DATE  # Full download if cache corrupted
-        elif not force_from_date:
-            from_date = DEFAULT_HISTORICAL_START_DATE  # Full download for new ticker
+                result = conn.execute(
+                    "SELECT MAX(date) FROM price_data WHERE ticker = ?", [ticker]
+                ).fetchone()
+                last_date = result[0] if result and result[0] else None
+            finally:
+                conn.close()
+            if last_date:
+                from_date = (pd.Timestamp(last_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            else:
+                from_date = DEFAULT_HISTORICAL_START_DATE
         
         url = f"{config.FMP_BASE_URL}/historical-price-eod/full"
         params = {
@@ -515,6 +539,7 @@ class DataRepository:
             'apikey': config.FMP_API_KEY
         }
         
+        last_error = None
         for attempt in range(max_retries):
             # Rate limiting
             self._rate_limit_check()
@@ -522,17 +547,33 @@ class DataRepository:
             try:
                 response = requests.get(url, params=params, timeout=30)
                 
-                # Handle 429 rate limit errors with progressive backoff
+                # Handle 429 rate limit errors with exponential backoff + jitter
                 if response.status_code == 429:
+                    self._trigger_global_cooldown(5.0)
                     if attempt < max_retries - 1:
-                        # Sleep intervals: 5s, 10s, 15s
-                        wait_time = 5 * (attempt + 1)
-                        logger.warning(f"{ticker}: Rate limit hit (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        wait_time = 3 * (attempt + 1) + random.uniform(0, 2)
+                        logger.debug(f"{ticker}: Rate limit (429), retrying in {wait_time:.1f}s... ({attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                         continue
                     else:
-                        logger.error(f"{ticker}: Rate limit hit (429), max retries exceeded")
+                        logger.debug(f"{ticker}: Rate limit (429), max retries exceeded")
                         return None
+
+                # Handle server errors (5xx) - retry with backoff
+                if 500 <= response.status_code < 600:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2 + random.uniform(0, 1)
+                        logger.debug(f"{ticker}: Server error ({response.status_code}), retrying in {wait_time:.1f}s... ({attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.debug(f"{ticker}: Server error ({response.status_code}), max retries exceeded")
+                        return None
+
+                # Handle client errors (4xx except 429) - don't retry, these are permanent
+                if 400 <= response.status_code < 500:
+                    logger.debug(f"{ticker}: Client error ({response.status_code}), not retrying")
+                    return None
                 
                 response.raise_for_status()
                 data = response.json()
@@ -553,18 +594,43 @@ class DataRepository:
                     logger.warning(f"Unexpected FMP response format for {ticker}: {type(data)}")
                     return None
                     
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries - 1 and "429" in str(e):
-                    wait_time = 5 * (attempt + 1)
-                    logger.warning(f"{ticker}: Request error (likely 429), retrying in {wait_time}s...")
+            except requests.exceptions.Timeout as e:
+                last_error = f"Timeout: {e}"
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2 + random.uniform(0, 1)
+                    logger.debug(f"{ticker}: Timeout, retrying in {wait_time:.1f}s... ({attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     continue
-                logger.error(f"FMP API request failed for {ticker}: {e}")
                 return None
+
+            except requests.exceptions.ConnectionError as e:
+                last_error = f"Connection error: {e}"
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3 + random.uniform(0, 2)
+                    logger.debug(f"{ticker}: Connection error, retrying in {wait_time:.1f}s... ({attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                return None
+
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                if attempt < max_retries - 1 and "429" in str(e):
+                    wait_time = (2 ** attempt) * 3 + random.uniform(0, 2)
+                    logger.debug(f"{ticker}: Request error (likely 429), retrying in {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                    continue
+                return None
+
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse FMP response for {ticker}: {e}")
+                last_error = f"JSON decode error: {e}"
+                if attempt < max_retries - 1:
+                    wait_time = 1 + random.uniform(0, 1)
+                    logger.debug(f"{ticker}: JSON decode error, retrying... ({attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
                 return None
-        
+
+        logger.debug(f"{ticker}: All {max_retries} attempts failed. Last error: {last_error}")
         return None
 
     def _parse_fmp_response(self, response_data: dict, ticker: str) -> Optional[pd.DataFrame]:
@@ -847,81 +913,101 @@ class DataRepository:
             logger.error(f"Failed to download {ticker}: {e}")
             return None
 
-    def update_cache(self, tickers: List[str], force: bool = False, source: str = 'fmp', max_workers: int = 10, from_date: str = None) -> Dict[str, bool]:
+    def update_cache(
+        self,
+        tickers: List[str] = None,
+        force: bool = False,
+        source: str = 'yfinance',
+        max_workers: int = 10,
+        from_date: str = None,
+        flush_threshold: int = 5000,
+        latest_trading_day: str = None,
+    ) -> Dict[str, bool]:
         """
-        Parallelized Cache Update with market date hoisting and incremental fetching.
-        
-        Args:
-            tickers: List of ticker symbols to update
-            force: If True, re-download all tickers regardless of cache status
-            source: Data source - 'fmp' (Financial Modeling Prep) or 'yfinance'
-            max_workers: Number of parallel workers for downloading (default: 10)
-            from_date: Override start date for fetching (YYYY-MM-DD). If specified,
-                      bypasses incremental logic and fetches full history from this date.
-        
-        Returns:
-            Dict mapping ticker -> success status
-        """
-        # Market hours check - skip update during trading hours unless forced
-        from datetime import datetime, time as dt_time
-        import pytz
+        Incremental price update: fetches only stale tickers, bulk-writes to DuckDB.
 
-        results = {}
-        to_download = []
+        Args:
+            tickers: Pre-computed stale list (skips internal staleness query)
+            force: Re-fetch full history for all active tickers (requires confirmation)
+            source: 'yfinance' (default) or 'fmp'
+            max_workers: Parallel workers for FMP path
+            from_date: Override start date (FMP path only)
+            flush_threshold: Max buffer rows before intermediate flush (force=True path)
+            latest_trading_day: Pre-computed trading day (skips get_latest_trading_day call)
+        """
+        if latest_trading_day is None:
+            latest_trading_day = get_latest_trading_day()
+            if isinstance(latest_trading_day, pd.Timestamp):
+                latest_trading_day = latest_trading_day.strftime('%Y-%m-%d')
 
         if force:
-            logger.info("Force mode enabled - downloading all")
-            to_download = tickers
+            candidate_tickers = tickers or self._get_all_active_tickers()
+            n = len(candidate_tickers)
+            print(f"⚠️  Force mode: will re-fetch full price history for {n} active tickers.")
+            print(f"    This consumes significant API quota and may take 30-60 minutes.")
+            confirm = input("    Type 'yes' to continue: ").strip().lower()
+            if confirm != 'yes':
+                logger.info("Force update cancelled by user.")
+                return {}
+            to_update = candidate_tickers
+        elif tickers is not None:
+            to_update = tickers  # caller already computed the stale list
         else:
-            # 1. CALCULATE DATE ONCE (The Fix)
-            logger.info("Fetching latest trading day...")
-            market_date = get_latest_trading_day()
-            logger.info(f"Latest trading day is: {market_date}")
-            
-            logger.info(f"Checking {len(tickers)} files (Parallel Metadata Scan)...")
-            
-            try:
-                from tqdm import tqdm
-                pbar = tqdm(total=len(tickers), desc="Scanning cache", unit="file")
-            except ImportError:
-                pbar = None
+            to_update = self._get_stale_tickers(latest_trading_day)
 
-            # 2. Worker uses the pre-calculated date
-            def check_worker(ticker):
-                path = self.price_dir / f"{ticker}.parquet"
-                # Use simplified staleness check
-                is_stale = self._is_cache_stale(path, current_market_date=market_date)
-                return ticker, is_stale
+        if not to_update:
+            logger.debug(f"All active tickers fresh as of {latest_trading_day}")
+            return {}
 
-            # 3. Parallel Execution
-            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                future_to_ticker = {executor.submit(check_worker, t): t for t in tickers}
-                
-                for future in concurrent.futures.as_completed(future_to_ticker):
-                    ticker, is_stale = future.result()
-                    if is_stale:
-                        to_download.append(ticker)
-                    else:
-                        results[ticker] = True
-                    
-                    if pbar: pbar.update(1)
-            
-            if pbar: pbar.close()
+        logger.debug(f"{len(to_update)} tickers to update (latest: {latest_trading_day})")
 
-        if not to_download:
-            logger.info("✅ All tickers up to date.")
-            return results
+        buffer: List[Tuple[str, pd.DataFrame]] = []
+        results: Dict[str, bool] = {}
+        rows_written = 0
+        self.last_errors = []
 
-        logger.info(f"⬇️ Downloading {len(to_download)} missing/stale tickers...")
-        
-        # Pass max_workers and from_date through to FMP fetcher
         if source == 'fmp' and config.FMP_API_KEY:
-            fmp_results = self._update_cache_fmp(to_download, max_workers=max_workers, from_date=from_date)
+            fmp_results, buffer, fmp_errors = self._update_cache_fmp(to_update, max_workers=max_workers, from_date=from_date)
             results.update(fmp_results)
-            return results
+            self.last_errors = fmp_errors
+        else:
+            # yfinance path: returns (results_dict, buffer, errors_dict)
+            yf_results, buffer, yf_errors = self._update_cache_yfinance(to_update, latest_trading_day)
+            results.update(yf_results)
+            # Surface per-ticker cause so PipelineRunManager.classify_error can
+            # bucket into RATE_LIMIT / TIMEOUT / NO_DATA / FETCH_FAILURE.
+            self.last_errors = [
+                (t, yf_errors.get(t, 'yfinance fetch failed (no cause recorded)'))
+                for t, ok in yf_results.items() if not ok
+            ]
 
-        yf_results = self._update_cache_yfinance(to_download)
-        results.update(yf_results)
+            # Intermediate flush if buffer is large (force=True full-history scenario)
+            if len(buffer) > 0:
+                total_rows = sum(len(d) for _, d in buffer)
+                if total_rows >= flush_threshold:
+                    rows_written += self._flush_buffer(buffer, latest_trading_day)
+                    buffer.clear()
+
+        # Final flush
+        if buffer:
+            rows_written += self._flush_buffer(buffer, latest_trading_day)
+
+        # Log post-retry failures
+        failed = [t for t, ok in results.items() if not ok]
+        if failed:
+            self._log_quality_issues(
+                [('FETCH_FAILURE', failed, f"no data after retries on {latest_trading_day}")],
+                latest_trading_day,
+            )
+
+        failure_rate = len(failed) / len(to_update) if to_update else 0
+        if failure_rate > 0.10:
+            self._log_quality_issues(
+                [('HIGH_FAILURE_RATE', [], f"{len(failed)}/{len(to_update)} failed — >10% threshold")],
+                latest_trading_day,
+            )
+
+        logger.debug(f"Price flush: {rows_written} rows written to price_data")
         return results    
     
     def _fetch_price_worker(self, ticker: str, max_retries: int = 3, from_date: str = None) -> tuple:
@@ -941,43 +1027,45 @@ class DataRepository:
         
         for attempt in range(max_retries):
             try:
-                # Fetch single ticker from FMP (with rate limiting)
                 fmp_data = self._fetch_fmp_historical(ticker, from_date=from_date, force_from_date=force_from_date)
 
                 if fmp_data:
-                    # Check if cache is already current (no new data available)
                     if fmp_data.get('already_current', False):
-                        logger.debug(f"{ticker}: Cache is already current, no update needed")
-                        return (ticker, True, None)
-                    
-                    # Parse and save new data
+                        logger.debug(f"{ticker}: Already current, no update needed")
+                        return (ticker, None, None)  # None df = already fresh, not a failure
+
                     df = self._parse_fmp_response(fmp_data, ticker)
                     if df is not None and not df.empty:
-                        cache_file = self.price_dir / f"{ticker}.parquet"
-
-                        # Use thread-safe write with validation (handles cache merging internally)
-                        success = self._safe_write_parquet(df, cache_file, ticker, merge_with_existing=True)
-                        return (ticker, success, None if success else "Validation failed")
+                        validated = self._validate_and_trim_data(df, ticker)
+                        if validated is None:
+                            return (ticker, None, "Validation failed")
+                        return (ticker, validated, None)
                     else:
-                        return (ticker, False, "No data parsed")
+                        return (ticker, None, "No data parsed")
                 else:
-                    return (ticker, False, "No FMP response")
+                    return (ticker, None, "No FMP response")
 
             except Exception as e:
                 if attempt < max_retries - 1:
                     logger.debug(f"{ticker}: Retry {attempt + 1}/{max_retries} after error: {e}")
-                    time.sleep(1 * (attempt + 1))  # Progressive backoff: 1s, 2s, 3s
+                    time.sleep(1 * (attempt + 1))
                     continue
                 else:
-                    return (ticker, False, str(e))
+                    return (ticker, None, str(e))
 
-        return (ticker, False, "Max retries exceeded")
+        return (ticker, None, "Max retries exceeded")
 
-    def _update_cache_fmp(self, tickers: List[str], max_workers: int = 10, show_progress: bool = True, from_date: str = None) -> Dict[str, bool]:
+    def _update_cache_fmp(self, tickers: List[str], max_workers: int = 5, show_progress: bool = True, from_date: str = None) -> Dict[str, bool]:
         """
-        Update cache using FMP API with parallel execution and retry logic.
+        Update cache using FMP API with parallel execution and automatic retry of failures.
         NOTE: FMP Starter tier does NOT support batch requests for historical data.
         Rate limited to 300 calls/minute.
+
+        Features:
+        - Parallel fetching with configurable workers
+        - Exponential backoff with jitter for transient errors
+        - Automatic retry pass for failed tickers (reduced parallelism)
+        - Detailed progress tracking
 
         Args:
             tickers: List of ticker symbols
@@ -986,141 +1074,290 @@ class DataRepository:
             from_date: Override start date for fetching (bypasses incremental logic)
 
         Returns:
-            Dict mapping ticker -> success status
+            Tuple of (results dict, buffer of (ticker, df) pairs for bulk write)
         """
-        results = {}
+        results: Dict[str, bool] = {}
+        buffer: List[Tuple[str, pd.DataFrame]] = []
         failed_tickers = []
         total_tickers = len(tickers)
         success_count = 0
         fail_count = 0
 
-        logger.info(f"Fetching {total_tickers} tickers from FMP with {max_workers} parallel workers...")
-        logger.info(f"Rate limit: {self.rate_limit} calls/minute")
+        logger.debug(f"FMP fetch: {total_tickers} tickers, {max_workers} workers, rate={self.rate_limit}/min")
         start_time = time.time()
 
-        # Check if tqdm is available
         use_tqdm = False
         if show_progress:
             try:
                 from tqdm import tqdm
                 use_tqdm = True
             except ImportError:
-                logger.info("Install tqdm for progress bar: pip install tqdm")
+                pass
 
-        # Use ThreadPoolExecutor for parallel fetching
+        def _collect(ticker: str, df: Optional[pd.DataFrame], error_msg: Optional[str]) -> None:
+            if df is not None:
+                buffer.append((ticker, df))
+                results[ticker] = True
+            elif error_msg is None:
+                results[ticker] = True  # already_current
+            else:
+                results[ticker] = False
+                failed_tickers.append((ticker, error_msg))
+
+        # First pass
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks with from_date
-            future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 3, from_date): ticker for ticker in tickers}
+            future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 5, from_date): ticker for ticker in tickers}
 
-            # Process completed tasks with progress tracking
             if use_tqdm:
                 with tqdm(total=total_tickers, desc="Fetching prices", unit="ticker") as pbar:
                     for future in concurrent.futures.as_completed(future_to_ticker):
-                        ticker, success, error_msg = future.result()
-                        results[ticker] = success
-                        if success:
-                            success_count += 1
-                        else:
-                            fail_count += 1
-                            failed_tickers.append((ticker, error_msg))
+                        ticker, df, error_msg = future.result()
+                        _collect(ticker, df, error_msg)
+                        success_count = sum(v for v in results.values() if v)
+                        fail_count = sum(1 for v in results.values() if not v)
                         pbar.update(1)
-                        pbar.set_postfix({'✓': success_count, '✗': fail_count})
+                        pbar.set_postfix({'OK': success_count, 'FAIL': fail_count})
             else:
                 completed = 0
                 for future in concurrent.futures.as_completed(future_to_ticker):
-                    ticker, success, error_msg = future.result()
-                    results[ticker] = success
-                    if success:
-                        success_count += 1
-                    else:
-                        fail_count += 1
-                        failed_tickers.append((ticker, error_msg))
-
+                    ticker, df, error_msg = future.result()
+                    _collect(ticker, df, error_msg)
+                    success_count = sum(v for v in results.values() if v)
+                    fail_count = sum(1 for v in results.values() if not v)
                     completed += 1
-                    # Log progress every 25 tickers or at milestones
-                    if completed % 25 == 0 or completed == total_tickers:
-                        pct_complete = (completed / total_tickers) * 100
+                    if completed % 100 == 0 or completed == total_tickers:
                         elapsed = time.time() - start_time
                         rate = completed / elapsed if elapsed > 0 else 0
-                        eta_seconds = (total_tickers - completed) / rate if rate > 0 else 0
-                        eta_minutes = eta_seconds / 60
-
-                        logger.info(
-                            f"Progress: {completed}/{total_tickers} ({pct_complete:.1f}%) | "
-                            f"✓ {success_count} ✗ {fail_count} | "
-                            f"Rate: {rate:.1f} tickers/sec | "
-                            f"ETA: {eta_minutes:.1f} min"
+                        logger.debug(
+                            f"FMP progress: {completed}/{total_tickers} | "
+                            f"OK {success_count} FAIL {fail_count} | {rate:.1f}/sec"
                         )
 
-        # Final summary
+        # Retry pass
+        if failed_tickers and len(failed_tickers) <= 100:
+            logger.debug(f"FMP retry: {len(failed_tickers)} tickers (10s cooldown)")
+            time.sleep(10)
+            retry_tickers = [t for t, _ in failed_tickers]
+            failed_tickers.clear()
+            retry_workers = min(3, max_workers)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=retry_workers) as executor:
+                future_to_ticker = {executor.submit(self._fetch_price_worker, ticker, 5, from_date): ticker for ticker in retry_tickers}
+                for future in concurrent.futures.as_completed(future_to_ticker):
+                    ticker, df, error_msg = future.result()
+                    _collect(ticker, df, error_msg)
+                    if results.get(ticker):
+                        logger.debug(f"FMP recovered: {ticker}")
+
+        # Summary
         elapsed_total = time.time() - start_time
-        logger.info(f"\n{'='*80}")
-        logger.info(f"FMP Cache Update Complete!")
-        logger.info(f"Total Time: {elapsed_total:.1f}s ({elapsed_total/60:.1f} min)")
-        logger.info(f"Successful: {success_count}/{total_tickers} ({success_count/total_tickers*100:.1f}%)")
-        logger.info(f"Failed: {fail_count}/{total_tickers} ({fail_count/total_tickers*100:.1f}%)")
+        success_count = sum(1 for v in results.values() if v)
+        fail_count = sum(1 for v in results.values() if not v)
+        logger.debug(f"FMP done: {success_count}/{total_tickers} OK, {fail_count} failed | {elapsed_total:.1f}s")
 
-        if failed_tickers:
-            logger.warning(f"\n{'='*80}")
-            logger.warning(f"FAILED TICKERS ({len(failed_tickers)}):")
-            logger.warning(f"{'='*80}")
-            for ticker, error in failed_tickers[:20]:  # Show first 20
-                logger.warning(f"  {ticker}: {error}")
-            if len(failed_tickers) > 20:
-                logger.warning(f"  ... and {len(failed_tickers) - 20} more")
+        return results, buffer, failed_tickers
 
-        logger.info(f"{'='*80}\n")
-
-        return results
-    
-    def _update_cache_yfinance(self, tickers: List[str]) -> Dict[str, bool]:
+    def _update_cache_yfinance(self, tickers: List[str], latest_trading_day: str = None) -> Tuple[Dict[str, bool], List[Tuple[str, pd.DataFrame]], Dict[str, str]]:
         """
-        Update cache using yfinance batch downloads.
-        
-        Args:
-            tickers: List of ticker symbols
-            
-        Returns:
-            Dict mapping ticker -> success status
-        """
-        results = {}
-        batch_size = config.BATCH_SIZE
-        
-        for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}/{(len(tickers)-1)//batch_size + 1}")
+        Update cache using a single yfinance bulk download (no batching).
 
+        Derives from_date from the most-recent existing data across the stale set
+        (MAX of per-ticker MAX dates). This avoids the MIN pitfall where one corrupt
+        ticker drags the whole batch back to 1970.
+
+        IPO validation is skipped — these are incremental updates, not full history.
+        Returns (results dict, buffer of (ticker, df) for bulk DuckDB write,
+        errors dict mapping failed ticker -> cause string).
+        """
+        results: Dict[str, bool] = {}
+        buffer: List[Tuple[str, pd.DataFrame]] = []
+        errors: Dict[str, str] = {}
+
+        # Use MIN(MAX(date)) — the oldest gap across stale tickers, but exclude
+        # corrupt pre-2000 rows (e.g. 1970-01-01 from bad yfinance data).
+        # yfinance returns all available data from `start` onward per ticker,
+        # so tickers that are already ahead simply get no new rows (INSERT OR IGNORE).
+        conn = db.connect(self.db_path)
+        try:
+            result = conn.execute("""
+                SELECT MIN(max_date) FROM (
+                    SELECT ticker, MAX(date) AS max_date
+                    FROM price_data
+                    WHERE ticker IN (SELECT unnest(?))
+                      AND date >= '2000-01-01'
+                    GROUP BY ticker
+                )
+            """, [tickers]).fetchone()
+            last_date = result[0] if result and result[0] else None
+        finally:
+            conn.close()
+
+        if last_date:
+            from_date = (pd.Timestamp(last_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+        else:
+            from_date = DEFAULT_HISTORICAL_START_DATE
+
+        # Compute explicit end date (yfinance end is exclusive)
+        # Without this, yfinance uses datetime.now() which on non-US timezones
+        # can produce end < start and trigger "Invalid input" errors.
+        if latest_trading_day:
+            end_date = (pd.Timestamp(latest_trading_day) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+        else:
+            end_date = (pd.Timestamp.now() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Per-ticker isolation: a single bulk yf.download() for all stale tickers
+        # marks EVERY ticker False on one 429/timeout. Batch the call so one bad
+        # batch can't sink the rest, then retry the failed subset once.
+        BATCH_SIZE = 200
+        RETRY_BATCH_SIZE = 50
+        RETRY_SLEEP_S = 15
+
+        def _download_and_extract(batch: List[str]) -> List[str]:
+            """Download + extract one batch. Returns tickers that yielded no data.
+            On success appends to buffer, sets results[ticker]=True, clears any
+            prior error; on failure sets results[ticker]=False and records the
+            cause in errors[ticker]. Identical for first + retry pass."""
             try:
-                # Batch download - use period='max' for full history
                 data = yf.download(
                     batch,
-                    period='max',  # Get full historical data (start= param is often ignored)
+                    start=from_date,
+                    end=end_date,
                     group_by='ticker',
                     auto_adjust=True,
                     progress=False,
-                    threads=True
+                    threads=True,
                 )
-
-                # Save each ticker individually
-                for ticker in batch:
-                    try:
-                        ticker_data = self._extract_ticker_from_batch(data, ticker)
-                        if ticker_data is not None and not ticker_data.empty:
-                            cache_file = self.price_dir / f"{ticker}.parquet"
-                            ticker_data.to_parquet(cache_file)
-                            results[ticker] = True
-                        else:
-                            results[ticker] = False
-                    except Exception as e:
-                        logger.debug(f"Failed to cache {ticker}: {e}")
-                        results[ticker] = False
-
             except Exception as e:
-                logger.error(f"Batch download failed for {len(batch)} tickers: {e}")
+                cause = f"yfinance batch download exception: {type(e).__name__}: {e}"
+                logger.warning(f"[Phase 1] yfinance batch ({len(batch)} tickers) failed: {e}")
                 for ticker in batch:
                     results[ticker] = False
+                    errors[ticker] = cause
+                return list(batch)
 
-        return results
+            failed: List[str] = []
+            for ticker in batch:
+                try:
+                    ticker_data = self._extract_ticker_from_batch(data, ticker)
+                    if ticker_data is not None and not ticker_data.empty:
+                        buffer.append((ticker, ticker_data))
+                        results[ticker] = True
+                        errors.pop(ticker, None)
+                    else:
+                        results[ticker] = False
+                        errors[ticker] = (
+                            'yfinance returned no data for ticker (not in response or empty frame)'
+                        )
+                        failed.append(ticker)
+                except Exception as e:
+                    logger.debug(f"Failed to extract {ticker}: {e}")
+                    results[ticker] = False
+                    errors[ticker] = f"yfinance extract exception: {type(e).__name__}: {e}"
+                    failed.append(ticker)
+            return failed
+
+        logger.debug(
+            f"yfinance batched download: {len(tickers)} tickers, "
+            f"{from_date} to {end_date}, batch={BATCH_SIZE}"
+        )
+
+        all_failed: List[str] = []
+        for i in range(0, len(tickers), BATCH_SIZE):
+            batch = tickers[i : i + BATCH_SIZE]
+            all_failed.extend(_download_and_extract(batch))
+
+        # Retry pass — once, smaller batches, after a cooldown.
+        if all_failed:
+            logger.info(
+                f"yfinance retry: {len(all_failed)} tickers "
+                f"({RETRY_SLEEP_S}s cooldown, batch={RETRY_BATCH_SIZE})"
+            )
+            time.sleep(RETRY_SLEEP_S)
+            for i in range(0, len(all_failed), RETRY_BATCH_SIZE):
+                batch = all_failed[i : i + RETRY_BATCH_SIZE]
+                # Recovered tickers flip results[ticker]=True inside the closure,
+                # so update_cache() will no longer count them in last_errors.
+                _download_and_extract(batch)
+
+        ok = sum(1 for v in results.values() if v)
+        no_data = len(tickers) - ok
+        logger.debug(f"yfinance done: {ok}/{len(tickers)} OK, {no_data} no data")
+
+        return results, buffer, errors
+
+    def _flush_buffer(self, buffer: List[Tuple[str, pd.DataFrame]], run_date: str) -> int:
+        """
+        Concatenate buffer, run quality checks, bulk-insert into price_data.
+        Returns number of rows written.
+        """
+        if not buffer:
+            return 0
+
+        df = pd.concat(
+            [d.assign(ticker=t) for t, d in buffer],
+        )
+        # yfinance stores dates in the DatetimeIndex — move to column
+        if 'date' not in [c.lower() for c in df.columns]:
+            df = df.reset_index()
+        df.columns = [c.lower() for c in df.columns]
+        # reset_index() may produce 'index', 'datetime', or 'date' depending on index name
+        for col in ('index', 'datetime'):
+            if col in df.columns and 'date' not in df.columns:
+                df = df.rename(columns={col: 'date'})
+        df['date'] = pd.to_datetime(df['date']).dt.date
+
+        issues = self._quality_check(df, run_date)
+        if issues:
+            self._log_quality_issues(issues, run_date)
+
+        conn = db.connect(self.db_path)
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO price_data (ticker, date, open, high, low, close, volume)
+                SELECT ticker, date, open, high, low, close, CAST(volume AS UBIGINT)
+                FROM df
+            """)
+            conn.commit()
+            return len(df)
+        except Exception as e:
+            logger.error(f"[Phase 1] Bulk DuckDB write failed: {e}", exc_info=True)
+            return 0
+        finally:
+            conn.close()
+
+    def _quality_check(
+        self, df: pd.DataFrame, run_date: str
+    ) -> List[Tuple[str, List[str], str]]:
+        """Cross-ticker checks on the full buffer before write. Post-retry only."""
+        issues = []
+
+        bad_close = df[df['close'] <= 0]
+        if not bad_close.empty:
+            tickers = bad_close['ticker'].unique().tolist()
+            issues.append(('NEGATIVE_CLOSE', tickers, f"close <= 0 on {run_date}"))
+
+        run_date_val = pd.Timestamp(run_date).date()
+        zero_vol = df[(df['volume'] == 0) & (df['date'] == run_date_val)]
+        if not zero_vol.empty:
+            tickers = zero_vol['ticker'].unique().tolist()
+            issues.append(('ZERO_VOLUME', tickers, f"volume=0 on {run_date}"))
+
+        return issues
+
+    def _log_quality_issues(
+        self, issues: List[Tuple[str, List[str], str]], run_date: str
+    ) -> None:
+        """Append quality issues to logs/data_quality/YYYY-MM.log (monthly rotation)."""
+        log_dir = Path("logs/data_quality")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{run_date[:7]}.log"
+
+        with open(log_file, 'a') as f:
+            for issue_type, tickers, detail in issues:
+                tickers_str = ', '.join(tickers[:20])
+                if len(tickers) > 20:
+                    tickers_str += f' ... +{len(tickers) - 20} more'
+                f.write(f"{run_date} | {issue_type:<18} | {tickers_str:<50} | {detail}\n")
 
     def _extract_ticker_from_batch(self, data: pd.DataFrame, ticker: str) -> Optional[pd.DataFrame]:
         """Extract single ticker data from batch download result."""
@@ -1285,6 +1522,9 @@ class DataRepository:
 
         # Extract ticker symbols from filenames (remove .parquet extension)
         tickers = [f.stem for f in parquet_files]
+        
+        # Filter out non-ticker files (like universe_*)
+        tickers = [t for t in tickers if not t.startswith('universe_')]
 
         # Sort alphabetically
         tickers.sort()

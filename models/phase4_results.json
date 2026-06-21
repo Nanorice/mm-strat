@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-01-29T00:10:40.784391",
+  "crisis_simulation": {
+    "combined": {
+      "period": "2022-01-01 to 2022-12-31",
+      "n_samples": 956,
+      "ic": -0.3890860004349668,
+      "ic_pvalue": 6.513136962092477e-36,
+      "selection_edge": -0.03208238155458609,
+      "top_decile_mean": -2.725630419963837,
+      "bottom_decile_mean": 1.8744400666326102,
+      "baseline_mean": -2.6935480384092507,
+      "positive_ic_months": 0,
+      "total_months": 12,
+      "score_type": "final_score",
+      "volatility_adjusted": true,
+      "m02_integrated": true
+    },
+    "vol_adjusted": {
+      "period": "2022-01-01 to 2022-12-31",
+      "n_samples": 956,
+      "ic": 0.09414528816119566,
+      "ic_pvalue": 0.0035732561137830324,
+      "selection_edge": 6.464418353894128,
+      "top_decile_mean": 3.770870315484878,
+      "bottom_decile_mean": -4.580714636388192,
+      "baseline_mean": -2.6935480384092507,
+      "positive_ic_months": 10,
+      "total_months": 12,
+      "score_type": "adjusted_score",
+      "volatility_adjusted": true,
+      "m02_integrated": false
+    }
+  },
+  "m02_integrated": true,
+  "status": "deployed"
+}

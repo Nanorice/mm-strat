@@ -1,0 +1,9 @@
+{
+  "id": "S2_trailing10_top5",
+  "description": "10-day trailing percentile, up to 5 entries/day, regime caps.",
+  "strategy_kwargs": {
+    "entry_mode": "top_n",
+    "entry_top_n": 5,
+    "rank_by": "trailing"
+  }
+}

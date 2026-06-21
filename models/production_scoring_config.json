@@ -1,0 +1,36 @@
+{
+  "sizing_rules": {
+    "high_conviction": {
+      "score_threshold": 0.85,
+      "position_weight": 1.5,
+      "description": "Top 15% scores get 1.5x position"
+    },
+    "standard": {
+      "score_threshold": 0.7,
+      "position_weight": 1.0,
+      "description": "Scores 70-85% get standard position"
+    },
+    "reduced": {
+      "score_threshold": 0.5,
+      "position_weight": 0.5,
+      "description": "Scores 50-70% get half position"
+    },
+    "skip": {
+      "score_threshold": 0.0,
+      "position_weight": 0.0,
+      "description": "Below 50% - skip"
+    }
+  },
+  "portfolio_rules": {
+    "max_positions": 10,
+    "max_single_position": 0.15,
+    "max_sector_exposure": 0.3,
+    "volatility_adjustment": true
+  },
+  "risk_rules": {
+    "stop_loss_atr_mult": 1.0,
+    "profit_target_atr_mult": 4.0,
+    "max_hold_days": 30,
+    "trailing_stop": false
+  }
+}

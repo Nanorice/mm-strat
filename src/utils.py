@@ -190,3 +190,65 @@ def filter_etfs(tickers: List[str], etf_list_path: str = 'data/etf_fund_tickers.
     except Exception as e:
         logger.warning(f"SPAC filtering failed: {e}, skipping")
         return etf_filtered
+
+
+def get_model_features(model_name: str = 'M01', db_path: str = 'data/market_data.duckdb') -> List[str]:
+    """Return the feature list for a model from the model_feature_sets table.
+
+    Queries the prod model version for model_name and returns its registered features
+    in ordinal order.
+
+    Args:
+        model_name: Prefix to match against version_id (e.g., 'M01' matches 'M01_baseline_v0.1').
+        db_path: Path to DuckDB database.
+
+    Returns:
+        Ordered list of feature names.
+
+    Raises:
+        RuntimeError: If model_feature_sets table is empty or no prod model found.
+    """
+    from src import db
+
+    con = db.connect(db_path)
+    try:
+        result = con.execute(
+            """
+            SELECT feature_set_id FROM models
+            WHERE status_flag = 'prod' AND LOWER(version_id) LIKE LOWER(?)
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            [f"{model_name}%"],
+        ).fetchone()
+
+        if not result:
+            raise RuntimeError(
+                f"No prod model found for '{model_name}'. "
+                "Run scripts/populate_feature_catalog.py first."
+            )
+
+        feature_set_id = result[0]
+        if not feature_set_id:
+            raise RuntimeError(
+                f"Prod model for '{model_name}' has no feature_set_id. "
+                "Run scripts/populate_feature_catalog.py first."
+            )
+
+        rows = con.execute(
+            """
+            SELECT feature_name FROM model_feature_sets
+            WHERE feature_set_id = ?
+            ORDER BY ordinal
+            """,
+            [feature_set_id],
+        ).fetchall()
+
+        if not rows:
+            raise RuntimeError(
+                f"model_feature_sets is empty for feature_set_id='{feature_set_id}'. "
+                "Run scripts/populate_feature_catalog.py first."
+            )
+
+        return [r[0] for r in rows]
+    finally:
+        con.close()

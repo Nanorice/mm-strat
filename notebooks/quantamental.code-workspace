@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../../.claude/plans"
+		}
+	],
+	"settings": {
+		"accessibility.signalOptions.volume": 5
+	}
+}

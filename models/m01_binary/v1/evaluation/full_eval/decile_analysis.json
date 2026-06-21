@@ -1,0 +1,76 @@
+{
+  "score_col": "prob_elite",
+  "outcome_col": "pnl_percent",
+  "outcome_note": "pnl_percent (realized trade PnL after stop/trend/timeout) is used as a degraded proxy for MFE. The plan asked for mfe_pct from v_d2_training but the DB is locked by the parallel binary-training session.",
+  "selection_bias_note": "Trades are pre-filtered (top-3 per day, prob_elite >= 0.15). Spearman IC here is conditional on selection, not universe-wide IC.",
+  "n_trades": 355,
+  "n_deciles_formed": 5,
+  "decile_stats": [
+    {
+      "decile": 0,
+      "n": 58,
+      "mean_pnl": -1.2056916286537533,
+      "median_pnl": -6.209456888942871,
+      "win_rate": 34.48275862068966,
+      "homerun_rate_30": 3.4482758620689653,
+      "homerun_rate_10": 20.689655172413794,
+      "score_min": 0.15,
+      "score_max": 0.24550898203592814
+    },
+    {
+      "decile": 1,
+      "n": 64,
+      "mean_pnl": 4.832737228025263,
+      "median_pnl": -2.567855466972241,
+      "win_rate": 48.4375,
+      "homerun_rate_30": 7.8125,
+      "homerun_rate_10": 37.5,
+      "score_min": 0.27927927927927926,
+      "score_max": 0.27927927927927926
+    },
+    {
+      "decile": 2,
+      "n": 134,
+      "mean_pnl": 1.0299448507795055,
+      "median_pnl": -5.5353876094441565,
+      "win_rate": 39.55223880597015,
+      "homerun_rate_30": 6.7164179104477615,
+      "homerun_rate_10": 26.865671641791046,
+      "score_min": 0.2885304659498208,
+      "score_max": 0.2885304659498208
+    },
+    {
+      "decile": 3,
+      "n": 69,
+      "mean_pnl": 2.012185909991216,
+      "median_pnl": -6.062776878491272,
+      "win_rate": 37.68115942028986,
+      "homerun_rate_30": 11.594202898550725,
+      "homerun_rate_10": 24.637681159420293,
+      "score_min": 0.3448275862068966,
+      "score_max": 0.3448275862068966
+    },
+    {
+      "decile": 4,
+      "n": 30,
+      "mean_pnl": -5.095655475925084,
+      "median_pnl": -12.264806648913375,
+      "win_rate": 20.0,
+      "homerun_rate_30": 6.666666666666667,
+      "homerun_rate_10": 16.666666666666664,
+      "score_min": 0.3790138614690227,
+      "score_max": 0.6426610026651076
+    }
+  ],
+  "spearman_ic": -0.11963721781130643,
+  "spearman_p_value": 0.024177917331213175,
+  "monotone_strict_up": false,
+  "monotone_fraction_up": 0.5,
+  "top_vs_bottom": {
+    "top_decile_mean_pnl": -5.095655475925084,
+    "bottom_decile_mean_pnl": -1.2056916286537533,
+    "top_decile_homerun_rate_30": 6.666666666666667,
+    "bottom_decile_homerun_rate_30": 3.4482758620689653
+  },
+  "homerun_30_lift_top_vs_bottom": 1.9333333333333336
+}

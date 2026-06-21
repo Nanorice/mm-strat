@@ -1,0 +1,1553 @@
+{
+  "model_id": "m01_binary/v1",
+  "model_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\models\\m01_binary\\v1\\model.json",
+  "db_path": "C:\\Users\\Hang\\PycharmProjects\\quantamental\\data\\market_data.duckdb",
+  "built_at": "2026-06-17T12:20:47Z",
+  "card_void": false,
+  "sections": {
+    "A": {
+      "name": "A",
+      "title": "Input data integrity",
+      "scored": false,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "A4_class_balance",
+          "value": 0.13828896701824878,
+          "detail": "home-run prevalence=0.1383 on n=11946 rows (1652 positives)"
+        }
+      ],
+      "rubric_scores": {},
+      "gates": [
+        {
+          "name": "A1_no_outcome_features",
+          "status": "pass",
+          "value": null,
+          "threshold": null,
+          "detail": "No outcome columns in feature set (19 forbidden, 97 features checked)",
+          "blocking": true
+        },
+        {
+          "name": "A2_label_horizon",
+          "status": "pass",
+          "value": 0.0,
+          "threshold": 0.0,
+          "detail": "spot-check n=100: bad_dates=0, negative_mfe=0, binary_mismatch=0",
+          "blocking": true
+        },
+        {
+          "name": "A3_sepa_match",
+          "status": "fail",
+          "value": null,
+          "threshold": null,
+          "detail": "Could not query v_d3_deployment: Out of Memory Error: Allocation failure",
+          "blocking": false
+        },
+        {
+          "name": "A5_bad_tickers_excluded",
+          "status": "warn",
+          "value": 1.0,
+          "threshold": 0.0,
+          "detail": "BAD_TICKERS present in eval data: ['LIF']",
+          "blocking": false
+        },
+        {
+          "name": "A6_trend_ok_consistency",
+          "status": "pass",
+          "value": 0.0,
+          "threshold": 0.0,
+          "detail": "rows with trend_ok=FALSE after filter: 0",
+          "blocking": true
+        }
+      ],
+      "tables": {},
+      "detail": "A1-A6 integrity check on n=11946 rows. All blocking gates passed.",
+      "aggregate_score": null,
+      "gates_passed": 3,
+      "gates_total": 5,
+      "has_blocking_failure": false
+    },
+    "B": {
+      "name": "B",
+      "title": "Discrimination (classification quality)",
+      "scored": true,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "roc_auc",
+          "value": 0.7680651026879948,
+          "detail": "P(positive scored above negative)"
+        },
+        {
+          "name": "pr_auc",
+          "value": 0.32645200960490267,
+          "detail": "average precision; baseline=prevalence=0.1383"
+        },
+        {
+          "name": "pr_auc_lift_over_prevalence",
+          "value": 2.36065115420107,
+          "detail": "PR-AUC / prevalence (\u22651.5 \u21d2 usable)"
+        },
+        {
+          "name": "brier",
+          "value": 0.10526188973641579,
+          "detail": "lower is better"
+        },
+        {
+          "name": "log_loss",
+          "value": 0.3475531488707794,
+          "detail": "lower is better"
+        },
+        {
+          "name": "baseline_prior_brier",
+          "value": 0.11916512861927447,
+          "detail": ""
+        },
+        {
+          "name": "baseline_prior_log_loss",
+          "value": 0.40184526438121687,
+          "detail": ""
+        },
+        {
+          "name": "baseline_stratified_auc",
+          "value": 0.5066888796266285,
+          "detail": ""
+        }
+      ],
+      "rubric_scores": {
+        "roc_auc": 3,
+        "pr_auc_lift": 2
+      },
+      "gates": [
+        {
+          "name": "B1_auc",
+          "status": "pass",
+          "value": 0.7680651026879948,
+          "threshold": 0.55,
+          "detail": "ROC-AUC=0.7681 (gate: > 0.55)",
+          "blocking": true
+        },
+        {
+          "name": "B2_pr_auc_lift",
+          "status": "pass",
+          "value": 2.36065115420107,
+          "threshold": 1.5,
+          "detail": "PR-AUC/prev=2.361\u00d7 (gate: > 1.5\u00d7)",
+          "blocking": true
+        },
+        {
+          "name": "B3_brier_beats_prior",
+          "status": "pass",
+          "value": 0.10526188973641579,
+          "threshold": 0.11916512861927447,
+          "detail": "Brier=0.1053 vs prior=0.1192",
+          "blocking": false
+        }
+      ],
+      "tables": {
+        "baselines": [
+          {
+            "baseline": "DummyClassifier(prior)",
+            "auc": NaN,
+            "pr_auc": 0.13828896701824878,
+            "brier": 0.11916512861927447,
+            "log_loss": 0.40184526438121687
+          },
+          {
+            "baseline": "DummyClassifier(stratified)",
+            "auc": 0.5066888796266285,
+            "pr_auc": 0.14227467179253978,
+            "brier": 0.32991143283173596,
+            "log_loss": 0.9923076849837736
+          },
+          {
+            "baseline": "model",
+            "auc": 0.7680651026879948,
+            "pr_auc": 0.32645200960490267,
+            "brier": 0.10526188973641579,
+            "log_loss": 0.3475531488707794
+          }
+        ]
+      },
+      "detail": "n=11946, positives=1652, prevalence=0.1383. AUC=0.768, PR-AUC=0.326 (2.36\u00d7 prev), Brier=0.1053.",
+      "aggregate_score": 2,
+      "gates_passed": 3,
+      "gates_total": 3,
+      "has_blocking_failure": false
+    },
+    "C": {
+      "name": "C",
+      "title": "Calibration (probability trustworthiness)",
+      "scored": true,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "ece",
+          "value": 0.019353343105795125,
+          "detail": "expected calibration error (n_bins=10)"
+        },
+        {
+          "name": "max_calibration_error",
+          "value": 0.44813574633897557,
+          "detail": "worst bin gap"
+        },
+        {
+          "name": "sharpness_var",
+          "value": 0.009795272973416425,
+          "detail": "variance of pred_proba (higher = more commitment)"
+        },
+        {
+          "name": "threshold_bins_within_tolerance",
+          "value": 0.0,
+          "detail": "of 4 non-empty bins (\u00b10.05)"
+        }
+      ],
+      "rubric_scores": {
+        "ece": 3
+      },
+      "gates": [
+        {
+          "name": "C1_ece",
+          "status": "pass",
+          "value": 0.019353343105795125,
+          "threshold": 0.05,
+          "detail": "ECE=0.0194 (gate: < 0.05)",
+          "blocking": true
+        },
+        {
+          "name": "C2_threshold_bin_calibration",
+          "status": "fail",
+          "value": 4.0,
+          "threshold": 0.0,
+          "detail": "4 of 4 non-empty bins exceed \u00b10.05",
+          "blocking": true
+        },
+        {
+          "name": "C3_sharpness",
+          "status": "pass",
+          "value": 0.009795272973416425,
+          "threshold": 0.005,
+          "detail": "sharpness=0.00980 (warn if < 0.005 \u21d2 model barely commits)",
+          "blocking": false
+        }
+      ],
+      "tables": {
+        "reliability_curve": [
+          {
+            "bin_lo": 0.0,
+            "bin_hi": 0.1,
+            "n": 5177,
+            "mean_pred": 0.05585271626125362,
+            "mean_obs": 0.039211898783079006,
+            "gap": 0.016640817478174613
+          },
+          {
+            "bin_lo": 0.1,
+            "bin_hi": 0.2,
+            "n": 4057,
+            "mean_pred": 0.15704437467060905,
+            "mean_obs": 0.14000492975104759,
+            "gap": 0.01703944491956147
+          },
+          {
+            "bin_lo": 0.2,
+            "bin_hi": 0.30000000000000004,
+            "n": 2244,
+            "mean_pred": 0.2783359495206218,
+            "mean_obs": 0.29500891265597146,
+            "gap": 0.01667296313534966
+          },
+          {
+            "bin_lo": 0.30000000000000004,
+            "bin_hi": 0.4,
+            "n": 346,
+            "mean_pred": 0.3447091993578145,
+            "mean_obs": 0.407514450867052,
+            "gap": 0.06280525150923749
+          },
+          {
+            "bin_lo": 0.4,
+            "bin_hi": 0.5,
+            "n": 119,
+            "mean_pred": 0.4999606936051573,
+            "mean_obs": 0.6302521008403361,
+            "gap": 0.1302914072351788
+          },
+          {
+            "bin_lo": 0.5,
+            "bin_hi": 0.6000000000000001,
+            "n": 2,
+            "mean_pred": 0.5518642536610244,
+            "mean_obs": 1.0,
+            "gap": 0.44813574633897557
+          },
+          {
+            "bin_lo": 0.6000000000000001,
+            "bin_hi": 0.7000000000000001,
+            "n": 1,
+            "mean_pred": 0.6291986329272957,
+            "mean_obs": 1.0,
+            "gap": 0.3708013670727043
+          },
+          {
+            "bin_lo": 0.7000000000000001,
+            "bin_hi": 0.8,
+            "n": 0,
+            "mean_pred": null,
+            "mean_obs": null,
+            "gap": null
+          },
+          {
+            "bin_lo": 0.8,
+            "bin_hi": 0.9,
+            "n": 0,
+            "mean_pred": null,
+            "mean_obs": null,
+            "gap": null
+          },
+          {
+            "bin_lo": 0.9,
+            "bin_hi": 1.0,
+            "n": 0,
+            "mean_pred": null,
+            "mean_obs": null,
+            "gap": null
+          }
+        ],
+        "threshold_bin_calibration": [
+          {
+            "threshold": 0.3,
+            "bin_lo": 0.3,
+            "bin_hi": 0.4,
+            "n": 346,
+            "observed_freq": 0.407514450867052,
+            "predicted_mean": 0.3447091993578145,
+            "gap": 0.06280525150923749,
+            "within_tolerance": false
+          },
+          {
+            "threshold": 0.4,
+            "bin_lo": 0.4,
+            "bin_hi": 0.5,
+            "n": 1,
+            "observed_freq": 0.0,
+            "predicted_mean": 0.4953225390137219,
+            "gap": 0.4953225390137219,
+            "within_tolerance": false
+          },
+          {
+            "threshold": 0.5,
+            "bin_lo": 0.5,
+            "bin_hi": 0.6,
+            "n": 120,
+            "observed_freq": 0.6416666666666667,
+            "predicted_mean": 0.5008644042276837,
+            "gap": 0.14080226243898297,
+            "within_tolerance": false
+          },
+          {
+            "threshold": 0.6,
+            "bin_lo": 0.6,
+            "bin_hi": 0.7,
+            "n": 1,
+            "observed_freq": 1.0,
+            "predicted_mean": 0.6291986329272957,
+            "gap": 0.3708013670727043,
+            "within_tolerance": false
+          },
+          {
+            "threshold": 0.7,
+            "bin_lo": 0.7,
+            "bin_hi": 0.7999999999999999,
+            "n": 0,
+            "observed_freq": null,
+            "predicted_mean": null,
+            "gap": null,
+            "within_tolerance": null
+          }
+        ]
+      },
+      "detail": "ECE=0.0194 (max-bin gap=0.4481), sharpness=0.00980. Threshold-bins: 4/4 fail \u00b10.05.",
+      "aggregate_score": 3,
+      "gates_passed": 2,
+      "gates_total": 3,
+      "has_blocking_failure": true
+    },
+    "D": {
+      "name": "D",
+      "title": "Ranker performance (D-binary + D-magnitude)",
+      "scored": true,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "Abin_ic_mean",
+          "value": 0.35040316215321476,
+          "detail": "mean of daily Spearman IC across 730 days"
+        },
+        {
+          "name": "Abin_ic_median",
+          "value": 0.40377494272292724,
+          "detail": "median of daily IC (less sensitive to outliers)"
+        },
+        {
+          "name": "Abin_ic_t_stat",
+          "value": 24.462263895611436,
+          "detail": "IC mean / (IC std / \u221aN_days); > 2 = significant"
+        },
+        {
+          "name": "Abin_top5_lift",
+          "value": 1.610241473709463,
+          "detail": "per-day mean of (top-5 mean target) / (pool mean target)"
+        },
+        {
+          "name": "Abin_top10_lift",
+          "value": 1.207659505101036,
+          "detail": "per-day mean of (top-10 mean target) / (pool mean target)"
+        },
+        {
+          "name": "Abin_tail_recall",
+          "value": 0.3668280871670702,
+          "detail": "of realised top-1%, fraction model placed in top decile"
+        },
+        {
+          "name": "Abin_top_vs_bot_decile",
+          "value": 21.838937182220764,
+          "detail": "top decile mean / bottom decile mean"
+        },
+        {
+          "name": "Amag_ic_mean",
+          "value": 0.2937117409230225,
+          "detail": "mean of daily Spearman IC across 1177 days"
+        },
+        {
+          "name": "Amag_ic_median",
+          "value": 0.3710924689031169,
+          "detail": "median of daily IC (less sensitive to outliers)"
+        },
+        {
+          "name": "Amag_ic_t_stat",
+          "value": 20.71573217910043,
+          "detail": "IC mean / (IC std / \u221aN_days); > 2 = significant"
+        },
+        {
+          "name": "Amag_top5_lift",
+          "value": 1.2187704894382303,
+          "detail": "per-day mean of (top-5 mean target) / (pool mean target)"
+        },
+        {
+          "name": "Amag_top10_lift",
+          "value": 1.070958184622072,
+          "detail": "per-day mean of (top-10 mean target) / (pool mean target)"
+        },
+        {
+          "name": "Amag_tail_recall",
+          "value": 0.6083333333333333,
+          "detail": "of realised top-1%, fraction model placed in top decile"
+        },
+        {
+          "name": "Amag_top_vs_bot_decile",
+          "value": 6.591760911060692,
+          "detail": "top decile mean / bottom decile mean"
+        }
+      ],
+      "rubric_scores": {
+        "D_binary": 2,
+        "D_magnitude": 1
+      },
+      "gates": [
+        {
+          "name": "D1_binary_ic",
+          "status": "pass",
+          "value": 0.40377494272292724,
+          "threshold": 0.0,
+          "detail": "median daily binary IC=0.4038, t-stat=24.46 (need > 0 with t > 2)",
+          "blocking": true
+        },
+        {
+          "name": "D2_top5_hit_lift",
+          "status": "pass",
+          "value": 1.610241473709463,
+          "threshold": 1.3,
+          "detail": "top-5 hit lift=1.610\u00d7 (need > 1.3\u00d7)",
+          "blocking": true
+        },
+        {
+          "name": "D3_top_vs_bottom_decile",
+          "status": "pass",
+          "value": 21.838937182220764,
+          "threshold": 2.0,
+          "detail": "top decile mean=0.4670, top/bot ratio=21.84\u00d7 (need \u2265 2\u00d7 ratio AND top \u2265 1.5\u00d7prevalence=0.2074)",
+          "blocking": true
+        },
+        {
+          "name": "D4_magnitude_ic",
+          "status": "pass",
+          "value": 0.3710924689031169,
+          "threshold": 0.0,
+          "detail": "median daily MFE-IC=0.3711, t-stat=20.72 (need > 0 with t > 2)",
+          "blocking": true
+        },
+        {
+          "name": "D5_top5_magnitude_lift",
+          "status": "warn",
+          "value": 1.2187704894382303,
+          "threshold": 1.3,
+          "detail": "top-5 magnitude lift=1.219\u00d7 (warn if < 1.3\u00d7)",
+          "blocking": false
+        },
+        {
+          "name": "D6_tail_recall",
+          "status": "pass",
+          "value": 0.6083333333333333,
+          "threshold": 0.2,
+          "detail": "tail recall (top-1% MFE \u2192 top decile P)=0.608 (warn if < 0.20)",
+          "blocking": false
+        }
+      ],
+      "tables": {
+        "decile_binary_mode_a": [
+          {
+            "decile": 1,
+            "n": 1216,
+            "p_min": 0.0,
+            "p_max": 0.04810126582278481,
+            "mean": 0.02138157894736842,
+            "median": 0.0,
+            "p90": 0.0
+          },
+          {
+            "decile": 2,
+            "n": 1836,
+            "p_min": 0.05415162454873646,
+            "p_max": 0.05415162454873646,
+            "mean": 0.0332244008714597,
+            "median": 0.0,
+            "p90": 0.0
+          },
+          {
+            "decile": 3,
+            "n": 675,
+            "p_min": 0.0547945205479452,
+            "p_max": 0.054878048780487805,
+            "mean": 0.04296296296296296,
+            "median": 0.0,
+            "p90": 0.0
+          },
+          {
+            "decile": 4,
+            "n": 1450,
+            "p_min": 0.05567459734424402,
+            "p_max": 0.09195402298850575,
+            "mean": 0.06,
+            "median": 0.0,
+            "p90": 0.0
+          },
+          {
+            "decile": 5,
+            "n": 1228,
+            "p_min": 0.10909090909090909,
+            "p_max": 0.11500974658869394,
+            "mean": 0.08794788273615635,
+            "median": 0.0,
+            "p90": 0.0
+          },
+          {
+            "decile": 6,
+            "n": 1268,
+            "p_min": 0.12254610886189832,
+            "p_max": 0.16271186440677965,
+            "mean": 0.12854889589905363,
+            "median": 0.0,
+            "p90": 1.0
+          },
+          {
+            "decile": 7,
+            "n": 1561,
+            "p_min": 0.1816949698490153,
+            "p_max": 0.19054441260744986,
+            "mean": 0.19026265214606022,
+            "median": 0.0,
+            "p90": 1.0
+          },
+          {
+            "decile": 8,
+            "n": 366,
+            "p_min": 0.23539808276728438,
+            "p_max": 0.24550898203592814,
+            "mean": 0.1885245901639344,
+            "median": 0.0,
+            "p90": 1.0
+          },
+          {
+            "decile": 9,
+            "n": 1877,
+            "p_min": 0.24578587186529197,
+            "p_max": 0.2885304659498208,
+            "mean": 0.31592967501331914,
+            "median": 0.0,
+            "p90": 1.0
+          },
+          {
+            "decile": 10,
+            "n": 469,
+            "p_min": 0.2984963579028436,
+            "p_max": 0.6291986329272957,
+            "mean": 0.4669509594882729,
+            "median": 0.0,
+            "p90": 1.0
+          }
+        ],
+        "decile_magnitude_mode_a": [
+          {
+            "decile": 1,
+            "n": 1216,
+            "p_min": 0.0,
+            "p_max": 0.04810126582278481,
+            "mean": 7.422525762207939,
+            "median": 4.820575588652787,
+            "p90": 17.544977240047242
+          },
+          {
+            "decile": 2,
+            "n": 1836,
+            "p_min": 0.05415162454873646,
+            "p_max": 0.05415162454873646,
+            "mean": 8.839781071672498,
+            "median": 5.6660169939704685,
+            "p90": 21.119681908896894
+          },
+          {
+            "decile": 3,
+            "n": 675,
+            "p_min": 0.0547945205479452,
+            "p_max": 0.054878048780487805,
+            "mean": 9.778752261809307,
+            "median": 6.456400742115043,
+            "p90": 22.14674833719584
+          },
+          {
+            "decile": 4,
+            "n": 1450,
+            "p_min": 0.05567459734424402,
+            "p_max": 0.09195402298850575,
+            "mean": 10.43273935546161,
+            "median": 6.049453778133451,
+            "p90": 24.78878998786128
+          },
+          {
+            "decile": 5,
+            "n": 1228,
+            "p_min": 0.10909090909090909,
+            "p_max": 0.11500974658869394,
+            "mean": 11.959623796297553,
+            "median": 7.4298472820205745,
+            "p90": 28.241795527373824
+          },
+          {
+            "decile": 6,
+            "n": 1268,
+            "p_min": 0.12254610886189832,
+            "p_max": 0.16271186440677965,
+            "mean": 15.255675070741116,
+            "median": 8.50715624307341,
+            "p90": 33.950092467333
+          },
+          {
+            "decile": 7,
+            "n": 1561,
+            "p_min": 0.1816949698490153,
+            "p_max": 0.19054441260744986,
+            "mean": 19.935639969042043,
+            "median": 10.316901408450697,
+            "p90": 44.911060585796434
+          },
+          {
+            "decile": 8,
+            "n": 366,
+            "p_min": 0.23539808276728438,
+            "p_max": 0.24550898203592814,
+            "mean": 19.322402002767298,
+            "median": 11.65523708965579,
+            "p90": 46.94707405296748
+          },
+          {
+            "decile": 9,
+            "n": 1877,
+            "p_min": 0.24578587186529197,
+            "p_max": 0.2885304659498208,
+            "mean": 29.345674682968948,
+            "median": 16.147495164937766,
+            "p90": 66.73522043997463
+          },
+          {
+            "decile": 10,
+            "n": 469,
+            "p_min": 0.2984963579028436,
+            "p_max": 0.6291986329272957,
+            "mean": 48.927515180663256,
+            "median": 26.27070245573957,
+            "p90": 98.66169590617517
+          }
+        ],
+        "summary": [
+          {
+            "view": "A_binary",
+            "n_rows": 11946,
+            "n_days": 730,
+            "ic_median": 0.40377494272292724,
+            "ic_t_stat": 24.462263895611436,
+            "top1_lift": 2.732154211294301,
+            "top5_lift": 1.610241473709463,
+            "top10_lift": 1.207659505101036,
+            "tail_recall": 0.3668280871670702,
+            "top_vs_bot_decile": 21.838937182220764
+          },
+          {
+            "view": "A_magnitude",
+            "n_rows": 11946,
+            "n_days": 1177,
+            "ic_median": 0.3710924689031169,
+            "ic_t_stat": 20.71573217910043,
+            "top1_lift": 1.6479085455042939,
+            "top5_lift": 1.2187704894382303,
+            "top10_lift": 1.070958184622072,
+            "tail_recall": 0.6083333333333333,
+            "top_vs_bot_decile": 6.591760911060692
+          }
+        ]
+      },
+      "detail": "<b>Mode A (Entry-only):</b> Evaluated only on the rows that became actual SEPA candidates (drives quality gates).<br><b>Mode B (Stateful):</b> Evaluated across all rows in the window to test signal retention (informational, no gates).<br><br><b>Metrics Summary:</b> Mode A: n=11946 across 730 days. Binary IC median=0.4038 (t=24.46), MFE IC median=0.3711 (t=20.72). Mode B: not built (skip mode_b).",
+      "aggregate_score": 1,
+      "gates_passed": 5,
+      "gates_total": 6,
+      "has_blocking_failure": false
+    },
+    "E": {
+      "name": "E",
+      "title": "Gate performance (threshold sweep)",
+      "scored": true,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "precision_at_t=0.6",
+          "value": 1.0,
+          "detail": "P(label=1 | P \u2265 0.6). Prevalence=0.1383."
+        },
+        {
+          "name": "precision_lift_at_t=0.6",
+          "value": 7.231234866828087,
+          "detail": "precision / prevalence (\u2265 1.5 = gate adds value)"
+        },
+        {
+          "name": "coverage_pct_at_t=0.6",
+          "value": 0.008371002846140967,
+          "detail": "fraction of pool above T (in percent)"
+        },
+        {
+          "name": "trades_per_month_at_t=0.6",
+          "value": 1.0,
+          "detail": "min usable = 3.0/month"
+        },
+        {
+          "name": "mean_mfe_given_gate_at_t=0.6",
+          "value": 115.99450837432705,
+          "detail": "E[MFE % | P \u2265 T*]"
+        },
+        {
+          "name": "p_mfe_gt_30_at_t=0.6",
+          "value": 1.0,
+          "detail": "P(MFE > 30% | P \u2265 T*) \u2014 30% home-run gate"
+        },
+        {
+          "name": "p_mfe_gt_50_at_t=0.6",
+          "value": 1.0,
+          "detail": "P(MFE > 50% | P \u2265 T*) \u2014 bigger winners"
+        },
+        {
+          "name": "p_mfe_gt_100_at_t=0.6",
+          "value": 1.0,
+          "detail": "P(MFE > 100% | P \u2265 T*) \u2014 10-baggers"
+        }
+      ],
+      "rubric_scores": {
+        "precision_lift": 3,
+        "coverage": 0
+      },
+      "gates": [
+        {
+          "name": "E1_precision_lift",
+          "status": "pass",
+          "value": 7.231234866828087,
+          "threshold": 1.5,
+          "detail": "precision at T*=0.6: 7.231\u00d7 prevalence (need > 1.5\u00d7)",
+          "blocking": true
+        },
+        {
+          "name": "E2_trade_frequency",
+          "status": "fail",
+          "value": 1.0,
+          "threshold": 3.0,
+          "detail": "trades/month at T*=0.6: 1.00 (need \u2265 3.0)",
+          "blocking": true
+        }
+      ],
+      "tables": {
+        "threshold_sweep": [
+          {
+            "threshold": 0.3,
+            "n_pass": 468,
+            "coverage_pct": 3.917629331993973,
+            "precision": 0.46794871794871795,
+            "precision_lift_over_prevalence": 3.383847085118272,
+            "recall": 0.13256658595641646,
+            "trades_per_month": 7.256622516556291,
+            "mean_mfe_given_gate": 49.01519205745504,
+            "median_mfe_given_gate": 26.29535122786978,
+            "p_mfe_gt_30": 0.46794871794871795,
+            "p_mfe_gt_50": 0.26495726495726496,
+            "p_mfe_gt_100": 0.10042735042735043
+          },
+          {
+            "threshold": 0.4,
+            "n_pass": 122,
+            "coverage_pct": 1.021262347229198,
+            "precision": 0.639344262295082,
+            "precision_lift_over_prevalence": 4.62324852141468,
+            "recall": 0.04721549636803874,
+            "trades_per_month": 1.9052719343252948,
+            "mean_mfe_given_gate": 61.193562808045534,
+            "median_mfe_given_gate": 38.63012700025757,
+            "p_mfe_gt_30": 0.639344262295082,
+            "p_mfe_gt_50": 0.39344262295081966,
+            "p_mfe_gt_100": 0.13114754098360656
+          },
+          {
+            "threshold": 0.5,
+            "n_pass": 121,
+            "coverage_pct": 1.0128913443830572,
+            "precision": 0.6446280991735537,
+            "precision_lift_over_prevalence": 4.661457186880916,
+            "recall": 0.04721549636803874,
+            "trades_per_month": 1.8896549512570548,
+            "mean_mfe_given_gate": 61.658523394827284,
+            "median_mfe_given_gate": 38.811039005321305,
+            "p_mfe_gt_30": 0.6446280991735537,
+            "p_mfe_gt_50": 0.39669421487603307,
+            "p_mfe_gt_100": 0.1322314049586777
+          },
+          {
+            "threshold": 0.6,
+            "n_pass": 1,
+            "coverage_pct": 0.008371002846140967,
+            "precision": 1.0,
+            "precision_lift_over_prevalence": 7.231234866828087,
+            "recall": 0.0006053268765133172,
+            "trades_per_month": 1.0,
+            "mean_mfe_given_gate": 115.99450837432705,
+            "median_mfe_given_gate": 115.99450837432705,
+            "p_mfe_gt_30": 1.0,
+            "p_mfe_gt_50": 1.0,
+            "p_mfe_gt_100": 1.0
+          },
+          {
+            "threshold": 0.7,
+            "n_pass": 0,
+            "coverage_pct": 0.0,
+            "precision": NaN,
+            "precision_lift_over_prevalence": NaN,
+            "recall": NaN,
+            "trades_per_month": 0.0,
+            "mean_mfe_given_gate": NaN,
+            "median_mfe_given_gate": NaN,
+            "p_mfe_gt_30": NaN,
+            "p_mfe_gt_50": NaN,
+            "p_mfe_gt_100": NaN
+          }
+        ],
+        "precision_by_year_at_t_star": [
+          {
+            "year": 2021,
+            "n_pass": 1,
+            "precision": 1.0
+          }
+        ]
+      },
+      "detail": "Sweep T \u2208 [0.3, 0.4, 0.5, 0.6, 0.7]. At T*=0.6: precision=1.0000 (7.23\u00d7 prev), coverage=0.01%, trades/mo=1.00, E[MFE|gate]=115.99%.",
+      "aggregate_score": 0,
+      "gates_passed": 1,
+      "gates_total": 2,
+      "has_blocking_failure": true
+    },
+    "F": {
+      "name": "F",
+      "title": "Regime & temporal robustness",
+      "scored": true,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "auc_regime_pass_rate_m03",
+          "value": 1.0,
+          "detail": "fraction of M03 quintiles with AUC > 0.55 (min n=30)"
+        },
+        {
+          "name": "auc_regime_pass_rate_target_exp",
+          "value": 1.0,
+          "detail": "fraction of target_exposure buckets with AUC > 0.55 (min n=30)"
+        },
+        {
+          "name": "yoy_auc_range",
+          "value": 0.13049233630937251,
+          "detail": "max(yearly AUC) - min(yearly AUC) for years with n\u226530"
+        }
+      ],
+      "rubric_scores": {
+        "regime_pass_rate": 3,
+        "yoy_stability": 3
+      },
+      "gates": [
+        {
+          "name": "F1_regime_pass_rate",
+          "status": "pass",
+          "value": 1.0,
+          "threshold": 0.6,
+          "detail": "min pass-rate across taxonomies=1.00",
+          "blocking": true
+        },
+        {
+          "name": "F2_no_year_worse_than_random",
+          "status": "pass",
+          "value": 0.0,
+          "threshold": 0.0,
+          "detail": "years with AUC < 0.50: none",
+          "blocking": false
+        }
+      ],
+      "tables": {
+        "taxonomy_m03_quintiles": [
+          {
+            "bucket": "Q1",
+            "n": 2395,
+            "n_positives": 387,
+            "prevalence": 0.16158663883089772,
+            "auc": 0.7820854823599657,
+            "pr_auc": 0.38036621356403394,
+            "brier": 0.11746825050548079
+          },
+          {
+            "bucket": "Q2",
+            "n": 2398,
+            "n_positives": 291,
+            "prevalence": 0.1213511259382819,
+            "auc": 0.7719424859370745,
+            "pr_auc": 0.28990797422711456,
+            "brier": 0.09563515859090939
+          },
+          {
+            "bucket": "Q3",
+            "n": 2377,
+            "n_positives": 323,
+            "prevalence": 0.13588557004627683,
+            "auc": 0.7357312319690342,
+            "pr_auc": 0.29848666282556924,
+            "brier": 0.10599403528492742
+          },
+          {
+            "bucket": "Q4",
+            "n": 2397,
+            "n_positives": 351,
+            "prevalence": 0.14643304130162704,
+            "auc": 0.7771811024499197,
+            "pr_auc": 0.35216456075787145,
+            "brier": 0.109300249699715
+          },
+          {
+            "bucket": "Q5",
+            "n": 2379,
+            "n_positives": 300,
+            "prevalence": 0.12610340479192939,
+            "auc": 0.7667532467532467,
+            "pr_auc": 0.30229704352956926,
+            "brier": 0.09787660534977151
+          }
+        ],
+        "taxonomy_target_exposure": [
+          {
+            "bucket": "0.15",
+            "n": 1723,
+            "n_positives": 156,
+            "prevalence": 0.09053975623911782,
+            "auc": 0.8593098031515389,
+            "pr_auc": 0.36465811727725467,
+            "brier": 0.07239850052576328
+          },
+          {
+            "bucket": "0.35",
+            "n": 333,
+            "n_positives": 51,
+            "prevalence": 0.15315315315315314,
+            "auc": 0.7496523432067863,
+            "pr_auc": 0.3366905536802922,
+            "brier": 0.11577779764515665
+          },
+          {
+            "bucket": "0.5",
+            "n": 828,
+            "n_positives": 153,
+            "prevalence": 0.18478260869565216,
+            "auc": 0.7319147906076011,
+            "pr_auc": 0.339964773301632,
+            "brier": 0.13697955663488393
+          },
+          {
+            "bucket": "0.75",
+            "n": 1936,
+            "n_positives": 287,
+            "prevalence": 0.14824380165289255,
+            "auc": 0.7840418541064904,
+            "pr_auc": 0.3415350676840472,
+            "brier": 0.10992196011357852
+          },
+          {
+            "bucket": "0.85",
+            "n": 3127,
+            "n_positives": 442,
+            "prevalence": 0.14134953629677008,
+            "auc": 0.7311854866570607,
+            "pr_auc": 0.2836814621966938,
+            "brier": 0.11094523502885836
+          },
+          {
+            "bucket": "1.0",
+            "n": 3999,
+            "n_positives": 563,
+            "prevalence": 0.14078519629907477,
+            "auc": 0.7799989454464998,
+            "pr_auc": 0.3500985562151548,
+            "brier": 0.10527836313095364
+          }
+        ],
+        "per_year": [
+          {
+            "bucket": "2021",
+            "n": 3119,
+            "n_positives": 419,
+            "prevalence": 0.1343379288233408,
+            "auc": 0.8160775214355166,
+            "pr_auc": 0.39307174691737745,
+            "brier": 0.09819722980664308
+          },
+          {
+            "bucket": "2022",
+            "n": 1020,
+            "n_positives": 91,
+            "prevalence": 0.0892156862745098,
+            "auc": 0.8460828729935297,
+            "pr_auc": 0.33967341431866704,
+            "brier": 0.0730566668699012
+          },
+          {
+            "bucket": "2023",
+            "n": 1878,
+            "n_positives": 252,
+            "prevalence": 0.134185303514377,
+            "auc": 0.7956141763798591,
+            "pr_auc": 0.35550244340222326,
+            "brier": 0.1006146272099292
+          },
+          {
+            "bucket": "2024",
+            "n": 2650,
+            "n_positives": 355,
+            "prevalence": 0.1339622641509434,
+            "auc": 0.7155905366841572,
+            "pr_auc": 0.2634603354597174,
+            "brier": 0.10727420912376635
+          },
+          {
+            "bucket": "2025",
+            "n": 2064,
+            "n_positives": 339,
+            "prevalence": 0.16424418604651161,
+            "auc": 0.7462297464836903,
+            "pr_auc": 0.32651730324184614,
+            "brier": 0.12248270395433343
+          },
+          {
+            "bucket": "2026",
+            "n": 1215,
+            "n_positives": 196,
+            "prevalence": 0.16131687242798354,
+            "auc": 0.7231379303438745,
+            "pr_auc": 0.2895326865522906,
+            "brier": 0.12397395043377106
+          }
+        ],
+        "per_sector": [
+          {
+            "bucket": "Basic Materials",
+            "n": 462,
+            "n_positives": 77,
+            "prevalence": 0.16666666666666666,
+            "auc": 0.7466520492494518,
+            "pr_auc": 0.3444257967602452,
+            "brier": 0.12437509412552632
+          },
+          {
+            "bucket": "Communication Services",
+            "n": 390,
+            "n_positives": 57,
+            "prevalence": 0.14615384615384616,
+            "auc": 0.7691112164796375,
+            "pr_auc": 0.36176653136534054,
+            "brier": 0.10976397122197039
+          },
+          {
+            "bucket": "Consumer Cyclical",
+            "n": 1322,
+            "n_positives": 174,
+            "prevalence": 0.13161875945537066,
+            "auc": 0.7462979094076656,
+            "pr_auc": 0.31347401840005146,
+            "brier": 0.1028469008517386
+          },
+          {
+            "bucket": "Consumer Defensive",
+            "n": 495,
+            "n_positives": 57,
+            "prevalence": 0.11515151515151516,
+            "auc": 0.7780381318593288,
+            "pr_auc": 0.2967357425389277,
+            "brier": 0.09223739838019222
+          },
+          {
+            "bucket": "ETF:Commodity",
+            "n": 1,
+            "n_positives": 0,
+            "prevalence": 0.0,
+            "auc": NaN,
+            "pr_auc": NaN,
+            "brier": 0.002932398441267317
+          },
+          {
+            "bucket": "Energy",
+            "n": 794,
+            "n_positives": 151,
+            "prevalence": 0.190176322418136,
+            "auc": 0.7075947802622229,
+            "pr_auc": 0.3697634302483846,
+            "brier": 0.14134992386117393
+          },
+          {
+            "bucket": "Financial Services",
+            "n": 2118,
+            "n_positives": 167,
+            "prevalence": 0.07884796978281397,
+            "auc": 0.8224586194090548,
+            "pr_auc": 0.3505139448976115,
+            "brier": 0.06196264210690171
+          },
+          {
+            "bucket": "Healthcare",
+            "n": 1672,
+            "n_positives": 294,
+            "prevalence": 0.17583732057416268,
+            "auc": 0.7436773693512239,
+            "pr_auc": 0.3483829649225834,
+            "brier": 0.13047021850402252
+          },
+          {
+            "bucket": "Industrials",
+            "n": 2046,
+            "n_positives": 266,
+            "prevalence": 0.1300097751710655,
+            "auc": 0.7763960462955138,
+            "pr_auc": 0.3321861312880344,
+            "brier": 0.10023846305438663
+          },
+          {
+            "bucket": "Real Estate",
+            "n": 619,
+            "n_positives": 47,
+            "prevalence": 0.07592891760904685,
+            "auc": 0.7049918166939444,
+            "pr_auc": 0.2660779223276254,
+            "brier": 0.06467783667520693
+          },
+          {
+            "bucket": "Technology",
+            "n": 1758,
+            "n_positives": 335,
+            "prevalence": 0.19055745164960183,
+            "auc": 0.7115417291616408,
+            "pr_auc": 0.3429981038451498,
+            "brier": 0.14131152739122052
+          },
+          {
+            "bucket": "Utilities",
+            "n": 269,
+            "n_positives": 27,
+            "prevalence": 0.10037174721189591,
+            "auc": 0.8813131313131313,
+            "pr_auc": 0.394340980662333,
+            "brier": 0.07584082778482173
+          }
+        ]
+      },
+      "detail": "M03 pass-rate=1.00, target_exp pass-rate=1.00, yoy AUC range=0.130. PSI: no features could be PSI-scored.",
+      "aggregate_score": 3,
+      "gates_passed": 2,
+      "gates_total": 2,
+      "has_blocking_failure": false
+    },
+    "G": {
+      "name": "G",
+      "title": "Edge existence (statistical)",
+      "scored": true,
+      "not_implemented": false,
+      "metrics": [
+        {
+          "name": "auc_observed",
+          "value": 0.7680651026879948,
+          "detail": "observed metric (random baseline = 0.5)"
+        },
+        {
+          "name": "auc_null_percentile",
+          "value": 100.0,
+          "detail": "observed metric's rank in permutation null (0-100)"
+        },
+        {
+          "name": "auc_p_value",
+          "value": 0.0,
+          "detail": "one-sided P(null >= observed)"
+        },
+        {
+          "name": "auc_ci_lo",
+          "value": 0.744298368413938,
+          "detail": "block-bootstrap 5th percentile"
+        },
+        {
+          "name": "auc_ci_hi",
+          "value": 0.790263559052168,
+          "detail": "block-bootstrap 95th percentile"
+        },
+        {
+          "name": "ic_binary_observed",
+          "value": 0.35040316215321476,
+          "detail": "observed metric (random baseline = 0.0)"
+        },
+        {
+          "name": "ic_binary_null_percentile",
+          "value": 100.0,
+          "detail": "observed metric's rank in permutation null (0-100)"
+        },
+        {
+          "name": "ic_binary_p_value",
+          "value": 0.0,
+          "detail": "one-sided P(null >= observed)"
+        },
+        {
+          "name": "ic_binary_ci_lo",
+          "value": 0.3193125679522769,
+          "detail": "block-bootstrap 5th percentile"
+        },
+        {
+          "name": "ic_binary_ci_hi",
+          "value": 0.38187299180587103,
+          "detail": "block-bootstrap 95th percentile"
+        },
+        {
+          "name": "top5_lift_observed",
+          "value": 1.610241473709463,
+          "detail": "observed metric (random baseline = 1.0)"
+        },
+        {
+          "name": "top5_lift_null_percentile",
+          "value": 100.0,
+          "detail": "observed metric's rank in permutation null (0-100)"
+        },
+        {
+          "name": "top5_lift_p_value",
+          "value": 0.0,
+          "detail": "one-sided P(null >= observed)"
+        },
+        {
+          "name": "top5_lift_ci_lo",
+          "value": 1.7058243635210715,
+          "detail": "block-bootstrap 5th percentile"
+        },
+        {
+          "name": "top5_lift_ci_hi",
+          "value": 2.0230515875508335,
+          "detail": "block-bootstrap 95th percentile"
+        },
+        {
+          "name": "n_positives_eval",
+          "value": 1652.0,
+          "detail": "positives in eval window (\u2265 100 = adequate)"
+        }
+      ],
+      "rubric_scores": {
+        "permutation_min": 3,
+        "bootstrap_min": 3,
+        "sample_adequacy": 3
+      },
+      "gates": [
+        {
+          "name": "G1_permutation_null",
+          "status": "pass",
+          "value": 3.0,
+          "threshold": 2.0,
+          "detail": "3/3 of {AUC, binary-IC, top-5 lift} sit above the 95th percentile of their permutation null. AUC pct=100.0, IC pct=100.0, top5 pct=100.0",
+          "blocking": true
+        },
+        {
+          "name": "G2_bootstrap_ci_excludes_baseline",
+          "status": "pass",
+          "value": 3.0,
+          "threshold": 1.0,
+          "detail": "3/3 metric CIs sit entirely above their random baseline (AUC>0.5, IC>0, top5>1.0)",
+          "blocking": true
+        },
+        {
+          "name": "G3_sample_adequacy",
+          "status": "pass",
+          "value": 1652.0,
+          "threshold": 100.0,
+          "detail": "n_positives=1652; < 50 noisy, < 100 marginal, \u2265 500 strong",
+          "blocking": false
+        }
+      ],
+      "tables": {
+        "summary": [
+          {
+            "metric": "auc",
+            "observed": 0.7680651026879948,
+            "baseline": 0.5,
+            "null_median": 0.49958640309054236,
+            "null_percentile": 100.0,
+            "p_value": 0.0,
+            "ci_lo_5pct": 0.744298368413938,
+            "ci_hi_95pct": 0.790263559052168,
+            "bootstrap_median": 0.7683220274415452,
+            "ci_excludes_baseline": true
+          },
+          {
+            "metric": "ic_binary",
+            "observed": 0.35040316215321476,
+            "baseline": 0.0,
+            "null_median": -0.00014453795105548518,
+            "null_percentile": 100.0,
+            "p_value": 0.0,
+            "ci_lo_5pct": 0.3193125679522769,
+            "ci_hi_95pct": 0.38187299180587103,
+            "bootstrap_median": 0.34941884227654185,
+            "ci_excludes_baseline": true
+          },
+          {
+            "metric": "top5_lift",
+            "observed": 1.610241473709463,
+            "baseline": 1.0,
+            "null_median": 0.9997928270642659,
+            "null_percentile": 100.0,
+            "p_value": 0.0,
+            "ci_lo_5pct": 1.7058243635210715,
+            "ci_hi_95pct": 2.0230515875508335,
+            "bootstrap_median": 1.8503366596338329,
+            "ci_excludes_baseline": true
+          }
+        ]
+      },
+      "detail": "n_rows=11946 across 1288 days, n_positives=1652. AUC=0.7681 (perm pct=100.0, CI=[0.7443, 0.7903]). Binary IC=0.3504 (perm pct=100.0, CI=[0.3193, 0.3819]). Top-5 lift=1.610\u00d7 (perm pct=100.0, CI=[1.706, 2.023]).",
+      "aggregate_score": 3,
+      "gates_passed": 3,
+      "gates_total": 3,
+      "has_blocking_failure": false
+    }
+  },
+  "use_case_verdicts": {
+    "selection_ranker_size_by_p": "WARNING",
+    "hit_rate_ranker_equal_size": "OK",
+    "threshold_gate": "LIMITATION",
+    "probability_sizing": "LIMITATION",
+    "composite_gate_plus_rank": "LIMITATION"
+  },
+  "use_case_reasons": {
+    "selection_ranker_size_by_p": [
+      {
+        "section": "A",
+        "verdict": "OK"
+      },
+      {
+        "section": "D_binary",
+        "verdict": "OK"
+      },
+      {
+        "section": "D_magnitude",
+        "verdict": "WARNING"
+      },
+      {
+        "section": "G",
+        "verdict": "OK"
+      }
+    ],
+    "hit_rate_ranker_equal_size": [
+      {
+        "section": "A",
+        "verdict": "OK"
+      },
+      {
+        "section": "D_binary",
+        "verdict": "OK"
+      },
+      {
+        "section": "G",
+        "verdict": "OK"
+      }
+    ],
+    "threshold_gate": [
+      {
+        "section": "A",
+        "verdict": "OK"
+      },
+      {
+        "section": "E",
+        "verdict": "LIMITATION"
+      },
+      {
+        "section": "G",
+        "verdict": "OK"
+      }
+    ],
+    "probability_sizing": [
+      {
+        "section": "A",
+        "verdict": "OK"
+      },
+      {
+        "section": "B",
+        "verdict": "OK"
+      },
+      {
+        "section": "C",
+        "verdict": "LIMITATION"
+      },
+      {
+        "section": "G",
+        "verdict": "OK"
+      }
+    ],
+    "composite_gate_plus_rank": [
+      {
+        "section": "A",
+        "verdict": "OK"
+      },
+      {
+        "section": "C",
+        "verdict": "LIMITATION"
+      },
+      {
+        "section": "D_binary",
+        "verdict": "OK"
+      },
+      {
+        "section": "D_magnitude",
+        "verdict": "WARNING"
+      },
+      {
+        "section": "E",
+        "verdict": "LIMITATION"
+      },
+      {
+        "section": "G",
+        "verdict": "OK"
+      }
+    ]
+  },
+  "aggregate": {
+    "total": 60.8,
+    "max": 100,
+    "per_section": {
+      "D_binary": 2,
+      "D_magnitude": 1,
+      "B": 2,
+      "C": 3,
+      "E": 0,
+      "F": 3,
+      "G": 3
+    },
+    "band": "60.8 / 100"
+  },
+  "benchmarks": {
+    "model": {
+      "name": "model[m01_binary/v1]",
+      "n_rows": 11946,
+      "auc": 0.7680651026879948,
+      "pr_auc": 0.32645200960490267,
+      "brier": 0.11464694035255944,
+      "log_loss": 0.37594634247108527,
+      "binary_ic_mean": 0.35040316215321476,
+      "top5_lift": 1.610241473709463,
+      "prevalence": 0.13828896701824878
+    },
+    "sepa_composite": {
+      "name": "sepa_composite[rs_rating,rs,rs_ma,rs_line_log,return_20d,price_vs_spy,vol_ratio,rs_universe_rank,pct_from_high_52w,dist_from_52w_high]",
+      "n_rows": 11946,
+      "auc": 0.6158699077626262,
+      "pr_auc": 0.18801671021852914,
+      "brier": 0.2628199584715581,
+      "log_loss": 0.8295763995273503,
+      "binary_ic_mean": 0.18003589386514163,
+      "top5_lift": 1.3126703637334396,
+      "prevalence": 0.13828896701824878
+    },
+    "delta_vs_sepa_composite": {
+      "delta_auc": 0.1521951949253686,
+      "delta_pr_auc": 0.13843529938637353,
+      "delta_brier": 0.14817301811899863,
+      "delta_binary_ic": 0.17036726828807314,
+      "delta_top5_lift": 0.29757110997602343
+    }
+  },
+  "meta": {
+    "split": {
+      "model_id": "m01_binary/v1",
+      "model_kind": "binary",
+      "num_class": 2,
+      "n_rows": 11946,
+      "n_positives": 1652,
+      "prevalence": 0.13828896701824878,
+      "date_min": "2021-01-04 00:00:00",
+      "date_max": "2026-05-22 00:00:00",
+      "feature_version": "v3.1",
+      "trend_ok_filtered": true,
+      "n_features": 97,
+      "outcome_columns_excluded": [
+        "days_observed",
+        "entry_date",
+        "entry_price",
+        "exit_date",
+        "exit_price",
+        "holding_days",
+        "is_new_trigger",
+        "mae_date",
+        "mae_pct",
+        "mfe_date",
+        "mfe_pct",
+        "return_at_exit",
+        "return_pct",
+        "sepa_exit_date",
+        "sl_date",
+        "sl_exit_date",
+        "sl_pct",
+        "sl_triggered",
+        "trade_id"
+      ]
+    },
+    "build_seconds": 763.12,
+    "phase": "3 (A/B/C/D/E/F/G + benchmarks)",
+    "mode_a_pool_rows": 11946,
+    "mode_b_pool_rows": null,
+    "section_g_n_permutations": 500,
+    "section_g_n_bootstrap": 500
+  }
+}

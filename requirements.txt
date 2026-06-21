@@ -18,6 +18,8 @@ openpyxl>=3.1.0
 # Visualization
 matplotlib>=3.7.0
 seaborn>=0.12.0
+anywidget>=0.9.21
+nbformat>=5
 
 # Progress Bars
 tqdm>=4.65.0
@@ -27,6 +29,10 @@ scikit-learn>=1.3.0
 
 # Database
 # sqlite3 (built-in to Python)
+duckdb>=0.10.0
+
+# Object storage (Cloudflare R2 / S3-compatible)
+boto3>=1.34.0
 
 # Core ML framework
 xgboost>=2.0.0          # Gradient boosting for classification
@@ -41,3 +47,9 @@ shap>=0.42.0            # SHAP values for feature importance
 # Dashboard & Visualization
 streamlit>=1.30.0
 plotly>=5.18.0
+
+# Backtesting
+vectorbt>=0.28.0
+
+# Orchestration (daily pipeline scheduling)
+prefect>=3.0.0

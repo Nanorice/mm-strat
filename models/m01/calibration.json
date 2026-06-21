@@ -1,0 +1,100 @@
+{
+  "generated_at": "2026-02-10T22:09:25.456558",
+  "model_name": "m01",
+  "n_samples": 7231,
+  "n_bins": 10,
+  "is_monotonic": false,
+  "calibration_error": 1.5964995575620973,
+  "deciles": [
+    {
+      "decile": 1,
+      "pred_mean": 0.5770000219345093,
+      "pred_min": -0.8360000252723694,
+      "pred_max": 0.8849999904632568,
+      "count": 724,
+      "true_mean": 0.804,
+      "calibrated_mean": 0.7910000085830688
+    },
+    {
+      "decile": 2,
+      "pred_mean": 1.003000020980835,
+      "pred_min": 0.8849999904632568,
+      "pred_max": 1.0989999771118164,
+      "count": 723,
+      "true_mean": 1.257,
+      "calibrated_mean": 1.2029999494552612
+    },
+    {
+      "decile": 3,
+      "pred_mean": 1.1660000085830688,
+      "pred_min": 1.0989999771118164,
+      "pred_max": 1.2259999513626099,
+      "count": 723,
+      "true_mean": 1.268,
+      "calibrated_mean": 1.3140000104904175
+    },
+    {
+      "decile": 4,
+      "pred_mean": 1.281000018119812,
+      "pred_min": 1.2259999513626099,
+      "pred_max": 1.3329999446868896,
+      "count": 723,
+      "true_mean": 1.448,
+      "calibrated_mean": 1.4329999685287476
+    },
+    {
+      "decile": 5,
+      "pred_mean": 1.3769999742507935,
+      "pred_min": 1.3329999446868896,
+      "pred_max": 1.4179999828338623,
+      "count": 723,
+      "true_mean": 1.54,
+      "calibrated_mean": 1.4839999675750732
+    },
+    {
+      "decile": 6,
+      "pred_mean": 1.4520000219345093,
+      "pred_min": 1.4179999828338623,
+      "pred_max": 1.4850000143051147,
+      "count": 723,
+      "true_mean": 1.506,
+      "calibrated_mean": 1.5069999694824219
+    },
+    {
+      "decile": 7,
+      "pred_mean": 1.5219999551773071,
+      "pred_min": 1.4850000143051147,
+      "pred_max": 1.562000036239624,
+      "count": 723,
+      "true_mean": 1.564,
+      "calibrated_mean": 1.5069999694824219
+    },
+    {
+      "decile": 8,
+      "pred_mean": 1.6059999465942383,
+      "pred_min": 1.562000036239624,
+      "pred_max": 1.652999997138977,
+      "count": 723,
+      "true_mean": 1.516,
+      "calibrated_mean": 1.5069999694824219
+    },
+    {
+      "decile": 9,
+      "pred_mean": 1.7109999656677246,
+      "pred_min": 1.652999997138977,
+      "pred_max": 1.7769999504089355,
+      "count": 723,
+      "true_mean": 1.503,
+      "calibrated_mean": 1.5069999694824219
+    },
+    {
+      "decile": 10,
+      "pred_mean": 1.906999945640564,
+      "pred_min": 1.7769999504089355,
+      "pred_max": 2.4240000247955322,
+      "count": 723,
+      "true_mean": 1.386,
+      "calibrated_mean": 1.5410000085830688
+    }
+  ]
+}

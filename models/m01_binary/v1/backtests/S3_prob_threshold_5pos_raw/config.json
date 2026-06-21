@@ -1,0 +1,17 @@
+{
+  "id": "S3_prob_threshold_5pos",
+  "description": "Calibrated P(>30%) >= 0.30 entry gate, fixed 5-position cap.",
+  "strategy_kwargs": {
+    "entry_mode": "top_n",
+    "entry_top_n": 5,
+    "rank_by": "prob_elite",
+    "min_prob_elite": 0.3,
+    "regime_max_pos": {
+      "0": 0,
+      "1": 5,
+      "2": 5,
+      "3": 5,
+      "4": 5
+    }
+  }
+}

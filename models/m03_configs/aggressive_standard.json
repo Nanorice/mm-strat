@@ -1,0 +1,38 @@
+{
+  "model_name": "M03",
+  "model_type": "factor_calculator",
+  "version": "1.1.0",
+  "archetype": "aggressive",
+  "vix_curve": "standard",
+  "description": "Balanced but Fast + Normal VIX sensitivity",
+  "hypothesis": "Low trend weight for speed, balanced risk/liq.",
+  "pillars": {
+    "trend": {
+      "weight": 0.2,
+      "sma_period": 200
+    },
+    "liquidity": {
+      "weight": 0.4,
+      "slope_lookback": 20
+    },
+    "risk_appetite": {
+      "weight": 0.4,
+      "vix_bull_threshold": 20,
+      "vix_bear_threshold": 25,
+      "vix_extreme_threshold": 40,
+      "spread_bull_threshold": 4.0,
+      "spread_bear_threshold": 6.0,
+      "spread_extreme_threshold": 8.0
+    }
+  },
+  "thresholds": {
+    "strong_bull": 80,
+    "bull": 60,
+    "neutral": 40,
+    "bear": 20
+  },
+  "gating_rules": {
+    "long_allow_min": 30,
+    "long_reduced_min": 50
+  }
+}

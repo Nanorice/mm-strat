@@ -1,0 +1,46 @@
+{
+  "scoring_comparison": [
+    {
+      "method": "Raw M01",
+      "ic": 0.009701810759665102,
+      "atr_corr": 0.7038614331501801
+    },
+    {
+      "method": "Vol-Adjusted M01",
+      "ic": 0.04810952280117167,
+      "atr_corr": 0.36999689068899494
+    }
+  ],
+  "crisis_simulation": {
+    "raw_m01": {
+      "period": "2022-01-01 to 2022-12-31",
+      "n_samples": 956,
+      "ic": 0.03224701279649796,
+      "ic_pvalue": 0.3192462548051224,
+      "selection_edge": 10.641150406139076,
+      "top_decile_mean": 11.830711195290826,
+      "bottom_decile_mean": -2.8469072866028107,
+      "baseline_mean": 1.18956078915175,
+      "positive_ic_months": 8,
+      "total_months": 12,
+      "score_type": "y_pred",
+      "volatility_adjusted": false,
+      "m02_integrated": false
+    },
+    "vol_adjusted": {
+      "period": "2022-01-01 to 2022-12-31",
+      "n_samples": 956,
+      "ic": 0.08126127461203729,
+      "ic_pvalue": 0.011957093411022425,
+      "selection_edge": 7.05027943253833,
+      "top_decile_mean": 8.23984022169008,
+      "bottom_decile_mean": -3.12992124448113,
+      "baseline_mean": 1.18956078915175,
+      "positive_ic_months": 10,
+      "total_months": 12,
+      "score_type": "adjusted_score",
+      "volatility_adjusted": true,
+      "m02_integrated": false
+    }
+  }
+}

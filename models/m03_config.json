@@ -1,0 +1,47 @@
+{
+  "model_name": "M03",
+  "model_type": "factor_calculator",
+  "version": "1.3.0",
+  "description": "Market Regime Risk Score (0-100). Higher = more bullish.",
+  "rationale": "Hybrid config: Trend=0.4 (Separation), Risk=0.4 (Speed), Liq=0.2 (Support). Tight VIX for fast crash detection. Validated: Cohen D=2.24, GFC Lag=10d, Fitness=0.793.",
+  "pillars": {
+    "trend": {
+      "weight": 0.4,
+      "sma_period": 200,
+      "description": "SPY price vs 200-day SMA. Primary Separation Driver."
+    },
+    "liquidity": {
+      "weight": 0.2,
+      "slope_lookback": 10,
+      "description": "Fed Net Liquidity 10-day slope. Supporting role with fast lookback."
+    },
+    "risk_appetite": {
+      "weight": 0.4,
+      "vix_bull_threshold": 15,
+      "vix_bear_threshold": 20,
+      "vix_extreme_threshold": 30,
+      "spread_bull_threshold": 4.0,
+      "spread_bear_threshold": 5.0,
+      "spread_extreme_threshold": 7.0,
+      "description": "VIX + HY Spread. Primary Speed Driver with tight thresholds."
+    }
+  },
+  "thresholds": {
+    "strong_bull": 75,
+    "bull": 60,
+    "neutral": 45,
+    "bear": 25,
+    "calibration": {
+      "ccr_score_threshold": 42,
+      "far_score_threshold": 30,
+      "lag_score_threshold": 30,
+      "calibrated_on": "2026-01-31",
+      "ccr_target": 0.8,
+      "far_target": 0.05
+    }
+  },
+  "gating_rules": {
+    "long_allow_min": 30,
+    "long_reduced_min": 50
+  }
+}

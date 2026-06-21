@@ -1,0 +1,27 @@
+{
+  "n_trades": 355,
+  "n_folds_with_trades": 3,
+  "n_iterations": 10000,
+  "block_size_days": 60,
+  "n_blocks": 13,
+  "sharpe": {
+    "observed": 0.8928169221970662,
+    "median": 0.8716365041293404,
+    "ci_lo_95": -0.84285281972489,
+    "ci_hi_95": 2.5275966270130774,
+    "gate": {
+      "name": "block_bootstrap_ci_lo",
+      "status": "fail",
+      "value": -0.84285281972489,
+      "threshold": 0.0,
+      "detail": "observed=0.8928, ci[5,95]=[-0.8429, 2.5276]",
+      "blocking": false
+    }
+  },
+  "total_return_pct": {
+    "observed": 363.3488416477943,
+    "median": 343.8641238823867,
+    "ci_lo_95": -305.9503809836933,
+    "ci_hi_95": 1054.0941714024489
+  }
+}

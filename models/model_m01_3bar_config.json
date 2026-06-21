@@ -1,0 +1,95 @@
+{
+  "model_name": "M01_3bar",
+  "created_at": "2026-01-21T01:42:44.617127",
+  "feature_columns": [
+    "alpha009",
+    "alpha011",
+    "alpha013",
+    "alpha041",
+    "alpha060",
+    "alpha101",
+    "nATR",
+    "RS",
+    "RS_Delta",
+    "VCP_Ratio",
+    "SMA_50_Slope",
+    "Price_vs_SMA_50",
+    "Price_vs_SMA_200",
+    "Dry_Up_Volume",
+    "Dist_From_20D_Low",
+    "Dist_From_52W_High",
+    "operating_margin",
+    "eps_growth_yoy",
+    "revenue_accel",
+    "pe_ratio",
+    "eps_accel"
+  ],
+  "barrier_params": {
+    "k_sl": 2.0,
+    "k_tp": 3.0,
+    "min_tp": 0.15,
+    "horizon_days": 120
+  },
+  "validation_metrics": [
+    {
+      "fold": 1,
+      "test_year": 2021,
+      "train_samples": 4168,
+      "test_samples": 2863,
+      "accuracy": 0.7020607754104087,
+      "precision": 0.24113475177304963,
+      "recall": 0.695906432748538,
+      "auc": 0.7732497314952063,
+      "top_decile_mean": 0.038437008439917625,
+      "selection_edge": 0.02912861639624455
+    },
+    {
+      "fold": 2,
+      "test_year": 2022,
+      "train_samples": 5809,
+      "test_samples": 956,
+      "accuracy": 0.6349372384937239,
+      "precision": 0.1717948717948718,
+      "recall": 0.7204301075268817,
+      "auc": 0.730784086519892,
+      "top_decile_mean": -0.002102296858616745,
+      "selection_edge": 0.010657581968186551
+    },
+    {
+      "fold": 3,
+      "test_year": 2023,
+      "train_samples": 5259,
+      "test_samples": 1850,
+      "accuracy": 0.7691891891891892,
+      "precision": 0.24680851063829787,
+      "recall": 0.6137566137566137,
+      "auc": 0.787273555485476,
+      "top_decile_mean": 0.04380516582479722,
+      "selection_edge": 0.036526660466044324
+    },
+    {
+      "fold": 4,
+      "test_year": 2024,
+      "train_samples": 5669,
+      "test_samples": 2487,
+      "accuracy": 0.7611580217129071,
+      "precision": 0.24551971326164876,
+      "recall": 0.44193548387096776,
+      "auc": 0.7151392119963845,
+      "top_decile_mean": 0.0323596060715399,
+      "selection_edge": 0.02153548704167011
+    },
+    {
+      "fold": 5,
+      "test_year": 2025,
+      "train_samples": 5293,
+      "test_samples": 1102,
+      "accuracy": 0.6969147005444646,
+      "precision": 0.2423469387755102,
+      "recall": 0.7196969696969697,
+      "auc": 0.7908700406123086,
+      "top_decile_mean": 0.04154595582954984,
+      "selection_edge": 0.04310182099794002
+    }
+  ]
+}

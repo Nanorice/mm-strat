@@ -1,0 +1,587 @@
+{
+  "accuracy": 0.6704545454545454,
+  "weighted_f1": 0.5819604293288504,
+  "macro_f1": 0.24751066856330015,
+  "micro_f1": 0.6704545454545454,
+  "test_samples": 352,
+  "confusion_matrix": [
+    [
+      0,
+      0,
+      4,
+      11
+    ],
+    [
+      0,
+      0,
+      11,
+      25
+    ],
+    [
+      1,
+      1,
+      8,
+      55
+    ],
+    [
+      0,
+      1,
+      7,
+      228
+    ]
+  ],
+  "classification_report": {
+    "Noise (0-2%)": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 15.0
+    },
+    "Moderate (2-10%)": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 36.0
+    },
+    "Strong (10-30%)": {
+      "precision": 0.26666666666666666,
+      "recall": 0.12307692307692308,
+      "f1-score": 0.16842105263157894,
+      "support": 65.0
+    },
+    "Home Run (>30%)": {
+      "precision": 0.7147335423197492,
+      "recall": 0.9661016949152542,
+      "f1-score": 0.8216216216216217,
+      "support": 236.0
+    },
+    "accuracy": 0.6704545454545454,
+    "macro avg": {
+      "precision": 0.24535005224660394,
+      "recall": 0.27229465449804435,
+      "f1-score": 0.24751066856330015,
+      "support": 352.0
+    },
+    "weighted avg": {
+      "precision": 0.5284387764795289,
+      "recall": 0.6704545454545454,
+      "f1-score": 0.5819604293288504,
+      "support": 352.0
+    }
+  },
+  "per_class_metrics": {},
+  "feature_importance": [
+    {
+      "feature": "dist_from_52w_low",
+      "gain": 28.021297454833984
+    },
+    {
+      "feature": "lowest_low_20d_delta",
+      "gain": 25.044015884399414
+    },
+    {
+      "feature": "rs_delta",
+      "gain": 22.678058624267578
+    },
+    {
+      "feature": "price_vs_sma_200",
+      "gain": 21.528486251831055
+    },
+    {
+      "feature": "high_52w_delta",
+      "gain": 18.487112045288086
+    },
+    {
+      "feature": "price_vs_sma_150",
+      "gain": 17.45439338684082
+    },
+    {
+      "feature": "mom_126d",
+      "gain": 15.253400802612305
+    },
+    {
+      "feature": "return_5d",
+      "gain": 14.88530445098877
+    },
+    {
+      "feature": "alpha049",
+      "gain": 14.526298522949219
+    },
+    {
+      "feature": "mom_189d",
+      "gain": 13.826128005981445
+    },
+    {
+      "feature": "roa",
+      "gain": 13.454828262329102
+    },
+    {
+      "feature": "green_days_ratio_20d",
+      "gain": 13.167695045471191
+    },
+    {
+      "feature": "price_vs_sma_200_delta",
+      "gain": 12.205606460571289
+    },
+    {
+      "feature": "days_since_report",
+      "gain": 12.043126106262207
+    },
+    {
+      "feature": "Industry_Momentum",
+      "gain": 10.754351615905762
+    },
+    {
+      "feature": "dist_from_20d_low_delta",
+      "gain": 10.67259693145752
+    },
+    {
+      "feature": "breakout_momentum",
+      "gain": 10.397488594055176
+    },
+    {
+      "feature": "RS_vs_Industry",
+      "gain": 10.279622077941895
+    },
+    {
+      "feature": "consolidation_width",
+      "gain": 9.895923614501953
+    },
+    {
+      "feature": "alpha041",
+      "gain": 9.718302726745605
+    },
+    {
+      "feature": "eps_diluted",
+      "gain": 9.264636993408203
+    },
+    {
+      "feature": "alpha046",
+      "gain": 9.081221580505371
+    },
+    {
+      "feature": "rs_velocity",
+      "gain": 8.842316627502441
+    },
+    {
+      "feature": "vol_ratio",
+      "gain": 8.82943058013916
+    },
+    {
+      "feature": "alpha011",
+      "gain": 8.788018226623535
+    },
+    {
+      "feature": "roe",
+      "gain": 8.73097038269043
+    },
+    {
+      "feature": "price_vs_sma_150_delta",
+      "gain": 8.580997467041016
+    },
+    {
+      "feature": "alpha054",
+      "gain": 8.540122985839844
+    },
+    {
+      "feature": "RS_Sector_Rank",
+      "gain": 8.149491310119629
+    },
+    {
+      "feature": "operating_margin",
+      "gain": 8.02535629272461
+    },
+    {
+      "feature": "eps_growth_yoy",
+      "gain": 8.01924991607666
+    },
+    {
+      "feature": "m03_pillar_risk",
+      "gain": 8.014754295349121
+    },
+    {
+      "feature": "natr",
+      "gain": 7.9815993309021
+    },
+    {
+      "feature": "price_accel_10d",
+      "gain": 7.896649360656738
+    },
+    {
+      "feature": "vcp_ratio",
+      "gain": 7.793513774871826
+    },
+    {
+      "feature": "m03_delta_5d",
+      "gain": 7.777154445648193
+    },
+    {
+      "feature": "immediate_thrust",
+      "gain": 7.717618942260742
+    },
+    {
+      "feature": "highest_high_20d_delta",
+      "gain": 7.624731540679932
+    },
+    {
+      "feature": "mom_21d",
+      "gain": 7.582686901092529
+    },
+    {
+      "feature": "rs_ma_delta",
+      "gain": 7.5757222175598145
+    },
+    {
+      "feature": "rs_rating",
+      "gain": 7.494868278503418
+    },
+    {
+      "feature": "alpha001",
+      "gain": 7.279083251953125
+    },
+    {
+      "feature": "eps_accel",
+      "gain": 7.2268595695495605
+    },
+    {
+      "feature": "alpha013",
+      "gain": 6.900299549102783
+    },
+    {
+      "feature": "current_ratio",
+      "gain": 6.582691669464111
+    },
+    {
+      "feature": "rsi_14_delta",
+      "gain": 6.551483631134033
+    },
+    {
+      "feature": "dist_from_20d_low",
+      "gain": 6.495007514953613
+    },
+    {
+      "feature": "revenue_growth_yoy",
+      "gain": 5.965378284454346
+    },
+    {
+      "feature": "natr_delta",
+      "gain": 5.9320068359375
+    },
+    {
+      "feature": "rsi_14",
+      "gain": 5.844497203826904
+    },
+    {
+      "feature": "rs",
+      "gain": 5.795675277709961
+    },
+    {
+      "feature": "dist_from_20d_high_delta",
+      "gain": 5.715237617492676
+    },
+    {
+      "feature": "RS_vs_Sector",
+      "gain": 5.397451400756836
+    },
+    {
+      "feature": "alpha012",
+      "gain": 5.38817834854126
+    },
+    {
+      "feature": "gross_margin",
+      "gain": 5.33536958694458
+    },
+    {
+      "feature": "revenue_accel",
+      "gain": 5.331618309020996
+    },
+    {
+      "feature": "volume_acceleration",
+      "gain": 5.2804107666015625
+    },
+    {
+      "feature": "alpha002",
+      "gain": 5.265315055847168
+    },
+    {
+      "feature": "return_1d",
+      "gain": 5.263120174407959
+    },
+    {
+      "feature": "RS_Industry_Rank",
+      "gain": 5.255378246307373
+    },
+    {
+      "feature": "alpha006",
+      "gain": 5.232351779937744
+    },
+    {
+      "feature": "dry_up_volume",
+      "gain": 5.166996955871582
+    },
+    {
+      "feature": "gross_margin_trend",
+      "gain": 5.081949234008789
+    },
+    {
+      "feature": "eps_stability_score",
+      "gain": 5.081493854522705
+    },
+    {
+      "feature": "m03_pillar_liq",
+      "gain": 5.003050804138184
+    },
+    {
+      "feature": "rs_ma",
+      "gain": 4.947305202484131
+    },
+    {
+      "feature": "revenue_cagr_3y",
+      "gain": 4.897135257720947
+    },
+    {
+      "feature": "consolidation_width_delta",
+      "gain": 4.890682220458984
+    },
+    {
+      "feature": "sma_50_slope",
+      "gain": 4.8390703201293945
+    },
+    {
+      "feature": "rs_line_lag_delta",
+      "gain": 4.780547618865967
+    },
+    {
+      "feature": "dry_up_volume_delta",
+      "gain": 4.6659722328186035
+    },
+    {
+      "feature": "mom_63d",
+      "gain": 4.630832672119141
+    },
+    {
+      "feature": "m03_score",
+      "gain": 4.313732624053955
+    },
+    {
+      "feature": "debt_to_equity",
+      "gain": 4.2871198654174805
+    },
+    {
+      "feature": "net_income_growth_yoy",
+      "gain": 4.110389709472656
+    },
+    {
+      "feature": "turnover",
+      "gain": 4.082993507385254
+    },
+    {
+      "feature": "price_vs_sma_50",
+      "gain": 4.002403736114502
+    },
+    {
+      "feature": "Sector_Momentum",
+      "gain": 3.9922585487365723
+    },
+    {
+      "feature": "pb_ratio",
+      "gain": 3.9729058742523193
+    },
+    {
+      "feature": "earnings_quality_score",
+      "gain": 3.871896982192993
+    },
+    {
+      "feature": "price_vs_sma_50_delta",
+      "gain": 3.793872594833374
+    },
+    {
+      "feature": "alpha015",
+      "gain": 3.7862727642059326
+    },
+    {
+      "feature": "dist_from_52w_low_delta",
+      "gain": 3.767138957977295
+    },
+    {
+      "feature": "mom_252d",
+      "gain": 3.7207109928131104
+    },
+    {
+      "feature": "pe_ratio",
+      "gain": 3.6944448947906494
+    },
+    {
+      "feature": "dist_from_20d_high",
+      "gain": 3.62097430229187
+    },
+    {
+      "feature": "alpha009",
+      "gain": 3.5376133918762207
+    },
+    {
+      "feature": "vcp_ratio_delta",
+      "gain": 3.5157954692840576
+    },
+    {
+      "feature": "consolidation_duration",
+      "gain": 3.4492032527923584
+    },
+    {
+      "feature": "m03_delta_20d",
+      "gain": 3.379031181335449
+    },
+    {
+      "feature": "m03_regime_vol",
+      "gain": 3.3385062217712402
+    },
+    {
+      "feature": "ps_ratio",
+      "gain": 3.291072130203247
+    },
+    {
+      "feature": "rs_line_delta",
+      "gain": 3.1861989498138428
+    },
+    {
+      "feature": "alpha060",
+      "gain": 3.1325676441192627
+    },
+    {
+      "feature": "fcf_margin",
+      "gain": 2.9640731811523438
+    },
+    {
+      "feature": "alpha101",
+      "gain": 2.781392812728882
+    },
+    {
+      "feature": "dist_from_52w_high_delta",
+      "gain": 2.4157164096832275
+    },
+    {
+      "feature": "m03_pillar_trend",
+      "gain": 2.1527788639068604
+    },
+    {
+      "feature": "alpha004",
+      "gain": 1.771602988243103
+    },
+    {
+      "feature": "dist_from_52w_high",
+      "gain": 1.47080397605896
+    },
+    {
+      "feature": "low_52w_delta",
+      "gain": 0.9424383044242859
+    }
+  ],
+  "roc_auc_per_class": {
+    "Noise (0-2%)": 0.6846686449060336,
+    "Moderate (2-10%)": 0.6906645569620253,
+    "Strong (10-30%)": 0.6247118734923613,
+    "Home Run (>30%)": 0.7190604909409702
+  },
+  "pr_auc_per_class": {
+    "Noise (0-2%)": 0.11551456703670955,
+    "Moderate (2-10%)": 0.255306935668591,
+    "Strong (10-30%)": 0.23030338858131646,
+    "Home Run (>30%)": 0.8399051823370969
+  },
+  "brier_score": {
+    "Noise (0-2%)": 0.040316956540578625,
+    "Moderate (2-10%)": 0.08870181077884937,
+    "Strong (10-30%)": 0.1597325012893673,
+    "Home Run (>30%)": 0.1951531747306128,
+    "mean": 0.12097611083485202
+  },
+  "shap_summary": {
+    "base_value": 0.28866177797317505,
+    "mean_abs_shap_per_class": {
+      "Noise (0-2%)": [
+        {
+          "feature": "price_vs_sma_50",
+          "mean_abs_shap": 0.02271750010550022
+        },
+        {
+          "feature": "price_vs_sma_150",
+          "mean_abs_shap": 0.01956954039633274
+        },
+        {
+          "feature": "close_above_sma200",
+          "mean_abs_shap": 0.019356457516551018
+        },
+        {
+          "feature": "price_vs_sma_200",
+          "mean_abs_shap": 0.01850016601383686
+        }
+      ],
+      "Moderate (2-10%)": [
+        {
+          "feature": "price_vs_sma_50",
+          "mean_abs_shap": 0.02436782978475094
+        },
+        {
+          "feature": "price_vs_sma_200",
+          "mean_abs_shap": 0.021950453519821167
+        },
+        {
+          "feature": "close_above_sma200",
+          "mean_abs_shap": 0.019312093034386635
+        },
+        {
+          "feature": "price_vs_sma_150",
+          "mean_abs_shap": 0.018918491899967194
+        }
+      ],
+      "Strong (10-30%)": [
+        {
+          "feature": "price_vs_sma_50",
+          "mean_abs_shap": 0.026797980070114136
+        },
+        {
+          "feature": "close_above_sma200",
+          "mean_abs_shap": 0.024811502546072006
+        },
+        {
+          "feature": "price_vs_sma_200",
+          "mean_abs_shap": 0.02155310846865177
+        },
+        {
+          "feature": "price_vs_sma_150",
+          "mean_abs_shap": 0.01968548260629177
+        }
+      ],
+      "Home Run (>30%)": [
+        {
+          "feature": "close_above_sma200",
+          "mean_abs_shap": 0.023976998403668404
+        },
+        {
+          "feature": "price_vs_sma_200",
+          "mean_abs_shap": 0.02209668792784214
+        },
+        {
+          "feature": "price_vs_sma_50",
+          "mean_abs_shap": 0.02073042280972004
+        },
+        {
+          "feature": "price_vs_sma_150",
+          "mean_abs_shap": 0.020119717344641685
+        }
+      ]
+    },
+    "sample_size": 352,
+    "shap_values_shape": [
+      352,
+      352,
+      105
+    ]
+  },
+  "_metadata": {
+    "model_name": "M01_baseline",
+    "model_version": "v1",
+    "evaluation_timestamp": "2026-03-15T13:31:29.374478",
+    "evaluator_class": "ClassificationEvaluator"
+  }
+}

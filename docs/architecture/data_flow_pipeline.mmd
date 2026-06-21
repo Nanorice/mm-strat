@@ -1,0 +1,107 @@
+%% Data pipeline (ingestion -> features -> views -> cache).
+%% Scoring / serving / downstream apps live in data_flow_serving.mmd.
+%% The full single-graph view is data_flow.mmd (canonical).
+flowchart TD
+    %% ── External Sources ──
+    subgraph Sources [External Sources]
+        direction LR
+        API_YF["yfinance / FMP"]
+        API_FRED["FRED"]
+    end
+
+    %% ── Phase 1: Ingestion ──
+    subgraph P1_Ingestion [Phase 1: Ingestion]
+        direction LR
+        P1_PRICE["1.1 Price"]
+        P1_FUND["1.2 Fundamentals + Earnings"]
+        P1_SHARES["1.3 Shares"]
+        P1_MACRO["1.4 Macro"]
+
+        T1_P[("price_data")]
+        T1_F[("fundamentals")]
+        T1_EC[("earnings_calendar")]
+        T1_S[("shares_history")]
+        T1_M[("macro_data")]
+        T1_TM[("t1_macro")]
+
+        %% 1.5 quality gate is part of ingestion: reads price_data, may retry
+        P15{{"1.5 Price Quality Gate"}}
+    end
+
+    API_YF --> P1_PRICE --> T1_P
+    API_YF --> P1_FUND
+    P1_FUND --> T1_F & T1_EC
+    API_YF --> P1_SHARES --> T1_S
+    API_YF & API_FRED --> P1_MACRO
+    P1_MACRO --> T1_M & T1_TM
+    T1_P --> P15
+
+    %% ── Phase 2: Screener Membership ──
+    subgraph P2_Screener [Phase 2: Screener]
+        P2["Screener Manager"]
+        T2_SM[("screener_membership")]
+    end
+    T1_P & T1_S --> P2 --> T2_SM
+
+    %% ── Phase 3: T2 Features ──
+    subgraph P3_T2 [Phase 3: T2 Features]
+        P3["Feature Pipeline"]
+        T2_SF[("t2_screener_features")]
+    end
+    T1_P & T1_TM & T2_SM --> P3 --> T2_SF
+
+    %% ── Phase 4: Regime + 5F Risk · Phase 4b: SEPA Watchlist ──
+    subgraph P4_Context [Phase 4: Regime + 5F Risk & SEPA Watchlist]
+        P4["M03 Regime"]
+        T2_RS[("t2_regime_scores")]
+        P4R["5F Risk Calculator"]
+        T2_RK[("t2_risk_scores")]
+        P4B["SEPA Manager<br/>(opens/closes sessions)"]
+        SW[("sepa_watchlist")]
+    end
+    T1_TM & T1_M --> P4 --> T2_RS
+    T1_M --> P4R --> T2_RK
+    %% T2 features gate which tickers open a SEPA breakout session
+    T2_SF --> P4B --> SW
+
+    %% ── Phase 5: T3 Features ──
+    subgraph P5_T3 [Phase 5: T3 Features]
+        P5["SEPA Feature Pipeline"]
+        T3_SF[("t3_sepa_features")]
+    end
+    T2_SF & SW & T1_P & T2_RS --> P5 --> T3_SF
+
+    %% ── Combine views: collapse base-table fan-in into Phase 6 ──
+    VPC(["v_price_combined"])
+    VSC(["v_shares_combined"])
+    T1_P & T1_TM --> VPC
+    T1_S --> VSC
+
+    %% ── Phase 6: Views ──
+    subgraph P6_Views [Phase 6: SQL Views]
+        P6["View Manager"]
+        V_SEPA(["v_sepa_candidates"])
+        V_D1(["v_d1_candidates"])
+        V_D2F(["v_d2_features"])
+        V_D2H(["v_d2_hydrated"])
+        V_D2T(["v_d2_training"])
+        V_D3D(["v_d3_deployment"])
+        V_D3P(["v_d3_prebreakout"])
+        V_SD(["v_screener_dashboard"])
+        MAT_SW[("screener_watchlist")]
+
+        V_D1 --> V_D2F & V_D2H & V_SD
+        V_D2F --> V_D2T & V_D3D & V_D3P & V_D2H
+        V_D2H --> V_D2T
+        V_SD --> MAT_SW
+    end
+    %% Phase 6 inputs: T3 features + the two combine-views + fundamentals
+    T3_SF & VPC & VSC & T1_F --> P6
+    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_D3P & V_SD
+
+    %% ── Phase 7: Cache Refresh ──
+    subgraph P7_Cache [Phase 7: Cache]
+        P7["Cache Refresh"]
+        D2_CACHE[("d2_training_cache")]
+    end
+    V_D2T --> P7 --> D2_CACHE
