@@ -2,9 +2,9 @@
 #
 # Task Scheduler wakes the machine (-WakeToRun) and runs this at 21:55. We then
 # hold the system-required lock for ~10 min (until ~22:05) so a short idle-sleep
-# timeout can't re-suspend the box before Prefect's 22:00 run starts. Once the
-# pipeline is running it keeps the CPU busy, and the flow's completion hook sleeps
-# the box again when the run finishes.
+# timeout can't re-suspend the box before Prefect's 22:00 run starts. The flow
+# itself then holds its OWN keep-awake lock for the full ~30-min run (CPU load
+# does not keep Windows awake), and its completion hook sleeps the box at the end.
 $ErrorActionPreference = 'SilentlyContinue'
 
 $Root = Split-Path -Parent $PSScriptRoot

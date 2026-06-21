@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import subprocess
 import sys
@@ -48,6 +49,22 @@ CRON_TZ = os.environ.get("PIPELINE_CRON_TZ") or _local_tz()
 def _python() -> str:
     """Project venv interpreter, falling back to the current one."""
     return str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
+
+
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def _set_keep_awake(on: bool) -> None:
+    """Hold/release a system-required lock for the duration of the run (~30 min).
+    Windows' idle-sleep timer is driven by USER INPUT, not CPU load — so an
+    unattended long run would otherwise be at the mercy of the sleep timeout.
+    No-ops off Windows. Released so the box can sleep again when the run ends."""
+    try:
+        flags = _ES_CONTINUOUS | (_ES_SYSTEM_REQUIRED if on else 0)
+        ctypes.windll.kernel32.SetThreadExecutionState(flags)
+    except Exception:
+        pass
 
 
 def _suspend_pc() -> None:
@@ -103,19 +120,25 @@ def daily_pipeline(
     # Pin CWD to project root (dotenv + relative paths) and force UTF-8 so the
     # child's emoji/log output streams cleanly into the Prefect run log.
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
-    for line in proc.stdout:
-        logger.info(line.rstrip())
-    rc = proc.wait()
+
+    # Keep the box awake for the whole ~30-min run, then let it sleep again.
+    _set_keep_awake(True)
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        for line in proc.stdout:
+            logger.info(line.rstrip())
+        rc = proc.wait()
+    finally:
+        _set_keep_awake(False)
 
     if rc != 0:
         raise RuntimeError(f"daily pipeline CLI exited {rc}")

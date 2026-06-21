@@ -112,8 +112,9 @@ Invoke-WebRequest http://127.0.0.1:4200/api/health   # -> true
 
 A real end-to-end run was verified 2026-06-21: deployment trigger → serve → flow
 → CLI → orchestrator, flow run `Completed`, pipeline `DONE | 14 phases | OK |
-335s wall`. Idempotency confirmed live (phases already done for the target
-trading day were skipped; scoring still wrote predictions).
+335s wall`. That run was mostly idempotent **skips** (the day was already
+processed); a full **fresh-day** run is **~30 min** (real ingestion + T2/T3
+compute + the 764 MB dashboard build/upload).
 
 ## Power — sleep between runs, wake before
 
@@ -122,13 +123,18 @@ machine, so a small Task Scheduler task handles the wake, and the flow handles t
 sleep — a clean split:
 
 1. **Wake** — `PrefectPipelineWake` (`-WakeToRun`) fires Mon-Fri at 21:55 and runs
-   `wake_for_pipeline.ps1`, which holds the box awake ~10 min so a short idle-sleep
-   timeout can't re-suspend it before 22:00.
-2. **Run** — Prefect's 22:00 cron fires; the pipeline keeps the CPU busy (~6 min).
-3. **Sleep** — the flow's `on_completion`/`on_failure` hook calls `_suspend_pc()`
-   when `sleep_after=True`. The scheduled deployment sets that param; **ad-hoc
-   `python flows/daily_pipeline_flow.py` runs do NOT sleep the box.** A failing run
-   still gets its one retry *before* sleeping (hook fires only on terminal state).
+   `wake_for_pipeline.ps1`, which holds the box awake ~10 min — bridging until the
+   flow takes over — so a short idle-sleep timeout can't re-suspend it before 22:00.
+2. **Run** — Prefect's 22:00 cron fires; a full fresh-day run is **~30 min**. The
+   flow holds its OWN keep-awake lock (`SetThreadExecutionState`) for the whole run,
+   because **Windows' idle-sleep timer is driven by user input, not CPU load** — a
+   long unattended run would otherwise risk sleeping mid-run.
+3. **Sleep** — the flow releases the lock, then its `on_completion`/`on_failure`
+   hook calls `_suspend_pc()` when `sleep_after=True`. The scheduled deployment sets
+   that param; **ad-hoc `python flows/daily_pipeline_flow.py` runs do NOT sleep the
+   box.** A failing run still gets its one retry *before* sleeping (hook fires only
+   on terminal state). Note: during the ~10-min retry delay the lock is released, so
+   keep the idle-sleep timeout ≥ 15 min to avoid sleeping in that gap.
 
 Setup (the registration needs the **elevated** shell):
 
