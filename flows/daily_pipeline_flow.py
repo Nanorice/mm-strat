@@ -78,6 +78,22 @@ def _suspend_pc() -> None:
         pass
 
 
+def _notify_discord(flow, flow_run, state) -> None:
+    """Send a Discord message on terminal state. Done IN-FLOW (not via a server
+    automation) and ordered BEFORE _sleep_after_run, so it delivers synchronously
+    even when a scheduled run then sleeps the box ~immediately after. Best-effort —
+    never affects the run. Crashed runs (process death) can't run this hook; the
+    server-side automation covers that case."""
+    try:
+        from prefect.blocks.notifications import DiscordWebhook
+        emoji = {"Completed": "✅", "Failed": "❌", "Crashed": "🛑"}.get(state.name, "ℹ️")
+        DiscordWebhook.load("daily-pipeline-discord").notify(
+            f"{emoji} daily-pipeline `{flow_run.name}` → **{state.name}**"
+        )
+    except Exception:
+        pass
+
+
 def _sleep_after_run(flow, flow_run, state) -> None:
     """Flow state hook: suspend the PC once the run is terminal — but ONLY for
     auto-SCHEDULED (cron) runs, never a manual UI/CLI run. A manual run sharing
@@ -92,8 +108,8 @@ def _sleep_after_run(flow, flow_run, state) -> None:
     name="daily-pipeline",
     retries=1,
     retry_delay_seconds=600,
-    on_completion=[_sleep_after_run],
-    on_failure=[_sleep_after_run],
+    on_completion=[_notify_discord, _sleep_after_run],
+    on_failure=[_notify_discord, _sleep_after_run],
 )
 def daily_pipeline(
     date: str | None = None,

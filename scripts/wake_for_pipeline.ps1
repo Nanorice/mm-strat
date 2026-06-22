@@ -1,28 +1,54 @@
-# Wake-task action: keep the box awake across the 22:00 Prefect trigger.
+# Wake-task action: wake the box, RESTART Prefect, hold awake across 22:00.
 #
-# Task Scheduler wakes the machine (-WakeToRun) and runs this at 21:55. We then
-# hold the system-required lock for ~10 min (until ~22:05) so a short idle-sleep
-# timeout can't re-suspend the box before Prefect's 22:00 run starts. The flow
-# itself then holds its OWN keep-awake lock for the full ~30-min run (CPU load
-# does not keep Windows awake), and its completion hook sleeps the box at the end.
+# Task Scheduler wakes the machine (-WakeToRun) and runs this at 21:55. Two jobs:
+#  1. Restart the Prefect server + serve. The server does NOT survive a sleep/wake
+#     cleanly (it resumes broken), and AtLogon tasks don't re-fire on wake — so a
+#     fresh restart here is what guarantees a healthy server before the 22:00 run.
+#  2. Hold the system-required lock ~10 min so a short idle timeout can't re-suspend
+#     the box before 22:00. The flow then holds its OWN lock for the run and its
+#     completion hook sleeps the box at the end.
 $ErrorActionPreference = 'SilentlyContinue'
 
 $Root = Split-Path -Parent $PSScriptRoot
 $LogDir = Join-Path $Root 'logs\prefect'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Log = Join-Path $LogDir ('wake_{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
-("{0}  woke for nightly pipeline; holding awake ~10 min" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) |
-    Out-File -FilePath $Log -Append -Encoding utf8
+function Log($m) { ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) | Out-File -FilePath $Log -Append -Encoding utf8 }
+Log "woke for nightly pipeline"
 
 # Prune wake logs older than 30 days.
 Get-ChildItem $LogDir -Filter 'wake_*.log' -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
+# Hold the box awake first (covers the restart + the gap to 22:00).
 # ES_CONTINUOUS (0x80000000) | ES_SYSTEM_REQUIRED (0x00000001) => block sleep.
 $sig = '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'
 $p = Add-Type -MemberDefinition $sig -Name Power -Namespace Win32 -PassThru
 $p::SetThreadExecutionState([uint32]'0x80000001') | Out-Null
+
+# --- Restart Prefect so the 22:00 run gets a clean, healthy server ---
+# Stop the tasks, kill any stale/suspended server+serve, then start fresh.
+foreach ($t in 'PrefectServer', 'PrefectDailyPipelineServe') {
+    Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
+}
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'prefect server start|daily_pipeline_flow.py --serve' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 3
+
+Start-ScheduledTask -TaskName 'PrefectServer'
+$healthy = $false
+for ($i = 0; $i -lt 45; $i++) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4200/api/health' -TimeoutSec 3 | Out-Null; $healthy = $true; break }
+    catch { Start-Sleep -Seconds 2 }
+}
+Log ("server healthy: {0}" -f $healthy)
+Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
+Log "serve (re)started"
+
+# Hold awake through the 22:00 trigger; flow takes over its own lock once running.
 Start-Sleep -Seconds 600
-# Release the lock (ES_CONTINUOUS only); normal idle/flow-hook sleep resumes.
+# Release the lock (ES_CONTINUOUS only); the flow's post-run hook sleeps the box.
 $p::SetThreadExecutionState([uint32]'0x80000000') | Out-Null
+Log "released keep-awake lock"
