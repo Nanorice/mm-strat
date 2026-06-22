@@ -130,14 +130,34 @@ class M03RegimeCalculator:
             json.dump(self.config, f, indent=2)
         logger.info(f"Saved M03 config to {save_path}")
 
+    def _load_spy_close(self) -> pd.DataFrame:
+        """SPY daily close from DuckDB price_data — the single source of truth.
+
+        Returns a DatetimeIndex frame with a 'Close' column. Replaces the parquet
+        CACHE_ONLY read, which read data/price/SPY.parquet — a cache the daily
+        pipeline does not maintain for benchmark tickers, and which is empty after
+        the ITX port. price_data has SPY fresh; the 5-factor risk calc already
+        reads it the same way.
+        """
+        from src import db
+        conn = db.connect(self.data_repo.db_path, read_only=True)
+        try:
+            spy_df = conn.execute(
+                'SELECT date, close AS "Close" FROM price_data '
+                "WHERE ticker = 'SPY' ORDER BY date"
+            ).fetchdf()
+        finally:
+            conn.close()
+        if not spy_df.empty:
+            spy_df['date'] = pd.to_datetime(spy_df['date'])
+            spy_df = spy_df.set_index('date')
+        return spy_df
+
     def _get_spy_data(self, lookback_days: int = 300) -> pd.DataFrame:
-        """Get SPY price data from cache."""
-        spy_df = self.data_repo.get_ticker_data(
-            'SPY',
-            mode=CacheMode.CACHE_ONLY
-        )
+        """Get SPY price data from DuckDB price_data."""
+        spy_df = self._load_spy_close()
         if spy_df is None or spy_df.empty:
-            raise ValueError("SPY data not available in cache")
+            raise ValueError("SPY data not available in price_data")
 
         spy_df = spy_df.tail(lookback_days)
         return spy_df
@@ -441,8 +461,8 @@ class M03RegimeCalculator:
         }
         risk_cfg = self.config['pillars']['risk_appetite']
 
-        # Load all data ONCE
-        spy_df = self.data_repo.get_ticker_data('SPY', mode=CacheMode.CACHE_ONLY)
+        # Load all data ONCE (SPY from DuckDB price_data — see _load_spy_close)
+        spy_df = self._load_spy_close()
         macro_df = self.macro_engine.get_all_macro_data()
 
         if spy_df is None or spy_df.empty:

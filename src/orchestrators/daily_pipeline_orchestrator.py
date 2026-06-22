@@ -1126,8 +1126,18 @@ class DailyPipelineOrchestrator:
             con.close()
 
     def _run_phase_4_t2_regime(self, target_date: str) -> Dict:
-        """Phase 4: Compute M03 regime scores + 5-factor risk scores."""
-        m03_rows = self.regime_pipeline.update_incremental()
+        """Phase 4: Compute M03 regime scores + 5-factor risk scores.
+
+        M03 and the 5-factor risk calc are independent — a failure in one must NOT
+        block the other. (Previously an M03 failure raised before the risk calc
+        ran, freezing 5-factor too even though it reads DuckDB directly.)
+        """
+        try:
+            m03_rows = self.regime_pipeline.update_incremental()
+            logger.info(f"[Phase 4] M03 regime: {m03_rows} new rows")
+        except Exception as e:
+            logger.warning(f"[Phase 4] M03 regime update FAILED (non-critical): {e}")
+            m03_rows = 0
 
         try:
             risk_rows = self.risk_calculator.update_incremental()
