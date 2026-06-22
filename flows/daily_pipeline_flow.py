@@ -79,11 +79,12 @@ def _suspend_pc() -> None:
 
 
 def _sleep_after_run(flow, flow_run, state) -> None:
-    """Flow state hook: suspend the PC once the run is terminal, but ONLY when
-    called with sleep_after=True (the scheduled nightly run). Manual/ad-hoc runs
-    leave the box awake. Fires after retries are exhausted, so a failing run still
-    gets its one retry before the box sleeps."""
-    if flow_run.parameters.get("sleep_after"):
+    """Flow state hook: suspend the PC once the run is terminal — but ONLY for
+    auto-SCHEDULED (cron) runs, never a manual UI/CLI run. A manual run sharing
+    the deployment's `sleep_after=True` default would otherwise sleep the box out
+    from under you and freeze any concurrent work. Both conditions required.
+    Fires after retries are exhausted, so a failing run still gets its retry."""
+    if getattr(flow_run, "auto_scheduled", False) and flow_run.parameters.get("sleep_after"):
         _suspend_pc()
 
 
