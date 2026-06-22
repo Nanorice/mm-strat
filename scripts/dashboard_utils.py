@@ -107,6 +107,40 @@ def _ensure_local_db() -> None:
         raise
 
 
+# Per-rerun R2 freshness re-check. `_ensure_local_db()` only ran at module import
+# (once per container), so a warm Streamlit Cloud container never saw a new nightly
+# upload until it restarted. Routing reads through `_connect()` re-checks the R2
+# ETag (cheap head_object) at most every _R2_RECHECK_SECS and re-pulls when it
+# changed; the 300s query cache then surfaces the new data within ~5 min. The
+# throttle global persists across Streamlit reruns (module imported once). No-op
+# on local runs.
+_R2_RECHECK_SECS = 120
+_last_r2_check = 0.0
+
+
+def _maybe_refresh_from_r2() -> None:
+    global _last_r2_check
+    if not _on_cloud() or not _db_env:
+        return
+    import time
+    now = time.time()
+    if now - _last_r2_check < _R2_RECHECK_SECS:
+        return
+    _last_r2_check = now
+    try:
+        _ensure_local_db()  # ETag-gated: re-downloads only when R2 actually changed
+    except Exception:
+        pass
+
+
+def _connect(read_only: bool = True):
+    """Open the dashboard DB, first re-pulling from R2 if the nightly upload
+    changed it (throttled). Use for all reads so a warm cloud container stays
+    current without a manual reboot."""
+    _maybe_refresh_from_r2()
+    return duckdb.connect(str(DB_PATH), read_only=read_only)
+
+
 # Disk-file dirs pulled from R2 on cloud boot. (local_dir, r2_prefix). Mirror of
 # sync_dashboard_db.ASSET_DIRS — pages that read these degrade gracefully if the
 # pull fails. data/backtest/ is intentionally not synced (WIP).
@@ -268,7 +302,7 @@ def exposure_band_label(target_exposure: float) -> tuple[str, str]:
 
 @st.cache_data(ttl=300)
 def load_regime() -> pd.Series | None:
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         row = con.execute("""
             SELECT date, m03_score, m03_pillar_trend, m03_pillar_liq, m03_pillar_risk,
@@ -284,7 +318,7 @@ def load_regime() -> pd.Series | None:
 @st.cache_data(ttl=300)
 def load_risk_5f() -> pd.Series | None:
     """Latest 5F row from t2_risk_scores."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         row = con.execute("""
             SELECT date, target_exposure, base_exposure, weighted_z,
@@ -303,7 +337,7 @@ def load_risk_5f() -> pd.Series | None:
 def load_regime_history(days: int | None = None) -> pd.DataFrame:
     """M03 regime score + 3 pillars over time (date asc). `days=None` → full history."""
     where = "" if days is None else f"WHERE date >= (SELECT MAX(date) FROM t2_regime_scores) - INTERVAL {int(days)} DAY"
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT date, m03_score, m03_pillar_trend, m03_pillar_liq, m03_pillar_risk
@@ -319,7 +353,7 @@ def load_regime_history(days: int | None = None) -> pd.DataFrame:
 def load_risk_history(days: int | None = None) -> pd.DataFrame:
     """5F factor z-scores + weighted_z over time (date asc). `days=None` → full history."""
     where = "" if days is None else f"AND date >= (SELECT MAX(date) FROM t2_risk_scores) - INTERVAL {int(days)} DAY"
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT date, z_vix, z_hy, z_term, z_trend, z_slope, weighted_z
@@ -334,7 +368,7 @@ def load_risk_history(days: int | None = None) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_watchlist() -> pd.DataFrame:
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute("""
             SELECT ticker, company_name, sector, industry, market_cap,
@@ -393,7 +427,7 @@ def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
     that (ticker, date) is the same prod-model score on the same feature set. Output
     carries the `m01_class` / `p_<label>` columns the watchlist renderer expects.
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         df = con.execute("""
             WITH preds AS (
@@ -447,7 +481,7 @@ def load_recent_exits(days: int = 30) -> pd.DataFrame:
     Surfaces realized winners/losers that left the watchlist — e.g. LITE +777%,
     AXTI +1369%. Ordered most-recent-exit first.
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute("""
             WITH max_d AS (SELECT MAX(price_date) AS d FROM screener_watchlist)
@@ -473,7 +507,7 @@ def load_ticker_history(ticker: str, model_version_id: str | None = None) -> pd.
     entry_date here (no ACTIVE "current" carve-out — that lives in the watchlist
     table).
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         if model_version_id is None:
             return con.execute("""
@@ -527,7 +561,7 @@ def load_activity_feed(days: int = 14) -> pd.DataFrame:
     the renderer stays dumb. Company name comes from company_profiles (membership
     carries ticker only).
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute("""
             WITH exits AS (
@@ -574,7 +608,7 @@ def load_scored_pre_breakout(model_version_id: str, limit: int = 100) -> pd.Data
     company_name + days_in_setup for display. Output carries the `m01_class` /
     `p_<label>` columns the renderer expects.
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         df = con.execute("""
             WITH pb AS (
@@ -616,7 +650,7 @@ def load_scored_pre_breakout(model_version_id: str, limit: int = 100) -> pd.Data
 
 @st.cache_data(ttl=300)
 def load_pipeline_status(limit: int = 20) -> pd.DataFrame:
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT target_date, phase_name, status, runtime_seconds,
@@ -637,7 +671,7 @@ def load_pipeline_runs_window(days: int = 30) -> pd.DataFrame:
     the heatmap can surface 'success-with-warnings' (e.g. T1 ingestion completes
     but logs per-ticker failures).
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT pr.target_date, pr.phase_name, pr.status, pr.runtime_seconds,
@@ -666,7 +700,7 @@ def load_null_filing_writes(days: int = 30) -> pd.DataFrame:
     (don't appear in pipeline_error_log), so this is the only place the per-run rate
     is observable. Empty frame if no run carries the field yet.
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT target_date,
@@ -712,7 +746,7 @@ def load_data_freshness() -> pd.DataFrame:
         # ML registry
         ("models",               "SELECT MAX(training_date)::DATE max_d, COUNT(*) n FROM models"),
     ]
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         rows = []
         today = con.execute("SELECT CURRENT_DATE").fetchone()[0]
@@ -739,7 +773,7 @@ def load_t1_ingestion_failures(days: int = 30) -> pd.DataFrame:
     One row per (ticker, phase, error_type) — sorted by days_failing desc so
     chronic offenders surface first as pruning candidates.
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT pel.affected_entity                AS ticker,
@@ -764,7 +798,7 @@ def load_t1_ingestion_failures(days: int = 30) -> pd.DataFrame:
 @st.cache_data(ttl=300)
 def load_latest_fundamentals_snapshot(n: int = 10) -> pd.DataFrame:
     """For Page 5 Fundamentals Audit: most recently updated tickers with key metrics."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT ticker, period_end, filing_date, updated_at, source,
@@ -785,7 +819,7 @@ def load_fundamentals_volume_by_quarter(start_year: int = 2020) -> pd.DataFrame:
     Catches volume drops that would indicate yfinance/FMP coverage gaps.
     Counts rows where revenue is non-null (a row with only date is not a real fetch).
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT YEAR(period_end)                                 AS year,
@@ -806,7 +840,7 @@ def load_fundamentals_volume_by_quarter(start_year: int = 2020) -> pd.DataFrame:
 @st.cache_data(ttl=300)
 def load_universe_trend(days: int = 60) -> pd.DataFrame:
     """For Page 5: trend_ok / breakout_ok counts per day."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT date,
@@ -829,7 +863,7 @@ def load_sector_heat(window_days: int = 1) -> pd.DataFrame:
     Returns one row per sector with average trend_ok / breakout counts per day
     within the window, plus the latest-day point for comparison.
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     # window_days=1 → today only. window_days=N → last N trading days from MAX(date).
     try:
         return con.execute(f"""
@@ -868,7 +902,7 @@ def load_sector_heat(window_days: int = 1) -> pd.DataFrame:
 @st.cache_data(ttl=300)
 def load_prod_model_version_id() -> str | None:
     """version_id of the currently-promoted prod classifier, or None if none registered."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         row = con.execute("""
             SELECT version_id FROM models
@@ -883,7 +917,7 @@ def load_prod_model_version_id() -> str | None:
 @st.cache_data(ttl=60)
 def load_daily_predictions_today(model_version_id: str) -> pd.DataFrame:
     """Latest-date daily_predictions for a given model. Empty df if none logged yet."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute("""
             SELECT prediction_date, ticker, model_version_id,
@@ -950,7 +984,7 @@ def load_rank_history(
         where.append("prediction_date <= ?")
         params.append(end)
 
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute(f"""
             SELECT prediction_date, ticker, rank_within_day,
@@ -972,7 +1006,7 @@ def load_rank_history_bounds(model_version_id: str, cohort: str | None = None) -
     if cohort is not None:
         where.append("cohort = ?")
         params.append(cohort)
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         row = con.execute(f"""
             SELECT MIN(prediction_date), MAX(prediction_date)
@@ -988,7 +1022,7 @@ def load_rank_history_bounds(model_version_id: str, cohort: str | None = None) -
 def load_rank_cohorts(model_version_id: str) -> list[str]:
     """Cohorts that actually have predictions for this model (e.g. binary has only
     'breakout' until it's scored on the pre_breakout universe). Ordered."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         rows = con.execute("""
             SELECT DISTINCT cohort FROM daily_predictions
@@ -1007,7 +1041,7 @@ def load_past_decisions(model_version_id: str, limit: int = 200) -> pd.DataFrame
     Used by the "Performance of past decisions" view on Page 1. Only rows where
     the user has actually toggled `decision_taken` (NULL rows are excluded).
     """
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute("""
             SELECT
@@ -1061,7 +1095,7 @@ def update_decision_taken(
 @st.cache_data(ttl=300)
 def load_models_table() -> pd.DataFrame:
     """For Model Lab — registry list."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = _connect()
     try:
         return con.execute("""
             SELECT version_id, status_flag, model_type, feature_version,
