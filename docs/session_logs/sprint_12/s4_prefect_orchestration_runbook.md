@@ -130,11 +130,19 @@ sleep — a clean split:
    because **Windows' idle-sleep timer is driven by user input, not CPU load** — a
    long unattended run would otherwise risk sleeping mid-run.
 3. **Sleep** — the flow releases the lock, then its `on_completion`/`on_failure`
-   hook calls `_suspend_pc()` when `sleep_after=True`. The scheduled deployment sets
-   that param; **ad-hoc `python flows/daily_pipeline_flow.py` runs do NOT sleep the
-   box.** A failing run still gets its one retry *before* sleeping (hook fires only
-   on terminal state). Note: during the ~10-min retry delay the lock is released, so
-   keep the idle-sleep timeout ≥ 15 min to avoid sleeping in that gap.
+   hook calls `_suspend_pc()` **only when `flow_run.auto_scheduled` is True AND
+   `sleep_after=True`** — i.e. only a cron-triggered run sleeps the box. **Any
+   manual run (UI Quick run, `prefect deployment run`, ad-hoc `python flows/...`)
+   never sleeps the box**, so a hand-kicked test can't suspend the machine or
+   freeze concurrent work. A failing run still gets its one retry *before* sleeping
+   (hook fires only on terminal state). During the ~10-min retry delay the
+   keep-awake lock is released, so keep the idle-sleep timeout ≥ 15 min.
+
+   > Why both conditions: the deployment default `sleep_after=True` is inherited by
+   > manual UI runs too. Gating on `auto_scheduled` was added 2026-06-22 after a
+   > manual run slept ITX for ~22h and froze a concurrent CLI run — see the
+   > handover. Validated 2026-06-22: a manual run completed (~30 min, data → 06-22,
+   > R2 uploaded) and left the box awake.
 
 Setup (the registration needs the **elevated** shell):
 
@@ -150,8 +158,11 @@ laptop, keep it enabled on battery). Confirm the box woke: `logs/prefect/wake_*.
 **Caveats:**
 - `-WakeToRun` wakes from **sleep/hibernate (S1-S4)**, NOT from a full **shutdown
   (S5)**. For shutdown recovery, set a BIOS "Resume by RTC Alarm" + auto-login.
-- A manual UI **Quick run** of the `daily` deployment inherits `sleep_after=True`
-  and *will* sleep the box — use the ad-hoc CLI for a no-sleep manual run.
+- Only **auto-scheduled** runs sleep the box. Manual runs (UI / CLI) never do —
+  safe to hand-trigger a test any time.
+- Don't run a manual Prefect run *and* a CLI `run_daily_pipeline.py` at the same
+  time — they'd contend on the single-writer DuckDB. (Harmless now re: sleep, since
+  the manual run won't suspend the box.)
 
 ## R2 remote-dashboard sync (verified 2026-06-21)
 
