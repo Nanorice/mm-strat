@@ -175,6 +175,17 @@ class DailyPipelineOrchestrator:
         Returns:
             True if all CRITICAL phases succeeded
         """
+        # Pre-flight: DuckDB is single-writer. Fail fast with a clear, actionable
+        # message if a foreign process (typically a notebook with a read-write
+        # connection) holds the write lock — otherwise we'd crash mid-phase. The
+        # non-zero exit propagates to the flow's Discord failure alert.
+        if not self.dry_run:
+            try:
+                db.check_write_available(self.db_path)
+            except db.DuckDBLockedError as e:
+                logger.error(f"[Pipeline] ABORT - {e}")
+                return False
+
         # Determine target date (latest completed US trading day if None)
         if target_date is None:
             from src.utils import get_latest_trading_day
