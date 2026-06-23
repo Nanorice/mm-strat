@@ -15,6 +15,9 @@ Get-ChildItem $LogDir -Filter 'server_*.log' -ErrorAction SilentlyContinue |
 
 $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUTF8 = '1'
+# Raise the SQLite busy timeout (default 10s) so startup state validation waits
+# out any brief residual WAL lock instead of failing with 'database is locked'.
+$env:PREFECT_SERVER_DATABASE_TIMEOUT = '30'
 Set-Location $Root
 
 & $Py -m prefect server start *>&1 | Tee-Object -FilePath $Log

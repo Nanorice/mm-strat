@@ -28,14 +28,34 @@ $p = Add-Type -MemberDefinition $sig -Name Power -Namespace Win32 -PassThru
 $p::SetThreadExecutionState([uint32]'0x80000001') | Out-Null
 
 # --- Restart Prefect so the 22:00 run gets a clean, healthy server ---
-# Stop the tasks, kill any stale/suspended server+serve, then start fresh.
+# Stop the tasks, kill the FULL prefect process set (server + serve + their
+# flow-execution children), then WAIT for the SQLite WAL lock to actually
+# release. A blind sleep races the handle teardown on force-kill: the new
+# server would start into a still-locked prefect.db, fail startup state
+# validation with 'database is locked', and never reach healthy.
 foreach ($t in 'PrefectServer', 'PrefectDailyPipelineServe') {
     Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
 }
-Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'prefect server start|daily_pipeline_flow.py --serve' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 3
+# Match server, serve, AND the flow-execution child (run_daily_pipeline.py):
+# that child holds live DB connections, so leaving it orphaned contends on the
+# lock with the fresh server.
+$prefectPat = 'prefect server start|daily_pipeline_flow\.py|run_daily_pipeline\.py'
+function Get-PrefectProcs {
+    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match $prefectPat }
+}
+Get-PrefectProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+# Active barrier: block until every matched proc is gone AND :4200 is free
+# (the dying child releases the WAL lock as it exits). Cap at ~30s.
+$gone = $false
+for ($i = 0; $i -lt 30; $i++) {
+    $alive = @(Get-PrefectProcs).Count
+    $port = @(Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue).Count
+    if ($alive -eq 0 -and $port -eq 0) { $gone = $true; break }
+    Start-Sleep -Seconds 1
+}
+Log ("teardown clear: {0} (waited {1}s, procs left={2})" -f $gone, $i, @(Get-PrefectProcs).Count)
 
 Start-ScheduledTask -TaskName 'PrefectServer'
 $healthy = $false
