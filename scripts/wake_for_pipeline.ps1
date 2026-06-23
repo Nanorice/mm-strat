@@ -14,6 +14,23 @@ $LogDir = Join-Path $Root 'logs\prefect'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Log = Join-Path $LogDir ('wake_{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
 function Log($m) { ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) | Out-File -FilePath $Log -Append -Encoding utf8 }
+
+# Server-independent Discord alert (raw webhook read from .env). The Prefect
+# DiscordWebhook block is unusable here: loading a block needs the API, which is
+# exactly what's down when the wake health check fails.
+function Send-DiscordAlert($msg) {
+    $envFile = Join-Path $Root '.env'
+    if (-not (Test-Path $envFile)) { return }
+    $line = Get-Content $envFile | Where-Object { $_ -match '^\s*DISCORD_WEBHOOK_URL\s*=' } | Select-Object -First 1
+    if (-not $line) { return }
+    $url = ($line -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    if (-not $url) { return }
+    try {
+        $body = [System.Text.Encoding]::UTF8.GetBytes((@{ content = $msg } | ConvertTo-Json -Compress))
+        Invoke-RestMethod -Uri $url -Method Post -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 10 | Out-Null
+    } catch {}
+}
+
 Log "woke for nightly pipeline"
 
 # Prune wake logs older than 30 days.
@@ -64,6 +81,10 @@ for ($i = 0; $i -lt 45; $i++) {
     catch { Start-Sleep -Seconds 2 }
 }
 Log ("server healthy: {0}" -f $healthy)
+if (-not $healthy) {
+    Log "ALERT: server unhealthy after wake - notifying Discord"
+    Send-DiscordAlert "🛑 ITX wake (21:55): Prefect server did NOT come up. Tonight's 22:00 pipeline run will NOT fire - manual recovery needed."
+}
 Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
 Log "serve (re)started"
 
