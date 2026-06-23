@@ -17,10 +17,15 @@ function Register-BootTask([string]$Name, [string]$ScriptPath) {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
         -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath)
     $trigger = New-ScheduledTaskTrigger -AtLogOn
+    # No RestartCount: auto-restart-on-failure spawned a 2nd server while the old
+    # process tree (uvicorn child) still held the SQLite lock -> "database is
+    # locked" -> crash -> restart -> cascade. A single instance is stable; clean
+    # restarts go through the wake task (kill-then-start) or a manual bounce.
+    # IgnoreNew: never run two instances of the same task concurrently.
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -StartWhenAvailable `
-        -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit ([TimeSpan]::Zero)   # long-running: no time limit
 
     Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
