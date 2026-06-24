@@ -8,12 +8,21 @@
 # Needs an ELEVATED PowerShell (writing the root task library requires admin).
 param(
     [string]$TaskName = 'PrefectPipelineWake',
-    [string]$At = '21:55'          # 5 min before the 22:00 Prefect run, local time
+    [string]$At = '21:45'          # 15 min before the 22:00 run: margin for a late ACPI wake
 )
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
 $WakeScript = Join-Path $Root 'scripts\wake_for_pipeline.ps1'
+
+# A wake-timer wake is "unattended"; Windows then re-sleeps after the unattended
+# sleep timeout (UNATTENDSLEEP, default 120s) BEFORE the wake task gets to run.
+# That is what silently skipped the 2026-06-24 run. Widen it to 15 min on AC so
+# the box stays up long enough for StartWhenAvailable to fire the wake task.
+powercfg -attributes SUB_SLEEP 7bc4a2f9-d8fc-4469-b07b-33eb785aaca0 -ATTRIB_HIDE 2>&1 | Out-Null
+powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP 7bc4a2f9-d8fc-4469-b07b-33eb785aaca0 900 2>&1 | Out-Null
+powercfg /setactive SCHEME_CURRENT 2>&1 | Out-Null
+Write-Host "[OK] Set unattended sleep timeout (AC) = 900s"
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $WakeScript)
