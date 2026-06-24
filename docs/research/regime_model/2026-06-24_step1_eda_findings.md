@@ -483,6 +483,31 @@ Every lead candidate has now been tested: level factors (coincident, S3b/c), ref
 (weak + crisis-only, S3d/e), cross-asset coupling (does not lead, Step 4). **Nothing leads equity
 tails on this universe — confirmed against the academic literature's best candidate.**
 
+### Scope note — what was NOT tested: VALUATION timing (different horizon, untested, the one open avenue)
+
+This entire investigation tested **TACTICAL / stress signals** at a **short horizon** (days–weeks):
+does vol / credit / coupling **warn before an imminent drawdown**? Answer: no, all coincident.
+
+It did **NOT** test **STRATEGIC / valuation** timing at a **long horizon** (months–years): does an
+*expensive* market (CAPE, equity-risk-premium, value spread) predict *lower long-run returns*? That
+is a different question with a different, literature-supported answer:
+- **Asness, Ilmanen & Maloney (2017), "Market Timing: Sin a Little"** — *defends* valuation timing
+  against the (incl. Asness's own earlier) skepticism. Valuation DOES carry timing info, but the edge
+  is **small and slow**; naive contrarian timing underperformed mostly because it fights trend. The
+  resolution: "sin a little" — a *small* valuation tilt, combined with momentum, adds modest value.
+  Big all-in timing ("sin a lot") does not.
+- **Why this does NOT contradict our finding:** different signal (valuation, not stress), different
+  horizon (years, not days), different target (long-run return, not imminent tail). A high-CAPE market
+  can be "expensive" for *years* with no near-term stress signal firing. Both hold simultaneously.
+  In fact Asness *reinforces* our meta-finding: the only place timing has any edge is a slow, small,
+  valuation tilt — **not** a fast stress alarm (which we showed doesn't exist).
+- **Implication / a possible "Step 5" of a different character:** if a STRATEGIC (months–years)
+  allocation tilt is ever wanted — as opposed to the tactical crisis gate we built — **valuation is
+  the candidate**, orthogonal to everything in the VIX/credit/AR panel, and the one literature-backed
+  timing signal we have NOT ruled out. It would be a slow allocation overlay, sized small ("sin a
+  little"), NOT a drawdown-warning system. Out of scope for this regime/sizing model; noted so it is a
+  *deliberate exclusion*, not an overlooked gap.
+
 **FINAL MODEL: `VIX` (sizing) + `est_prob` gate (in-crisis). No pre-crisis warning layer — BY
 EVIDENCE.** This is the simplest thing that works, fully validated, fully explainable, and the "no
 lead" conclusion is now exhaustively supported rather than assumed.
