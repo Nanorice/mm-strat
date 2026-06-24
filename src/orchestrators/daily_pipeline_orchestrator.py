@@ -1624,9 +1624,15 @@ class DailyPipelineOrchestrator:
             logger.warning(f"[Dashboard DB] Build script not found: {build_script}")
             return {'rows_processed': 0}
 
+        # 1800s ceiling: the build windows the multi-GB feature tables off an
+        # ever-growing source DB (~88 GB and climbing), so the old 600s cap was
+        # killing the build mid-manifest. The build now writes atomically (temp
+        # + os.replace), so a kill here can only leave the last good slim DB in
+        # place — never a truncated one — but a generous timeout lets the rebuild
+        # actually finish so the remote dashboard stays fresh, not just valid.
         proc = subprocess.run(
             [sys.executable, str(build_script)],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=1800,
             cwd=str(project_root),
         )
         if proc.returncode != 0:

@@ -26,6 +26,7 @@ Manifest modes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -139,14 +140,27 @@ def _build_table(con: duckdb.DuckDBPyConnection, name: str, mode: str,
     return con.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
 
 
+def _purge(path: Path) -> None:
+    """Remove a DuckDB file and its WAL sidecar if present."""
+    for p in (path, path.with_name(path.name + ".wal")):
+        if p.exists():
+            p.unlink()
+
+
 def build(source: Path, out: Path, window_days: int) -> None:
     if not source.exists():
         raise FileNotFoundError(f"source DB not found: {source}")
-    if out.exists():
-        out.unlink()  # idempotent: rebuild from scratch
+
+    # Build into a temp file and atomically promote it only after the full
+    # manifest + invariant succeed. The published `out` is never unlinked up
+    # front, so a build that dies partway (timeout kill, OOM, bad view) leaves
+    # the last good slim DB intact instead of a truncated one that the R2 sync
+    # would happily ship to the remote dashboard.
+    tmp = out.with_name(out.stem + ".tmp" + out.suffix)
+    _purge(tmp)  # clear any leftover from a prior aborted run
 
     t0 = time.time()
-    con = db.connect(str(out))
+    con = db.connect(str(tmp))
     try:
         con.execute(f"ATTACH '{source}' AS src (READ_ONLY)")
         print(f"[BUILD] {out.name} from {source.name} "
@@ -177,8 +191,18 @@ def build(source: Path, out: Path, window_days: int) -> None:
             raise RuntimeError(f"manifest objects missing from slim DB: {sorted(missing)}")
 
         con.execute("DETACH src")
+    except BaseException:
+        con.close()
+        _purge(tmp)  # never leave a partial temp behind; keep `out` untouched
+        raise
     finally:
         con.close()
+
+    # Full build verified — atomically replace the published DB. os.replace is
+    # atomic on the same filesystem, so the R2 sync can never observe a half-
+    # written file.
+    _purge(out)
+    os.replace(tmp, out)
 
     size_mb = out.stat().st_size / 1024 ** 2
     print(f"\n[OK] {out.name}: {size_mb:,.1f} MB | {time.time() - t0:.1f}s")
