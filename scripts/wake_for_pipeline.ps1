@@ -75,12 +75,19 @@ for ($i = 0; $i -lt 30; $i++) {
 Log ("teardown clear: {0} (waited {1}s, procs left={2})" -f $gone, $i, @(Get-PrefectProcs).Count)
 
 Start-ScheduledTask -TaskName 'PrefectServer'
-$healthy = $false
-for ($i = 0; $i -lt 45; $i++) {
-    try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4200/api/health' -TimeoutSec 3 | Out-Null; $healthy = $true; break }
-    catch { Start-Sleep -Seconds 2 }
+# Require SUSTAINED health, not a single 200. The server answers /api/health
+# during early startup, then can die ~2s later on a 'database is locked' state-
+# validation error. Handing off to serve inside that window is how the 06-25
+# run was silently lost (single check passed, so no alert fired either). Only
+# declare healthy after it survives several consecutive checks (~12s).
+$healthy = $false; $streak = 0
+for ($i = 0; $i -lt 60; $i++) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4200/api/health' -TimeoutSec 3 | Out-Null; $streak++ }
+    catch { $streak = 0 }
+    if ($streak -ge 6) { $healthy = $true; break }
+    Start-Sleep -Seconds 2
 }
-Log ("server healthy: {0}" -f $healthy)
+Log ("server healthy (sustained): {0} after {1}s" -f $healthy, ($i * 2))
 if (-not $healthy) {
     Log "ALERT: server unhealthy after wake - notifying Discord"
     Send-DiscordAlert "🛑 ITX wake (21:55): Prefect server did NOT come up. Tonight's 22:00 pipeline run will NOT fire - manual recovery needed."
