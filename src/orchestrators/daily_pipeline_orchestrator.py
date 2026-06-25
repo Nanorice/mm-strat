@@ -182,6 +182,7 @@ class DailyPipelineOrchestrator:
         if not self.dry_run:
             try:
                 db.check_write_available(self.db_path)
+                logger.info("[Pipeline] Pre-flight OK: DuckDB write lock is free")
             except db.DuckDBLockedError as e:
                 logger.error(f"[Pipeline] ABORT - {e}")
                 return False
