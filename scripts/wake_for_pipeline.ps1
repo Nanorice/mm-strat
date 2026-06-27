@@ -74,23 +74,42 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 Log ("teardown clear: {0} (waited {1}s, procs left={2})" -f $gone, $i, @(Get-PrefectProcs).Count)
 
-Start-ScheduledTask -TaskName 'PrefectServer'
-# Require SUSTAINED health, not a single 200. The server answers /api/health
-# during early startup, then can die ~2s later on a 'database is locked' state-
-# validation error. Handing off to serve inside that window is how the 06-25
-# run was silently lost (single check passed, so no alert fired either). Only
-# declare healthy after it survives several consecutive checks (~12s).
-$healthy = $false; $streak = 0
-for ($i = 0; $i -lt 60; $i++) {
-    try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4200/api/health' -TimeoutSec 3 | Out-Null; $streak++ }
-    catch { $streak = 0 }
-    if ($streak -ge 6) { $healthy = $true; break }
-    Start-Sleep -Seconds 2
+# The server is flaky for the first minute or two right after a wake-from-sleep
+# (system + SQLite still settling post-resume): it prints its banner, answers
+# /api/health briefly, then dies on a 'database is locked' state validation. A
+# single attempt (06-27) caught it in that window and the run was lost - but a
+# retry once the box has settled reliably succeeds. So retry up to 3x, tearing
+# down the dead server and letting the box settle between tries.
+#
+# Each try requires SUSTAINED health, not a single 200: the server answers
+# /api/health during early startup then can die ~2s later, so one passing check
+# is not enough (that is how the 06-25 run was silently lost). Only count it
+# healthy after 6 consecutive checks (~12s).
+$healthy = $false
+for ($attempt = 1; $attempt -le 3 -and -not $healthy; $attempt++) {
+    if ($attempt -gt 1) {
+        Get-PrefectProcs | Where-Object { $_.CommandLine -match 'prefect server start' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        for ($j = 0; $j -lt 25; $j++) {
+            if (@(Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue).Count -eq 0) { break }
+            Start-Sleep -Seconds 1
+        }
+        Start-Sleep -Seconds 20   # let the box settle before retrying
+    }
+    Start-ScheduledTask -TaskName 'PrefectServer'
+    $streak = 0
+    for ($i = 0; $i -lt 45; $i++) {
+        try { Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4200/api/health' -TimeoutSec 3 | Out-Null; $streak++ }
+        catch { $streak = 0 }
+        if ($streak -ge 6) { $healthy = $true; break }
+        Start-Sleep -Seconds 2
+    }
+    Log ("server start attempt {0}: healthy={1}" -f $attempt, $healthy)
 }
-Log ("server healthy (sustained): {0} after {1}s" -f $healthy, ($i * 2))
+Log ("server healthy (sustained): {0}" -f $healthy)
 if (-not $healthy) {
-    Log "ALERT: server unhealthy after wake - notifying Discord"
-    Send-DiscordAlert "🛑 ITX wake (21:55): Prefect server did NOT come up. Tonight's 22:00 pipeline run will NOT fire - manual recovery needed."
+    Log "ALERT: server unhealthy after wake (3 attempts) - notifying Discord"
+    Send-DiscordAlert "🛑 ITX wake: Prefect server did NOT come up after 3 attempts. Tonight's run will NOT fire - manual recovery needed."
 }
 Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
 Log "serve (re)started"
