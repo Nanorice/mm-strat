@@ -126,7 +126,7 @@ def render_macro_dashboard() -> None:
             )
             
         if days is not None:
-            cutoff = pd.Timestamp.now().date() - pd.Timedelta(days=days)
+            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=days)
             hist = df[df["date"] >= cutoff]
         else:
             hist = df

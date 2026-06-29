@@ -408,6 +408,9 @@ def load_macro_pillars() -> pd.DataFrame:
         con.close()
 
     df_db['value'] = pd.to_numeric(df_db['value'], errors='coerce')
+    # DuckDB DATE -> pandas can land as datetime64[us]; normalize so consumers
+    # can compare against pd.Timestamp without dtype-mismatch TypeErrors.
+    df_db['date'] = pd.to_datetime(df_db['date'])
     df_db = df_db.drop_duplicates(subset=['date', 'symbol'])
     df_db = df_db.pivot(index='date', columns='symbol', values='value').reset_index()
     # Forward fill missing daily values, then drop rows before we have VIX data
