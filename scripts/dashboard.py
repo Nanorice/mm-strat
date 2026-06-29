@@ -29,16 +29,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from dashboard_utils import (
     CLASS_COLORS,
     CLASS_LABELS,
-    FACTOR_FRIENDLY,
     P_HR_COL,
     P_STRONG_COL,
-    PILLAR_FORMULAS,
-    REGIME_THRESHOLDS,
-    VETO_THRESHOLD,
-    classify_regime,
-    exposure_band_label,
     load_activity_feed,
     load_daily_predictions_today,
+    load_macro_pillars,
     load_past_decisions,
     load_pipeline_status,
     load_prod_model_version_id,
@@ -46,10 +41,6 @@ from dashboard_utils import (
     load_rank_history,
     load_rank_history_bounds,
     load_recent_exits,
-    load_regime,
-    load_regime_history,
-    load_risk_5f,
-    load_risk_history,
     load_scored_pre_breakout,
     load_scored_watchlist,
     load_sector_heat,
@@ -70,94 +61,102 @@ def render_pipeline_status(pipeline: pd.DataFrame) -> None:
     st.caption(f"Pipeline: {status_icon} {latest['phase_name']} — {ts}")
 
 
-def render_regime_header(regime: pd.Series | None) -> None:
-    st.subheader("M03 Market Regime")
-    if regime is None:
-        st.warning("No M03 regime data found in t2_regime_scores.")
+def render_macro_dashboard() -> None:
+    st.subheader("6-Pillar Macro Environment")
+    df = load_macro_pillars()
+    if df.empty:
+        st.warning("No macro data available.")
         return
-
-    score = regime["m03_score"]
-    label, color = classify_regime(score)
-    st.markdown(
-        f"<span style='font-size:1.4em;font-weight:bold;color:{color}'>{label}</span>"
-        f" &nbsp; Score: **{score:.1f}** &nbsp; "
-        f"<span style='font-size:0.85em;color:#888'>"
-        f"{regime['m03_delta_5d']:+.1f} (5d) · as of {regime['date']}</span>",
-        unsafe_allow_html=True,
-    )
-
-    p1, p2, p3 = st.columns(3)
-    for col, pillar_name, value, formula_key in [
-        (p1, "Trend", regime["m03_pillar_trend"], "Trend (40%)"),
-        (p2, "Liquidity", regime["m03_pillar_liq"], "Liquidity (30%)"),
-        (p3, "Risk Appetite", regime["m03_pillar_risk"], "Risk Appetite (30%)"),
-    ]:
-        with col:
-            st.metric(pillar_name, f"{value:.1f}")
-            st.caption(f"*{PILLAR_FORMULAS[formula_key]}*")
-
-
-def render_risk_5f_header(risk: pd.Series | None) -> None:
-    st.subheader("5-Factor Risk Regime")
-    if risk is None:
-        st.warning("No 5F data found in t2_risk_scores.")
-        return
-
-    target = float(risk["target_exposure"])
-    band, color = exposure_band_label(target)
-    pct = float(risk["rolling_percentile"]) if pd.notna(risk["rolling_percentile"]) else None
-    veto = bool(risk["veto_flag"]) if pd.notna(risk["veto_flag"]) else False
-
-    veto_tag = (
-        " <span style='background:#b71c1c;color:#fff;padding:1px 7px;border-radius:6px;"
-        "font-size:0.8em;'>VETO</span>" if veto else ""
-    )
-    st.markdown(
-        f"<span style='font-size:1.4em;font-weight:bold;color:{color}'>{band}</span>"
-        f" &nbsp; Exposure: **{target:.0%}**{veto_tag} &nbsp; "
-        f"<span style='font-size:0.85em;color:#888'>"
-        f"5y-pct: {pct:.0%} · as of {risk['date']}</span>"
-        if pct is not None else
-        f"<span style='font-size:1.4em;font-weight:bold;color:{color}'>{band}</span>"
-        f" &nbsp; Exposure: **{target:.0%}**{veto_tag} &nbsp; "
-        f"<span style='font-size:0.85em;color:#888'>as of {risk['date']}</span>",
-        unsafe_allow_html=True,
-    )
-
-    # Worst factor — largest z-score (most stretched)
-    z_cols = ["z_vix", "z_hy", "z_term", "z_trend", "z_slope"]
-    zs = {c: float(risk[c]) for c in z_cols if pd.notna(risk[c])}
-    if zs:
-        worst_col = max(zs, key=lambda k: zs[k])
-        worst_val = zs[worst_col]
-        f_name = FACTOR_FRIENDLY[worst_col]
-        worst_color = "#c62828" if worst_val >= VETO_THRESHOLD else (
-            "#fb8c00" if worst_val >= 1.0 else "#2e7d32"
+        
+    latest = df.iloc[-1]
+    
+    col1, col2 = st.columns([1, 1.2])
+    
+    with col1:
+        st.markdown("**Latest Snapshot** (Percentiles 0-100)")
+        
+        pillars = [
+            ("VIX (Fear)", "VIX_pct"),
+            ("Credit Stress", "Credit_pct"),
+            ("Term Spread", "Term Spread_pct"),
+            ("Rates (Financial Conditions)", "Rates_pct"),
+            ("Net Liquidity", "Liquidity_pct"),
+            ("Valuation (CAPE)", "CAPE_pct"),
+        ]
+        
+        names = []
+        vals = []
+        colors = []
+        # Reverse for top-to-bottom layout
+        for name, col_pct in reversed(pillars): 
+            names.append(name)
+            val = latest[col_pct] if pd.notna(latest.get(col_pct)) else 0
+            vals.append(val)
+            if val < 40:
+                colors.append("#2e7d32") # Green
+            elif val < 75:
+                colors.append("#fb8c00") # Orange
+            else:
+                colors.append("#c62828") # Red
+                
+        fig = go.Figure(go.Bar(
+            x=vals, y=names, orientation='h',
+            marker=dict(color=colors),
+            text=[f"{v:.0f}" if v else "N/A" for v in vals],
+            textposition='auto'
+        ))
+        fig.update_layout(
+            height=300, margin=dict(l=0, r=20, t=10, b=0),
+            xaxis=dict(range=[0, 100], title="Percentile"),
         )
-        weighted_z = float(risk["weighted_z"]) if pd.notna(risk["weighted_z"]) else None
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Worst Factor", f_name, f"{worst_val:+.2f}σ")
-            st.caption(
-                f"*Veto fires at |z| ≥ {VETO_THRESHOLD}σ (any single factor) → forces 15% exposure*"
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with col2:
+        st.markdown("**Historical Trends**")
+        
+        c_lb, c_sel = st.columns([1, 2])
+        with c_lb:
+            days = _lookback_selector("macro_hist_lb", default="3y")
+        with c_sel:
+            selected_pillars = st.multiselect(
+                "Overlay Pillars", 
+                options=[p[0] for p in pillars],
+                default=["VIX (Fear)", "Net Liquidity"],
+                label_visibility="collapsed"
             )
-        with c2:
-            if weighted_z is not None:
-                st.metric("Weighted z", f"{weighted_z:+.2f}")
-                st.caption("*Aggregate 5F stress; lower = riskier*")
-
-        # Expander with all z-scores
-        with st.expander("All factor z-scores", expanded=False):
-            z_df = pd.DataFrame({
-                "Factor": [FACTOR_FRIENDLY[c] for c in z_cols],
-                "z-score": [zs.get(c, float("nan")) for c in z_cols],
-            })
-            st.dataframe(
-                z_df.style.format({"z-score": "{:+.3f}"})
-                          .background_gradient(subset=["z-score"], cmap="RdYlGn_r",
-                                               vmin=-2, vmax=2),
-                use_container_width=True, hide_index=True,
-            )
+            
+        if days is not None:
+            cutoff = pd.Timestamp.now().date() - pd.Timedelta(days=days)
+            hist = df[df["date"] >= cutoff]
+        else:
+            hist = df
+            
+        fig2 = go.Figure()
+        
+        line_colors = {
+            "VIX (Fear)": "#42a5f5",
+            "Credit Stress": "#ab47bc",
+            "Term Spread": "#26a69a",
+            "Rates (Financial Conditions)": "#ffa726",
+            "Net Liquidity": "#8d6e63",
+            "Valuation (CAPE)": "#ef5350"
+        }
+        
+        for name, col_pct in pillars:
+            if name in selected_pillars:
+                fig2.add_trace(go.Scatter(
+                    x=hist["date"], y=hist[col_pct], name=name,
+                    mode="lines", line=dict(color=line_colors[name], width=1.5)
+                ))
+                
+        fig2.add_hline(y=75, line=dict(color="#b71c1c", width=1, dash="dash"), annotation_text="Elevated", annotation_position="top right")
+                
+        fig2.update_layout(
+            height=300, margin=dict(l=0, r=20, t=10, b=0),
+            yaxis=dict(range=[0, 100], title="Percentile"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0)
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
 
 # ── Regime / risk history charts ──────────────────────────────────────────────
@@ -173,109 +172,7 @@ def _lookback_selector(key: str, default: str = "1y") -> int | None:
     return _LOOKBACKS[choice]
 
 
-def render_regime_history() -> None:
-    st.markdown("**M03 regime history** — total score (bold) + 3 pillars")
-    days = _lookback_selector("m03_hist_lb")
-    hist = load_regime_history(days)
-    if hist.empty:
-        st.info("No M03 history in range.")
-        return
 
-    fig = go.Figure()
-    # Shade regime bands across the plot width
-    for label, (lo, hi, color) in REGIME_THRESHOLDS.items():
-        fig.add_hrect(y0=lo, y1=hi, fillcolor=color, opacity=0.08,
-                      line_width=0, annotation_text=label,
-                      annotation_position="right",
-                      annotation_font_size=9, annotation_font_color="#888")
-    for col, name, color, width in [
-        ("m03_pillar_trend", "Trend", "#42a5f5", 1),
-        ("m03_pillar_liq", "Liquidity", "#ab47bc", 1),
-        ("m03_pillar_risk", "Risk Appetite", "#ef5350", 1),
-        ("m03_score", "Total", "#000000", 2.6),
-    ]:
-        fig.add_trace(go.Scatter(
-            x=hist["date"], y=hist[col], name=name, mode="lines",
-            line=dict(color=color, width=width),
-        ))
-    fig.update_layout(
-        height=300, margin=dict(l=0, r=60, t=10, b=0),
-        yaxis=dict(range=[0, 100], title="score"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_risk_history() -> None:
-    st.markdown("**5F stress history** — factor z-scores + weighted z; ±2σ veto band")
-    days = _lookback_selector("risk_hist_lb")
-    hist = load_risk_history(days)
-    if hist.empty:
-        st.info("No 5F history in range.")
-        return
-
-    fig = go.Figure()
-    fig.add_hrect(y0=VETO_THRESHOLD, y1=hist[["z_vix", "z_hy", "z_term", "z_trend", "z_slope"]].max().max() + 0.5,
-                  fillcolor="#b71c1c", opacity=0.06, line_width=0)
-    fig.add_hline(y=VETO_THRESHOLD, line=dict(color="#b71c1c", width=1, dash="dash"))
-    fig.add_hline(y=-VETO_THRESHOLD, line=dict(color="#b71c1c", width=1, dash="dash"))
-    for col, color in [
-        ("z_vix", "#42a5f5"), ("z_hy", "#ab47bc"), ("z_term", "#26a69a"),
-        ("z_trend", "#ffa726"), ("z_slope", "#8d6e63"),
-    ]:
-        fig.add_trace(go.Scatter(
-            x=hist["date"], y=hist[col], name=FACTOR_FRIENDLY[col],
-            mode="lines", line=dict(color=color, width=1),
-        ))
-    fig.add_trace(go.Scatter(
-        x=hist["date"], y=hist["weighted_z"], name="Weighted z",
-        mode="lines", line=dict(color="#000000", width=2.4),
-    ))
-    fig.update_layout(
-        height=300, margin=dict(l=0, r=10, t=10, b=0),
-        yaxis=dict(title="z (σ)"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_risk_position(risk: pd.Series | None) -> None:
-    """Diverging dot plot — today's z per factor on a −3..+3 σ axis, veto at ±2σ."""
-    if risk is None:
-        return
-    st.markdown("**5F current position** — how stretched each factor is right now")
-    z_cols = ["z_vix", "z_hy", "z_term", "z_trend", "z_slope"]
-    zs = [(FACTOR_FRIENDLY[c], float(risk[c])) for c in z_cols if pd.notna(risk[c])]
-    if not zs:
-        st.info("No current 5F z-scores.")
-        return
-    names = [n for n, _ in zs]
-    vals = [v for _, v in zs]
-    colors = ["#c62828" if abs(v) >= VETO_THRESHOLD else
-              ("#fb8c00" if abs(v) >= 1.0 else "#2e7d32") for v in vals]
-
-    fig = go.Figure()
-    fig.add_vrect(x0=-VETO_THRESHOLD, x1=VETO_THRESHOLD, fillcolor="#9e9e9e",
-                  opacity=0.07, line_width=0)
-    fig.add_vline(x=VETO_THRESHOLD, line=dict(color="#b71c1c", width=1, dash="dash"))
-    fig.add_vline(x=-VETO_THRESHOLD, line=dict(color="#b71c1c", width=1, dash="dash"))
-    fig.add_vline(x=0, line=dict(color="#bbb", width=1))
-    # stems
-    for n, v, c in zip(names, vals, colors):
-        fig.add_trace(go.Scatter(x=[0, v], y=[n, n], mode="lines",
-                                 line=dict(color=c, width=2), showlegend=False))
-    fig.add_trace(go.Scatter(
-        x=vals, y=names, mode="markers+text",
-        marker=dict(color=colors, size=14),
-        text=[f"{v:+.2f}σ" for v in vals], textposition="middle right",
-        showlegend=False,
-    ))
-    fig.update_layout(
-        height=240, margin=dict(l=0, r=10, t=6, b=0),
-        xaxis=dict(range=[-3, 3], title="z (σ from factor's own rolling mean)",
-                   zeroline=False),
-    )
-    st.plotly_chart(fig, use_container_width=True)
 
 
 # ── Active trades table ───────────────────────────────────────────────────────
@@ -1074,17 +971,7 @@ def page_today() -> None:
     render_pipeline_status(load_pipeline_status())
     st.markdown("---")
 
-    # M03 + 5F side-by-side
-    regime = load_regime()
-    risk = load_risk_5f()
-    col_regime, col_risk = st.columns(2)
-    with col_regime:
-        render_regime_header(regime)
-        render_regime_history()
-    with col_risk:
-        render_risk_5f_header(risk)
-        render_risk_history()
-        render_risk_position(risk)
+    render_macro_dashboard()
 
     st.markdown("---")
 

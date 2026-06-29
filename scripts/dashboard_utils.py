@@ -381,6 +381,66 @@ def load_watchlist() -> pd.DataFrame:
         con.close()
 
 
+@st.cache_data(ttl=3600)
+def load_macro_pillars() -> pd.DataFrame:
+    """Load the 6 Macro Pillars: VIX, Credit, Term Spread, Rates, Liquidity, CAPE.
+
+    Reads ALL series — including CAPE and DFII10 — from the `macro_data` table.
+    No live network fetch: the macro pipeline (Phase 1) is the single writer.
+
+    Calculates display-only percentiles (0-100) for each pillar:
+    - Fast Risk (all-time rank): VIX, Credit, Term Spread
+    - Slow Fundamentals (5-yr rolling rank): Rates, Liquidity, CAPE
+    NOTE: all-time rank uses the full series (look-ahead) — fine for a "where are
+    we historically" gauge, but do NOT feed these percentiles into a backtest.
+    """
+    con = _connect()
+    try:
+        df_db = con.execute("""
+            SELECT date, symbol, close AS value
+            FROM macro_data
+            WHERE symbol IN (
+                'VIX', 'BAMLH0A0HYM2', 'DGS10', 'DGS2',
+                'WALCL', 'WTREGEN', 'RRPONTSYD', 'CAPE'
+            )
+        """).fetchdf()
+    finally:
+        con.close()
+
+    df_db['value'] = pd.to_numeric(df_db['value'], errors='coerce')
+    df_db = df_db.drop_duplicates(subset=['date', 'symbol'])
+    df_db = df_db.pivot(index='date', columns='symbol', values='value').reset_index()
+    # Forward fill missing daily values, then drop rows before we have VIX data
+    for col in ('VIX', 'CAPE'):
+        if col not in df_db.columns:
+            df_db[col] = pd.NA
+    df_db = df_db.set_index('date').sort_index().ffill().dropna(subset=['VIX'])
+
+    # Map raw series to the 6 pillars.
+    df_db['Credit'] = df_db['BAMLH0A0HYM2']
+    df_db['Term Spread'] = df_db['DGS10'] - df_db['DGS2']
+    # Net Liquidity in billions, matching MacroEngine.get_net_liquidity():
+    #   WALCL (millions) - WTREGEN (millions) - RRPONTSYD (already billions)
+    df_db['Liquidity'] = (
+        df_db['WALCL'] / 1000.0
+        - df_db['WTREGEN'].fillna(0) / 1000.0
+        - df_db['RRPONTSYD'].fillna(0)
+    )
+    df_db['Rates'] = df_db['DGS10']
+
+    # Percentiles — all-time rank for fast pillars, 5-yr rolling for slow ones.
+    for col in ['VIX', 'Credit', 'Term Spread']:
+        df_db[f'{col}_pct'] = df_db[col].rank(pct=True) * 100
+
+    for col in ['Rates', 'Liquidity', 'CAPE']:
+        if col in df_db.columns and not df_db[col].isna().all():
+            df_db[f'{col}_pct'] = df_db[col].rolling(1260, min_periods=252).rank(pct=True) * 100
+        else:
+            df_db[f'{col}_pct'] = pd.NA
+
+    return df_db.reset_index()
+
+
 def _attach_class_labels(df: pd.DataFrame) -> pd.DataFrame:
     """Translate materialized prob_class_N / predicted_class → the label columns
     the renderers expect (`m01_class`, `m01_class_id`, `p_<label>`).

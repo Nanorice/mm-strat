@@ -505,6 +505,67 @@ def check_macro_integrity(con: duckdb.DuckDBPyConnection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section 5b: Macro Data (macro_data — long FRED/Yale series) Integrity
+# ---------------------------------------------------------------------------
+# Per-symbol max staleness (calendar days). Daily series should be fresh within a
+# week; weekly FRED releases and monthly CAPE legitimately lag further.
+MACRO_DATA_EXPECTED: dict[str, int] = {
+    "VIX": 5,            # daily (FRED VIXCLS)
+    "DGS10": 5,          # daily
+    "DGS2": 5,           # daily
+    "DFII10": 5,         # daily (10Y real yield)
+    "BAMLH0A0HYM2": 5,   # daily (HY OAS)
+    "RRPONTSYD": 5,      # daily (overnight RRP)
+    "WALCL": 12,         # weekly (Fed balance sheet, Wed release)
+    "WTREGEN": 12,       # weekly (TGA)
+    "WBAA": 12,          # weekly (Baa yield)
+    "CAPE": 70,          # monthly (Yale ie_data.xls — trails ~1-2 months)
+}
+
+
+def check_macro_data_integrity(con: duckdb.DuckDBPyConnection) -> None:
+    has_table = con.execute("""
+        SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'macro_data'
+    """).fetchone()[0] > 0
+    if not has_table:
+        _check("macro_data", "table_exists", "FAIL", False, "macro_data table not found")
+        return
+
+    total = con.execute("SELECT COUNT(*) FROM macro_data").fetchone()[0]
+    _check("macro_data", "total_rows", "INFO", total, "Total rows in macro_data (long format)")
+    if total == 0:
+        _check("macro_data", "table_empty", "FAIL", 0, "macro_data has no rows")
+        return
+
+    today = date.today()
+    present = {
+        sym: (n, mx)
+        for sym, n, mx in con.execute(
+            "SELECT symbol, COUNT(*), MAX(date) FROM macro_data GROUP BY symbol"
+        ).fetchall()
+    }
+
+    for sym, max_stale in MACRO_DATA_EXPECTED.items():
+        if sym not in present:
+            _check("macro_data", f"symbol_{sym}", "FAIL", "MISSING",
+                   f"Expected series '{sym}' absent from macro_data (dashboard pillar will be blank)")
+            continue
+        n, mx = present[sym]
+        days_since = (today - mx).days if mx else 9999
+        status = "OK" if days_since <= max_stale else "WARNING"
+        _check("macro_data", f"symbol_{sym}", status, str(mx),
+               f"{n} rows, {days_since}d stale (tolerance {max_stale}d)")
+
+    # The dashboard reads `close`; `value` is unused. Guard against a regression
+    # where a writer populates `value` instead, which silently blanks the gauge.
+    null_close = con.execute("SELECT COUNT(*) FROM macro_data WHERE close IS NULL").fetchone()[0]
+    pct = _pct(null_close, total)
+    status = "FAIL" if pct > 1.0 else "OK"
+    _check("macro_data", "null_close", status, null_close,
+           f"{pct}% rows with NULL close (dashboard pillars read `close`, not `value`)")
+
+
+# ---------------------------------------------------------------------------
 # Section 6: Shares History Integrity
 # ---------------------------------------------------------------------------
 def check_shares_integrity(con: duckdb.DuckDBPyConnection) -> None:
@@ -586,6 +647,7 @@ def main() -> None:
         check_filing_date_integrity(con)
         check_price_integrity(con)
         check_macro_integrity(con)
+        check_macro_data_integrity(con)
         check_shares_integrity(con)
     finally:
         con.close()

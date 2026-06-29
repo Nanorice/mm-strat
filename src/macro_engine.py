@@ -149,6 +149,43 @@ class MacroEngine:
             df = df.rename(columns={'VIXCLS': 'VIX'})
         return df
 
+    CAPE_URL = "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
+
+    def fetch_cape(self, start_date: str = '2003-01-01') -> pd.DataFrame:
+        """
+        Fetch the Shiller CAPE ratio from Yale's ie_data.xls (monthly).
+
+        The 'Date' column is a year.month fraction (e.g. 2023.09 -> 2023-09-01).
+        Returns a DataFrame indexed by observation date with a single 'CAPE'
+        column, so it flows through update_series / write_to_macro_data like any
+        other series.
+        """
+        import io as _io
+
+        try:
+            r = requests.get(self.CAPE_URL, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            raw = pd.read_excel(_io.BytesIO(r.content), sheet_name="Data", skiprows=7, engine="xlrd")
+        except Exception as e:
+            logger.error(f"CAPE fetch failed: {e}")
+            return pd.DataFrame()
+
+        df = raw[["Date", "CAPE"]].apply(pd.to_numeric, errors="coerce").dropna()
+        if df.empty:
+            logger.warning("CAPE: no parseable rows from Yale workbook")
+            return pd.DataFrame()
+
+        def _frac_to_date(frac: float) -> pd.Timestamp:
+            year = int(frac)
+            month = min(max(int(round((frac - year) * 100)), 1), 12)
+            return pd.Timestamp(year=year, month=month, day=1)
+
+        df['observation_date'] = df['Date'].map(_frac_to_date)
+        df = df[['observation_date', 'CAPE']].set_index('observation_date').sort_index()
+        df = df[df.index >= pd.Timestamp(start_date)]
+        logger.info(f"Fetched {len(df)} CAPE observations from Yale")
+        return df
+
     def _get_cache_path(self, series_id: str) -> Path:
         """Get cache file path for a series."""
         return self.macro_dir / f"{series_id}.parquet"
@@ -195,6 +232,8 @@ class MacroEngine:
         # Fetch new data
         if series_id == 'VIX':
             new_data = self.fetch_vix(start_date)
+        elif series_id == 'CAPE':
+            new_data = self.fetch_cape(start_date)
         else:
             new_data = self.fetch_fred_series(series_id, start_date)
 
@@ -233,12 +272,13 @@ class MacroEngine:
             if write_db and not df.empty:
                 self.write_to_macro_data(series_id, df)
 
-        # Update VIX
-        logger.info("Updating VIX...")
-        df = self.update_series('VIX', force=force)
-        results['VIX'] = len(df)
-        if write_db and not df.empty:
-            self.write_to_macro_data('VIX', df)
+        # Update non-FRED series (VIX from FRED VIXCLS, CAPE from Yale XLS)
+        for series_id in ('VIX', 'CAPE'):
+            logger.info(f"Updating {series_id}...")
+            df = self.update_series(series_id, force=force)
+            results[series_id] = len(df)
+            if write_db and not df.empty:
+                self.write_to_macro_data(series_id, df)
 
         logger.info(f"Macro cache update complete: {results}")
         return results

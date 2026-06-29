@@ -113,6 +113,7 @@ FRED_SERIES = {
     'BAMLH0A0HYM2': {'name': 'HY Credit Spread (OAS)', 'freq': 'D', 'unit': 'percent'},
     'DGS10': {'name': '10Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
     'DGS2': {'name': '2Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
+    'DFII10': {'name': '10Y Real Yield (TIPS)', 'freq': 'D', 'unit': 'percent'},
     'WBAA': {'name': "Moody's Baa Corporate Yield", 'freq': 'W', 'unit': 'percent'},
 }
 

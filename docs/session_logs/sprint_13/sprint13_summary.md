@@ -34,3 +34,26 @@
 - Guard against the feature-shift SQL bug (an edit landed in the wrong place in SQL and
   shifted all features).
 - Document cleanup — batch at sprint end.
+
+## Overall Sprint Roadmap
+
+By the end of Sprint 13 at a high level, we should:
+1. Have a new macro dashboard for the weather/climate gauge (see [macro_dashboard_implementation_plan.md](macro_dashboard_implementation_plan.md)).
+2. Finalise M02 (the ongoing scoring model).
+3. Strip M03 from all models, and understand the impact on ability to rank (generating clean model cards).
+4. Finalise the backtesting framework.
+5. Evaluate the model and strategy, and finalise the trading system.
+6. In parallel, work on ITX to smooth automatic runs of the daily job.
+- *Side quest:* Compare with [vnpy](https://github.com/vnpy/vnpy) to see if there are any gaps not implementable in the current framework (pros and cons comparison).
+
+## Sprint TODOs
+
+- **CAPE pillar — replace Yale XLS with a FRED-derived proxy.** The macro dashboard's
+  6th pillar (Valuation/CAPE) is now sourced from Yale's `ie_data.xls` into `macro_data`
+  (engine path, DQ-checked). But that file's CAPE column trails badly — currently frozen
+  at **2023-09** (~1000d stale), so the gauge renders on an old value and the DQ audit
+  flags it WARN by design. Accepted as-is for now (5/6 pillars are fresh). Follow-up:
+  build a daily FRED-derived CAPE proxy, and before swapping it in, quantify:
+  (a) the gap between the proxy and true Shiller CAPE, (b) *why* the Yale file is stale
+  (publication cadence vs. our fetch), and (c) how reliable the proxy is as a stand-in.
+  Isolated to the dashboard valuation pillar — no downstream model/backtest impact.
