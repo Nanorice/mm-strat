@@ -351,7 +351,7 @@ class VectorizedSEPABacktest:
         }
 
         print("=" * 60)
-        print(f"Vectorized Backtest Summary ({self.start_date} → {self.end_date})")
+        print(f"Vectorized Backtest Summary ({self.start_date} -> {self.end_date})")
         print("=" * 60)
         print(f"  Trades:        {stats['n_trades']}")
         print(f"  Tickers:       {stats['n_tickers']}")

@@ -26,6 +26,7 @@ from src import db
 
 import config
 from src.utils import get_model_features
+from src.evaluation.categorical_encoding import encode_categoricals, load_categorical_map
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,18 @@ class UniverseScorer:
         else:
             self._m01_features = get_model_features('M01', db_path=str(DEFAULT_DB_PATH))
             logger.info(f"M01 uses {len(self._m01_features)} features (from model_feature_sets)")
+
+    def _categorical_feature_names(self) -> list[str]:
+        """Names of features the booster was trained as categorical (feature_types=='c').
+
+        The booster is the source of truth; metadata/feature lists don't record dtype.
+        """
+        if self.m01_model is None:
+            return []
+        booster = self.m01_model.get_booster()
+        names = booster.feature_names or []
+        types = booster.feature_types or []
+        return [n for n, t in zip(names, types) if t == 'c']
 
     def _compute_trailing_percentile(
         self,
@@ -542,38 +555,30 @@ class UniverseScorer:
 
         X = df[self._m01_features].copy()
 
-        # Ensure categorical features have exactly the same categories as the training set
-        for col in ['industry', 'sector']:
-            if col in X.columns:
-                cats = None
-                
-                # First try to load from the model's categorical_mapping.json
-                if hasattr(self, 'm01_path') and self.m01_path:
-                    cat_map_path = self.m01_path.parent / 'categorical_mapping.json'
-                    if cat_map_path.exists():
-                        import json
-                        with open(cat_map_path, 'r') as f:
-                            cat_map = json.load(f)
-                            if col in cat_map:
-                                cats = cat_map[col]
-                                
-                if cats is None:
-                    # Fallback: query from company_profiles
-                    con_tmp = db.connect(str(db_path), read_only=True)
-                    try:
-                        cats = con_tmp.execute(f"SELECT DISTINCT {col} FROM company_profiles WHERE {col} IS NOT NULL ORDER BY {col}").df()[col].astype(str).tolist()
-                    finally:
-                        con_tmp.close()
-                        
-                X[col] = X[col].astype(str).replace({'nan': np.nan, 'None': np.nan})
-                X[col] = pd.Categorical(X[col], categories=cats)
+        # Categorical encoding: route through the SAME shared util prod ScoreEngine
+        # uses, so backtest scoring is byte-identical to daily scoring. The model's
+        # frozen vocab (categorical_mapping.json) maps string labels → the integer
+        # codes XGBoost was trained on. The booster's feature_types ('c') are the
+        # authoritative list of which features are categorical.
+        cat_features = self._categorical_feature_names()
+        categorical_map = load_categorical_map(self.m01_path) if self.m01_path else {}
 
-        for col in ['industry_id', 'sector_id']:
-            if col in X.columns:
-                X[col] = X[col].astype('category')
+        # Hard-fail: a model with categorical features but no frozen vocab cannot be
+        # scored reproducibly (per-frame codes drift vs training). No silent fallback.
+        unmapped = [c for c in cat_features if c not in categorical_map]
+        if unmapped:
+            raise ValueError(
+                f"Model {self.m01_path} has categorical features {unmapped} but no "
+                f"categorical_mapping.json entry for them. Backtest scoring requires "
+                f"the frozen training vocab — re-save the model with its mapping."
+            )
 
-        numeric_cols = X.select_dtypes(include=[np.number]).columns
-        X[numeric_cols] = X[numeric_cols].fillna(X[numeric_cols].median())
+        # Missing-value handling MUST match prod ScoreEngine.predict_frame: replace
+        # inf→NaN and hand NaN straight to XGBoost (it treats NaN as missing). A
+        # window-median fill (the old behaviour) made scores window-dependent and
+        # diverged from the materialized daily_predictions — see scripts/check_backtest_parity.py.
+        X = X.replace([np.inf, -np.inf], np.nan)
+        X = encode_categoricals(X, self._m01_features, categorical_map)
 
         prob_elite = None
         if self._is_classifier:
