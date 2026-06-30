@@ -33,6 +33,11 @@ function Send-DiscordAlert($msg) {
 
 Log "woke for nightly pipeline"
 
+# Record wake-source evidence first thing (open issue #1): what woke the box and
+# which sleep state it left. Pairs with the -Phase pre snapshot taken at sleep.
+& (Join-Path $PSScriptRoot 'wake_diag.ps1') -Phase post 2>&1 | Out-Null
+Send-DiscordAlert "⏰ ITX woke from sleep - restarting Prefect (server + serve)."
+
 # Prune wake logs older than 30 days.
 Get-ChildItem $LogDir -Filter 'wake_*.log' -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
@@ -74,6 +79,15 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 Log ("teardown clear: {0} (waited {1}s, procs left={2})" -f $gone, $i, @(Get-PrefectProcs).Count)
 
+# Checkpoint the SQLite WAL now that the db is unlocked. Repeated server crashes
+# leave a bloated uncheckpointed WAL that stalls the next startup with 'database
+# is locked' (seen 2026-06-29). Cheap no-op when the WAL is already small.
+$Py = Join-Path $Root '.venv\Scripts\python.exe'
+if (Test-Path $Py) {
+    $cp = & $Py (Join-Path $Root 'scripts\checkpoint_prefect_wal.py') 2>&1
+    Log ("wal checkpoint: {0}" -f ($cp -join ' '))
+}
+
 # The server is flaky for the first minute or two right after a wake-from-sleep
 # (system + SQLite still settling post-resume): it prints its banner, answers
 # /api/health briefly, then dies on a 'database is locked' state validation. A
@@ -111,8 +125,12 @@ if (-not $healthy) {
     Log "ALERT: server unhealthy after wake (3 attempts) - notifying Discord"
     Send-DiscordAlert "🛑 ITX wake: Prefect server did NOT come up after 3 attempts. Tonight's run will NOT fire - manual recovery needed."
 }
+else {
+    Send-DiscordAlert ("✅ ITX wake: Prefect server healthy (sustained) after {0} attempt(s)." -f ($attempt - 1))
+}
 Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
 Log "serve (re)started"
+Send-DiscordAlert "🚀 ITX wake: serve restarted - ready for the scheduled run."
 
 # Hold awake through the 22:00 trigger; flow takes over its own lock once running.
 Start-Sleep -Seconds 600

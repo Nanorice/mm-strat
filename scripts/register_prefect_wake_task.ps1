@@ -24,11 +24,11 @@ powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP 7bc4a2f9-d8fc-4469-b07b-33eb7
 powercfg /setactive SCHEME_CURRENT 2>&1 | Out-Null
 Write-Host "[OK] Set unattended sleep timeout (AC) = 900s"
 
-# The flow's _suspend_pc() uses rundll32 SetSuspendState, which HIBERNATES (S4)
-# whenever hibernation is enabled - and this box's RTC wake timer does NOT fire
-# from S4 (root cause of the missed 2026-06-26 wake; every S3 sleep woke fine,
-# the one S4 hibernate did not). Disable hibernation so every suspend is S3
-# (this also turns off Fast Startup, which is desirable for a headless box).
+# The box is put to sleep by the OS idle timeout (not a script): on this hardware
+# an idle-triggered S3 sleep (Kernel-Power Reason 7) wakes reliably on the RTC
+# timer, whereas a programmatic SetSuspendState (Reason 4) only fires ~50%. Keep
+# hibernation OFF so the idle sleep is S3, never S4 (the RTC does NOT wake from S4;
+# root cause of the missed 2026-06-26 wake). This also turns off Fast Startup.
 powercfg /hibernate off 2>&1 | Out-Null
 Write-Host "[OK] Hibernation disabled (suspends now go to S3, which wakes reliably)"
 

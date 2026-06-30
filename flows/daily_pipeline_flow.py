@@ -67,62 +67,60 @@ def _set_keep_awake(on: bool) -> None:
         pass
 
 
-def _suspend_pc() -> None:
-    """Put Windows to sleep (S3; hibernate if enabled). Safe because the 21:55
-    Task Scheduler wake task brings the box back before the next scheduled run."""
+def _discord_send(content: str) -> None:
+    """Best-effort Discord notify via the Prefect block. Loading the block needs
+    the API, so this is only safe while the server is up — true for in-flow hooks
+    (the wake script, where the server is down, uses a raw webhook instead)."""
     try:
-        subprocess.run(
-            ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], timeout=30
-        )
+        from prefect.blocks.notifications import DiscordWebhook
+        DiscordWebhook.load("daily-pipeline-discord").notify(content)
     except Exception:
         pass
 
 
 def _notify_discord(flow, flow_run, state) -> None:
     """Send a Discord message on terminal state. Done IN-FLOW (not via a server
-    automation) and ordered BEFORE _sleep_after_run, so it delivers synchronously
-    even when a scheduled run then sleeps the box ~immediately after. Best-effort —
-    never affects the run. Crashed runs (process death) can't run this hook; the
-    server-side automation covers that case."""
-    try:
-        from prefect.blocks.notifications import DiscordWebhook
-        emoji = {"Completed": "✅", "Failed": "❌", "Crashed": "🛑"}.get(state.name, "ℹ️")
-        DiscordWebhook.load("daily-pipeline-discord").notify(
-            f"{emoji} daily-pipeline `{flow_run.name}` → **{state.name}**"
-        )
-    except Exception:
-        pass
+    automation) so it delivers while the server is up. Best-effort — never affects
+    the run. Crashed runs (process death) can't run this hook; the server-side
+    automation covers that case."""
+    emoji = {"Completed": "✅", "Failed": "❌", "Crashed": "🛑"}.get(state.name, "ℹ️")
+    _discord_send(f"{emoji} daily-pipeline `{flow_run.name}` → **{state.name}**")
 
 
-def _sleep_after_run(flow, flow_run, state) -> None:
-    """Flow state hook: suspend the PC once the run is terminal — but ONLY for
-    auto-SCHEDULED (cron) runs, never a manual UI/CLI run. A manual run sharing
-    the deployment's `sleep_after=True` default would otherwise sleep the box out
-    from under you and freeze any concurrent work. Both conditions required.
-    Fires after retries are exhausted, so a failing run still gets its retry."""
-    if getattr(flow_run, "auto_scheduled", False) and flow_run.parameters.get("sleep_after"):
-        _suspend_pc()
+# NOTE: the box is NOT script-slept after a run. On this hardware a programmatic
+# SetSuspendState (Kernel-Power Reason 4) leaves the RTC wake timer firing only
+# intermittently (~50%), while a genuine idle-triggered sleep (Reason 7) wakes
+# reliably. So the run only HOLDS the box awake (see _set_keep_awake); the OS idle
+# timeout puts it to sleep afterward, and the Task Scheduler wake task brings it back.
 
 
 @flow(
     name="daily-pipeline",
     retries=1,
     retry_delay_seconds=600,
-    on_completion=[_notify_discord, _sleep_after_run],
-    on_failure=[_notify_discord, _sleep_after_run],
+    on_completion=[_notify_discord],
+    on_failure=[_notify_discord],
 )
 def daily_pipeline(
     date: str | None = None,
     force: bool = False,
     dry_run: bool = False,
-    sleep_after: bool = False,
+    selftest: bool = False,
 ) -> None:
     """Run the full daily pipeline via its CLI; raise on non-zero exit.
 
     Idempotency in the orchestrator makes the single retry cheap — already-
     completed phases are skipped, so a retry resumes rather than redoes.
+
+    `selftest=True` skips the pipeline entirely and returns at once: it exercises
+    only the scheduling path + terminal-state hooks (Discord + power-cycle sleep),
+    so the sleep/wake cycle can be tested without a ~35-min pipeline run.
     """
     logger = get_run_logger()
+
+    if selftest:
+        logger.info("selftest: skipping pipeline body; exercising scheduling + completion hooks only")
+        return
 
     cmd = [_python(), str(CLI)]
     if date:
@@ -173,9 +171,6 @@ def _serve() -> None:
     daily_pipeline.serve(
         name="daily",
         schedule=Cron(CRON, timezone=CRON_TZ),
-        # The scheduled nightly run sleeps the box when done (paired with the
-        # 21:55 Task Scheduler wake task). Ad-hoc `python flows/...` runs do not.
-        parameters={"sleep_after": True},
     )
 
 
