@@ -79,14 +79,18 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 Log ("teardown clear: {0} (waited {1}s, procs left={2})" -f $gone, $i, @(Get-PrefectProcs).Count)
 
-# Checkpoint the SQLite WAL now that the db is unlocked. Repeated server crashes
-# leave a bloated uncheckpointed WAL that stalls the next startup with 'database
-# is locked' (seen 2026-06-29). Cheap no-op when the WAL is already small.
+# Checkpoint the SQLite WAL now that the db is unlocked, then remove the SHM.
+# The SHM persists across sleep/wake with stale WAL lock state; wal_checkpoint(TRUNCATE)
+# clears WAL content but leaves the SHM intact. A stale SHM makes the next server start
+# hit 'database is locked' during startup state validation (seen 2026-07-01).
 $Py = Join-Path $Root '.venv\Scripts\python.exe'
 if (Test-Path $Py) {
     $cp = & $Py (Join-Path $Root 'scripts\checkpoint_prefect_wal.py') 2>&1
     Log ("wal checkpoint: {0}" -f ($cp -join ' '))
 }
+$PrefectDb = Join-Path $env:USERPROFILE '.prefect'
+Remove-Item -Path (Join-Path $PrefectDb 'prefect.db-wal') -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $PrefectDb 'prefect.db-shm') -Force -ErrorAction SilentlyContinue
 
 # The server is flaky for the first minute or two right after a wake-from-sleep
 # (system + SQLite still settling post-resume): it prints its banner, answers
@@ -108,6 +112,11 @@ for ($attempt = 1; $attempt -le 3 -and -not $healthy; $attempt++) {
             if (@(Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue).Count -eq 0) { break }
             Start-Sleep -Seconds 1
         }
+        # Also remove SHM+WAL between attempts: crashed server writes uncommitted data
+        # to WAL; stale SHM from that crash confuses the next startup just like a
+        # post-sleep stale SHM does.
+        Remove-Item -Path (Join-Path $PrefectDb 'prefect.db-wal') -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path (Join-Path $PrefectDb 'prefect.db-shm') -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 20   # let the box settle before retrying
     }
     Start-ScheduledTask -TaskName 'PrefectServer'
@@ -128,9 +137,11 @@ if (-not $healthy) {
 else {
     Send-DiscordAlert ("✅ ITX wake: Prefect server healthy (sustained) after {0} attempt(s)." -f ($attempt - 1))
 }
-Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
-Log "serve (re)started"
-Send-DiscordAlert "🚀 ITX wake: serve restarted - ready for the scheduled run."
+if ($healthy) {
+    Start-ScheduledTask -TaskName 'PrefectDailyPipelineServe'
+    Log "serve (re)started"
+    Send-DiscordAlert "🚀 ITX wake: serve restarted - ready for the scheduled run."
+}
 
 # Hold awake through the 22:00 trigger; flow takes over its own lock once running.
 Start-Sleep -Seconds 600

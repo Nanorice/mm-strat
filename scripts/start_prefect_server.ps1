@@ -15,15 +15,20 @@ Get-ChildItem $LogDir -Filter 'server_*.log' -ErrorAction SilentlyContinue |
 
 $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUTF8 = '1'
-# Raise the SQLite busy timeout (default 10s) so startup state validation waits
-# out any brief residual WAL lock instead of failing with 'database is locked'.
-$env:PREFECT_SERVER_DATABASE_TIMEOUT = '60'
+# PREFECT_API_DATABASE_TIMEOUT is the legacy setting name the server actually reads
+# (configurations.py uses PREFECT_API_DATABASE_TIMEOUT, not PREFECT_SERVER_DATABASE_TIMEOUT).
+# Raise from default 10s so startup state validation survives transient contention.
+$env:PREFECT_API_DATABASE_TIMEOUT = '60'
 Set-Location $Root
 
-# Checkpoint+truncate the WAL while the db is still unlocked (server not up yet) so
-# a bloated WAL from a prior crash can't stall startup state validation. Defense in
-# depth: the wake script also does this in teardown.
+# Checkpoint+truncate the WAL, then delete the SHM+WAL files.
+# The SHM persists across sleep/wake with stale WAL lock state; wal_checkpoint(TRUNCATE)
+# clears WAL content but leaves the SHM intact. A stale SHM makes SQLite think a lock
+# is held by a dead connection, causing 'database is locked' in startup state validation.
 & $Py (Join-Path $Root 'scripts\checkpoint_prefect_wal.py') *> (Join-Path $LogDir 'wal_checkpoint.log')
+$PrefectDb = Join-Path $env:USERPROFILE '.prefect'
+Remove-Item -Path (Join-Path $PrefectDb 'prefect.db-wal') -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $PrefectDb 'prefect.db-shm') -Force -ErrorAction SilentlyContinue
 
 # Launch the server with a DIRECT all-stream redirect, NOT '... | Tee-Object'.
 # Running it inside a PowerShell pipeline (Tee) made the server EXIT on a startup
