@@ -21,9 +21,14 @@
 import numpy as np, pandas as pd, duckdb
 from pathlib import Path
 import matplotlib.pyplot as plt
-ROOT = Path.cwd()
-while not (ROOT / "data" / "market_data.duckdb").exists() and ROOT != ROOT.parent:
-    ROOT = ROOT.parent
+def _repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for d in (p, *p.parents):
+        if (d / "config.py").exists() and (d / "src").is_dir():
+            return d
+    raise RuntimeError(f"repo root not found above {p}")
+
+ROOT = _repo_root()
 con = duckdb.connect(str(ROOT / "data" / "market_data.duckdb"), read_only=True)
 
 fred = pd.read_parquet(ROOT / "scratch" / "raw_factor_panel.parquet")
@@ -143,6 +148,53 @@ print(load.round(2).to_string())
 Wh = pd.DataFrame((U * 1.0)[:, :4], index=Nu_long.index, columns=[f"w{i+1}" for i in range(4)])
 print("\nwhitened corr (should be ~I):"); print(Wh.corr().round(2).to_string())
 ```
+
+## P2b-plot — PCA biplot + loadings heatmap (the visual of "VIX is only PC3")
+
+```python
+# %% P2b-plot — make the P2b loadings VISUAL. Two panels:
+#   (left)  biplot: each DATE scored on PC1×PC2, with factor loading arrows overlaid.
+#   (right) loadings heatmap PC1-3 × factors — shows PC1=rate/dollar level, PC3=pure VIX (the point).
+import matplotlib.pyplot as plt
+
+scores = M @ Vt.T                       # date scores on every PC (M, Vt from P2b)
+fig, ax = plt.subplots(1, 2, figsize=(15, 6))
+
+# --- left: PC1-PC2 biplot, colored by VIX percentile so we can SEE risk-off ---
+vix_pctl = Nu_long["VIX"].rank(pct=True).values if "VIX" in Nu_long.columns else None
+sc = ax[0].scatter(scores[:, 0], scores[:, 1], c=vix_pctl, cmap="RdYlGn_r", s=6, alpha=.5)
+plt.colorbar(sc, ax=ax[0], label="VIX percentile (red = stress)")
+arrow_scale = np.abs(scores[:, :2]).max() * 0.9
+for i, fac in enumerate(LONG_SET):
+    ax[0].arrow(0, 0, Vt[0, i] * arrow_scale, Vt[1, i] * arrow_scale,
+                color="black", head_width=arrow_scale * .02, length_includes_head=True)
+    ax[0].text(Vt[0, i] * arrow_scale * 1.12, Vt[1, i] * arrow_scale * 1.12, fac,
+               fontsize=9, ha="center", color="navy")
+ax[0].axhline(0, color="grey", lw=.5); ax[0].axvline(0, color="grey", lw=.5)
+ax[0].set_xlabel(f"PC1 ({evr[0]:.0%}) — rate/dollar level")
+ax[0].set_ylabel(f"PC2 ({evr[1]:.0%}) — credit-vs-curve")
+ax[0].set_title("PCA biplot: dates on PC1×PC2 + factor loadings")
+
+# --- right: loadings heatmap, the decisive 'where does VIX live' view ---
+load_full = pd.DataFrame(Vt[:3].T, index=LONG_SET, columns=["PC1","PC2","PC3"])
+im = ax[1].imshow(load_full.values, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+ax[1].set_xticks(range(3)); ax[1].set_xticklabels(
+    [f"PC1\n{evr[0]:.0%}", f"PC2\n{evr[1]:.0%}", f"PC3\n{evr[2]:.0%}"])
+ax[1].set_yticks(range(len(LONG_SET))); ax[1].set_yticklabels(LONG_SET)
+for (r, c), v in np.ndenumerate(load_full.values):
+    ax[1].text(c, r, f"{v:.2f}", ha="center", va="center",
+               color="white" if abs(v) > .55 else "black", fontsize=8)
+plt.colorbar(im, ax=ax[1], label="loading")
+ax[1].set_title("Loadings — VIX sits in PC3 (11%), NOT PC1")
+fig.tight_layout()
+```
+
+**Read (this plot IS the PRUNE argument):** the heatmap shows PC1 (54%) is loaded on
+`real_yield/DGS10/DGS2` (the rate-level bloc) and **VIX barely loads on PC1–PC2 — it's PC3, ~11%**. So
+whitening (which optimizes for variance) would hand the joint model 54% attention to the rate level
+and bury VIX, the ONE proven-useful factor (§A4 fwd-vol corr 0.67). The biplot's red (high-VIX) dates
+scatter along PC3, orthogonal to the dominant axes — visual confirmation that **variance ≠ usefulness**
+here. This is why P2c's silhouette tie resolves to **PRUNED**, not whitened.
 
 ## P2c — COMPARE the two routes (the empirical decision)
 

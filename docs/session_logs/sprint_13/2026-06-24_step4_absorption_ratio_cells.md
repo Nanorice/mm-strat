@@ -24,9 +24,14 @@
 import numpy as np, pandas as pd, duckdb
 from pathlib import Path
 import matplotlib.pyplot as plt
-ROOT = Path.cwd()
-while not (ROOT / "data" / "market_data.duckdb").exists() and ROOT != ROOT.parent:
-    ROOT = ROOT.parent
+def _repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for d in (p, *p.parents):
+        if (d / "config.py").exists() and (d / "src").is_dir():
+            return d
+    raise RuntimeError(f"repo root not found above {p}")
+
+ROOT = _repo_root()
 con = duckdb.connect(str(ROOT / "data" / "market_data.duckdb"), read_only=True)
 
 AR_UNIVERSE = ["SPY","QQQ","IWM","EFA","EEM",

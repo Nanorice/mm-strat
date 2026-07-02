@@ -1,5 +1,9 @@
 # Regime Model — Findings & Decision Log: Steps 1–3 (2026-06-24)
 
+> 📍 **Index:** `README_regime_research_map.md` — meta map of every step (problem→did→result→test)
+> + metric glossary (definitions, interpretation, traps). Start there to look back or challenge.
+
+
 > Companion to `2026-06-24_regime_model_design.md` (the design/decision record) and
 > `market_regime_literature_review.md` (the survey). This document records the **thinking process,
 > the data behind each conclusion, and the gate to the next step** for the full R-c roadmap

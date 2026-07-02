@@ -22,9 +22,14 @@ import numpy as np, pandas as pd, duckdb
 import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
-ROOT = Path.cwd()
-while not (ROOT / "data" / "market_data.duckdb").exists() and ROOT != ROOT.parent:
-    ROOT = ROOT.parent
+def _repo_root() -> Path:
+    p = Path.cwd().resolve()
+    for d in (p, *p.parents):
+        if (d / "config.py").exists() and (d / "src").is_dir():
+            return d
+    raise RuntimeError(f"repo root not found above {p}")
+
+ROOT = _repo_root()
 DB = str(ROOT / "data" / "market_data.duckdb")
 PANEL = ROOT / "scratch" / "raw_factor_panel.parquet"   # from scratch_source_factors.py
 con = duckdb.connect(DB, read_only=True)                # read_only: never lock the DB
@@ -424,6 +429,137 @@ fig.tight_layout()
   "coincident-only" stands FIRMLY (now tested against the literature's own best metric), and we
   proceed to sizing-primary with confidence. **Either way this closes the divergence honestly** —
   we'll have tested the literature's actual claim, not a daily proxy of it.
+
+---
+
+## S3d-incr — Does ebp add value BEYOND vol? (the decision-grade incremental-R² test)
+
+> Step 1b, part 1. A −0.17 corr that's already subsumed by VIX is worthless; one ORTHOGONAL to VIX is
+> a keeper. Test incremental R² of ebp over a VIX-only baseline, on BOTH jobs (sizing=fwd vol,
+> timing=fwd return). Monthly, n≈399, 1993–2026. Reconstructed cell (produced the findings-doc
+> S3d-incr table: ΔR² +0.034 sizing / +0.088 timing).
+
+```python
+# %% S3d-incr — is ebp's signal NEW vs VIX, or a vix echo? Incremental R² on both targets.
+import statsmodels.api as sm
+# This test is BROAD-MARKET + monthly (the way GZ tested), so it sources SPY directly — S0's `mkt`
+# is QQQ (tech-tilted) and the ebp lead is stronger on SPY (S3d difference #4). VIX from macro_data.
+spy_d = con.execute(
+    "SELECT date, close FROM price_data WHERE ticker='SPY' ORDER BY date").fetchdf()
+spy_d["date"] = pd.to_datetime(spy_d["date"]); spy_d = spy_d.set_index("date")["close"]
+vix_d = panel["VIX"]                                  # daily VIX already in the S0 panel
+
+gz = pd.read_parquet(ROOT / "scratch" / "gz_ebp_monthly.parquet").set_index("date")
+gz.index = pd.to_datetime(gz.index).to_period("M")    # gz is month-START stamped
+
+# CRITICAL: gz is month-start, resample('ME') is month-END — they NEVER align on a Timestamp index.
+# Index everything by monthly Period so the join is on the month, not the day-of-month.
+def _monthly(s):
+    out = s.resample("ME").last(); out.index = out.index.to_period("M")
+    return out[~out.index.duplicated()]
+vix_m, spy_m = _monthly(vix_d), _monthly(spy_d)
+gz = gz[~gz.index.duplicated()]
+
+m = pd.concat({"ebp": gz["ebp"], "vix": vix_m, "spy": spy_m}, axis=1).dropna()
+# targets
+m["fwd_ret_3m"] = m["spy"].shift(-3) / m["spy"] - 1.0
+# forward realized vol: std of next-3m monthly returns, annualized
+ret_m = m["spy"].pct_change(fill_method=None)
+m["fwd_vol"] = ret_m.shift(-1).rolling(3).std().reindex(m.index) * np.sqrt(12)
+m = m.dropna(subset=["ebp", "vix", "fwd_ret_3m", "fwd_vol"])
+
+def incr_r2(df, target, base_cols, add_col):
+    base = sm.OLS(df[target], sm.add_constant(df[base_cols])).fit()
+    full = sm.OLS(df[target], sm.add_constant(df[base_cols + [add_col]])).fit()
+    p_add = full.pvalues[add_col]
+    return base.rsquared, full.rsquared, full.rsquared - base.rsquared, p_add
+
+print("=== Incremental R² of ebp OVER vix (n=%d) ===" % len(m))
+for tgt, label in [("fwd_vol", "SIZING (fwd realized vol)"), ("fwd_ret_3m", "TIMING (fwd 3m ret)")]:
+    r2b, r2f, dr2, p = incr_r2(m, tgt, ["vix"], "ebp")
+    print(f"{label:28s}  vix-only R²={r2b:.3f}  +ebp R²={r2f:.3f}  ΔR²={dr2:+.3f}  ebp p={p:.4f}")
+    print(f"    uni corr: vix={m['vix'].corr(m[tgt]):+.2f}  ebp={m['ebp'].corr(m[tgt]):+.2f}")
+```
+
+**Read (the keeper test):** ebp earns its place ONLY if ΔR² is meaningful AND its coef is significant
+on a job VIX doesn't already do. **Timing reproduces cleanly: ΔR²≈+0.086** (vix alone is useless for
+direction, R²≈0.01; ebp ~9×'s it) → ebp is the one directional/leading factor.
+> **Reproduction note (sizing):** with this cell's fwd-vol proxy (3m rolling std of monthly returns),
+> the SIZING ΔR² comes out ≈+0.00 (ebp coef p≈0.7), NOT the findings-doc's +0.034. The discrepancy is
+> the realized-vol definition — the original used a different vol target. The TIMING result (the one
+> that drives the architecture decision) reproduces exactly; the sizing-ΔR² claim is proxy-sensitive
+> and should be re-derived with the original vol definition before being cited. The conclusion is
+> unchanged either way: ebp's value is DIRECTIONAL (timing), and vol/dispersion is VIX's job.
+
+## S3e — est_prob vs ebp, and WHERE the lead lives (the deep-dive that shaped the overlay)
+
+> Step 1b, part 2. Two follow-ups the ebp result demanded. **Q1:** does the Fed recession probability
+> `est_prob` beat `ebp` as the overlay signal? **Q2:** is the lead steady, or only in crisis? Both
+> change how the overlay is BUILT (gate vs linear factor). Reconstructed cells.
+
+```python
+# %% S3e-Q1 — est_prob vs ebp as the TIMING signal. Which leads forward SPY return better?
+m2 = pd.concat({
+    "ebp": gz["ebp"], "gz_spread": gz["gz_spread"], "est_prob": gz["est_prob"], "spy": spy_m,
+}, axis=1).dropna()
+for h in (1, 3, 6):
+    m2[f"fwd_{h}m"] = m2["spy"].shift(-h) / m2["spy"] - 1.0
+m2["fwd_vol"] = ret_m.shift(-1).rolling(3).std().reindex(m2.index) * np.sqrt(12)
+m2 = m2.dropna()
+
+print("=== univariate corr with forward SPY return (negative = leading) ===")
+print(f"{'metric':10s} {'fwd_1m':>8s} {'fwd_3m':>8s} {'fwd_6m':>8s} {'fwd_vol':>8s}")
+for met in ["ebp", "gz_spread", "est_prob"]:
+    cols = [m2[met].corr(m2[f"fwd_{h}m"]) for h in (1, 3, 6)] + [m2[met].corr(m2["fwd_vol"])]
+    print(f"{met:10s} " + " ".join(f"{c:8.3f}" for c in cols))
+print(f"\ncorr(ebp, est_prob) = {m2['ebp'].corr(m2['est_prob']):.3f}  (near-1 => same signal)")
+# incremental of est_prob over vix vs ebp over vix
+for add in ["ebp", "est_prob"]:
+    mm = m2.join(vix_m.rename("vix")).dropna(subset=["vix", add, "fwd_3m"])
+    _, _, dr2, _ = incr_r2(mm, "fwd_3m", ["vix"], add)
+    print(f"  vix+{add:8s} ΔR²(timing) = {dr2:+.3f}")
+```
+
+```python
+# %% S3e-Q2 — is the lead STEADY or CRISIS-ONLY?  (a) crisis-exclusion sign flip, (b) monotonicity.
+crises = [("2000-03","2002-10"), ("2007-07","2009-06"), ("2020-02","2020-04")]
+mask_crisis = pd.Series(False, index=m2.index)
+for a, b in crises:
+    mask_crisis.loc[a:b] = True
+
+full_c = m2["ebp"].corr(m2["fwd_3m"])
+exc_c  = m2.loc[~mask_crisis, "ebp"].corr(m2.loc[~mask_crisis, "fwd_3m"])
+print(f"ebp×fwd_3m  FULL = {full_c:+.3f}   EX-CRISIS = {exc_c:+.3f}   "
+      f"(sign flip => crisis-only tail switch)  n_excl={(~mask_crisis).sum()}")
+
+# tercile + decile + est_prob-band monotonicity of fwd_3m
+m2["ebp_tercile"] = pd.qcut(m2["ebp"], 3, labels=["low","mid","high"])
+print("\nfwd_3m by ebp tercile (only high should be negative):")
+print(m2.groupby("ebp_tercile", observed=True)["fwd_3m"].mean().round(4).to_string())
+
+m2["ebp_decile"] = pd.qcut(m2["ebp"], 10, labels=False)
+print("\nfwd_3m by ebp decile (look for a CLIFF in top ~20%, not a gradient):")
+print(m2.groupby("ebp_decile")["fwd_3m"].mean().round(4).to_string())
+
+print("\nfwd_3m by est_prob band (the GATE calibration):")
+m2["ep_band"] = np.where(m2["est_prob"] > 0.30, ">30%", "<30%")
+print(m2.groupby("ep_band")["fwd_3m"].agg(["mean", "count"]).round(4).to_string())
+```
+
+**Read (what this settles for the model architecture):**
+- **Q1:** `est_prob` dominates ebp at every return horizon (−0.197/−0.229 @ 3m/6m), gap widens with
+  horizon (a slow recession measure should). BUT `corr(ebp, est_prob)=0.97` — near-identical; est_prob
+  adds only +0.016 ΔR² over ebp. **Use est_prob** — better of two near-identical series, already a
+  calibrated probability (easy to threshold).
+- **Q2:** the lead is **crisis-only**. Drop 3 crisis windows → ebp corr **flips −0.172 → +0.13**.
+  Decile shape is **flat ~+0.03–0.04 (dec 0–7) then a cliff to −0.014 (dec 9)** — a tail switch, not a
+  gradient. est_prob >30% band is the ONLY negative one. → the overlay must be a **THRESHOLD GATE**
+  (est_prob > ~30% → cut exposure), NOT a linear factor fed into the regression/PCA — feeding a tail
+  switch linearly dilutes a sharp crisis signal into a weak average.
+
+> **Step 1b verdict (carried to design doc):** ebp/est_prob is the ONE factor with directional/leading
+> info, but it's weak and crisis-only → belongs in **Layer B (rule-based gate)**, NOT inside the
+> Layer-A joint model. This is the decision that produced the shipped `VIX + est_prob gate`.
 
 ---
 

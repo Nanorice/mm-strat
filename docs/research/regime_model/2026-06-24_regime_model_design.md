@@ -1,5 +1,8 @@
 # Regime Risk Model — Design Record & Open Decision (2026-06-24)
 
+> 📍 **Index:** `README_regime_research_map.md` — meta map of every step (problem→did→result→test)
+> + metric glossary. Start there to look back or challenge a result.
+>
 > Sprint 13. Consolidates the M03 / 5-risk-factor investigation into a single design problem.
 > Written to be taken away for a decision. The throughline: **the model's entire value is that it
 > collapses many macro factors into ONE explainable number** (factor levels → regime score →
