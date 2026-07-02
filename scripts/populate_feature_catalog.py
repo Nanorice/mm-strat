@@ -1509,6 +1509,20 @@ def run(db_path: Path) -> None:
         )
         print(f"[OK] Registered feature set '{PROTOTYPE_FEATURE_SET_ID}' ({len(proto_fs_rows)} features)")
 
+        # 3c. Register fs_m01_no_macro: prototype minus any m03_ features.
+        nomacro_features = [f for f in prototype_features if not f.startswith("m03_")]
+        nomacro_fs_rows = [
+            ("fs_m01_no_macro", name, proto_group_lookup.get(name), i)
+            for i, name in enumerate(nomacro_features)
+        ]
+        con.execute("DELETE FROM model_feature_sets WHERE feature_set_id = ?", ["fs_m01_no_macro"])
+        con.executemany(
+            "INSERT OR IGNORE INTO model_feature_sets "
+            "(feature_set_id, feature_name, feature_group, ordinal) VALUES (?, ?, ?, ?)",
+            nomacro_fs_rows,
+        )
+        print(f"[OK] Registered feature set 'fs_m01_no_macro' ({len(nomacro_fs_rows)} features)")
+
         # 4. Register model version in models table
         git_sha = ModelRegistry.get_git_sha()
         existing = con.execute(

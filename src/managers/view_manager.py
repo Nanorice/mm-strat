@@ -386,7 +386,14 @@ class ViewManager:
                 INNER JOIN trade_prices tp ON cand.trade_id = tp.trade_id
             )
             SELECT
-                e.*,
+                e.* EXCLUDE (
+                    natr_pct_chg, atr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
+                    price_vs_sma_50_pct_chg, price_vs_sma_150_pct_chg, price_vs_sma_200_pct_chg,
+                    rs_pct_chg, rs_ma_pct_chg, dry_up_volume_pct_chg,
+                    high_52w_pct_chg, low_52w_pct_chg, lowest_low_20d_pct_chg, highest_high_20d_pct_chg,
+                    rsi_14_pct_chg, dist_from_52w_high_pct_chg, dist_from_52w_low_pct_chg,
+                    dist_from_20d_low_pct_chg, dist_from_20d_high_pct_chg
+                ),
                 -- v3.1: Delta features from pre-computed pct_chg columns (convert % to ratio)
                 -- NOTE: pct_chg is in percentage (0-100 scale), delta is ratio (0-1 scale)
                 e.natr_pct_chg / 100.0 AS natr_delta,
@@ -725,7 +732,14 @@ class ViewManager:
             -- Base: pre-breakout rows + delta renames (mirrors v_d1_candidates tail).
             base AS (
                 SELECT
-                    f.*,
+                    f.* EXCLUDE (
+                        natr_pct_chg, atr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
+                        price_vs_sma_50_pct_chg, price_vs_sma_150_pct_chg, price_vs_sma_200_pct_chg,
+                        rs_pct_chg, rs_ma_pct_chg, dry_up_volume_pct_chg,
+                        high_52w_pct_chg, low_52w_pct_chg, lowest_low_20d_pct_chg, highest_high_20d_pct_chg,
+                        rsi_14_pct_chg, dist_from_52w_high_pct_chg, dist_from_52w_low_pct_chg,
+                        dist_from_20d_low_pct_chg, dist_from_20d_high_pct_chg
+                    ),
                     c.sector,
                     c.industry,
                     f.natr_pct_chg / 100.0 AS natr_delta,

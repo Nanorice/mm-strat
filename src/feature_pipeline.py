@@ -269,21 +269,7 @@ class FeaturePipeline:
             con.execute(f"DELETE FROM t2_screener_features WHERE date BETWEEN '{start_date}' AND '{end_date}'")
 
             con.execute(f"""
-                INSERT INTO t2_screener_features (
-                    ticker, date,
-                    open, high, low, close, volume,
-                    sma_20, sma_50, sma_150, sma_200, sma_200_lag20,
-                    price_vs_sma_50, price_vs_sma_150, price_vs_sma_200, close_above_sma200,
-                    rs_rating, rs, rs_ma, rs_line_log, rs_line_delta, rs_line_uptrend,
-                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w, pct_above_low_52w,
-                    high_20d, lowest_low_20d, highest_high_20d, dist_from_20d_high, dist_from_20d_low,
-                    vol_avg_20, vol_avg_50, vol_ratio, dry_up_volume,
-                    atr_20d, natr, volatility_20d,
-                    vcp_ratio, consolidation_width,
-                    trend_ok, breakout_ok,
-                    price_vs_spy, price_vs_spy_ma63,
-                    updated_at
-                )
+                INSERT INTO t2_screener_features BY NAME
                 WITH price_base AS (
                     SELECT
                         p.ticker, p.date, p.open, p.close, p.high, p.low, p.volume,
@@ -627,49 +613,7 @@ class FeaturePipeline:
             # cumulative t3 rows instead of chunk size. With a guaranteed-empty target
             # window the index probe is wasted work; plain INSERT keeps wall time flat.
             con.execute(f"""
-                INSERT INTO t3_sepa_features (
-                    ticker, date, feature_version,
-                    open, high, low, close, volume,
-                    -- t2 carry-forward
-                    sma_20, sma_50, sma_150, sma_200, sma_200_lag20,
-                    price_vs_sma_50, price_vs_sma_150, price_vs_sma_200, close_above_sma200,
-                    price_vs_spy, price_vs_spy_ma63,
-                    rs_rating, rs, rs_ma, rs_line_log, rs_line_delta, rs_line_uptrend,
-                    high_52w, low_52w, dist_from_52w_high, dist_from_52w_low, pct_from_high_52w, pct_above_low_52w,
-                    high_20d, lowest_low_20d, highest_high_20d, dist_from_20d_high, dist_from_20d_low,
-                    vol_avg_20, vol_avg_50, vol_ratio, dry_up_volume,
-                    atr_20d, natr, volatility_20d, vcp_ratio, consolidation_width,
-                    trend_ok, breakout_ok,
-                    RS_Universe_Rank, RS_Sector_Rank, RS_vs_Sector, Sector_Momentum,
-                    RS_Industry_Rank, RS_vs_Industry, Industry_Momentum,
-                    alpha001, alpha002, alpha004, alpha008, alpha011, alpha013,
-                    alpha015, alpha019, alpha060,
-                    ema_8, ema_21, ema_50, ema_100, ema_200,
-                    rs_line_lag_delta,
-                    -- per-ticker window features
-                    mom_21d, mom_63d, mom_126d, mom_189d, mom_252d,
-                    rsi_14, sma_50_slope,
-                    vol_ma20, vol_ma50, vol_ratio_50, dollar_volume_avg_20,
-                    turnover, turnover_ma20, atr_14,
-                    return_1d, return_5d, return_20d, return_60d,
-                    breakout, is_green_day, green_days_ratio_20d, adr_20d,
-                    rs_velocity, volume_acceleration, breakout_momentum, consolidation_duration,
-                    price_momentum_curve, volume_velocity_2d, price_accel_10d, immediate_thrust,
-                    -- pct_chg deltas
-                    price_vs_sma_50_pct_chg, price_vs_sma_150_pct_chg, price_vs_sma_200_pct_chg,
-                    rs_pct_chg, rs_ma_pct_chg, dry_up_volume_pct_chg,
-                    natr_pct_chg, atr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
-                    rsi_14_pct_chg, dist_from_52w_high_pct_chg, dist_from_52w_low_pct_chg,
-                    low_52w_pct_chg, high_52w_pct_chg, dist_from_20d_high_pct_chg,
-                    dist_from_20d_low_pct_chg, lowest_low_20d_pct_chg, highest_high_20d_pct_chg,
-                    -- m01_prototype Group A (SQL-derived ratios/slopes)
-                    ema_8_21_ratio, ema_21_50_ratio, ema_50_100_ratio,
-                    mom_slope_21_63, mom_slope_63_126,
-                    sma_ratio_150_200, gap_risk_ratio,
-                    -- M03
-                    m03_score, m03_pillar_trend, m03_pillar_liq, m03_pillar_risk,
-                    m03_delta_5d, m03_delta_20d, m03_regime_vol
-                )
+                INSERT INTO t3_sepa_features BY NAME
                 WITH candidates AS (
                     -- Universe = sepa_watchlist (any ticker that ever entered a SEPA session).
                     -- Carries full history for those tickers — gating happens at session level
@@ -820,7 +764,7 @@ class FeaturePipeline:
                     WINDOW w_tk AS (PARTITION BY pt.ticker ORDER BY pt.date)
                 )
                 SELECT
-                    wv.ticker, wv.date, '{self.feature_version}',
+                    wv.ticker, wv.date, '{self.feature_version}' as feature_version,
                     wv.open, wv.high, wv.low, wv.close, wv.volume,
                     -- t2 carry-forward
                     t2.sma_20, t2.sma_50, t2.sma_150, t2.sma_200, t2.sma_200_lag20,

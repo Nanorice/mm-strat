@@ -1,0 +1,8 @@
+{
+  "n_fit_samples": 5551,
+  "fit_date": "2026-06-30T00:01:31.067723+00:00",
+  "model_version_id": null,
+  "pre_ece": 0.3550344605641072,
+  "post_ece": 0.0,
+  "method": "isotonic"
+}
