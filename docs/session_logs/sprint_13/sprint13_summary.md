@@ -5,63 +5,44 @@
 > core question: **is the M01 score real alpha, or a structural artifact (industry mix,
 > regime, survivorship)?**
 
-## Goals
+## Consolidated Sprint Roadmap & Goals
 
-### A — Score attribution & validity
-1. **Industry/sector score bias** — Healthcare tends to score high. Real edge, or a
-   class-prior artifact now that `industry`/`sector` are model *inputs*? Compare score
-   distribution vs realized forward return *within* each industry.
-2. **Period analysis on recent breakouts** — avg score, industry mix, realized return by
-   industry. Empirical ground-truth check for (1).
-3. **m01_prototype vs m01_binary vs m02_prototype** — m01 looks like it solves a harder
-   problem yet scores better. Illusion? Run a single bake-off: same OOS window, metric,
-   universe. (Suspicion warranted — `notebooks/memo.md` already flags m01_baseline as a
-   dead-end: longer window + leakage didn't lift backtest.)
+### 1. Modeling (M01 & M02)
+- **Finalise M02 (the ongoing scoring model).** ✅ **DONE.**
+  - Shifted M02 to predict structural breakouts directly via a continuous `breakout_proximity` score.
+  - Model achieved **50% Precision@50** out-of-sample (~3.6x edge over random). See [m02_final_verdict.md](../../research/m02_final_verdict.md).
+- **Strip M03 from all models.** ✅ **DONE.**
+  - Created `fs_m01_no_macro` feature set. Retrained `m01_no_macro` and `m01_binary_no_macro`.
+  - Conclusion: Macro context is essential for binary "Home Run" predictions, but redundant for standard 4-class multi-class predictions. See [M01 No Macro Model Card](../../models/m01_no_macro/v1/model_card.html).
 
-### B — SEPA staging / entry timing
-- Classify Minervini Stage 1–4 so we enter Stage 1/2, not late Stage 3. Build a
-  rule-based Stage Classifier first (`price_vs_sma_200`, `sma_ratio_150_200`,
-  `dist_from_52w_low`). Defer Elliott-wave counting unless rules prove insufficient.
+### 2. Strategy Evaluation & Backtesting
+- **Backtester — exploratory & finalisation.** ✅ **DONE.** 
+  - Fixed bugs, converged prod/backtest scoring. Evaluated `vnpy` and decided against adopting it.
+- **Goal B: SEPA Staging / Entry Timing.**
+  - Classify Minervini Stage 1–4 using a rule-based Stage Classifier (`price_vs_sma_200`, `sma_ratio_150_200`, etc.) to enter Stage 1/2 and avoid late Stage 3. See [goal_b_stage_classifier_plan.md](goal_b_stage_classifier_plan.md).
+- **Parameter Optimizer.** ✅ **BUILT** (2026-07-02). Optuna over the vectorized engine.
+  - `scripts/run_strategy_optimizer.py` — single IS/OOS split, maximize Sharpe.
+  - `scripts/run_strategy_wfo.py` — rolling/anchored walk-forward variant (the overfit gate).
+  - See [2026-07-02_backtest_arena_session.md](2026-07-02_backtest_arena_session.md) for full results.
+- **Evaluate the model and strategy.** ✅ **Model Arena built + first results** (2026-07-02).
+  - `scripts/run_model_arena.py` — all scoreable variants on shared strategy infra, ranked by honest mark-to-market Sharpe. m01_binary ≈ m01_prototype at top; m01_no_macro (4-class) worst.
 
-### C — Regime / bearish-event notebook  ← **ACTIVE**
-- QQQ/SPX daily-return distribution → define a bearish-event cutoff → mark those dates →
-  inspect neighbouring segments → breakout pattern by industry + watchlist forward
-  returns around those events. Connects to M03 regime. (Overlaps A2.)
+### 3. Research: Score Validity & Macro Regime
+- **Goal A: Score Attribution & Validity.** 
+  - Investigate Industry/sector score bias (Healthcare). Run period analysis on recent breakouts to check empirical ground-truth. Compare m01_prototype vs m01_binary vs m02_prototype in a single bake-off.
+- **Goal C: Regime / Bearish-Event Notebook.** ← **ACTIVE**
+  - QQQ/SPX daily-return distribution → define a bearish-event cutoff → mark dates → inspect neighbouring segments → breakout pattern by industry + watchlist forward returns.
+- **High-Beta Feature of SEPA Candidates.** 
+  - Top tickers currently have decent returns while SPY is up 1-2%, contrasting with past high-uncertainty performance. Check average return in 10-day lookback rolling for top tickers (score > 0.6) and correlation with index return.
+- **Macro Evaluation.** Can we use this to confirm a trend? (Not leading).
 
-### D — Feature correctness & housekeeping
-- `_pct_change` vs `_delta` features are likely duplicates — confirm and drop
-  `_pct_change`. (Fix before trusting any model comparison in A.)
-- Guard against the feature-shift SQL bug (an edit landed in the wrong place in SQL and
-  shifted all features).
-- Document cleanup — batch at sprint end.
-
-## Overall Sprint Roadmap
-
-By the end of Sprint 13 at a high level, we should:
-1. Have a new macro dashboard for the weather/climate gauge (see [macro_dashboard_implementation_plan.md](macro_dashboard_implementation_plan.md)).
-2. Finalise M02 (the ongoing scoring model).
-3. Strip M03 from all models, and understand the impact on ability to rank (generating clean model cards).
-4. **Backtester — exploratory & finalisation.** ✅ **DONE.** Assessed capability,
-   converged backtest scoring onto the shared prod categorical-encoding util,
-   hard-fail on missing categorical_mapping.json, fixed the window-median-fill bug
-   (backtest↔prod scoring parity 44%→0.17% off), wired `daily_predictions` as the
-   parity anchor (`scripts/check_backtest_parity.py` + `tests/test_backtest_smoke.py`).
-   Side-quest vnpy comparison done — see below.
-   - *Side quest:* Compare with [vnpy](https://github.com/vnpy/vnpy) for gaps not
-     implementable in the current framework (pros/cons). ✅ **DONE** —
-     [2026-06-29_vnpy_comparison.md](2026-06-29_vnpy_comparison.md). Verdict: do
-     **not** adopt vnpy (live-trading CN-futures stack, wrong fit; we'd lose
-     ML-scoring/parity/regime differentiators). Portfolio-risk-as-a-layer +
-     live-trading reuse deferred to the trading-system goal.
-5. **Parameter optimizer** (split out of Goal 4). Build systematic param
-   optimization (grid/Optuna over the vectorized engine, walk-forward-gated to
-   avoid overfit) — the one real backtester gap vnpy surfaced. ⛔ **Blocked on
-   Goal 3** (M03-stripped models, in progress in parallel): optimize over the
-   clean M03-free models, not the current ones. Feeds the Strategy Arena
-   (Sharpe-gated m02/m01/SEPA-rules/ATR on shared infra).
-6. Evaluate the model and strategy, and finalise the trading system.
-7. In parallel, work on ITX to smooth automatic runs of the daily job.
-8. Addition on macro evaluation: can we use this to confirm a trend? ok it's not leading
+### 4. Infrastructure & Housekeeping
+- **Macro Dashboard.** Have a new macro dashboard for the weather/climate gauge (see [macro_dashboard_implementation_plan.md](macro_dashboard_implementation_plan.md)).
+- **ITX.** Work on ITX to smooth automatic runs of the daily job.
+- **Goal D: Feature Correctness & Housekeeping.** ✅ **DONE.**
+  - `_pct_change` vs `_delta` features are likely duplicates — confirm and drop `_pct_change`.
+  - Guard against the feature-shift SQL bug (used DuckDB's `INSERT ... BY NAME`).
+  - Document cleanup — batch at sprint end.
 
 ## Sprint TODOs
 
@@ -74,3 +55,14 @@ By the end of Sprint 13 at a high level, we should:
   (a) the gap between the proxy and true Shiller CAPE, (b) *why* the Yale file is stale
   (publication cadence vs. our fetch), and (c) how reliable the proxy is as a stand-in.
   Isolated to the dashboard valuation pillar — no downstream model/backtest impact.
+
+- **Macro-driven position sizing in backtest — the "no double-count" experiment.**
+  M03 macro was stripped from the *models* (`fs_m01_no_macro`) precisely so macro isn't
+  baked into the score. The open question: reintroduce macro *only* at the **sizing /
+  position-cap layer** of the backtest (bake in the new clean `macro_data` flow to scale
+  exposure by regime), NOT as a model feature. Goal is to prove that — **without macro
+  double-counting through the regime** — what the performance is when macro governs *how
+  much* we hold rather than *what* we score. Baseline to beat: the flat-sizing bake-off
+  (m01_binary Sharpe 0.60, see backtest_architecture bake-off). Compare regime-scaled
+  sizing vs. flat on the same trades. Blocked on the vectorized equity-curve fix landing
+  first (need trustworthy Sharpe before sizing changes are attributable).
