@@ -91,6 +91,12 @@ models/m01_baseline_*/
 models/m01_prototype*/
 models/m01_prototyoe*/
 models/m02_prototype*/
+# Backtest / optimizer / arena / sizing output dirs (generated reports + json)
+models/arena/
+models/**/optimizer/
+models/**/wfo/
+models/**/sizing/
+models/m02_breakout/
 evaluation/*.png
 evaluation/*.jpg
 sepa_xgboost_model.json

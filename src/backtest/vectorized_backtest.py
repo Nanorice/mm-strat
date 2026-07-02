@@ -104,6 +104,7 @@ class VectorizedSEPABacktest:
             entries['ticker'].unique().tolist(),
             sma_period=self.sma_exit_period,
         )
+        self._price_path = prices  # cached so equity_curve can mark-to-market
         trades = self._simulate_exits(entries, prices)
         trades = self._apply_costs(trades)
         return trades
@@ -298,35 +299,135 @@ class VectorizedSEPABacktest:
         trades['pnl_pct'] = trades['pnl_pct'] - cost
         return trades
 
-    def equity_curve(self, trades: pd.DataFrame) -> pd.Series:
-        """Build a daily equity curve from trades (equal-weight position sizing)."""
+    def equity_curve(
+        self,
+        trades: pd.DataFrame,
+        exposure: Optional[pd.Series] = None,
+    ) -> pd.Series:
+        """Bar-by-bar mark-to-market equity curve with a shared capital pool.
+
+        Fixes two flaws of a spike-on-exit curve:
+          1. Each position is marked to its *actual* daily close over its holding
+             window (from the cached ``price_data`` path), so real intra-trade
+             volatility and drawdown are captured — not a straight-line
+             approximation, which artificially smooths daily variance and
+             inflates Sharpe.
+          2. Positions draw from a *shared* pool: per-position weight is
+             ``position_size_pct`` of current equity, scaled down pro-rata when
+             more positions are open than the pool allows (max_slots =
+             1/position_size_pct), so N concurrent trades cannot each lever the
+             full account.
+
+        ``exposure`` is an optional daily weight series (a *separate* sizing input,
+        e.g. macro/VIX regime) indexed by date, values in [0, 1+]. It scales each
+        day's portfolio return WITHOUT touching selection — the same trades, sized
+        differently. Missing/unaligned dates default to 1.0 (flat). Must be
+        lagged by the caller to avoid lookahead. Default None => flat 1.0, i.e.
+        exactly the prior behaviour (backward-compatible).
+
+        Requires the price path — set by ``run()``. If unavailable (e.g. curve
+        called on injected trades), raises so the caller doesn't silently get a
+        degenerate curve.
+        """
         if trades.empty:
             return pd.Series(dtype=float)
+        prices = getattr(self, '_price_path', None)
+        if prices is None:
+            raise RuntimeError(
+                "equity_curve needs the price path; call run() first (it caches "
+                "_price_path) or pass prices via _price_path."
+            )
 
-        cash = self.initial_cash
-        returns_by_date: dict[pd.Timestamp, float] = {}
-        for _, t in trades.iterrows():
-            exit_d = pd.Timestamp(t['exit_date'])
-            pnl_dollar = cash * self.position_size_pct * t['pnl_pct']
-            returns_by_date[exit_d] = returns_by_date.get(exit_d, 0.0) + pnl_dollar
+        max_slots = max(1, int(round(1.0 / self.position_size_pct)))
 
         dates = pd.date_range(
             start=pd.Timestamp(trades['entry_date'].min()),
             end=pd.Timestamp(trades['exit_date'].max()),
             freq='B',
         )
-        daily_pnl = pd.Series(0.0, index=dates)
-        for d, v in returns_by_date.items():
-            if d in daily_pnl.index:
-                daily_pnl.loc[d] += v
-            else:
-                nearest = daily_pnl.index[daily_pnl.index >= d]
-                if len(nearest):
-                    daily_pnl.loc[nearest[0]] += v
 
-        equity = self.initial_cash + daily_pnl.cumsum()
-        equity.name = 'equity'
-        return equity
+        # Wide daily-return matrix: rows=business days, cols=ticker, cell=close-to-close ret.
+        px = prices[['ticker', 'date', 'close']].copy()
+        px['date'] = pd.to_datetime(px['date'])
+        close_wide = (
+            px.pivot_table(index='date', columns='ticker', values='close', aggfunc='last')
+            .reindex(dates).ffill()
+        )
+        ret_wide = close_wide.pct_change().fillna(0.0)
+
+        date_pos = {d: i for i, d in enumerate(dates)}
+
+        # Per-day fractional PnL (weight-1 positions) and open-position count.
+        daily_frac_pnl = np.zeros(len(dates))
+        open_count = np.zeros(len(dates))
+
+        for _, t in trades.iterrows():
+            tkr = t['ticker']
+            if tkr not in ret_wide.columns:
+                continue
+            entry_i = self._nearest_idx(pd.Timestamp(t['entry_date']), dates, date_pos)
+            exit_i = self._nearest_idx(pd.Timestamp(t['exit_date']), dates, date_pos)
+            if entry_i is None or exit_i is None or exit_i <= entry_i:
+                continue
+            # Held over (entry, exit]; PnL accrues on each held bar's actual return.
+            seg = ret_wide[tkr].values[entry_i + 1:exit_i + 1]
+            daily_frac_pnl[entry_i + 1:exit_i + 1] += seg
+            open_count[entry_i:exit_i] += 1
+
+        scale = np.where(open_count > max_slots, max_slots / np.maximum(open_count, 1), 1.0)
+        daily_return = daily_frac_pnl * self.position_size_pct * scale
+
+        # Separate sizing input: scale daily exposure by the macro weight (flat if absent).
+        if exposure is not None:
+            w = exposure.reindex(dates).ffill().fillna(1.0).to_numpy()
+            daily_return = daily_return * w
+
+        equity = self.initial_cash * np.cumprod(1.0 + daily_return)
+        return pd.Series(equity, index=dates, name='equity')
+
+    @staticmethod
+    def _nearest_idx(day: pd.Timestamp, dates: pd.DatetimeIndex, date_idx: dict) -> Optional[int]:
+        """Map a (possibly non-business-day) date onto the business-day grid."""
+        i = date_idx.get(day)
+        if i is not None:
+            return i
+        after = dates[dates >= day]
+        if len(after):
+            return date_idx[after[0]]
+        return None
+
+    def metrics(self, trades: pd.DataFrame) -> dict:
+        """Risk-adjusted metrics off the mark-to-market equity curve.
+
+        The objective surface for the parameter optimizer. Returns sharpe,
+        annualized return/vol, max drawdown, plus trade-level stats.
+        """
+        base = {
+            'n_trades': len(trades), 'sharpe': float('nan'), 'ann_return': float('nan'),
+            'ann_vol': float('nan'), 'total_return': float('nan'), 'max_drawdown': float('nan'),
+            'win_rate': float('nan'), 'avg_pnl_pct': float('nan'),
+        }
+        if trades.empty:
+            return base
+
+        eq = self.equity_curve(trades)
+        if len(eq) < 2:
+            return base
+
+        rets = eq.pct_change().dropna()
+        ann = np.sqrt(252)
+        std = rets.std()
+        wins = trades[trades['pnl_pct'] > 0]
+        base.update({
+            'sharpe': float(rets.mean() / std * ann) if std > 0 else float('nan'),
+            'ann_return': float((eq.iloc[-1] / eq.iloc[0]) ** (252 / len(eq)) - 1),
+            'ann_vol': float(std * ann),
+            'total_return': float(eq.iloc[-1] / eq.iloc[0] - 1),
+            'max_drawdown': float((eq / eq.cummax() - 1).min()),
+            'win_rate': float(len(wins) / len(trades)),
+            'avg_pnl_pct': float(trades['pnl_pct'].mean()),
+        })
+        return base
 
     def summary(self, trades: pd.DataFrame) -> dict:
         """Print and return summary statistics."""
