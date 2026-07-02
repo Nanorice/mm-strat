@@ -1,60 +1,87 @@
 # Claude Code Rules
 
-## Commands
-# These are the specific commands Claude must use for this project
-- **Activation**: `C:/Users/sh019/Documents/projects/mm-strat/.venv/Scripts/Activate.ps1`
+## Environment (verify before running anything)
+- **Python / venv**: always use the project-local `.venv` — `.venv/Scripts/python.exe`
+  (activate: `.venv/Scripts/Activate.ps1`). The relative path works on every machine; do
+  NOT hardcode an absolute user path.
+- **Which machine am I on?** Check `$USERNAME` / `$COMPUTERNAME`:
+  - `Hang` (DESKTOP-MTF20CI) → **research/dev box** (EDA, modelling, backtests). Default context.
+  - `sh019` → **infra/ops box** — the self-hosted **Prefect** server + nightly scheduler run
+    here (`flows/daily_pipeline_flow.py`). Treat ops/scheduling work as live on this machine;
+    be cautious with anything that touches the running Prefect server or the nightly task.
+  Both machines have their own project-local `.venv`, so the relative path resolves correctly on each.
+- **Main DB**: `data/market_data.duckdb`. Notebook/interactive connections **MUST** be `read_only=True` (an open kernel locks the DB against all writers).
+- **Tests**: `.venv/Scripts/python.exe -m pytest tests/` (dir is `tests/`, not `test/`).
+- **Shell**: PowerShell primary. Bash tool available for POSIX scripts.
 
-## 🧠 Critical Thinking Protocol (PRIORITY)
-# Claude is a Senior Engineer, not a text generator.
-1.  **Challenge Weak Logic**: If a user request violates OOP, introduces coupling, or creates "God Classes", STOP and propose a refactor first.
-3.  **Simplification**: If the user asks for a complex script, challenge them: "Can this be done by reusing `src/existing_class.py`?"
-4.  **No "Yes-Man" Behavior**: Do not apologize for pointing out flaws. Be direct.
+## Codebase Map (where things live)
+Read the deep docs (below) for *why*; this is *where*.
 
-## 🧠 First Principles (MANDATORY)
-1.  **No Band-Aids**: Never simply "patch" a bug (e.g., adding `try/catch` or `if x is not None`).
-    - *Constraint*: Before writing code, you must identify the **Structural Flaw** that caused the issue.
-    - *Action*: If a bug exists, ask: "Is the data flow wrong? Is the class responsibility unclear?" Refactor the design, don't just silence the error.
-2.  **Conciseness > Compatibility**:
-    - Prefer deleting code over adding code.
-    - If a function is complex, break it down. Do not add flags to "handle edge cases" in a massive function.
-3.  **Logic Review**: When asked to fix something, first summarize the **High-Level Logic** of the component to ensure it makes sense.
-4.  **Smart Confirmation**:
-    - **Complex/Ambiguous Requests**: If the user asks for a major refactor or a vague feature, restate the plan and ask "Shall I proceed?"
-    - **Standard Tasks**: For bug fixes, specific features, or direct instructions, **execute immediately**. Do not ask for permission if the path is clear.
+- **Engines (data I/O)** → `src/*_engine.py` (data, fundamental, shares, macro, edgar, earnings, company_profile). Each fetches and writes one raw table.
+- **Pipelines (compute)** → `src/feature_pipeline.py` (daily_features T1→T3), `src/regime_pipeline.py` (M03 regime).
+- **Managers (state/lifecycle)** → `src/managers/`: `view_manager.py` (DuckDB views), `screener_manager.py`, `sepa_watchlist_manager.py`, `pipeline_run_manager.py`.
+- **Orchestrator (workflow)** → `src/orchestrators/daily_pipeline_orchestrator.py` + `phase_registry.py` (stable phase IDs).
+- **Model registry** → `src/model_registry.py` (feature_catalog, model_feature_sets). NOT ViewManager.
+- **Backtest** → `src/backtest/` (`runner.py`, `sepa_strategy.py`, `universe_scorer.py`, `vectorized_backtest.py`).
+- **Data loaders** → `src/data_loader_duckdb.py` (`load_training_data_from_db`).
+- **CLI entrypoints** → `scripts/` (e.g. `run_daily_pipeline.py`, `create_duckdb_views.py`, `refresh_training_cache.py`, `build_model_card.py`).
 
-## File Structure Rules
-# Strictly enforce where files are created
-- `src/` -> Core logic, reusable classes, production modules (snake_case.py).
-- `scripts/` -> Executable scripts run by humans (verb_noun.py).
-- `tools/` -> One-off debugging or maintenance tools.
-- `test/` -> Unit tests matching src modules.
-- `docs/` -> ONLY create if explicitly requested.
+## Deep docs — read on demand (progressive disclosure)
+These are large (~1k–1.5k lines each). Do NOT read whole; jump to the named section.
+- **Full methodology / replication** → `docs/architecture/comprehensive_methodology.md`
+  (sections: Feature Engineering, Market Regime M03, SEPA Session Mgmt, ML Methodology, Backtesting, Ops).
+- **Ops quick-reference / runbooks** → `docs/architecture/manual_for_me.md`
+  (sections: Phase Map, Key Tables, Audit System, Ticker Lifecycle, Model Training, Backtesting, Runbooks, Open TODOs).
+- **Pipeline diagram (source of truth)** → `docs/architecture/data_flow.mmd`
+- **Active research** → `docs/research/`, **session logs** → `docs/session_logs/sprint_N/`.
+
+When a fact about schema/phases/tables is needed and not in the loaded memory index, grep these docs before re-deriving from code.
+
+## File Structure Rules (where new files go)
+- `src/` → core logic, reusable classes, production modules (`snake_case.py`).
+- `scripts/` → human-run executables (`verb_noun.py`).
+- `tools/` → one-off debug / maintenance tools.
+- `tests/` → unit tests matching `src` modules.
+- `docs/` → research, session logs, architecture. **Do NOT author prose docs proactively** — confirm scope/location with the user first, then place under the right subfolder.
+- `scratch/` or the session scratchpad → throwaway exploration. Delete debug files at session end.
+
+## Critical Thinking Protocol (PRIORITY)
+You are a Senior Engineer, not a text generator.
+1. **Challenge weak logic** — if a request introduces coupling, a God Class, or breaks the MECE layer design, STOP and propose a refactor first.
+2. **Simplify** — before writing a new script, ask "can this reuse an existing `src/` class?"
+3. **No yes-man behavior** — point out flaws directly; don't apologize for it.
+
+## First Principles (MANDATORY)
+1. **No band-aids** — don't silence a bug with `try/except` or `if x is not None`. Identify the *structural flaw* (wrong data flow? unclear class responsibility?) and fix the design.
+2. **Conciseness > compatibility** — prefer deleting code over adding it. Break up complex functions instead of adding edge-case flags.
+3. **Logic review** — when fixing, first summarize the component's high-level logic to confirm it makes sense.
+4. **Reproduce → fix → verify** — for a "fix X" request, run the relevant test first to reproduce, then fix, then re-run.
+
+## Smart Confirmation
+- **Complex/ambiguous/refactor** → restate the plan, ask "Shall I proceed?"
+- **Standard task with a clear path** → execute immediately, no permission-seeking.
 
 ## Coding Standards
-- **Naming**: `snake_case` for variables/functions, `PascalCase` for classes.
-- **Typing**: Python type hints are required for all function signatures.
-- **Docs**: DO NOT generate module-level docstrings or verbose comments unless the logic is complex. Keep it terse. DO NOT generate any documentation before checking with user.
-- **Error Handling**: Use specific exceptions, never bare `except:`.
-- **Debug**: Delete debug files at the end of session if not needed anymore.
+- **Naming**: `snake_case` for vars/functions, `PascalCase` for classes.
+- **Typing**: type hints required on all function signatures.
+- **Docs/comments**: terse. No module docstrings or verbose comments unless logic is genuinely complex.
+- **Errors**: specific exceptions, never bare `except:`.
 
-## Emoji Usage (CRITICAL)
-When using emojis in console output or strings, **only use these tested, working Unicode characters**:
-- Status: ✅ ❌ ⚠️ 🛑 🔒 🔓
-- Progress: 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ ⏳ ⌚ 🔄
-- Actions: 📋 📅 📊 🔧 ⏱️ 🚀 💾 📁 🔍 🧹 💡 ⚙️ 🔔 📝 📦 🔗 📈 📉
+## Data Query Safety (DuckDB)
+- Scope queries to views (`v_d2_training`, `v_d3_deployment`, `daily_features`, `price_data`). Bare `SELECT *` or `COUNT(DISTINCT (ticker,date))` on raw tables OOMs the session.
+- `price_data.volume` is `UBIGINT` — `CAST(volume AS BIGINT)` before any subtraction.
+- `adj_close`/`adj_factor`/`vwap` are 100% NULL — compute returns from `close`.
 
-**Rules:**
-1. Copy-paste emojis directly from this list - do NOT use escape sequences like `\U0001F4CB`
-2. Avoid exotic/uncommon emojis that may have encoding issues on Windows consoles
-3. Prefer simple status indicators (✅ ❌) over decorative emojis
-4. If unsure, use plain ASCII like `[OK]`, `[WARN]`, `[ERR]` instead
+## Notebooks
+- **Never edit `.ipynb` directly.** Write intended cell changes to a markdown artifact (e.g. `docs/session_logs/.../<topic>_cells.md`); the user applies them.
 
-## Interaction Style
-- Be concise. Do not explain standard code.
-- When creating files, double-check the "File Structure Rules" above.
-- If a user asks to "fix" something, run the test command first to reproduce, then fix, then verify.
+## Long Runs
+- Before any long run, CHECK WITH THE USER to run a small smoke-test batch first. Require progress logging (`flush=True`) + checkpoint/resume.
 
-## 📝 Interaction & Handover
-- **Challenge the User**: If a request leads to "Spaghetti Code", reject it and propose a cleaner architecture.
-- **Session End**: When the user says "Wrap up", ALWAYS trigger the `Session Handover` skill.
-2. The "Session Handover" Skill (Final Version)
+## Emoji / Console Output (Windows encoding)
+Only use these tested glyphs; copy-paste them, never `\U…` escapes:
+- Status: ✅ ❌ ⚠️ 🛑 🔒 🔓   ·  Progress: ⏳ 🔄 1️⃣ 2️⃣ 3️⃣   ·  Actions: 📋 📅 📊 🔧 🚀 💾 📁 🔍 🧹 💡 ⚙️ 🔔 📝 📦 🔗 📈 📉
+- When unsure, use ASCII `[OK]` / `[WARN]` / `[ERR]`.
+
+## Session End
+- When the user says "Wrap up", trigger the **handover** skill.
