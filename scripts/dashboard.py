@@ -81,8 +81,15 @@ def render_macro_dashboard() -> None:
             ("Term Spread", "Term Spread_pct"),
             ("Rates (Financial Conditions)", "Rates_pct"),
             ("Net Liquidity", "Liquidity_pct"),
-            ("Valuation (CAPE)", "CAPE_pct"),
+            ("Valuation (CAPE*)", "CAPE_pct"),
         ]
+        _cape_now = latest.get("CAPE")
+        _cape_note = (
+            f"*Valuation = self-computed aggregate CAPE (latest **{_cape_now:.1f}**), "
+            "not the published Shiller number — tracks it (rank corr 0.87) but runs ~1.3× "
+            "high by construction. Read the percentile, not the level."
+            if pd.notna(_cape_now) else ""
+        )
         
         names = []
         vals = []
@@ -110,7 +117,9 @@ def render_macro_dashboard() -> None:
             xaxis=dict(range=[0, 100], title="Percentile"),
         )
         st.plotly_chart(fig, use_container_width=True)
-        
+        if _cape_note:
+            st.caption(_cape_note)
+
     with col2:
         st.markdown("**Historical Trends**")
         
@@ -139,7 +148,7 @@ def render_macro_dashboard() -> None:
             "Term Spread": "#26a69a",
             "Rates (Financial Conditions)": "#ffa726",
             "Net Liquidity": "#8d6e63",
-            "Valuation (CAPE)": "#ef5350"
+            "Valuation (CAPE*)": "#ef5350"
         }
         
         for name, col_pct in pillars:

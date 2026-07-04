@@ -87,6 +87,54 @@ def _slice(df, start, end):
     return df.loc[(d >= start) & (d <= end)]
 
 
+def _train_final(args) -> None:
+    """G1: single all-period booster → deployable model.json + metadata.json.
+
+    Same params/features as the WF folds; trains on [train_start, test_end] with no
+    holdout (WF already banked the OOS evidence). Output is the artifact the score
+    loader and daily scanner consume — one booster, one clean scoring pass.
+    """
+    run_dir = OUT_BASE / (("final_smoke_" if args.smoke else "final_") + datetime.now().strftime("%Y%m%d_%H%M%S"))
+    run_dir.mkdir(parents=True, exist_ok=True)
+    print(f"run dir: {run_dir}", flush=True)
+
+    con = duckdb.connect(args.db, read_only=True)
+    feature_cols = get_feature_cols(con)
+    con.close()
+    df, used = load_matrix(args.db, feature_cols, args.smoke)
+
+    lo, hi = date.fromisoformat(args.train_start), date.fromisoformat(args.test_end)
+    df = _slice(df, lo, hi).dropna(subset=["_y"]).copy()
+    print(f"final-fit matrix: {len(df):,} rows x {len(used)} features [{lo}..{hi}]", flush=True)
+    if df.empty:
+        raise RuntimeError("no rows in [train_start, test_end] with a non-null target")
+
+    t0 = datetime.now()
+    dtr = xgb.DMatrix(_prep_cat(df[used]), label=df["_y"], enable_categorical=True)
+    booster = xgb.train(_XGB_PARAMS, dtr, num_boost_round=NUM_BOOST_ROUND)
+    secs = (datetime.now() - t0).total_seconds()
+
+    model_path = run_dir / "model.json"
+    booster.save_model(str(model_path))
+    metadata = {
+        "model": "m02_breakout",
+        "kind": "final_all_period",
+        "target": "breakout_proximity",
+        "features": used,
+        "xgb_params": _XGB_PARAMS,
+        "num_boost_round": NUM_BOOST_ROUND,
+        "train_start": args.train_start,
+        "train_end": args.test_end,
+        "n_rows": int(len(df)),
+        "horizon_days": HORIZON,
+        "trained_at": datetime.now().isoformat(timespec="seconds"),
+        "note": "OOS evidence is the WF run (summary.json); this is the deployable fit, no holdout.",
+    }
+    (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    print(f"final model -> {model_path}  ({len(used)} feats, {secs:.0f}s)", flush=True)
+    print(f"metadata    -> {run_dir / 'metadata.json'}", flush=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(DUCKDB_PATH))
@@ -95,7 +143,14 @@ def main() -> None:
     ap.add_argument("--test-end", default="2026-01-01")
     ap.add_argument("--step", default="1Y")
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--final", action="store_true",
+                    help="Fit ONE booster on all data [train_start..test_end] and save "
+                         "model.json + metadata.json (the deployable artifact). Skips WF eval.")
     args = ap.parse_args()
+
+    if args.final:
+        _train_final(args)
+        return
 
     run_tag = ("smoke_" if args.smoke else "") + datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = OUT_BASE / run_tag

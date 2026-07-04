@@ -401,7 +401,7 @@ def load_macro_pillars() -> pd.DataFrame:
             FROM macro_data
             WHERE symbol IN (
                 'VIX', 'BAMLH0A0HYM2', 'DGS10', 'DGS2',
-                'WALCL', 'WTREGEN', 'RRPONTSYD', 'CAPE'
+                'WALCL', 'WTREGEN', 'RRPONTSYD', 'CAPE', 'CAPE_OURS'
             )
         """).fetchdf()
     finally:
@@ -414,10 +414,17 @@ def load_macro_pillars() -> pd.DataFrame:
     df_db = df_db.drop_duplicates(subset=['date', 'symbol'])
     df_db = df_db.pivot(index='date', columns='symbol', values='value').reset_index()
     # Forward fill missing daily values, then drop rows before we have VIX data
-    for col in ('VIX', 'CAPE'):
+    for col in ('VIX', 'CAPE', 'CAPE_OURS'):
         if col not in df_db.columns:
             df_db[col] = pd.NA
     df_db = df_db.set_index('date').sort_index().ffill().dropna(subset=['VIX'])
+
+    # Valuation pillar sources from our self-computed CAPE_OURS (live, updates nightly).
+    # Yale 'CAPE' is dormant (froze 2024-09) — kept as a raw cross-check column only.
+    # See docs/session_logs/sprint_13/cape_fred_proxy_findings.md.
+    df_db['CAPE_yale'] = df_db['CAPE']
+    if not df_db['CAPE_OURS'].isna().all():
+        df_db['CAPE'] = df_db['CAPE_OURS']
 
     # Map raw series to the 6 pillars.
     df_db['Credit'] = df_db['BAMLH0A0HYM2']
