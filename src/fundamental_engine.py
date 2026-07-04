@@ -83,8 +83,14 @@ _ALL_FUNDAMENTAL_COLS = list(_INCOME_MAP.values()) + list(_BALANCE_MAP.values())
 # announcement timestamp (or worse, the period_end itself) rather than the SEC
 # 10-Q filing date. Real 10-Q filings take at least 8 days (accelerated filers
 # average 20-30 days). Treat closer gaps as NULL — better honest unknown than
-# misleading PIT anchor.
-_MIN_REAL_FILING_GAP_DAYS = 8
+# misleading PIT anchor. Shared with the T1 audit's fast-filing check.
+_MIN_REAL_FILING_GAP_DAYS = config.FILING_MIN_REAL_GAP_DAYS
+
+# No real company has more shares than this (see T1_PLAUSIBILITY_BOUNDS). FMP/yfinance
+# serve sporadic multiplicative units dirt (1000x typical) in the share-count fields;
+# null it at the write gate so it can't leak into shares_history via the backfill.
+_SHARES_MAX = config.T1_PLAUSIBILITY_BOUNDS['shares_max']
+_SHARE_COUNT_COLS = ('basic_avg_shares', 'diluted_avg_shares')
 
 
 class FundamentalEngine:
@@ -363,6 +369,12 @@ class FundamentalEngine:
                 f"{_MIN_REAL_FILING_GAP_DAYS}d of period_end for {ticker}. "
                 f"Sample: {sample}"
             )
+        df, n_bad_shares, shares_sample = _sanitize_share_counts(df)
+        if n_bad_shares:
+            logger.warning(
+                f"[FundamentalEngine] Nulled {n_bad_shares} implausible share count(s) "
+                f"(> {_SHARES_MAX:.0e}) for {ticker}. Sample: {shares_sample}"
+            )
 
         df = df.copy()
         df['updated_at'] = datetime.utcnow()
@@ -421,6 +433,12 @@ class FundamentalEngine:
                 f"[FundamentalEngine] Rejected {n_rejected} filing_date(s) within "
                 f"{_MIN_REAL_FILING_GAP_DAYS}d of period_end for {ticker}. "
                 f"Sample: {sample}"
+            )
+        df, n_bad_shares, shares_sample = _sanitize_share_counts(df)
+        if n_bad_shares:
+            logger.warning(
+                f"[FundamentalEngine] Nulled {n_bad_shares} implausible share count(s) "
+                f"(> {_SHARES_MAX:.0e}) for {ticker}. Sample: {shares_sample}"
             )
 
         df = df.copy()
@@ -1314,6 +1332,36 @@ def _sanitize_filing_dates(df: pd.DataFrame) -> Tuple[pd.DataFrame, int, List[Tu
         sample = [(r.ticker, int(r.gap)) for r in bad_rows.head(5).itertuples()]
 
     df.loc[bad_mask, 'filing_date'] = None
+    return df, rejected_count, sample
+
+
+def _sanitize_share_counts(df: pd.DataFrame) -> Tuple[pd.DataFrame, int, List[Tuple[str, float]]]:
+    """
+    NULL out basic/diluted_avg_shares above _SHARES_MAX (vendor units/scaling dirt).
+
+    Returns (sanitized_df, rejected_count, rejected_sample) — sample is
+    (ticker, value) tuples capped at 5, mirroring _sanitize_filing_dates.
+    """
+    if df is None or df.empty:
+        return df, 0, []
+    cols = [c for c in _SHARE_COUNT_COLS if c in df.columns]
+    if not cols:
+        return df, 0, []
+
+    df = df.copy()
+    rejected_count = 0
+    sample: List[Tuple[str, float]] = []
+    for col in cols:
+        vals = pd.to_numeric(df[col], errors='coerce')
+        bad_mask = vals > _SHARES_MAX
+        n = int(bad_mask.sum())
+        if not n:
+            continue
+        rejected_count += n
+        if 'ticker' in df.columns and len(sample) < 5:
+            bad_rows = df.loc[bad_mask, ['ticker']].assign(val=vals.loc[bad_mask])
+            sample += [(r.ticker, float(r.val)) for r in bad_rows.head(5 - len(sample)).itertuples()]
+        df.loc[bad_mask, col] = None
     return df, rejected_count, sample
 
 

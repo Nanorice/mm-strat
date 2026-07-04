@@ -25,7 +25,9 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import DUCKDB_PATH
+from config import DUCKDB_PATH, T1_PLAUSIBILITY_BOUNDS
+
+SHARES_MAX = T1_PLAUSIBILITY_BOUNDS['shares_max']  # FMP has 1000x-scaled dirt above this
 
 
 def main() -> None:
@@ -40,7 +42,7 @@ def main() -> None:
     con = duckdb.connect(str(DUCKDB_PATH))
 
     # Pre-flight: count rows to insert
-    rows_to_insert = con.execute("""
+    rows_to_insert = con.execute(f"""
         WITH first_yf AS (
             SELECT ticker, MIN(date) AS first_yf_date
             FROM shares_history
@@ -52,9 +54,10 @@ def main() -> None:
         WHERE f.period_end < fy.first_yf_date
           AND f.basic_avg_shares IS NOT NULL
           AND f.basic_avg_shares > 0
+          AND f.basic_avg_shares < {SHARES_MAX}
     """).fetchone()[0]
 
-    tickers_affected = con.execute("""
+    tickers_affected = con.execute(f"""
         WITH first_yf AS (
             SELECT ticker, MIN(date) AS first_yf_date
             FROM shares_history
@@ -66,6 +69,7 @@ def main() -> None:
         WHERE f.period_end < fy.first_yf_date
           AND f.basic_avg_shares IS NOT NULL
           AND f.basic_avg_shares > 0
+          AND f.basic_avg_shares < {SHARES_MAX}
     """).fetchone()[0]
 
     existing = con.execute("SELECT COUNT(*) FROM shares_history").fetchone()[0]
@@ -82,7 +86,7 @@ def main() -> None:
     print(f"\n  Inserting...")
     t0 = time.perf_counter()
 
-    con.execute("""
+    con.execute(f"""
         INSERT OR IGNORE INTO shares_history (ticker, date, shares_outstanding)
         WITH first_yf AS (
             SELECT ticker, MIN(date) AS first_yf_date
@@ -98,6 +102,7 @@ def main() -> None:
         WHERE f.period_end < fy.first_yf_date
           AND f.basic_avg_shares IS NOT NULL
           AND f.basic_avg_shares > 0
+          AND f.basic_avg_shares < {SHARES_MAX}
         ORDER BY f.ticker, f.period_end
     """)
 

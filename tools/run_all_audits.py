@@ -157,6 +157,31 @@ def build_report(all_results: list[dict], skipped: list[str], run_ts: str) -> di
     }
 
 
+def find_new_fails(report: dict) -> list[dict]:
+    """Diff current FAILs against the most recent previous report.
+
+    Alert-fatigue fix: with standing FAILs the exit code / totals carry no signal —
+    only a FAIL that wasn't there yesterday is actionable. First run (no previous
+    report) treats every FAIL as new.
+    """
+    current = {(r.get("audit"), r["section"], r["check"]): r
+               for r in report["results"] if r["status"] == "FAIL"}
+    if not current:
+        return []
+    date_str = report["run_at"][:10].replace("-", "")
+    prev_paths = sorted(p for p in REPORT_DIR.glob("audit_report_*.json")
+                        if p.name != f"audit_report_{date_str}.json")
+    if not prev_paths:
+        return list(current.values())
+    try:
+        prev = json.loads(prev_paths[-1].read_text())
+        prev_keys = {(r.get("audit"), r["section"], r["check"])
+                     for r in prev.get("results", []) if r["status"] == "FAIL"}
+    except Exception:
+        return []  # unreadable previous report — no basis for a delta
+    return [r for k, r in current.items() if k not in prev_keys]
+
+
 def save_report(report: dict) -> Path:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     date_str = report["run_at"][:10].replace("-", "")
@@ -196,8 +221,14 @@ def main() -> None:
         print(f"  {marker} {label}: {status_str}")
 
     report = build_report(all_results, skipped, run_ts)
+    report["new_fails"] = find_new_fails(report)
     report_path = save_report(report)
     print(f"\nReport saved: {report_path}")
+
+    if report["new_fails"]:
+        print(f"\n  [ALERT] {len(report['new_fails'])} NEW FAIL(s) vs previous report:")
+        for r in report["new_fails"]:
+            print(f"    - {r.get('audit')}/{r['section']}.{r['check']} = {r['value']}")
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))

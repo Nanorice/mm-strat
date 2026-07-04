@@ -19,7 +19,12 @@ from typing import Any
 import duckdb
 
 sys.path.insert(0, ".")
-from config import DUCKDB_PATH, PIPELINE_ALERT_THRESHOLDS
+from config import (
+    DUCKDB_PATH,
+    FILING_MIN_REAL_GAP_DAYS,
+    PIPELINE_ALERT_THRESHOLDS,
+    T1_PLAUSIBILITY_BOUNDS as _B,
+)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -248,6 +253,24 @@ def check_fundamental_completeness(con: duckdb.DuckDBPyConnection) -> None:
     _check("fundamentals", "avg_periods_per_ticker", "INFO", round(avg_periods, 1),
            "Average number of fundamental periods per ticker")
 
+    # basic_avg_shares scale sanity — this is the table backfill_shares_from_fundamentals.py
+    # copies from, so dirt here re-leaks into shares_history. FMP has sporadic multiplicative
+    # units errors (1000x typical, 10x seen on OPTT); the backfill's 3e10 absolute bound misses
+    # dirt on small tickers (e.g. CALC 15B vs real 15M). Same relative rule as shares_history.
+    fund_scale_dirt = con.execute(f"""
+        WITH med AS (
+            SELECT ticker, MEDIAN(basic_avg_shares) med
+            FROM fundamentals WHERE basic_avg_shares > 0 GROUP BY ticker
+        )
+        SELECT COUNT(*) FROM fundamentals f JOIN med m USING(ticker)
+        WHERE f.basic_avg_shares > {_B['shares_scale_abs']}
+          AND f.basic_avg_shares > {_B['shares_scale_ratio']} * m.med
+    """).fetchone()[0]
+    _check("fundamentals", "basic_avg_shares_scale_dirt", "FAIL" if fund_scale_dirt > 0 else "OK",
+           fund_scale_dirt,
+           f"rows > {_B['shares_scale_abs']:.0e} shares AND > {_B['shares_scale_ratio']}x ticker median "
+           "(units dirt; re-leaks via shares backfill)")
+
 
 # ---------------------------------------------------------------------------
 # Section 4: Price Data Integrity
@@ -265,11 +288,50 @@ def check_price_integrity(con: duckdb.DuckDBPyConnection) -> None:
     _check("price_data", "duplicate_ticker_date", "FAIL" if dupes > 0 else "OK", dupes,
            "Rows with duplicate (ticker, date) keys")
 
-    # Rows with NULL close price
-    null_close = con.execute("SELECT COUNT(*) FROM price_data WHERE close IS NULL OR close <= 0").fetchone()[0]
-    pct = _pct(null_close, total)
-    _check("price_data", "null_or_zero_close", "FAIL" if null_close > 0 else "OK", null_close,
-           f"{pct}% rows with NULL or non-positive close price")
+    # Rows with NULL/non-positive close. Bars with ALL of open/high/low/close NULL are the
+    # deliberate clean_dirty_shares_price.py signature (dirt nulled in place, date spine kept)
+    # — count them as INFO, not FAIL, or the cleanup permanently reddens this check.
+    bad_close, nulled_bars = con.execute("""
+        SELECT COUNT(*) FILTER (WHERE close <= 0
+                                OR (close IS NULL AND NOT (open IS NULL AND high IS NULL AND low IS NULL))),
+               COUNT(*) FILTER (WHERE close IS NULL AND open IS NULL AND high IS NULL AND low IS NULL)
+        FROM price_data WHERE close IS NULL OR close <= 0
+    """).fetchone()
+    pct = _pct(bad_close, total)
+    _check("price_data", "null_or_zero_close", "FAIL" if bad_close > 0 else "OK", bad_close,
+           f"{pct}% rows with unexplained NULL/non-positive close "
+           f"({nulled_bars} fully-nulled bars from deliberate dirt cleanup excluded)")
+
+    # Absolute close ceiling: BRK-A (real US high) tops ~$810k. > $1M/share is not a real
+    # price (units/scaling error). This is the Mode B root cause — the delta-based extreme-move
+    # check below misses sustained wrong-scale blocks (e.g. MRDN @ $1.6T).
+    absurd_px = con.execute(
+        f"SELECT COUNT(*) FROM price_data WHERE close > {_B['close_max']}"
+    ).fetchone()[0]
+    _check("price_data", "absurd_close_price", "FAIL" if absurd_px > 0 else "OK", absurd_px,
+           f"rows with close > ${_B['close_max']:,.0f}/share (impossible; BRK-A real max ~$810k)")
+
+    # OHLC ordering: high must bound close/low, low must bound close. Profiled 2026-07: 99.9%
+    # of raw violations are <0.1% float-rounding epsilon (legacy import) — not corruption.
+    # 0.1-10% = live-feed tape artifacts (recur on quad-witching days; GREATEST/LEAST(close)
+    # bounds them downstream) -> WARNING. >10% = genuinely corrupt bars -> FAIL.
+    eps, warn_rows, fail_rows = con.execute(f"""
+        WITH v AS (
+            SELECT GREATEST(CASE WHEN high < close THEN close / NULLIF(high, 0) ELSE 1 END,
+                            CASE WHEN low > close THEN low / NULLIF(close, 0) ELSE 1 END,
+                            CASE WHEN high < low THEN low / NULLIF(high, 0) ELSE 1 END) - 1 AS excess
+            FROM price_data
+            WHERE high < close OR low > close OR high < low
+        )
+        SELECT COUNT(*) FILTER (WHERE excess < {_B['ohlc_excess_warn']}),
+               COUNT(*) FILTER (WHERE excess >= {_B['ohlc_excess_warn']} AND excess <= {_B['ohlc_excess_fail']}),
+               COUNT(*) FILTER (WHERE excess > {_B['ohlc_excess_fail']})
+        FROM v
+    """).fetchone()
+    status = "FAIL" if fail_rows > 0 else ("WARNING" if warn_rows > 0 else "OK")
+    _check("price_data", "ohlc_ordering", status, fail_rows,
+           f"bars violating high>=close>=low by >10% (corrupt); {warn_rows} tape artifacts (0.1-10%), "
+           f"{eps} rounding-epsilon rows (<0.1%, ignored)")
 
     # Rows with negative/zero volume (excluding weekends/holidays already filtered)
     bad_vol = con.execute("SELECT COUNT(*) FROM price_data WHERE volume = 0").fetchone()[0]
@@ -403,16 +465,19 @@ def check_filing_date_integrity(con: duckdb.DuckDBPyConnection) -> None:
     _check("filing_date", "filing_before_period_end", "FAIL" if impossible > 0 else "OK", impossible,
            "Rows where filing_date < period_end (bad date mapping)")
 
-    # filing_date < 30 days after period_end: suspiciously fast filing
-    fast = con.execute("""
+    # filing_date < FILING_MIN_REAL_GAP_DAYS after period_end: real 10-Qs take >= 8 days.
+    # Threshold shared with fundamental_engine's write-time sanitizer (was 30d here, which
+    # flagged 22k legitimate accelerated filers as permanent warn-noise).
+    fast = con.execute(f"""
         SELECT COUNT(*) FROM fundamentals
         WHERE filing_date IS NOT NULL
-          AND DATE_DIFF('day', period_end, filing_date) < 30
+          AND DATE_DIFF('day', period_end, filing_date) < {int(FILING_MIN_REAL_GAP_DAYS)}
           AND filing_date >= period_end
     """).fetchone()[0]
     status = "WARNING" if fast > 0 else "OK"
-    _check("filing_date", "filing_lt_30d_after_period", status, fast,
-           "Rows filed <30 days after period_end (likely bad earnings date match)")
+    _check("filing_date", "filing_before_min_real_gap", status, fast,
+           f"Rows filed <{FILING_MIN_REAL_GAP_DAYS} days after period_end (not a real 10-Q date; "
+           "pre-fix legacy rows — new ingests are sanitised at the upsert gate)")
 
     # filing_date > 90 days after period_end: outside legal filing window
     late = con.execute("""
@@ -426,18 +491,18 @@ def check_filing_date_integrity(con: duckdb.DuckDBPyConnection) -> None:
 
     # Sample worst offenders for fast filings
     if fast > 0:
-        rows = con.execute("""
+        rows = con.execute(f"""
             SELECT ticker, period_end, filing_date,
                    DATE_DIFF('day', period_end, filing_date) AS gap_days
             FROM fundamentals
             WHERE filing_date IS NOT NULL
-              AND DATE_DIFF('day', period_end, filing_date) < 30
+              AND DATE_DIFF('day', period_end, filing_date) < {int(FILING_MIN_REAL_GAP_DAYS)}
               AND filing_date >= period_end
             ORDER BY gap_days
             LIMIT 5
         """).fetchall()
         sample = ", ".join(f"{t} {pe} ({g}d)" for t, pe, fd, g in rows)
-        _check("filing_date", "filing_lt_30d_sample", "INFO", fast,
+        _check("filing_date", "fast_filing_sample", "INFO", fast,
                f"Fastest filers: {sample}")
 
 
@@ -519,7 +584,13 @@ MACRO_DATA_EXPECTED: dict[str, int] = {
     "WALCL": 12,         # weekly (Fed balance sheet, Wed release)
     "WTREGEN": 12,       # weekly (TGA)
     "WBAA": 12,          # weekly (Baa yield)
-    "CAPE": 70,          # monthly (Yale ie_data.xls — trails ~1-2 months)
+    "CPIAUCSL": 70,      # monthly (CPI, ~1mo release lag; deflator for CAPE_OURS)
+    "CAPE_OURS": 40,     # monthly self-computed valuation pillar — recomputes nightly,
+                         #   trails only the latest month-start. This is the LIVE pillar.
+    "CAPE": 800,         # Yale Shiller ie_data.xls — DORMANT (froze 2024-09), kept only as
+                         #   a cross-check vs CAPE_OURS. Not fetchable fresh; see sprint_13
+                         #   cape_fred_proxy_findings.md. 800d tolerance = don't alarm on a
+                         #   source we've deliberately superseded.
 }
 
 
@@ -585,6 +656,44 @@ def check_shares_integrity(con: duckdb.DuckDBPyConnection) -> None:
     status = "WARNING" if pct > 1.0 else "OK"
     _check("shares_history", "null_or_zero_shares", status, null_shares,
            f"{pct}% rows with NULL or non-positive shares_outstanding")
+
+    # Absolute upper-bound sanity: real max is ~25B split-adjusted (AAPL); C peaked ~29B
+    # pre-2011 reverse split. Delta/percentile checks miss sustained wrong-scale blocks
+    # (e.g. PCG 2011-2017); only an absolute bound catches them.
+    absurd = con.execute(
+        f"SELECT COUNT(*) FROM shares_history WHERE shares_outstanding > {_B['shares_max']}"
+    ).fetchone()[0]
+    _check("shares_history", "absurd_share_count", "FAIL" if absurd > 0 else "OK", absurd,
+           f"rows with shares_outstanding > {_B['shares_max']:.0e} (impossible; likely units/scaling error)")
+
+    # Relative scale sanity: FMP's ~1000x units dirt on a SMALL company lands below any global
+    # ceiling (e.g. GTLS 29.9B vs real 30M), so also flag rows that are both >1B AND >500x the
+    # ticker's own median. The 500x floor keeps legit pre-reverse-split counts out (EXE was
+    # 1.957B = 200x its split-adjusted median before its 1:200 reverse split).
+    scale_dirt = con.execute(f"""
+        WITH med AS (
+            SELECT ticker, MEDIAN(shares_outstanding) med
+            FROM shares_history WHERE shares_outstanding > 0 GROUP BY ticker
+        )
+        SELECT COUNT(*) FROM shares_history s JOIN med m USING(ticker)
+        WHERE s.shares_outstanding > {_B['shares_scale_abs']}
+          AND s.shares_outstanding > {_B['shares_scale_ratio']} * m.med
+    """).fetchone()[0]
+    _check("shares_history", "share_scale_dirt_vs_median", "FAIL" if scale_dirt > 0 else "OK", scale_dirt,
+           f"rows > {_B['shares_scale_abs']:.0e} shares AND > {_B['shares_scale_ratio']}x ticker median "
+           "(multiplicative units dirt below the global ceiling)")
+
+    # Derived market-cap sanity — catches BOTH dirty-shares and dirty-price. NET, not a primary
+    # gate: the (ticker,date) join covers only ~60% of shares rows; the per-table ceilings
+    # (absurd_share_count, absurd_close_price) are the date-independent guards.
+    absurd_cap = con.execute(f"""
+        WITH s AS (SELECT ticker, date, shares_outstanding FROM shares_history),
+             p AS (SELECT ticker, date, close FROM price_data)
+        SELECT COUNT(*) FROM s JOIN p USING(ticker, date)
+        WHERE s.shares_outstanding * p.close > {_B['implied_cap_max']}
+    """).fetchone()[0]
+    _check("shares_history", "absurd_implied_market_cap", "FAIL" if absurd_cap > 0 else "OK", absurd_cap,
+           f"ticker-days with implied cap > ${_B['implied_cap_max']:.0e} (dirty shares OR dirty price; largest ever ~$4.7T)")
 
     mn, mx = con.execute("SELECT MIN(date), MAX(date) FROM shares_history").fetchone()
     _check("shares_history", "date_range", "INFO", f"{mn} to {mx}", "Full date range in shares_history")

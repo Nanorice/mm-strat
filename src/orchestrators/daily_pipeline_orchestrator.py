@@ -257,6 +257,10 @@ class DailyPipelineOrchestrator:
             stats_1_5 = self._run_phase_1_5_quality_gate(target_date, actual_trading_day)
             run_stats['phase_1_5'] = stats_1_5
 
+            # Phase 1.6: fast plausibility gate (FAIL-level audit ceilings only).
+            # Non-halting; Phase 7.6 withholds the R2 publish while it's red.
+            run_stats['phase_1_6'] = self._run_phase_1_6_plausibility_gate()
+
             if phase_1_only:
                 return critical_success
 
@@ -379,16 +383,26 @@ class DailyPipelineOrchestrator:
             critical_success = False
             return False
 
-        # Phase 7.6: Upload slim DB to R2 (best-effort; skipped if R2 creds absent)
-        phase_success, phase_stats = self._execute_phase(
-            "r2_sync",
-            lambda: self._run_phase_7_6_r2_sync(),
-            target_date
-        )
-        run_stats['phase_7_6'] = phase_stats
-        if not phase_success and self._is_critical("r2_sync"):
-            critical_success = False
-            return False
+        # Phase 7.6: Upload slim DB to R2 (best-effort; skipped if R2 creds absent).
+        # Withheld while the Phase 1.6 plausibility gate is red — the remote dashboard
+        # stays on its last clean snapshot rather than publishing implausible data.
+        gate_failures = run_stats.get('phase_1_6', {}).get('failures')
+        if gate_failures:
+            logger.warning(
+                f"[Phase 7.6] R2 publish withheld: Phase 1.6 plausibility gate failed "
+                f"({gate_failures}). Remote dashboard stays on last clean snapshot."
+            )
+            run_stats['phase_7_6'] = {'rows_processed': 0, 'skipped': 'plausibility_gate'}
+        else:
+            phase_success, phase_stats = self._execute_phase(
+                "r2_sync",
+                lambda: self._run_phase_7_6_r2_sync(),
+                target_date
+            )
+            run_stats['phase_7_6'] = phase_stats
+            if not phase_success and self._is_critical("r2_sync"):
+                critical_success = False
+                return False
 
         # Phase 8: Monitoring (ALWAYS RUN)
         phase_success, phase_stats = self._execute_phase(
@@ -705,6 +719,59 @@ class DailyPipelineOrchestrator:
             'status': 'warned' if coverage_pct_after < warn_threshold else 'recovered',
         }
 
+    def _run_phase_1_6_plausibility_gate(self) -> Dict:
+        """
+        Phase 1.6: fast plausibility gate on freshly-ingested T1 data.
+
+        Runs only the FAIL-level plausibility ceilings from the T1 audit (a few
+        seconds total) so impossible values are caught BEFORE features, scoring
+        and the R2 publish consume them — the full Phase 8 audit is post-hoc.
+        Non-halting: records failures in run_stats; Phase 7.6 withholds the R2
+        publish while any fire (stale-but-clean beats fresh-but-dirty).
+        """
+        from config import T1_PLAUSIBILITY_BOUNDS as b
+        checks = {
+            'absurd_share_count':
+                f"SELECT COUNT(*) FROM shares_history WHERE shares_outstanding > {b['shares_max']}",
+            'share_scale_dirt': f"""
+                WITH med AS (SELECT ticker, MEDIAN(shares_outstanding) med
+                             FROM shares_history WHERE shares_outstanding > 0 GROUP BY ticker)
+                SELECT COUNT(*) FROM shares_history s JOIN med m USING(ticker)
+                WHERE s.shares_outstanding > {b['shares_scale_abs']}
+                  AND s.shares_outstanding > {b['shares_scale_ratio']} * m.med""",
+            'absurd_close_price':
+                f"SELECT COUNT(*) FROM price_data WHERE close > {b['close_max']}",
+            'absurd_implied_market_cap': f"""
+                SELECT COUNT(*) FROM shares_history s JOIN price_data p USING(ticker, date)
+                WHERE s.shares_outstanding * p.close > {b['implied_cap_max']}""",
+            'corrupt_ohlc_bars': f"""
+                SELECT COUNT(*) FROM price_data
+                WHERE (high < close OR low > close OR high < low)
+                  AND GREATEST(CASE WHEN high < close THEN close / NULLIF(high, 0) ELSE 1 END,
+                               CASE WHEN low > close THEN low / NULLIF(close, 0) ELSE 1 END,
+                               CASE WHEN high < low THEN low / NULLIF(high, 0) ELSE 1 END) - 1
+                      > {b['ohlc_excess_fail']}""",
+        }
+        failures: Dict[str, int] = {}
+        conn = db.connect(self.db_path, read_only=True)
+        try:
+            for name, sql in checks.items():
+                n = conn.execute(sql).fetchone()[0]
+                if n:
+                    failures[name] = n
+        finally:
+            conn.close()
+
+        if failures:
+            logger.error(
+                f"[Phase 1.6] Plausibility gate FAILED: {failures} — R2 publish will be "
+                f"withheld. Run scripts/clean_dirty_shares_price.py and check engine "
+                f"clamp warnings in the Phase 1 log."
+            )
+        else:
+            logger.info("[Phase 1.6] Plausibility gate: all clean")
+        return {'status': 'fail' if failures else 'ok', 'failures': failures}
+
     def _run_phase_1_t1_ingestion(self, target_date: str, latest_trading_day: str) -> Dict:
         """
         Phase 1: T1 ingestion (SEQUENTIAL).
@@ -917,6 +984,20 @@ class DailyPipelineOrchestrator:
         except Exception as e:
             results['macro'] = {'success': False, 'error': str(e)}
             logger.error(f"[Phase 1] Macro FAILED: {e}", exc_info=True)
+
+        # CAPE_OURS: self-computed valuation pillar (Shiller's own data is dormant).
+        # Monthly series computed over already-ingested price/fundamentals/shares; isolated
+        # try so a compute hiccup never fails the macro phase. See cape_engine.py.
+        try:
+            from src.cape_engine import CapeEngine
+            cape_rows = CapeEngine(self.db_path).update()
+            results['cape_ours'] = {'success': True, 'rows': cape_rows}
+            logger.info(f"[Phase 1] CAPE_OURS: upserted {cape_rows} months")
+            if cape_rows:
+                self.run_manager.record_write('macro_data', cape_rows, 'phase_1_cape_ours')
+        except Exception as e:
+            results['cape_ours'] = {'success': False, 'error': str(e)}
+            logger.error(f"[Phase 1] CAPE_OURS FAILED: {e}", exc_info=True)
 
         return {
             'rows_processed': len(active_tickers),
@@ -1641,10 +1722,22 @@ class DailyPipelineOrchestrator:
             f"FAIL={summary.get('FAIL', 0)} WARN={summary.get('WARNING', 0)} "
             f"OK={summary.get('OK', 0)} overall={report.get('overall')}"
         )
+
+        # Standing FAILs are noise; a FAIL that wasn't in the previous report is the
+        # actionable signal — escalate those to ERROR so they stand out in the nightly log.
+        new_fails = report.get("new_fails", [])
+        if new_fails:
+            for r in new_fails:
+                logger.error(
+                    f"[Phase 8] NEW audit FAIL: {r.get('audit')}/{r.get('section')}."
+                    f"{r.get('check')} = {r.get('value')} — {r.get('detail', '')[:120]}"
+                )
+
         return {
             'path': str(report_path),
             'overall': report.get('overall'),
             'summary': summary,
+            'new_fails': [f"{r.get('section')}.{r.get('check')}" for r in new_fails],
         }
 
     def _log_prod_model_predictions(self, target_date: str) -> int:
@@ -1868,20 +1961,24 @@ class DailyPipelineOrchestrator:
         if not tickers:
             return
         import pandas as pd
-        from config import FUNDAMENTAL_STALENESS_DAYS, EXPECTED_NEXT_FILING_LAG_DAYS
+        from config import (
+            FUNDAMENTAL_STALENESS_DAYS,
+            EXPECTED_NEXT_FILING_LAG_DAYS,
+            FILING_MIN_REAL_GAP_DAYS,
+        )
 
         ticker_df = pd.DataFrame({'ticker': tickers})
         con = db.connect(self.db_path, read_only=True)
         try:
             con.register('_dq_tickers', ticker_df)
 
-            bogus = con.execute("""
+            bogus = con.execute(f"""
                 SELECT ticker, period_end, filing_date,
                        DATE_DIFF('day', period_end, filing_date) AS gap_days
                 FROM fundamentals
                 WHERE ticker IN (SELECT ticker FROM _dq_tickers)
                   AND filing_date IS NOT NULL
-                  AND DATE_DIFF('day', period_end, filing_date) < 8
+                  AND DATE_DIFF('day', period_end, filing_date) < {int(FILING_MIN_REAL_GAP_DAYS)}
                 ORDER BY gap_days
                 LIMIT 20
             """).fetchdf()

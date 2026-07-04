@@ -1306,6 +1306,19 @@ class DataRepository:
                 df = df.rename(columns={col: 'date'})
         df['date'] = pd.to_datetime(df['date']).dt.date
 
+        # Write-time plausibility clamp: close above the ceiling is vendor scaling dirt
+        # (yfinance serves $T/share bars for some low-float tickers). Null OHLC but keep
+        # the row so the date spine survives — same remedy as clean_dirty_shares_price.py.
+        close_max = config.T1_PLAUSIBILITY_BOUNDS['close_max']
+        implausible = df['close'] > close_max
+        if implausible.any():
+            tickers = df.loc[implausible, 'ticker'].unique().tolist()
+            logger.warning(
+                f"[Phase 1] Nulled OHLC on {int(implausible.sum())} bars with close > "
+                f"${close_max:,.0f} (implausible; vendor scaling dirt): {tickers[:10]}"
+            )
+            df.loc[implausible, ['open', 'high', 'low', 'close']] = None
+
         issues = self._quality_check(df, run_date)
         if issues:
             self._log_quality_issues(issues, run_date)

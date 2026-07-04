@@ -8,9 +8,12 @@ import duckdb
 from src import db
 import pandas as pd
 
+import config
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "market_data.duckdb"
+_SHARES_MAX = config.T1_PLAUSIBILITY_BOUNDS['shares_max']
 
 
 class SharesEngine:
@@ -100,6 +103,20 @@ class SharesEngine:
     def _upsert(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0
+
+        # Write-time plausibility clamp: no real company has > _SHARES_MAX shares.
+        # Vendor units/scaling dirt (see sprint_13 ISSUE_dirty_shares_cap_dq_gap) must be
+        # rejected at the pump, not just tripwired by the Phase 8 audit.
+        implausible = df['shares_outstanding'] > _SHARES_MAX
+        if implausible.any():
+            sample = df.loc[implausible, ['ticker', 'shares_outstanding']].head(5).to_dict('records')
+            logger.warning(
+                f"[SharesEngine] Rejected {int(implausible.sum())} implausible share counts "
+                f"(> {_SHARES_MAX:.0e}). Sample: {sample}"
+            )
+            df = df[~implausible]
+            if df.empty:
+                return 0
 
         con = db.connect(self.db_path)
         try:

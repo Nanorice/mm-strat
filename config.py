@@ -115,6 +115,7 @@ FRED_SERIES = {
     'DGS2': {'name': '2Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
     'DFII10': {'name': '10Y Real Yield (TIPS)', 'freq': 'D', 'unit': 'percent'},
     'WBAA': {'name': "Moody's Baa Corporate Yield", 'freq': 'W', 'unit': 'percent'},
+    'CPIAUCSL': {'name': 'CPI (All Urban, SA)', 'freq': 'M', 'unit': 'index'},  # deflator for CAPE_OURS
 }
 
 # ==============================================================================
@@ -405,6 +406,24 @@ PIPELINE_ALERT_THRESHOLDS = {
     't1_price_coverage_warn_pct': 80.0,   # Audit warn threshold (audit_t1_data_quality.py)
     't1_price_coverage_retry_pct': 90.0,  # Phase 1.5 same-run retry trigger
 }
+
+# T1 plausibility bounds — single source of truth for engine write clamps, the Phase 1.6
+# gate, audit_t1_data_quality.py, and clean_dirty_shares_price.py. Absolute bounds only:
+# nothing legitimate sits above them (see sprint_13 ISSUE_dirty_shares_cap_dq_gap.md).
+T1_PLAUSIBILITY_BOUNDS = {
+    'shares_max': 3e10,        # real max ~25B split-adj (AAPL); C peaked ~29B pre-2011 rev split
+    'close_max': 1e6,          # real US max ~$810k/share (BRK-A)
+    'implied_cap_max': 8e12,   # largest company ever ~$4.7T
+    'shares_scale_abs': 1e9,   # relative tripwire: only values > 1B shares...
+    'shares_scale_ratio': 500, # ...that are also > 500x the ticker's own median (audit-only —
+                               #    needs full history; EXE was 200x legit pre-1:200 rev split)
+    'ohlc_excess_fail': 0.10,  # ordering violation > 10% = corrupt bar (FAIL)
+    'ohlc_excess_warn': 0.001, # 0.1%-10% = live-feed tape artifact (WARN); below = rounding
+}
+
+# Minimum plausible gap between period_end and a real 10-Q filing_date. Shared by
+# fundamental_engine._sanitize_filing_dates and the audit's fast-filing check.
+FILING_MIN_REAL_GAP_DAYS = 8
 
 # ==============================================================================
 # LOGGING & OUTPUT
