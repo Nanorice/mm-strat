@@ -1,84 +1,52 @@
-# Module Passport: M02 Model (Ignition Classifier)
+# Module Passport: M02 (Ignition Classifier) — Code Structure
+
+> **Scope:** this passport documents the **code/infra** of the *live* M02 — the
+> ignition classifier (breakout-proximity regressor). For the model's purpose, theory,
+> metrics, and journey see the lifecycle doc [docs/model_doc/m02.md](../model_doc/m02.md).
+>
+> ⚠️ The previous version of this passport described the **retired loser-detector**
+> (`M02Trainer`, triple-barrier, `y_loser` inversion). That code is dead and is **not**
+> the current M02. See §4 (Retired code) for what it was.
 
 ## 1. Overview
-**Responsibility:**  
-The **M02 Model** (also known as the "Ignition Classifier" or "Loser Detector") is a binary classification model designed to predict the probability of a trade "igniting" (hitting a profit target) versus "failing" (hitting a stop loss) immediately after entry. In production, it functions as a **Loser Detector**, identifying low-quality setups to filter out.
 
-It uses a **Triple Barrier** labeling method (Profit Target / Stop Loss / Time Limit) to create ground truth labels from historical price trajectories.
+**Responsibility:** train and evaluate the ignition classifier — an XGBoost regressor that
+ranks the dense ticker universe by proximity to the next SEPA-watchlist breakout.
 
-**Key Dependencies:**
-*   **Data Pipeline:** `src.pipeline.DataPipeline` (for hydrating and labeling data)
-*   **Triple Barrier Labeler:** `src.triple_barrier_labeler` (for outcome calculation)
-*   **Feature Config:** `src.feature_config` (defines `M02_FEATURES`)
-*   **Base Trainer:** `src.pipeline.base_trainer.BaseTrainer` (parent class)
+**Key dependencies:**
+- `src.evaluation.walk_forward.anchored_walk_forward` — fold geometry (60d embargo)
+- `src.evaluation.breakout_cv` — `cross_sectional_rank_ic`, `precision_recall_at_k`
+- `model_feature_sets` table — resolves `fs_m01_prototype` feature columns
+- `t3_training_cache` + `m02_breakout_targets` (DuckDB) — feature matrix and target join
 
 ## 2. File Structure
 
 | File | Purpose |
 | :--- | :--- |
-| `model_runner.py` | **CLI Entry Point**. Handles command-line arguments (`python model_runner.py m02`) and orchestrates the training pipeline steps (`scan`, `hydrate`, `label`, `train`). |
-| `src/pipeline/m02_trainer.py` | **Core Logic**. Defines the `M02Trainer` class which handles model creation (XGBoost), training (with class weighting), validation, and reporting. Inverts labels to predict "Loser" probability. |
-| `src/triple_barrier_labeler.py` | **Labeling Engine**. Applies path-dependent barriers (TP/SL/Time) to trade trajectories to determine outcomes (`TP`, `SL`, `Time`). |
-| `src/feature_config.py` | **Configuration**. Defines `M02_FEATURES` (the "Velocity Squad"), a specific subset of features focused on relative strength, volume acceleration, and momentum. |
-| `src/pipeline/data_pipeline.py` | **Orchestration**. Manages the flow from `scan` (D1) -> `features` (D2) -> `hydrate` (D2R) -> `label` (D3). |
+| `scripts/build_breakout_targets.py` | **Target builder.** Joins `price_data` × `sepa_watchlist`, computes days-to-next-ignition, applies `exp(-0.1·days)` decay → `m02_breakout_targets` table. |
+| `scripts/train_breakout_model.py` | **Trainer + eval.** Loads matrix, runs anchored WF folds, trains one XGBoost booster per fold, scores Rank IC / Precision@K. Checkpointed per fold; `--smoke` for a 5-ticker path test. |
+| `src/evaluation/breakout_cv.py` | **Metrics.** `cross_sectional_rank_ic`, `precision_recall_at_k`. |
+| `src/evaluation/walk_forward.py` | **Fold geometry.** `anchored_walk_forward` — anchored train window, stepping test window, embargo. |
 
-## 3. Data Schemas
+## 3. Data & Artifacts
 
-### D3 Dataset (Labeled Training Data)
-The training input (`d3`) is a Pandas DataFrame containing features and labels.
+- **Input matrix:** `SELECT fs_m01_prototype features FROM t3_training_cache JOIN m02_breakout_targets ON (ticker, date)`.
+- **Target column:** `breakout_proximity` (float, 0..1).
+- **Run output:** `models/m02_breakout/<run_tag>/` — `fold_NN_model.json` (per-fold boosters),
+  `fold_NN.json` (metric checkpoints), `summary.json` (aggregated IC / P@50).
+- **XGBoost params:** `reg:squarederror`, `hist`, `max_depth=6`, `eta=0.05`, `subsample=0.8`,
+  `colsample_bytree=0.8`, `min_child_weight=20`, `num_boost_round=300`.
 
-| Category | Columns / Description |
-| :--- | :--- |
-| **Target (y_loser)** | `1` = **Stop Loss Hit** (Loser)<br>`0` = **Profit Target** or **Time Limit** (Success/Neutral) |
-| **Outcomes (Raw)** | `outcome` (Enum: `TP`, `SL`, `Time`), `return_at_outcome` (float), `days_to_outcome` (int), `barrier_id` (int) |
-| **Features (Velocity Focus)** | **53 Features** (defined in `feature_config.M02_FEATURES`), including:<br>- **Captains:** `RS` (Relative Strength), `Vol_Ratio`, `Alpha011` (VWAP Div), `VCP_Ratio` (Tightness)<br>- **Velocity Squad:** `volume_acceleration` (Surge), `rs_velocity` (Accel), `breakout_momentum`<br>- **Physics (Alphas):** `alpha046` (Slope Accel), `alpha051` (Slope Change), `alpha101` (Body Strength)<br>- **Context:** `Dist_From_52W_High`, `consolidation_duration` |
+## 4. Retired code (NOT the current M02)
 
-## 4. Implementation Rules ("The Secret Sauce")
+The following are dead and retained only to explain the name collision. Do not treat as the
+live model or as fallbacks.
 
-### Triple Barrier Method
-Unlike standard fixed-horizon returns, M02 uses path-dependent barriers.
-*   **Stop Loss (SL):** `k_sl * ATR` (Default `k_sl=1.0`)
-*   **Profit Target (TP):** `MAX(min_tp, k_tp * ATR)`
-    *   **Default Constants:** `k_tp=4.0`, `min_tp=0.20` (20%)
-    *   *Logic:* Target must be at least 20%, or 4x volatility, whichever is higher.
-*   **Time Barrier:** Max holding period `max_time=30` days.
+- `src/pipeline/m02_trainer.py` (`M02Trainer`) — the retired **loser-detector**: binary
+  classifier predicting `y_loser` (P(stop-loss hit)) via label inversion, trained on triple-barrier
+  outcomes (`k_sl=1.0`, `k_tp=4.0`, `min_tp=0.20`, `max_time=30`).
+- `src/triple_barrier_labeler.py` — the path-dependent labeler feeding that model.
+- `M02_FEATURES` in `src/feature_config.py` — the old "Velocity Squad" 53-feature set for the
+  loser-detector (the live model uses `fs_m01_prototype`, resolved from `model_feature_sets`).
 
-### Loser Detector Logic
-*   **Inversion:** The model is trained to predict the **NEGATIVE** class (Losers).
-*   **Imbalance Handling:** Uses `scale_pos_weight` in XGBoost to handle the rarity of specific outcomes if needed (though `M02Trainer` calculates class weights dynamically).
-*   **Prediction:** Output is `P(Loss)`. A low score means high probability of success (Ignition).
-
-### Magic Numbers & Defaults
-*   **Time Limit:** 30 days (Default).
-*   **Minimum Target:** 20% (`min_tp = 0.20`).
-*   **Risk/Reward:** Target is typically 4x the Stop (`k_tp=4.0` vs `k_sl=1.0`).
-
-## 5. Public Interface
-
-### `src.pipeline.m02_trainer.M02Trainer`
-The primary class for interacting with the M02 model.
-
-**Methods:**
-
-*   `__init__(feature_set=None, model_name=None, barrier_params=None)`
-    *   Initializes trainer with optional custom config.
-    
-*   `train(data, tune=False, train_years=3, test_years=1)`
-    *   **Input:** `data` (D3 DataFrame).
-    *   **Process:** Splits data (TimeGroupKFold), handles class weights, trains XGBoost.
-    *   **Returns:** `(model, metrics_df)`
-    
-*   `save(model, metrics_df)`
-    *   Saves artifacts to `models/` directory:
-        *   `{model_name}.json` (XGBoost model)
-        *   `{model_name}_metrics.csv` (Performance metrics)
-        *   `{model_name}_barriers.json` (Barrier params used)
-        
-*   `generate_report(model, metrics_df, start_date, end_date)`
-    *   Creates a detailed Markdown report with confusion matrices and separation plots.
-
-### `src.triple_barrier_labeler.TripleBarrierLabeler`
-
-*   `label_dataset(d2_rehydrated, params, ...)`
-    *   **Input:** Multi-day price trajectories (`d2r`).
-    *   **Output:** Single-row-per-trade DataFrame (`d3`) with `outcome`, `return`, and `days` columns added.
+Retirement rationale (and the earlier quantile-cone M02): [docs/model_doc/m02.md](../model_doc/m02.md) §9.
