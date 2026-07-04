@@ -149,7 +149,11 @@ class MacroEngine:
             df = df.rename(columns={'VIXCLS': 'VIX'})
         return df
 
-    CAPE_URL = "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
+    # Shiller moved his data off econ.yale.edu (that mirror froze at 2023-09).
+    # Current canonical host is the shillerdata.com CDN blob (through ~2024-09,
+    # ~9mo stale by design — publisher cadence, not our fetch). See sprint_13
+    # cape_fred_proxy_findings.md. Same workbook layout, so fetch_cape is unchanged.
+    CAPE_URL = "https://img1.wsimg.com/blobby/go/e5e77e0b-59d1-44d9-ab25-4763ac982e53/downloads/ie_data.xls"
 
     def fetch_cape(self, start_date: str = '2003-01-01') -> pd.DataFrame:
         """
