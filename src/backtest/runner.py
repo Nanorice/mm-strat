@@ -625,7 +625,8 @@ class SEPABacktestRunner:
         logger.info(f"Created run directory: {run_dir}")
         return run_dir
 
-    def save_run(self, metrics: Dict[str, Any], run_dir: Path = None, run_note: str = "") -> Path:
+    def save_run(self, metrics: Dict[str, Any], run_dir: Path = None, run_note: str = "",
+                 strategy_name: Optional[str] = None) -> Path:
         """
         Save structured backtest run for dashboard visualization.
 
@@ -634,11 +635,14 @@ class SEPABacktestRunner:
         - equity_curve.parquet: Daily portfolio state
         - trades.parquet: All closed trades
         - metrics.json: Pre-computed analytics for charts
+        - plot.png: the 6-panel diagnostic (Backtest Studio renders it inline)
 
         Args:
             metrics: Dict from run() with backtest metrics
             run_dir: Directory to save to (if None, creates one)
             run_note: Optional name for run folder (used if run_dir is None)
+            strategy_name: registry key (e.g. "champion") — tags the manifest with the
+                registry fingerprint + description so the dashboard can label the run.
 
         Returns:
             Path to the run directory
@@ -669,8 +673,15 @@ class SEPABacktestRunner:
             json.dump(metrics_extended, f, indent=2, default=str)
         logger.info("  - metrics.json")
 
-        # 4. Build and save manifest.json
-        manifest = self._build_manifest(run_id, metrics)
+        # 4. Save the 6-panel diagnostic PNG (the chart Backtest Studio renders inline)
+        try:
+            self.plot(save_path=str(run_dir / 'plot.png'))
+            logger.info("  - plot.png")
+        except Exception as e:  # plotting is cosmetic — never fail a save over it
+            logger.warning(f"  - plot.png skipped ({e})")
+
+        # 5. Build and save manifest.json
+        manifest = self._build_manifest(run_id, metrics, strategy_name=strategy_name)
         with open(run_dir / 'manifest.json', 'w') as f:
             json.dump(manifest, f, indent=2, default=str)
         logger.info("  - manifest.json")
@@ -782,8 +793,13 @@ class SEPABacktestRunner:
             return fallback
         return None
 
-    def _build_manifest(self, run_id: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """Build manifest with parameters, artifact links, and summary metrics."""
+    def _build_manifest(self, run_id: str, metrics: Dict[str, Any],
+                        strategy_name: Optional[str] = None) -> Dict[str, Any]:
+        """Build manifest with parameters, artifact links, and summary metrics.
+
+        If strategy_name matches a registry entry, tag the manifest with its
+        fingerprint + description so the dashboard can label the run in plain English.
+        """
         # Extract strategy params
         strategy_params = {}
         if self.strategy is not None:
@@ -801,11 +817,24 @@ class SEPABacktestRunner:
             else 'SEPAHybridV1'
         )
 
+        # Registry tag: fingerprint + human description for the named strategy.
+        fingerprint, description = None, None
+        if strategy_name:
+            try:
+                from src.backtest import strategy_registry as reg
+                d = reg.get(strategy_name)
+                fingerprint, description = d.fingerprint, d.description
+                strategy_class = d.name
+            except (KeyError, ImportError) as e:
+                logger.warning(f"Registry lookup for {strategy_name!r} failed: {e}")
+
         return {
             'manifest_version': 'v1',
             'run_id': run_id,
             'created_at': pd.Timestamp.now().isoformat(),
             'strategy': strategy_class,
+            'fingerprint': fingerprint,
+            'description': description,
             'model': {
                 'name': self.model_name,
                 'version_id': self.model_version_id,

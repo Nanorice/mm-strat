@@ -61,12 +61,15 @@ def discover_runs() -> pd.DataFrame:
             "dir": d.name,
             "created_at": m.get("created_at"),
             "strategy": strategy,
+            "fingerprint": m.get("fingerprint"),
+            "description": m.get("description"),
             "model_name": model.get("name"),
             "model_version_id": model.get("version_id"),
             "start_date": params.get("start_date"),
             "end_date": params.get("end_date"),
             "initial_cash": params.get("initial_cash"),
             "total_return": summary.get("total_return"),
+            "ann_return_pct": summary.get("ann_return_pct"),
             "sharpe_ratio": summary.get("sharpe_ratio"),
             "max_drawdown": summary.get("max_drawdown"),
             "total_trades": summary.get("total_trades"),
@@ -118,20 +121,21 @@ def render_run_list(runs: pd.DataFrame) -> Optional[str]:
 
     show = runs[["run_id", "strategy", "model_name", "model_version_id",
                  "start_date", "end_date",
-                 "total_return", "sharpe_ratio", "max_drawdown",
+                 "total_return", "ann_return_pct", "sharpe_ratio", "max_drawdown",
                  "total_trades", "win_rate", "created_at"]].copy()
     rename = {
         "run_id": "Run", "strategy": "Strategy",
         "model_name": "Model", "model_version_id": "Version",
         "start_date": "Start", "end_date": "End",
-        "total_return": "Total Ret %", "sharpe_ratio": "Sharpe",
+        "total_return": "Total Ret %", "ann_return_pct": "Ann Ret %",
+        "sharpe_ratio": "Sharpe",
         "max_drawdown": "Max DD %", "total_trades": "Trades",
         "win_rate": "Win %", "created_at": "Created",
     }
     show = show.rename(columns=rename)
 
     styled = show.style
-    for c in ["Total Ret %", "Sharpe", "Max DD %", "Win %"]:
+    for c in ["Total Ret %", "Ann Ret %", "Sharpe", "Max DD %", "Win %"]:
         if c in show.columns:
             styled = styled.format("{:.2f}", subset=[c], na_rep="—")
     if "Trades" in show.columns:
@@ -291,6 +295,22 @@ def render_trade_table(trades: pd.DataFrame) -> None:
     st.caption(f"Showing {len(show):,} of {len(trades):,} trades")
 
 
+# ── Fingerprint glossary ─────────────────────────────────────────────────────
+
+def render_fingerprint_glossary(fingerprint: str) -> None:
+    """Decode the X1/X4/S0… components of a fingerprint into a plain-English table."""
+    from src.backtest.strategy_registry import KNOB_GLOSSARY
+
+    families = [f for f in KNOB_GLOSSARY if any(
+        c.startswith(f) for c in fingerprint.split("_"))]
+    if not families:
+        return
+    gloss = pd.DataFrame(
+        [{"Term": f, "Meaning": KNOB_GLOSSARY[f]} for f in families])
+    with st.expander(f"What the terms mean — `{fingerprint}`"):
+        st.dataframe(gloss, use_container_width=True, hide_index=True)
+
+
 # ── Compare mode ─────────────────────────────────────────────────────────────
 
 def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
@@ -361,15 +381,31 @@ run_row = runs[runs["run_id"] == selected].iloc[0]
 art = load_run_artifacts(run_row["_path"])
 
 st.subheader(f"📊 {selected}")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total Return", f"{run_row['total_return']:.2f}%" if pd.notna(run_row["total_return"]) else "—")
-c2.metric("Sharpe", f"{run_row['sharpe_ratio']:.2f}" if pd.notna(run_row["sharpe_ratio"]) else "—")
-c3.metric("Max DD", f"{run_row['max_drawdown']:.2f}%" if pd.notna(run_row["max_drawdown"]) else "—")
-c4.metric("Trades", f"{int(run_row['total_trades']):,}" if pd.notna(run_row["total_trades"]) else "—")
-st.caption(f"Strategy: `{run_row['strategy']}` · "
+c2.metric("Ann Return", f"{run_row['ann_return_pct']:.1f}%" if pd.notna(run_row.get("ann_return_pct")) else "—",
+          help="Annualized — the fair metric across different window lengths (a start-time sweep).")
+c3.metric("Sharpe", f"{run_row['sharpe_ratio']:.2f}" if pd.notna(run_row["sharpe_ratio"]) else "—")
+c4.metric("Max DD", f"{run_row['max_drawdown']:.2f}%" if pd.notna(run_row["max_drawdown"]) else "—")
+c5.metric("Trades", f"{int(run_row['total_trades']):,}" if pd.notna(run_row["total_trades"]) else "—")
+fingerprint = run_row.get("fingerprint")
+tag = f" · `{fingerprint}`" if fingerprint else ""
+st.caption(f"Strategy: `{run_row['strategy']}`{tag} · "
            f"Model: `{run_row['model_version_id']}` · "
            f"Window: {run_row['start_date']} → {run_row['end_date']} · "
            f"Cash: ${run_row['initial_cash']:,.0f}")
+
+# Natural-language "what this strategy does" + a glossary decoding the fingerprint.
+if run_row.get("description"):
+    st.info(run_row["description"])
+if fingerprint:
+    render_fingerprint_glossary(fingerprint)
+
+# Cached 6-panel diagnostic (the notebook's r.plot()), if this run persisted one.
+plot_png = Path(run_row["_path"]) / "plot.png"
+if plot_png.exists():
+    with st.expander("6-panel diagnostic (equity/regime · underwater · monthly · per-trade · by-regime · exits)", expanded=True):
+        st.image(str(plot_png), use_container_width=True)
 
 render_equity_dd(art["equity"], selected)
 st.markdown("---")

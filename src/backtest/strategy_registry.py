@@ -46,6 +46,18 @@ class StrategyDef:
 
 _FAMILIES = ("E1", "E2", "X1", "Xt", "X3", "S0", "skip")
 
+# Human glossary for the fingerprint families — rendered as a table in the dashboard
+# so a reader can decode `E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5` without the code.
+KNOB_GLOSSARY: Dict[str, str] = {
+    "E1": "Entry — immediate: buy on the day the name qualifies (delay 0).",
+    "E2": "Entry — delayed N days: wait N sessions, enter only if still in the join-return band.",
+    "X1": "Stop — whole-position hard stop at the given % (wider-of ATR/%; e.g. sl15 = 15%).",
+    "Xt": "Take-profit — tranche T1 target at +N% (e.g. t1_10 = trim at +10%).",
+    "X3": "Exit — decoupled SMA trend cross: close any open position on an SMA-N break (e.g. sma50).",
+    "S0": "Selection — top-N daily by prob_elite (e.g. top5 = 5 highest-scored names/day).",
+    "skip": "Selection — skip the top-K names each day (skip2 = drop the 2 hottest, take the next N).",
+}
+
 
 def parse_fingerprint(fp: str) -> Dict[str, Any]:
     """`E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5` -> strategy_kwargs.
