@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import backtrader as bt
+import pandas as pd
 
 from .score_lookup import ScoreLookup
 from .position_tracker import PositionTracker
@@ -130,6 +131,28 @@ class SEPAHybridV1(bt.Strategy):
         # Position sizing mode
         ('sizing_mode', 'regime'),  # 'regime', 'equal_weight', 'rank_weighted', 'score_weighted'
 
+        # --- Rotation extensions (default = no-op; S1..S5 unchanged) ---
+        # E2 delayed conditional entry: buffer a candidate's first-qualifying
+        # date, then enter on day N only if its return since that date is within
+        # [entry_ret_lo, entry_ret_hi]. 0 = immediate entry (E1, the default).
+        ('entry_delay_days', 0),
+        ('entry_ret_lo', -1.0),   # fraction, e.g. -0.03 = down ≤3% ok
+        ('entry_ret_hi', 1.0),    # fraction, e.g.  0.15 = up ≤15% ok (avoid the spent runner)
+        # X2 score-drop exit: exit full position if today's prob_elite fell more
+        # than score_drop_thresh below its entry value, OR below score_exit_floor.
+        # None = disabled.
+        ('score_drop_thresh', None),
+        ('score_exit_floor', None),
+        # X3 make SMA/trend exit fire independently of tranche state (your intent:
+        # close<SMA => get out). Default False keeps the tranche-gated behaviour.
+        ('sma_exit_independent', False),
+        # Selection skip-top-K (A3 tail-pollution cap): drop the K highest-ranked
+        # candidates each day before slot-filling, so entries come from ranks
+        # K+1..K+slots. 0 = disabled (take the very top). Confirmed in the
+        # vectorized sweep as a real edge on wide-spread signals (proto_cali),
+        # neutral on compressed binary — the top-ranked names are "spent".
+        ('selection_skip_top', 0),
+
         # Score data (DataFrame from UniverseScorer.score_from_t3())
         ('scores_df', None),
     )
@@ -165,6 +188,11 @@ class SEPAHybridV1(bt.Strategy):
 
         # Warmup bar counter (used to suppress entries during initial bars)
         self._bars_seen = 0
+
+        # E2 delayed entry: ticker -> first date it qualified (watchlist-join proxy).
+        self._first_qualified: Dict[str, datetime] = {}
+        # entry prob_elite per held ticker, for the X2 score-drop exit.
+        self._entry_prob_elite: Dict[str, float] = {}
 
         logger.info(f"SEPA Strategy initialized with {len(self.stock_feeds)} stock feeds")
 
@@ -294,6 +322,10 @@ class SEPAHybridV1(bt.Strategy):
         # === CHECK RANK-BASED EXITS (Optional) ===
         if self.p.exit_use_percentile:
             self._check_rank_exits(current_date)
+
+        # === CHECK SCORE-DROP EXITS (X2, optional) ===
+        if self.p.score_drop_thresh is not None or self.p.score_exit_floor is not None:
+            self._check_score_drop_exits(current_date)
 
         # === WARMUP CHECK ===
         # Skip entries during initial warmup bars (exits still run above).
@@ -431,8 +463,9 @@ class SEPAHybridV1(bt.Strategy):
             if pos.exit_pending:
                 continue
 
-            # Only check trend exit after T1 and T2 are sold
-            if not (pos.tranche1_sold and pos.tranche2_sold):
+            # Trend exit normally trails the runner (after both tranches sold).
+            # sma_exit_independent=True fires it on any open position (X3 intent).
+            if not self.p.sma_exit_independent and not (pos.tranche1_sold and pos.tranche2_sold):
                 continue
 
             data = self.stock_feeds.get(ticker)
@@ -491,6 +524,60 @@ class SEPAHybridV1(bt.Strategy):
                     pos.exit_pending = True
                     logger.info(f"Rank exit for {ticker}: percentile {pct_rank:.2f} < threshold {self.p.exit_percentile_max:.2f}")
 
+    def _join_close(self, ticker: str, join_date: datetime) -> Optional[float]:
+        """Close price on the ticker's first-qualified date (E2 return baseline).
+        Reads the feed's backing DataFrame — O(1) dict lookup, no bt indexing."""
+        data = self.stock_feeds.get(ticker)
+        if data is None or not hasattr(data.p, 'dataname'):
+            return None
+        df = data.p.dataname
+        key = pd.Timestamp(join_date.date() if hasattr(join_date, 'date') else join_date)
+        try:
+            return float(df.at[key, 'close'])
+        except (KeyError, ValueError):
+            return None
+
+    def _check_score_drop_exits(self, current_date: datetime):
+        """X2: exit if today's prob_elite dropped >score_drop_thresh below entry,
+        or fell below score_exit_floor. Respects min_hold_days (a confidence dip,
+        not real damage). Rotates capital out of decaying setups."""
+        for ticker, pos in list(self.position_tracker.positions.items()):
+            if pos.exit_pending:
+                continue
+            if self.p.min_hold_days > 0:
+                entry_date = pos.entry_date
+                if hasattr(entry_date, "date"):
+                    entry_date = entry_date.date()
+                cur = current_date.date() if hasattr(current_date, "date") else current_date
+                if (cur - entry_date).days < self.p.min_hold_days:
+                    continue
+
+            sd = self.score_lookup.get_score(current_date, ticker)
+            if not sd:
+                continue
+            prob_now = sd[3]
+            if prob_now is None:
+                continue
+            entry_prob = self._entry_prob_elite.get(ticker)
+
+            drop_hit = (
+                self.p.score_drop_thresh is not None
+                and entry_prob is not None
+                and prob_now < entry_prob - self.p.score_drop_thresh
+            )
+            floor_hit = (
+                self.p.score_exit_floor is not None
+                and prob_now < self.p.score_exit_floor
+            )
+            if drop_hit or floor_hit:
+                data = self.stock_feeds.get(ticker)
+                if data and pos.remaining_shares > 0:
+                    order = self.sell(data=data, size=pos.remaining_shares)
+                    self.pending_orders[order.ref] = {'reason': 'score_drop', 'ticker': ticker}
+                    pos.exit_pending = True
+                    logger.info(f"Score-drop exit {ticker}: prob {prob_now:.3f} "
+                                f"(entry {entry_prob}, floor {self.p.score_exit_floor})")
+
     def _process_entries(self, regime: int, current_date: datetime):
         """Process new entry signals with rejection tracking."""
         # Check position limits
@@ -513,6 +600,12 @@ class SEPAHybridV1(bt.Strategy):
         # Filter candidates with rejection tracking
         valid_candidates = []
         for ticker, score, trailing_pct, prob_elite in candidates:
+            # E2: anchor first-qualified date on true first sighting (before any
+            # skip), so the delay window measures from watchlist-join, not re-entry.
+            # ponytail: proxy for join date; exact would join the watchlist table.
+            if self.p.entry_delay_days > 0:
+                self._first_qualified.setdefault(ticker, current_date)
+
             # Skip if in cooldown
             if self.position_tracker.is_in_cooldown(ticker, current_date, self.p.cooldown_days):
                 self.signal_rejections.append(SignalRejection(
@@ -571,24 +664,56 @@ class SEPAHybridV1(bt.Strategy):
                     ))
                     continue
 
-            valid_candidates.append((ticker, score, trailing_pct, data))
+            # E2 delayed conditional entry: gate on days-since-first-qualified +
+            # return band. entry_delay_days=0 -> immediate (E1), no-op.
+            if self.p.entry_delay_days > 0:
+                first = self._first_qualified[ticker]
+                first_d = first.date() if hasattr(first, "date") else first
+                cur_d = current_date.date() if hasattr(current_date, "date") else current_date
+                if (cur_d - first_d).days < self.p.entry_delay_days:
+                    continue  # still waiting out the delay window
+                join_px = self._join_close(ticker, first)
+                cur_px = data.close[0]
+                if join_px and join_px > 0:
+                    ret = (cur_px - join_px) / join_px
+                    if not (self.p.entry_ret_lo <= ret <= self.p.entry_ret_hi):
+                        self.signal_rejections.append(SignalRejection(
+                            date=current_date, ticker=ticker, score=score,
+                            reason='delay_band',
+                        ))
+                        continue
+
+            valid_candidates.append((ticker, score, trailing_pct, data, prob_elite))
+
+        # Selection skip-top-K: drop the K highest-ranked survivors so entries
+        # come from ranks K+1.. (A3 tail-pollution cap). Rank order is preserved
+        # from get_candidates. Dropped names are tracked as a distinct reason so
+        # the rejection audit stays honest.
+        if self.p.selection_skip_top > 0 and valid_candidates:
+            skipped = valid_candidates[:self.p.selection_skip_top]
+            for ticker, score, trailing_pct, data, prob_elite in skipped:
+                self.signal_rejections.append(SignalRejection(
+                    date=current_date, ticker=ticker, score=score, reason='skip_top',
+                ))
+            valid_candidates = valid_candidates[self.p.selection_skip_top:]
 
         # Track "no_slots" rejections for candidates that passed filters but couldn't enter
         if available_slots <= 0:
-            for ticker, score, trailing_pct, data in valid_candidates:
+            for ticker, score, trailing_pct, data, prob_elite in valid_candidates:
                 self.signal_rejections.append(SignalRejection(
                     date=current_date, ticker=ticker, score=score, reason='no_slots'
                 ))
             return
 
         # Track "no_slots" for candidates beyond available slots
-        for ticker, score, trailing_pct, data in valid_candidates[available_slots:]:
+        for ticker, score, trailing_pct, data, prob_elite in valid_candidates[available_slots:]:
             self.signal_rejections.append(SignalRejection(
                 date=current_date, ticker=ticker, score=score, reason='no_slots'
             ))
 
         # Enter top N by trailing percentile (already sorted)
-        for ticker, score, trailing_pct, data in valid_candidates[:available_slots]:
+        for ticker, score, trailing_pct, data, prob_elite in valid_candidates[:available_slots]:
+            self._entry_prob_elite[ticker] = prob_elite
             self._enter_position(ticker, score, trailing_pct, data, regime, current_date)
 
     def calculate_position_size(self, regime_cat: int, score: float, rank: float) -> float:

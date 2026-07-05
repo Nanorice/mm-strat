@@ -16,6 +16,25 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def prototype_scores_to_contract(df: pd.DataFrame) -> pd.DataFrame:
+    """Adapt daily_predictions-sourced prototype scores (date, ticker,
+    prob_elite[, calibrated_score]) to the full ScoreLookup contract.
+
+    normalized_score is prob_elite*100; daily/trailing ranks are the per-day
+    percentile of prob_elite (trailing == daily here — prototype has no cohort
+    rank, and rank_by='prob_elite' is the intended entry sort anyway).
+    """
+    out = df.copy()
+    out['date'] = pd.to_datetime(out['date'])
+    out['normalized_score'] = out['prob_elite'] * 100.0
+    out['daily_pct_rank'] = out.groupby('date')['prob_elite'].rank(pct=True)
+    out['trailing_pct'] = out['daily_pct_rank']
+    if 'calibrated_score' not in out.columns:
+        out['calibrated_score'] = out['prob_elite']
+    return out[['date', 'ticker', 'normalized_score', 'daily_pct_rank',
+                'trailing_pct', 'prob_elite', 'calibrated_score']]
+
+
 class ScoreLookup:
     """
     Pre-loaded universe scores for fast daily candidate filtering.

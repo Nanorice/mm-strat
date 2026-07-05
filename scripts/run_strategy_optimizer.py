@@ -101,13 +101,21 @@ def run_trades(model_path: str, scores: pd.DataFrame, start: str, end: str, para
 def suggest_params(trial) -> dict:
     """Shared strategy search space — single source of truth for both the
     single-split optimizer and the rolling walk-forward variant."""
-    return dict(
+    params = dict(
         min_prob_elite=trial.suggest_float("min_prob_elite", 0.0, 0.35),
         max_positions_per_day=trial.suggest_int("max_positions_per_day", 1, 5),
         stop_loss_pct=trial.suggest_float("stop_loss_pct", 0.05, 0.15),
-        sma_exit_period=trial.suggest_categorical("sma_exit_period", [20, 50, 100]),
+        exit_policy=trial.suggest_categorical("exit_policy", ["sma", "nday", "atr_trail"]),
         max_hold_days=trial.suggest_categorical("max_hold_days", [60, 120, 252]),
     )
+    # Exit-type-specific knobs — only the active policy's params matter.
+    if params["exit_policy"] == "sma":
+        params["sma_exit_period"] = trial.suggest_categorical("sma_exit_period", [20, 50, 100])
+    elif params["exit_policy"] == "nday":
+        params["nday_hold"] = trial.suggest_categorical("nday_hold", [5, 10, 21])
+    else:  # atr_trail
+        params["atr_trail_mult"] = trial.suggest_categorical("atr_trail_mult", [1.5, 2.0, 2.5])
+    return params
 
 
 def build_objective(model_path: str, scores: pd.DataFrame, start: str, end: str):

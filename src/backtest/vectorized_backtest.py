@@ -61,6 +61,13 @@ class VectorizedSEPABacktest:
         initial_cash: float = 100_000.0,
         position_size_pct: float = 0.10,
         max_hold_days: int = 252,
+        exit_policy: str = 'sma',
+        nday_hold: int = 10,
+        atr_period: int = 14,
+        atr_trail_mult: float = 2.5,
+        regime_gate: bool = False,
+        regime_bear_score: float = 15.0,
+        max_concurrent_positions: Optional[int] = None,
         precomputed_scores: Optional[pd.DataFrame] = None,
         precomputed_prices: Optional[pd.DataFrame] = None,
     ):
@@ -79,6 +86,25 @@ class VectorizedSEPABacktest:
         self.initial_cash = initial_cash
         self.position_size_pct = position_size_pct
         self.max_hold_days = max_hold_days
+        if exit_policy not in ('sma', 'nday', 'atr_trail'):
+            raise ValueError(f"exit_policy must be sma|nday|atr_trail, got {exit_policy!r}")
+        self.exit_policy = exit_policy
+        self.nday_hold = nday_hold
+        self.atr_period = atr_period
+        self.atr_trail_mult = atr_trail_mult
+        # M03 strong-bear gate: matches SEPAHybridV1 (no entries + zero exposure
+        # when m03_score < regime_bear_score, i.e. regime_cat 0). This is the
+        # load-bearing piece that closes the vec↔BackTrader sign-flip gap — the
+        # vectorized engine otherwise holds through the 2022 bear.
+        self.regime_gate = regime_gate
+        self.regime_bear_score = regime_bear_score
+        # Hard slot-book cap. Without it the engine over-subscribes (top-N *new*
+        # entries/day × ~25-day holds → up to ~4N concurrent), and equity_curve
+        # pro-rata-dilutes the winners — the dominant vec↔BackTrader gap. When
+        # set, a greedy capacity pass admits an entry only if a slot is free
+        # (an earlier trade has exited), mirroring BackTrader's slot book.
+        self.max_concurrent_positions = max_concurrent_positions
+        self._regime_exposure: Optional[pd.Series] = None
 
         # Injected caches — avoids re-scoring / re-loading on every sweep combo
         self._scores: Optional[pd.DataFrame] = precomputed_scores
@@ -106,6 +132,7 @@ class VectorizedSEPABacktest:
         )
         self._price_path = prices  # cached so equity_curve can mark-to-market
         trades = self._simulate_exits(entries, prices)
+        trades = self._enforce_capacity(trades)
         trades = self._apply_costs(trades)
         return trades
 
@@ -140,6 +167,17 @@ class VectorizedSEPABacktest:
 
         warmup_cutoff = unique_dates.iloc[self.warmup_days]
         eligible = eligible[eligible['date'] >= warmup_cutoff]
+
+        # M03 gate: block entries on strong-bear days (regime 0), like BackTrader.
+        if self.regime_gate:
+            exp = self._load_regime_exposure()
+            bear_days = set(exp.index[exp <= 0.0])
+            n_before = len(eligible)
+            eligible = eligible[~eligible['date'].isin(bear_days)]
+            logger.info(
+                f"Regime gate: dropped {n_before - len(eligible)} bear-day candidate rows "
+                f"({len(bear_days)} strong-bear days)"
+            )
 
         eligible['daily_rank'] = eligible.groupby('date')['prob_elite'].rank(
             ascending=False, method='first'
@@ -198,8 +236,45 @@ class VectorizedSEPABacktest:
             df.groupby('ticker')['close']
             .transform(lambda s: s.rolling(sma_period, min_periods=1).mean())
         )
+        if self.exit_policy == 'atr_trail':
+            g = df.groupby('ticker')
+            prev_close = g['close'].shift(1)
+            tr = pd.concat([
+                df['high'] - df['low'],
+                (df['high'] - prev_close).abs(),
+                (df['low'] - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            df['atr'] = tr.groupby(df['ticker']).transform(
+                lambda s: s.rolling(self.atr_period, min_periods=1).mean()
+            )
         logger.info(f"Prices ready: {len(df)} rows, {df['ticker'].nunique()} tickers, SMA={sma_period}")
         return df
+
+    def _load_regime_exposure(self) -> pd.Series:
+        """Daily exposure series from M03: 0.0 on strong-bear (m03_score < bear
+        threshold, i.e. regime_cat 0), 1.0 otherwise. Same threshold as
+        SEPAHybridV1's bear-gate (runner._load_regime_from_duckdb → regime_cat 0).
+        Cached so entry-gate and equity_curve share one series.
+        """
+        if self._regime_exposure is not None:
+            return self._regime_exposure
+        con = db.connect(str(self.db_path), read_only=True)
+        try:
+            df = con.execute("""
+                SELECT date, m03_score
+                FROM t2_regime_scores
+                WHERE date >= ? AND date <= ?
+                ORDER BY date
+            """, [self.start_date, self.end_date]).fetchdf()
+        finally:
+            con.close()
+        df['date'] = pd.to_datetime(df['date'])
+        exp = pd.Series(
+            np.where(df['m03_score'] < self.regime_bear_score, 0.0, 1.0),
+            index=df['date'], name='exposure',
+        )
+        self._regime_exposure = exp
+        return exp
 
     def _simulate_exits(
         self,
@@ -228,17 +303,34 @@ class VectorizedSEPABacktest:
         )
         merged = merged[merged['date'] > merged['entry_date']].copy()
 
-        merged['stop_level'] = merged['entry_price'] * (1.0 - self.stop_loss_pct)
-        merged['hit_stop'] = merged['low'] <= merged['stop_level']
-        merged['hit_trend'] = merged['close'] < merged['sma']
         merged['bars_held'] = (
             merged.groupby(['ticker', 'entry_date']).cumcount() + 1
         )
+
+        # Stop level: fixed % (sma/nday) or ATR-trailing off the running high (atr_trail).
+        if self.exit_policy == 'atr_trail':
+            grp = merged.groupby(['ticker', 'entry_date'])
+            run_high = grp['high'].cummax()
+            merged['stop_level'] = run_high - self.atr_trail_mult * merged['atr']
+        else:
+            merged['stop_level'] = merged['entry_price'] * (1.0 - self.stop_loss_pct)
+        merged['hit_stop'] = merged['low'] <= merged['stop_level']
         merged['hit_timeout'] = merged['bars_held'] >= self.max_hold_days
 
-        # Determine exit reason priority: stop > trend > timeout
-        conditions = [merged['hit_stop'], merged['hit_trend'], merged['hit_timeout']]
-        choices = ['stop_loss', 'trend_break', 'max_hold']
+        # Second exit condition is the strategy-type selector.
+        if self.exit_policy == 'sma':
+            merged['hit_secondary'] = merged['close'] < merged['sma']
+            secondary_reason = 'trend_break'
+        elif self.exit_policy == 'nday':
+            merged['hit_secondary'] = merged['bars_held'] >= self.nday_hold
+            secondary_reason = 'nday_exit'
+        else:  # atr_trail — the trailing stop IS the exit; no separate secondary
+            merged['hit_secondary'] = False
+            secondary_reason = 'trail_stop'
+
+        # Priority: stop > secondary > timeout
+        conditions = [merged['hit_stop'], merged['hit_secondary'], merged['hit_timeout']]
+        choices = ['stop_loss', secondary_reason, 'max_hold']
         merged['exit_candidate'] = np.select(conditions, choices, default=None)
 
         exits = merged[merged['exit_candidate'].notna()].copy()
@@ -291,6 +383,36 @@ class VectorizedSEPABacktest:
             cols.append('rs_industry_rank')
             
         return trades[cols].sort_values('entry_date').reset_index(drop=True)
+
+    def _enforce_capacity(self, trades: pd.DataFrame) -> pd.DataFrame:
+        """Greedy slot-book: admit an entry only if a slot is free at its date.
+
+        Exits here are path-independent — a trade's exit depends only on its own
+        entry and that ticker's forward price, not on other open positions — so a
+        single heap pass over entry-date-sorted trades gives the exact 5-slot
+        book BackTrader produces via its event loop. On a tie of entry dates,
+        higher prob_elite_at_entry wins the slot (matches daily-rank priority).
+        """
+        import heapq
+        cap = self.max_concurrent_positions
+        if cap is None or trades.empty:
+            return trades
+
+        ordered = trades.sort_values(
+            ['entry_date', 'prob_elite_at_entry'], ascending=[True, False]
+        )
+        active: list = []  # min-heap of exit_dates for currently-open positions
+        keep_idx = []
+        for idx, t in ordered.iterrows():
+            entry = pd.Timestamp(t['entry_date'])
+            while active and active[0] <= entry:  # free slots for exits up to today
+                heapq.heappop(active)
+            if len(active) < cap:
+                heapq.heappush(active, pd.Timestamp(t['exit_date']))
+                keep_idx.append(idx)
+        n_drop = len(trades) - len(keep_idx)
+        logger.info(f"Capacity gate (cap={cap}): dropped {n_drop} over-subscribed entries")
+        return trades.loc[keep_idx].sort_values('entry_date').reset_index(drop=True)
 
     def _apply_costs(self, trades: pd.DataFrame) -> pd.DataFrame:
         if trades.empty:
@@ -376,6 +498,13 @@ class VectorizedSEPABacktest:
 
         scale = np.where(open_count > max_slots, max_slots / np.maximum(open_count, 1), 1.0)
         daily_return = daily_frac_pnl * self.position_size_pct * scale
+
+        # M03 bear-gate: zero daily return on strong-bear days (positions flat),
+        # mirroring BackTrader's regime_liquidation. Composes with any macro
+        # exposure the caller passes (they multiply).
+        if self.regime_gate:
+            g = self._load_regime_exposure().reindex(dates).ffill().fillna(1.0).to_numpy()
+            daily_return = daily_return * g
 
         # Separate sizing input: scale daily exposure by the macro weight (flat if absent).
         if exposure is not None:
