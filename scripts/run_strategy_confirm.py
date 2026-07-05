@@ -27,8 +27,8 @@ import argparse
 import json
 import logging
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -40,7 +40,9 @@ import pandas as pd
 
 from src.backtest.runner import SEPABacktestRunner
 from src.backtest.score_lookup import prototype_scores_to_contract
-from scripts.run_strategy_array import _run_one_strategy, _render_comparison_md, StrategyConfig
+from src.backtest.strategy_registry import _base_kwargs
+from src.backtest.population_runner import Job, run_population
+from scripts.run_strategy_array import _render_comparison_md
 
 DB_PATH = REPO_ROOT / "data" / "market_data.duckdb"
 CACHE = {
@@ -64,28 +66,8 @@ class Arm:
     strategy_kwargs: Dict[str, Any] = field(default_factory=dict)
 
 
-# Equal-weight slot book, immediate top-N by prob_elite, decoupled SMA50 exit,
-# 10% whole stop (X1). regime_max_pos = the N slots; regime 0 liquidates (bear
-# gate). rank_by='prob_elite' matches the vec sweep's ranking.
-def _base_kwargs(n: int) -> Dict[str, Any]:
-    return {
-        "entry_mode": "top_n",
-        "entry_top_n": n,
-        "rank_by": "prob_elite",
-        "min_prob_elite": 0.15,
-        "sizing_mode": "equal_weight",
-        "regime_sizes": {0: 0.0, 1: 1.0 / n, 2: 1.0 / n, 3: 1.0 / n, 4: 1.0 / n},
-        "regime_max_pos": {0: 0, 1: n, 2: n, 3: n, 4: n},
-        # X1 stop: 10% floor, ATR off (avoid the atr_stop_mult=0 stop-at-entry bug
-        # by keeping a real % stop as the whole-position stop).
-        "atr_stop_mult": 2.0,
-        "max_stop_pct": 0.10,
-        "sma_exit_period": 50,
-        "sma_exit_independent": True,   # X3 decoupled SMA trend exit
-        "min_score": 0,                 # prob_elite is the gate, not norm score
-        "cooldown_days": 3,
-    }
-
+# _base_kwargs now lives in src/backtest/strategy_registry.py (single source of
+# truth): equal-weight slot book, top-N by prob_elite, decoupled SMA50, 10% stop.
 
 POPULATION: List[Arm] = [
     Arm("A1_binary_top5", "binary", "SEED: binary E1 top-5 (prior BackTrader champion)",
@@ -120,11 +102,14 @@ def _exit_grid() -> List[Arm]:
         Arm("G_sl15", "binary", "T1 stop: widest 15% floor", G({"max_stop_pct": 0.15})),
         Arm("G_atr2p5", "binary", "T1 stop: wider ATR 2.5", G({"atr_stop_mult": 2.5})),
         Arm("G_atr3", "binary", "T1 stop: widest ATR 3.0", G({"atr_stop_mult": 3.0})),
-        # X4 pure-ATR: floor the % at a tiny 2% (NOT 0 — that's the stop-at-entry −84% bug)
-        Arm("G_x4_atr2", "binary", "T1 X4 pure-ATR 2.0 (2% safety floor)",
-            G({"atr_stop_mult": 2.0, "max_stop_pct": 0.02})),
-        Arm("G_x4_atr2p5", "binary", "T1 X4 pure-ATR 2.5 (2% safety floor)",
-            G({"atr_stop_mult": 2.5, "max_stop_pct": 0.02})),
+        # X4 pure-ATR: let ATR dominate. initial_stop=max(price-mult*ATR, price*(1-pct))
+        # picks the TIGHTER (higher) stop, so max_stop_pct must be LOOSE (wide) — a
+        # small pct is a tight CAP, not a floor (the −69% G7 bug). 0.30 = a wide net
+        # that only fires on extreme ATR; ATR is the live stop otherwise.
+        Arm("G_x4_atr2", "binary", "T1 X4 pure-ATR 2.0 (30% wide safety net)",
+            G({"atr_stop_mult": 2.0, "max_stop_pct": 0.30})),
+        Arm("G_x4_atr2p5", "binary", "T1 X4 pure-ATR 2.5 (30% wide safety net)",
+            G({"atr_stop_mult": 2.5, "max_stop_pct": 0.30})),
         # --- Tier 2: TAKE-PROFIT (X3 SMA period; Xt tranche targets) ---
         Arm("G_sma20", "binary", "T2 TP: faster SMA20 trend exit", G({"sma_exit_period": 20})),
         Arm("G_sma100", "binary", "T2 TP: slower SMA100 trend exit", G({"sma_exit_period": 100})),
@@ -228,67 +213,14 @@ def _load_scores(signal: str, start: str, end: str) -> pd.DataFrame:
     return prototype_scores_to_contract(df)
 
 
-def _run_arm(arm: Arm, start: str, end: str, initial_cash: float,
-             out_dir: Path) -> Dict[str, Any]:
-    """Worker entrypoint: one arm end-to-end. Loads its own scores + feeds and
-    persists EVERY trade + the rejection audit so any entry/exit is investigable.
-
-    Artifacts per arm (out_dir/<arm.id>/):
-      trades.parquet     — every closed trade: entry/exit date+price, exit_reason,
-                           entry_regime, entry_score, prob_elite + score row at
-                           entry, pnl, holding_days, max_dd_pct, mae_pct.
-      rejections.parquet — every candidate that qualified but did NOT enter, with
-                           reason (no_slots / skip_top / cooldown / already_holding
-                           / delay_band / low_liquidity / …). The "why we didn't
-                           enter" side of the audit.
-      equity.parquet, metrics.json, config.json — as the array harness writes.
-    """
-    scores_df = _load_scores(arm.signal, start, end)
-    run_dir = out_dir / arm.id
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    runner = SEPABacktestRunner(
-        start_date=start, end_date=end, initial_cash=initial_cash,
-        db_path=str(DB_PATH), model_path=None, model_version_id=None,
+def _arm_to_job(arm: Arm, start: str, end: str) -> Job:
+    """Arm -> population Job. Scores are lazy-loaded IN the worker via a picklable
+    partial (not the in-hand frame) so parallel workers don't pickle a big frame."""
+    return Job(
+        id=arm.id, description=arm.description, signal=arm.signal,
+        model="/".join(MODEL[arm.signal]), strategy_kwargs=arm.strategy_kwargs,
+        score_loader=partial(_load_scores, arm.signal, start, end),
     )
-    runner.setup(scores_df=scores_df, strategy_kwargs=arm.strategy_kwargs)
-    metrics = runner.run()
-    equity = runner.get_equity_curve_dataframe()
-    trades = runner.get_trade_dataframe()
-
-    if isinstance(trades, pd.DataFrame) and not trades.empty:
-        trades.to_parquet(run_dir / "trades.parquet", index=False)
-    if isinstance(equity, pd.DataFrame) and not equity.empty:
-        # keep the date index — it's the x-axis for equity plots
-        equity.reset_index().to_parquet(run_dir / "equity.parquet", index=False)
-
-    # Rejection audit — the raw per-candidate log, not just aggregate counts.
-    # NB: bt.Strategy overrides __nonzero__ (line arithmetic) — never test it for
-    # truthiness; use `is not None`.
-    rejs = getattr(runner.strategy, "signal_rejections", []) if runner.strategy is not None else []
-    if rejs:
-        pd.DataFrame([{"date": r.date, "ticker": r.ticker, "score": r.score,
-                       "reason": r.reason} for r in rejs]).to_parquet(
-            run_dir / "rejections.parquet", index=False)
-
-    metrics_flat = {k: v for k, v in metrics.items() if not isinstance(v, (dict, list))}
-    (run_dir / "metrics.json").write_text(json.dumps(metrics_flat, indent=2, default=str))
-    (run_dir / "config.json").write_text(json.dumps({
-        "id": arm.id, "description": arm.description, "signal": arm.signal,
-        "model": "/".join(MODEL[arm.signal]), "strategy_kwargs": arm.strategy_kwargs,
-    }, indent=2, default=str))
-
-    return {
-        "id": arm.id, "description": arm.description, "signal": arm.signal,
-        "model": "/".join(MODEL[arm.signal]),
-        "sharpe_ratio": metrics_flat.get("sharpe_ratio"),
-        "total_return_pct": metrics_flat.get("total_return"),
-        "max_drawdown_pct": metrics_flat.get("max_drawdown"),
-        "win_rate_pct": metrics_flat.get("win_rate"),
-        "total_trades": metrics_flat.get("total_trades"),
-        "sqn": metrics_flat.get("sqn"),
-        "n_rejections": len(rejs),
-    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -348,23 +280,9 @@ def main() -> None:
     logger.info("Grid=%s: %d arms, workers=%d, window %s → %s",
                 args.grid, len(pop), args.workers, args.start, args.end)
 
-    results: List[Dict[str, Any]] = []
-    if args.workers <= 1:
-        for arm in pop:
-            logger.info("── running %s (%s)", arm.id, arm.description)
-            results.append(_run_arm(arm, args.start, args.end, args.initial_cash, out_dir))
-    else:
-        with ProcessPoolExecutor(max_workers=args.workers) as ex:
-            futs = {ex.submit(_run_arm, a, args.start, args.end, args.initial_cash, out_dir): a
-                    for a in pop}
-            for fut in as_completed(futs):
-                arm = futs[fut]
-                try:
-                    results.append(fut.result())
-                    logger.info("✅ done %s", arm.id)
-                except Exception as e:
-                    logger.exception("❌ arm %s failed: %s", arm.id, e)
-                    results.append({"id": arm.id, "signal": arm.signal, "error": str(e)})
+    jobs = [_arm_to_job(a, args.start, args.end) for a in pop]
+    results = run_population(jobs, args.start, args.end, args.initial_cash,
+                             out_dir, str(DB_PATH), workers=args.workers)
 
     (out_dir / "summary.json").write_text(json.dumps({
         "window": f"{args.start} → {args.end}",

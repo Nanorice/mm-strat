@@ -41,8 +41,9 @@ if str(REPO_ROOT) not in sys.path:
 
 import pandas as pd
 
-from src.backtest.runner import SEPABacktestRunner
 from src.backtest.universe_scorer import UniverseScorer
+from src.backtest.population_runner import Job, run_arm
+from src.backtest import strategy_registry
 
 DB_PATH = REPO_ROOT / "data" / "market_data.duckdb"
 
@@ -63,71 +64,25 @@ class StrategyConfig:
 
 
 # ---------------------------------------------------------------------------
-# Strategy array definitions
+# Strategy array — sourced from the registry (single source of truth).
 # ---------------------------------------------------------------------------
-# Each config flips one knob at a time relative to the baseline so the
-# comparison.md table reads as a clean A/B/C/D/E ablation rather than a
-# tangled multi-factor experiment.
+# The S-series lives in src/backtest/strategy_registry.py. We expose it here
+# keyed by both the short alias ("S1") and the full id ("S1_baseline_top3") so
+# the CLI's `--strategies S1,S2` UX is unchanged.
 
-STRATEGY_ARRAY: Dict[str, StrategyConfig] = {
-    "S1": StrategyConfig(
-        id="S1_baseline_top3",
-        description="Baseline: top-3 daily, regime caps, default exits.",
-        strategy_kwargs={
-            "entry_mode": "top_n",
-            "entry_top_n": 3,
-            "rank_by": "daily",
-        },
-    ),
-    "S2": StrategyConfig(
-        id="S2_trailing10_top5",
-        description="10-day trailing percentile, up to 5 entries/day, regime caps.",
-        strategy_kwargs={
-            "entry_mode": "top_n",
-            "entry_top_n": 5,
-            "rank_by": "trailing",
-        },
-    ),
-    "S3": StrategyConfig(
-        id="S3_prob_threshold_5pos",
-        description="Calibrated P(>30%) >= 0.30 entry gate, fixed 5-position cap.",
-        strategy_kwargs={
-            "entry_mode": "top_n",
-            "entry_top_n": 5,
-            "rank_by": "prob_elite",
-            "min_prob_elite": 0.30,
-            # Fixed cap across all regimes — overrides regime-driven max_pos.
-            "regime_max_pos": {0: 0, 1: 5, 2: 5, 3: 5, 4: 5},
-        },
-    ),
-    "S4": StrategyConfig(
-        id="S4_trailing20_regime_aware",
-        description="20-day trailing percentile + min_prob_elite=0.25.",
-        strategy_kwargs={
-            "entry_mode": "top_n",
-            "entry_top_n": 5,
-            "rank_by": "trailing",
-            "min_prob_elite": 0.25,
-        },
-    ),
-    "S5": StrategyConfig(
-        id="S5_hybrid_persistent",
-        description=(
-            "Persistence-gated entry (top-30% trailing rank, 3 of last 5 days), "
-            "fixed 8-position cap, 10-day min hold."
-        ),
-        strategy_kwargs={
-            "entry_mode": "top_n",
-            "entry_top_n": 8,
-            "rank_by": "trailing",
-            "regime_max_pos": {0: 0, 1: 8, 2: 8, 3: 8, 4: 8},
-            "persistence_window_days": 5,
-            "persistence_min_count": 3,
-            "persistence_threshold": 0.7,
-            "min_hold_days": 10,
-        },
-    ),
-}
+def _load_strategy_array() -> Dict[str, StrategyConfig]:
+    out: Dict[str, StrategyConfig] = {}
+    for d in strategy_registry.by_status("baseline"):
+        if not d.name.startswith("S") or "_" not in d.name:
+            continue  # S-series ids only (skip e1_seed etc.)
+        cfg = StrategyConfig(id=d.name, description=d.description,
+                             strategy_kwargs=dict(d.strategy_kwargs))
+        out[d.name] = cfg
+        out[d.name.split("_", 1)[0]] = cfg  # short alias "S1"
+    return out
+
+
+STRATEGY_ARRAY: Dict[str, StrategyConfig] = _load_strategy_array()
 
 
 # ---------------------------------------------------------------------------
@@ -191,52 +146,18 @@ def _run_one_strategy(
     db_path: Path,
     output_dir: Path,
 ) -> Dict[str, Any]:
-    """Execute a single strategy config and persist artifacts."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """Execute a single strategy config via the shared population runner (which
+    persists trades + rejections + equity + metrics + config), then enrich the
+    summary with the array's hold-days stats from the persisted trades."""
+    job = Job(id=config.id, description=config.description,
+              strategy_kwargs=config.strategy_kwargs, scores_df=scores_df)
+    # run_arm writes into out_dir/<job.id>/ — but the array already nests per-run.
+    # Point it at output_dir.parent so the run dir lands exactly at output_dir.
+    summary = run_arm(job, start, end, initial_cash, output_dir.parent, str(db_path))
 
-    runner = SEPABacktestRunner(
-        start_date=start,
-        end_date=end,
-        initial_cash=initial_cash,
-        db_path=str(db_path),
-        # No model path — scores_df is already in hand and pre-scored.
-        model_path=None,
-        model_version_id=None,
-    )
-    runner.setup(scores_df=scores_df, strategy_kwargs=config.strategy_kwargs)
-    metrics = runner.run()
-    equity = runner.get_equity_curve_dataframe()
-    trades = runner.get_trade_dataframe()
-
-    if isinstance(trades, pd.DataFrame) and not trades.empty:
-        trades.to_parquet(output_dir / "trades.parquet", index=False)
-    if isinstance(equity, pd.DataFrame) and not equity.empty:
-        equity.to_parquet(output_dir / "equity.parquet", index=False)
-
-    # Flatten nested metric dicts so JSON dumps cleanly.
-    metrics_flat = {k: v for k, v in metrics.items() if not isinstance(v, (dict, list))}
-    (output_dir / "metrics.json").write_text(json.dumps(metrics_flat, indent=2, default=str))
-    (output_dir / "config.json").write_text(
-        json.dumps({
-            "id": config.id,
-            "description": config.description,
-            "strategy_kwargs": config.strategy_kwargs,
-        }, indent=2, default=str)
-    )
-
-    # Pull a handful of headline numbers for the comparison table.
-    summary = {
-        "id": config.id,
-        "description": config.description,
-        "sharpe_ratio": metrics_flat.get("sharpe_ratio"),
-        "total_return_pct": metrics_flat.get("total_return"),
-        "max_drawdown_pct": metrics_flat.get("max_drawdown"),
-        "win_rate_pct": metrics_flat.get("win_rate"),
-        "total_trades": metrics_flat.get("total_trades"),
-        "avg_return_pct": metrics_flat.get("avg_return"),
-        "sqn": metrics_flat.get("sqn"),
-        "ending_value": metrics_flat.get("ending_value"),
-        # Trade-level derived stats (defensive against empty trades).
+    trades_path = output_dir / "trades.parquet"
+    trades = pd.read_parquet(trades_path) if trades_path.exists() else None
+    summary.update({
         "avg_hold_days": (
             float(trades["holding_days"].mean())
             if isinstance(trades, pd.DataFrame) and "holding_days" in trades and not trades.empty
@@ -247,7 +168,9 @@ def _run_one_strategy(
             if isinstance(trades, pd.DataFrame) and "holding_days" in trades and not trades.empty
             else None
         ),
-    }
+    })
+    # array-specific fields not in the shared summary
+    summary["description"] = config.description
     return summary
 
 

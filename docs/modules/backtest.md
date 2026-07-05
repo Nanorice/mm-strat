@@ -3,12 +3,14 @@
 ## 1. Overview
 
 **Location:** `C:\Users\Hang\PycharmProjects\quantamental\src\backtest`
-**Files:** 10
+**Files:** 13
 
 ## 2. Visual Architecture
 
 ```mermaid
 graph TD
+    strategy_registry[strategy_registry]
+    population_runner[population_runner]
     feeds[feeds]
     position_tracker[position_tracker]
     price_feed[price_feed]
@@ -24,7 +26,18 @@ graph TD
     sepa_strategy --> position_tracker
     trade_logger[trade_logger]
     universe_scorer[universe_scorer]
+    vectorized_backtest[vectorized_backtest]
+    analyzers[analyzers]
+    macro_sizer[macro_sizer]
+    population_runner --> runner
+    runner --> analyzers
 ```
+
+> **CLIs over these engines** (`scripts/`): `run_backtest.py` (single run),
+> `run_strategy_array.py` (S-series), `run_strategy_confirm.py` (parallel grids),
+> `run_oos_gate.py` (fixed-config OOS gate), `run_strategy_wfo.py` (vec re-optimize
+> search), `run_model_arena.py`, `check_backtest_parity.py`. The array/confirm CLIs
+> are thin wrappers over `population_runner`; both read configs from `strategy_registry`.
 
 ## 3. Data Schemas
 
@@ -118,6 +131,34 @@ graph TD
 
 ## 5. Public Interface
 
+### `strategy_registry`
+
+Named, versioned strategy configs (a dict of kwargs behind a stable name + a
+human-readable fingerprint) — the single source of truth for the champion, the
+S-series, and experiment arms. Not a class hierarchy: configs are
+`SEPAHybridV1` kwargs passed straight through the runner.
+
+**class StrategyDef** — `(name, signal, strategy_kwargs, description, status, fingerprint)`; `status ∈ {champion, candidate, baseline, retired}`. `fingerprint` auto-derives if blank.
+- `parse_fingerprint(fp: str) -> Dict[str, Any]` — `E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5` → kwargs.
+- `to_fingerprint(kwargs: Dict[str, Any]) -> str` — canonical label (round-trips with parse).
+- `get(name: str) -> StrategyDef`
+- `by_status(status: str) -> List[StrategyDef]`
+- `STRATEGIES: Dict[str, StrategyDef]` — the registry. Current champion = `champion` / `E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5`.
+
+**Fingerprint scheme** (`<Entry>_<Stop>_<TP>_<Selection>`): `E1.d0` immediate entry / `E2.dN` delayed · `X1.slNN` whole-% stop · `Xt.t1_NN` tranche T1 target · `X3.smaNN` decoupled SMA trend exit · `S0.topN` top-N by score · `skipK` selection_skip_top. Only components a config sets appear.
+
+### `population_runner`
+
+Shared "run one arm end-to-end, fan out across arms" path. Both
+`run_strategy_array.py` and `run_strategy_confirm.py` are thin CLIs over it. Every
+prod run persists the **full artifact set** (trades + rejections + equity +
+metrics + config). BackTrader is serial *within* an arm (temporal fidelity),
+parallel *across* arms (ProcessPoolExecutor; DuckDB reads are read-only).
+
+**class Job** — `(id, description, strategy_kwargs, signal, model, scores_df, score_loader)`; pass `score_loader` (a picklable partial) instead of `scores_df` for parallel workers.
+- `run_arm(job, start, end, initial_cash, out_dir, db_path) -> Dict` — one arm, persists `<id>/{trades,rejections,equity}.parquet + {metrics,config}.json`, returns summary row.
+- `run_population(jobs, start, end, initial_cash, out_dir, db_path, workers=3) -> List[Dict]` — serial if `workers<=1`, else fan out.
+
 ### `feeds`
 
 **class SEPAStockFeed**
@@ -162,7 +203,7 @@ graph TD
 ### `runner`
 
 **class SEPABacktestRunner**
-  - `setup(max_tickers: Optional[int], specific_tickers: List[str])`
+  - `setup(scores_df: pd.DataFrame, max_tickers: Optional[int], specific_tickers: List[str], strategy_kwargs: Optional[Dict[str, Any]])` — `strategy_kwargs` passes straight through to `SEPAHybridV1` (the kwargs-passthrough the registry relies on; no subclassing).
   - `run() -> Dict[str, Any]`
   - `get_equity_curve_dataframe() -> Optional[pd.DataFrame]`
   - `get_trade_dataframe() -> Optional[pd.DataFrame]`
@@ -208,47 +249,96 @@ graph TD
 
 **class UniverseScorer**
   - `load_model()`
-  - `score_universe(start_date: str, end_date: str, output_path: Optional[Path]) -> pd.DataFrame`
-- `score_universe(start_date: str, end_date: str, output_path: Optional[Path]) -> pd.DataFrame`
+  - `score_from_t3(start_date: str, end_date: str, db_path: Optional[Path], ranking_lookback_days: int) -> pd.DataFrame` — canonical scoring path (scores SEPA candidates daily from `t3_sepa_features`); returns the `ScoreLookup` contract.
 
 
 ## 7. Strategy Configuration Guide
 
-Adjust these parameters in `sepa_strategy.py` to tune strategy selectivity.
+Don't hand-write kwargs. Configs are named in `strategy_registry.STRATEGIES` and
+passed to the runner via `strategy_kwargs` — reference a registry name, or add a
+new `StrategyDef`. The knobs below are the ones the registry sets.
 
-### Critical Parameters
+### Entry / selection (the live model)
 
-| Parameter | Type | Range | Description |
-|-----------|------|-------|-------------|
-| `min_score` | `float` | `0.0` - `100.0` | Absolute floor for M01 score. Scores below this are rejected immediately. |
-| `min_percentile` | `float` | `0.0` - `1.0` | Minimum **daily rank percentile**. `0.9` means only the top 10% of stocks that day are eligible. |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `entry_mode` | `'top_n' \| 'percentile'` | Slot-fill mode. Live configs use `top_n`. |
+| `entry_top_n` | `int` | N slots to fill (champion = 5). |
+| `rank_by` | `'prob_elite' \| 'trailing' \| 'daily'` | Ranking metric. Champion ranks by `prob_elite`. |
+| `min_prob_elite` | `float` | Entry gate on P(elite) (champion = 0.15). |
+| `min_score` | `float` | Absolute M01 floor; `0` when `prob_elite` is the gate. |
+| `selection_skip_top` | `int` | Drop the K highest-ranked names before slot-fill (A3 tail-pollution cap; proto-specific DD lever, no-op on binary). |
+| `regime_max_pos` | `dict` | Per-M03-regime slot cap; regime 0 (strong bear) = 0 → hard-liquidate. |
 
-> [!WARNING]
-> `min_percentile` must be between **0.0 and 1.0**. Setting it to an integer like `10` will filter out ALL stocks (since rank `0.9` < `10`).
+### Exits (where the edge lives)
 
-### Configuration Presets
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `max_stop_pct` | `float` | Whole-position % stop. **Champion = 0.15** (15%). |
+| `atr_stop_mult` | `float` | ATR stop multiplier. **Inert** on the champion — `initial_stop = max(price−mult·ATR, price·(1−pct))` and the 10–15% floor always wins. A *small* `max_stop_pct` is a tight CAP, not a floor (the G7 pure-ATR trap). |
+| `min_target1_pct` | `float` | Tranche-1 profit-take. **Champion = 0.10** (early +10% pop). |
+| `sma_exit_period` | `int` | Trend-exit SMA (champion = 50). |
+| `sma_exit_independent` | `bool` | `True` = decoupled SMA (close<SMA ⇒ out), beats tranche-gated. Champion = `True`. |
 
-#### 1. "Top N Competition" (Recommended)
-Let the regime filter exposure, and simply pick the best available stocks to fill the slots.
-```python
-('min_score', 30.0),       # Weak floor, just to filter noise
-('min_percentile', 0.0),  # No hard gate - best candidates win
-```
+> The champion (`E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5`) is a **stop×TP
+> interaction**: the wide 15% stop lets winners breathe; the early +10% T1 banks
+> the first pop before the wide stop gives it back. `sl15` and `tpTight` each
+> *alone* underperform the old seed — together they win (IS 1.10, OOS-gated 1.47).
 
-#### 2. Balanced Quality
-Ensure stocks have decent absolute quality and are in the top tier relative to peers.
-```python
-('min_score', 50.0),       # Must be "neutral" or better
-('min_percentile', 0.80), # Top 20% of daily ranks
-```
+## 8. Productionisation workflow (registry → gate → promote)
 
-#### 3. "Sniper" Mode (Strict)
-Only take the absolute highest conviction setups. High win rate, lower frequency.
-```python
-('min_score', 70.0),       # Strong Bull conviction
-('min_percentile', 0.90), # Top 10% elite
-```
+The 2026-07-05 backtest productionisation
+(`docs/architecture/backtest_productionisation_plan.md`) folded the ad-hoc
+strategy-exploration harness into the prod suite behind clean seams. **Phases 1–3
++ the G7 fix are shipped; Phase 4 is planned (below).**
 
-## 8. Maintenance Log
+**Shipped:**
+1. **Registry (`strategy_registry`)** — every config is a named, fingerprinted
+   `StrategyDef`. Champions/experiments are referenceable, diffable,
+   regression-tested. `run_strategy_array` (S-series) and `run_strategy_confirm`
+   (grids) both source configs here; `_base_kwargs` is single-sourced.
+2. **Fixed-config OOS gate (`scripts/run_oos_gate.py --strategy <name>`)** — the
+   promotion gate. Rolls train/test folds, runs the *locked* registry config on
+   each unseen BackTrader window, stitches OOS → `data/selection_sweep/wfo_gate/<name>.json`.
+   NOT `run_strategy_wfo.py` (that *re-optimizes* on the vectorized engine which
+   lacks tranche TP — a **search**, complementary; don't merge them). Re-gating
+   the champion reproduces **agg OOS Sharpe 1.47 / +245% / −28%** exactly.
+3. **Shared population runner (`population_runner`)** — the parallel
+   run-arm-and-persist path, with the **rejection audit** (`rejections.parquet`:
+   why a qualified candidate did NOT enter — `no_slots`/`skip_top`/`cooldown`/…)
+   persisted for all prod runs. Array/confirm are thin CLIs over it.
+4. **G7 fix** — the `G_x4` pure-ATR arms mis-expressed the stop (small
+   `max_stop_pct` = tight cap, not floor → −69%); fixed to a wide 0.30 net so ATR
+   dominates.
 
-**Last Updated:** 2026-02-04
+**Guards:** `tests/test_strategy_registry.py` (kwargs validity + fingerprint
+round-trip), `tests/test_oos_gate.py` (prod gate reproduces recorded Sharpe),
+`tests/test_population_runner.py` (artifact set + rejection persistence + fan-out).
+
+### Phase 4 — wire the champion live (PLANNED)
+
+**Purpose:** the champion is currently a *validated backtest config*, not a
+*tradeable* one. Phase 4 closes the last gap — from "gated on 3 historical folds"
+to "running forward on unseen data." Nothing here is new science; it's promotion
+plumbing + a forward-quarter probation.
+
+| Step | What | Why |
+|---|---|---|
+| **4a — live config** | Promote the champion into the live `SEPAFlatV1` defaults (`max_stop_pct=0.15, min_target1_pct=0.10, sma_exit_independent=True, entry_top_n=5`); **drop the inert `atr_stop_mult`**. Or a registry-driven live selector reading `strategy_registry.get("champion")`. | Makes the champion the actual strategy the pipeline trades, not a kwargs dict in a script. |
+| **4b — nightly shadow** | Add the champion to the nightly pipeline **shadow** (paper, no capital); log fills vs backtest. | The OOS gate is 3 historical folds and 2024 was flat — a live forward quarter on unseen 2026-H2 data is the *real* out-of-sample (Path forward Tier A.1). Treat the live slot as paper/small-size probation, not a full allocation. |
+| **4c — parity guards (G6)** | Extend `check_backtest_parity.py` / `test_backtest_smoke.py` to cover the new primitives (`selection_skip_top`, `regime_gate`, `max_concurrent_positions`). | These knobs have no prod call-site yet → untested against the parity/scoring guards. |
+
+> **Deferred deliberately** — Phase 4 touches the running Prefect nightly on the
+> `sh019` infra box, so it's a separate, supervised change. It also depends on
+> the friction / liquidity-floor re-run (Tier A.2) to confirm the edge survives
+> realistic costs *before* any real capital — the microcap +861% is a ranking
+> signal, not a P&L promise.
+
+## 9. Maintenance Log
+
+- **2026-07-05** — Backtest productionisation (Phases 1–3 + G7): added
+  `strategy_registry` + `population_runner`, `scripts/run_oos_gate.py`; array/confirm
+  refactored to thin CLIs over the shared runner. Fixed stale §5 (`runner.setup`
+  signature, `universe_scorer.score_from_t3`) and §7 (removed non-existent
+  `min_percentile` guide). Phase 4 (live wiring) documented as planned.
+- **2026-02-04** — Auto-generated passport.
