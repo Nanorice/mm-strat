@@ -3,9 +3,15 @@
 ## 1. Overview
 
 **Location:** `C:\Users\Hang\PycharmProjects\quantamental\src\backtest`
-**Files:** 13
+**Files:** 15 (`.py`, incl. `__init__`)
 
 ## 2. Visual Architecture
+
+Two engines share the same config vocabulary (`strategy_registry`) and position
+model (`position_tracker`): the **BackTrader** event-loop backtester (`runner` +
+`sepa_strategy`, the fidelity engine) and the **forward step-engine**
+(`forward_engine`, a synchronous next-open mirror for live shadowing). A
+**vectorized** engine (`vectorized_backtest`) is the fast within-signal screen.
 
 ```mermaid
 graph TD
@@ -13,17 +19,17 @@ graph TD
     population_runner[population_runner]
     feeds[feeds]
     position_tracker[position_tracker]
-    price_feed[price_feed]
-    regime_feed[regime_feed]
     report[report]
     runner[runner]
     runner --> feeds
     runner --> sepa_strategy
-    runner --> price_feed
     score_lookup[score_lookup]
     sepa_strategy[sepa_strategy]
     sepa_strategy --> score_lookup
     sepa_strategy --> position_tracker
+    forward_engine[forward_engine]
+    forward_engine --> position_tracker
+    forward_engine --> score_lookup
     trade_logger[trade_logger]
     universe_scorer[universe_scorer]
     vectorized_backtest[vectorized_backtest]
@@ -36,8 +42,10 @@ graph TD
 > **CLIs over these engines** (`scripts/`): `run_backtest.py` (single run),
 > `run_strategy_array.py` (S-series), `run_strategy_confirm.py` (parallel grids),
 > `run_oos_gate.py` (fixed-config OOS gate), `run_strategy_wfo.py` (vec re-optimize
-> search), `run_model_arena.py`, `check_backtest_parity.py`. The array/confirm CLIs
-> are thin wrappers over `population_runner`; both read configs from `strategy_registry`.
+> search), `run_starttime_sweep.py` (start-time/horizon sensitivity),
+> `run_shadow_book.py` (forward shadow book), `run_model_arena.py`,
+> `check_backtest_parity.py`. The array/confirm/sweep CLIs are thin wrappers over
+> `population_runner`; all read configs from `strategy_registry`.
 
 ## 3. Data Schemas
 
@@ -121,9 +129,6 @@ graph TD
 
 | Constant | Value | File |
 |----------|-------|------|
-| `BACKTEST_DATA_DIR` | `config.DATA_DIR / 'backtest'` | `price_feed` |
-| `PRICE_OUTPUT_DIR` | `BACKTEST_DATA_DIR / 'prices'` | `price_feed` |
-| `BACKTEST_DATA_DIR` | `config.DATA_DIR / 'backtest'` | `regime_feed` |
 | `BACKTEST_DATA_DIR` | `config.DATA_DIR / 'backtest'` | `runner` |
 | `BACKTEST_DATA_DIR` | `config.DATA_DIR / 'backtest'` | `universe_scorer` |
 | `D2_PATH` | `config.DATA_DIR / 'ml' / 'd2.parquet'` | `universe_scorer` |
@@ -161,10 +166,37 @@ parallel *across* arms (ProcessPoolExecutor; DuckDB reads are read-only).
 
 ### `feeds`
 
-**class SEPAStockFeed**
-**class M03RegimeFeed**
-- `load_stock_feed(ticker: str, prices_dir: str) -> SEPAStockFeed`
-- `load_regime_feed(regime_path: str) -> M03RegimeFeed`
+**class SEPAStockFeed** — OHLCV + `atr` line (`atr_14` col). **class M03RegimeFeed**
+— synthetic feed carrying `regime_cat` + M03 pillars. Both are `bt.feeds.PandasData`
+subclasses; `runner._add_price_feeds_from_duckdb` / `_load_regime_from_duckdb` build
+the frames (there is no separate `price_feed`/`regime_feed` module — that was folded in).
+
+### `forward_engine`
+
+Synchronous **next-open** step-engine mirroring `SEPAHybridV1.next()` for live
+shadowing (BackTrader is an event-loop *replayer* and can't step forward one day at
+a time). Reuses `PositionTracker` + `ScoreLookup` verbatim; the BackTrader coupling
+(async orders, feed `[0]` indexing, bar-count warmup) is the only thing re-expressed.
+Parity with the backtest is enforced by `tests/test_forward_parity.py`.
+
+**class ChampionBook** — holds a `PositionTracker` + registry kwargs; steps one day.
+  - `step(day, day_scores_df, day_prices) -> List[Action]` — runs the exact `next()`
+    sequence (regime-liquidate → update stops → stops → targets → trend → entries)
+    with a one-day pending queue (decided T, filled T+1 open × slippage). Champion-off
+    branches (E2-delay, persistence, score-drop, rank-exit, warmup, skip-top) raise
+    `NotImplementedError` in `__init__` — no untested ports.
+  - `set_regime_series(regime_by_date: Dict[date, int])`
+- `build_price_frame(price_df, sma_period=50) -> pd.DataFrame` — per-(ticker,day)
+  OHLCV + `atr14` (`ewm(span=14)` TR) + `sma50` (`rolling(50)`), **definitions lifted
+  verbatim from the backtest feed** (the G2 parity fix), incl. the `<50-bar` skip.
+- **class Action** — `(date, ticker, kind, shares, price, reason, pnl_pct)`;
+  `kind ∈ enter/target1/target2/stop/trend/regime_liquidation`.
+
+> **Warmup diverges intentionally.** The backtest's `next()` doesn't fire until
+> *every* feed's SMA50 is warm (the latest-listing ticker gates the whole strategy);
+> the parity test replicates that all-feed rule. The **live** `run_shadow_book.py`
+> uses **per-ticker** warmup (a name trades once its own SMA50 exists) so one recent
+> IPO doesn't freeze the book. Rules/fills identical; only first-tradeable-day differs.
 
 ### `position_tracker`
 
@@ -182,17 +214,6 @@ parallel *across* arms (ProcessPoolExecutor; DuckDB reads are read-only).
   - `check_stops(ticker: str, current_low: float) -> bool`
   - `check_targets(ticker: str, current_high: float) -> Optional[str]`
   - `get_stats() -> Dict`
-
-### `price_feed`
-
-- `calculate_atr(df: pd.DataFrame, period: int) -> pd.Series`
-- `get_qualifying_tickers(scores_path: Path, min_score: float, min_percentile: float) -> Set[str]`
-- `prepare_price_feeds(start_date: str, end_date: str, scores_path: Optional[Path], output_dir: Optional[Path], min_score: float, min_percentile: float, atr_period: int) -> List[str]`
-- `list_prepared_tickers(output_dir: Optional[Path]) -> List[str]`
-
-### `regime_feed`
-
-- `prepare_regime_feed(start_date: str, end_date: str, output_path: Optional[Path], trading_days_only: bool) -> pd.DataFrame`
 
 ### `report`
 
@@ -214,9 +235,11 @@ parallel *across* arms (ProcessPoolExecutor; DuckDB reads are read-only).
 
 ### `score_lookup`
 
-**class ScoreLookup**
-  - `get_candidates(date: datetime, min_score: float, min_percentile: float, rank_by: Literal['trailing', 'daily']) -> List[Tuple[str, float, float]]`
-  - `get_score(date: datetime, ticker: str) -> Optional[Tuple[float, float, float]]`
+**class ScoreLookup** — indexes the `UniverseScorer.score_from_t3()` contract
+(date, ticker, normalized_score, daily_pct_rank, trailing_pct, prob_elite).
+  - `get_candidates(date, min_score, min_percentile, min_prob_elite, rank_by: Literal['trailing','daily','prob_elite']) -> List[Tuple[str, float, float, float]]` — returns `(ticker, score, trailing_pct, prob_elite)` sorted by `rank_by` desc.
+  - `get_score(date, ticker) -> Optional[Tuple[float, float, float, float]]` — `(normalized_score, daily_pct_rank, trailing_pct, prob_elite)`.
+  - `check_persistence(ticker, date, window_days, min_count, rank_threshold, rank_field) -> bool` — S5 persistence gate.
   - `get_available_dates() -> List[datetime]`
   - `get_date_range() -> Tuple[datetime, datetime]`
   - `get_stats() -> Dict`
@@ -315,27 +338,53 @@ strategy-exploration harness into the prod suite behind clean seams. **Phases 1�
 round-trip), `tests/test_oos_gate.py` (prod gate reproduces recorded Sharpe),
 `tests/test_population_runner.py` (artifact set + rejection persistence + fan-out).
 
-### Phase 4 — wire the champion live (PLANNED)
+### Phase 4 — live monitoring & start-time robustness (REVISED 2026-07-05)
 
-**Purpose:** the champion is currently a *validated backtest config*, not a
-*tradeable* one. Phase 4 closes the last gap — from "gated on 3 historical folds"
-to "running forward on unseen data." Nothing here is new science; it's promotion
-plumbing + a forward-quarter probation.
+Re-scoped after a design review into two independent tracks. **Full spec + gap
+analysis + step-by-step plan live in
+`docs/architecture/backtest_productionisation_plan.md` §Phase 4** — this is the
+summary.
 
-| Step | What | Why |
-|---|---|---|
-| **4a — live config** | Promote the champion into the live `SEPAFlatV1` defaults (`max_stop_pct=0.15, min_target1_pct=0.10, sma_exit_independent=True, entry_top_n=5`); **drop the inert `atr_stop_mult`**. Or a registry-driven live selector reading `strategy_registry.get("champion")`. | Makes the champion the actual strategy the pipeline trades, not a kwargs dict in a script. |
-| **4b — nightly shadow** | Add the champion to the nightly pipeline **shadow** (paper, no capital); log fills vs backtest. | The OOS gate is 3 historical folds and 2024 was flat — a live forward quarter on unseen 2026-H2 data is the *real* out-of-sample (Path forward Tier A.1). Treat the live slot as paper/small-size probation, not a full allocation. |
-| **4c — parity guards (G6)** | Extend `check_backtest_parity.py` / `test_backtest_smoke.py` to cover the new primitives (`selection_skip_top`, `regime_gate`, `max_concurrent_positions`). | These knobs have no prod call-site yet → untested against the parity/scoring guards. |
+- **Thing 2 — start-time sweep ✅ SHIPPED (all runs done).**
+  `scripts/run_starttime_sweep.py`: the locked champion over a grid of
+  `(start, end)` windows to measure how much the start date matters. Robust edge →
+  tight return spread; fragile → wide. Three grids (`rolling`/`horizon`/`matrix`),
+  fair annualized metrics (`sharpe_from_returns`, never raw total_return).
+  **Verdict: strongly start-time dependent** — `rolling` (fixed 12m horizon, 53
+  cells) ann_return **−39%..+197%**, Sharpe **−0.88..+2.45**, 17/53 Sharpe-negative,
+  regime-clustered. The edge is a beta/regime ride, not a start-invariant skill.
+  Artifacts: `data/selection_sweep/starttime/champion/{rolling,horizon,matrix}/`.
+- **Thing 1 — forward shadow book ✅ Steps 1–5 SHIPPED, parity GREEN.** What the
+  champion would buy/hold/partial/exit/cut today if followed live. `forward_engine`
+  (§5) is the pure `step()` engine; `scripts/run_shadow_book.py --strategy champion
+  --start-date …` **replays start→today** (a pure function of scores/prices/regime;
+  replay beats fragile serialization) and persists to **`shadow_book`** (one row per
+  open position, keyed by `book_id`) + **`shadow_action`** (append-only
+  enter/target/stop/trend, `pnl_pct`), idempotent per `book_id`.
+  **Step 6 (orchestrator on `sh019`) NOT done** — supervised; when wiring, add both
+  tables to `build_dashboard_db` MANIFEST or the R2 remote breaks
+  (dashboard-remote-parity).
 
-> **Deferred deliberately** — Phase 4 touches the running Prefect nightly on the
-> `sh019` infra box, so it's a separate, supervised change. It also depends on
-> the friction / liquidity-floor re-run (Tier A.2) to confirm the edge survives
-> realistic costs *before* any real capital — the microcap +861% is a ranking
-> signal, not a P&L promise.
+> **Guard:** `tests/test_forward_parity.py` (LOAD-BEARING) runs the champion through
+> both engines over 2024-H1 and asserts entry-set overlap > 0.85. If it can't be made
+> green, the extraction is wrong — the forward engine must not ship.
+>
+> **Rejected:** the earlier "promote into `SEPAFlatV1` defaults" — that class already
+> carries a *different* live default set other call-sites use; the champion is sourced
+> from the registry instead (single source of truth), no `SEPAFlatV1` edit.
+>
+> **Prereq before any real capital:** the friction / liquidity-floor re-run
+> (Tier A.2) — the microcap +861% is a ranking signal, not a P&L promise. The
+> paper shadow may run in parallel; capital may not.
 
 ## 9. Maintenance Log
 
+- **2026-07-05 (cont.)** — Phase 4 shipped: added `forward_engine` (synchronous
+  next-open step-engine + `build_price_frame`) and `scripts/run_shadow_book.py`
+  (`shadow_book`/`shadow_action` tables); `run_starttime_sweep.py` full runs done
+  (fixed an unpicklable-closure bug in its parallel path). Parity gate
+  `tests/test_forward_parity.py` green. Fixed stale §2/§5 (removed phantom
+  `price_feed`/`regime_feed` modules — folded into `feeds`/`runner`; file count 13→15).
 - **2026-07-05** — Backtest productionisation (Phases 1–3 + G7): added
   `strategy_registry` + `population_runner`, `scripts/run_oos_gate.py`; array/confirm
   refactored to thin CLIs over the shared runner. Fixed stale §5 (`runner.setup`

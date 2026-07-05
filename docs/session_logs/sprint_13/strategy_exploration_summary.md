@@ -46,10 +46,20 @@ prior seed on every OOS metric, no IS→OOS collapse.
   NOT "proven." One good gate ≠ a live track record. Treat the live slot as a **paper/small-size
   probation**, not a full allocation.
 
-**Immediate trading posture:** promote the new champion to the live SEPAFlatV1 config
-(`max_stop_pct=0.15, min_target1_pct=0.10, sma_exit_independent=True, entry_top_n=5`), drop the
-inert `atr_stop_mult`, and run it **paper/small-size for a forward quarter** before any real capital
-scaling. See *Path forward* at the bottom.
+**Immediate trading posture:** the champion is now a named config in
+`strategy_registry` (`champion` / `E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5`) — the single source of
+truth. It is **NOT** written into `SEPAFlatV1` defaults (that class carries a different live default
+set other call-sites use — overwriting would be a silent regression). A **forward shadow book**
+(`scripts/run_shadow_book.py`, parity-gated) now replays it start→today and persists what it would
+buy/hold/exit; run it **paper/small-size for a forward quarter** before any real capital. See
+*Start-time robustness* and *The whole journey* below, and *Path forward* at the bottom.
+
+> **Post-champion caveat (2026-07-05 cont.):** a start-time sweep found the champion is **strongly
+> start-time dependent** — same 12-month holding period, ann_return swings **−39%..+197%** depending
+> on the start month, 17/53 windows Sharpe-negative. The edge is a **regime/beta ride, not a
+> start-invariant skill.** This does not falsify the champion, but it reframes what "trade it" means:
+> the honest live expectation is a *distribution over start dates*, not the headline +245% OOS. See
+> the dedicated section below.
 
 ---
 
@@ -304,6 +314,85 @@ which re-optimizes on the vec engine that lacks tranche TP):
 **➡️ NEW CHAMPION: `E1.d0 / stop 15% / T1 +10% / decoupled SMA50 / top-5 binary`** — supersedes the
 sl10/tpDflt seed. `atr_stop_mult` stays inert (drop it). Ships as `selection_skip_top`-free binary.
 
+## Start-time & horizon robustness — the champion is a regime ride (2026-07-05 cont.)
+
+The OOS gate answered "is this overfit to the *fold split*?" (no). It did **not** answer "does the
+edge survive *when* you happen to start?" A single equity curve hides that — so we ran the **locked**
+champion over a grid of `(start, end)` windows: `scripts/run_starttime_sweep.py`
+(`data/selection_sweep/starttime/champion/{rolling,horizon,matrix}/`). Fair, window-length-invariant
+metrics (`ann_return` / `sharpe` / `maxDD` — never raw `total_return`, which a long window inflates).
+
+> A robust edge → **tight** return spread across start dates; a fragile / path-dependent one → **wide**
+> spread. (Bug fixed en route: the sweep's parallel path submitted an unpicklable local closure — only
+> the serial `--smoke` worked; `_run_cell` lifted to module level.)
+
+**`rolling` — the decisive read (53 cells, fixed 12-month horizon, monthly starts):**
+
+| metric | value |
+|---|---|
+| ann_return spread | **−39.4% .. +196.6%** (median 21.6%, IQR 61.2%) |
+| Sharpe spread | **−0.88 .. +2.45** (median 0.68) |
+| Sharpe-negative cells | **17 / 53** |
+| pattern | regime-clustered — 2021 & 2025 starts win big, mid-2022 starts lose |
+
+Same holding period, only the start *month* differs → the outcome is dominated by **what regime you
+start into**, not by stock-picking skill. `horizon` (fixed start, growing end) confirms it from the
+other axis: ann_return mean-reverts from **517%** (6-month, all 2021 melt-up) down to **~35–55%**
+(36–48 month), Sharpe settling ~0.9–1.2 — the eye-popping numbers are a short-window regime artifact
+that dilutes as the window lengthens. (`matrix`, 84 cells, the full start×horizon cross, reinforces
+"wide + path-dependent"; its short cells annualize into nonsense like +138853%, so **`rolling` is the
+canonical read**, not `matrix`.)
+
+**What it means practically:**
+1. **The champion's edge is a beta/regime ride.** It is a long-only momentum-breakout book; it makes
+   its money *in* bull/ignition regimes and bleeds *in* bears. The M03 strong-bear liquidation gate
+   caps the bleeding but doesn't manufacture an edge in a chop/bear start.
+2. **The honest forward expectation is a distribution, not the +245% OOS headline.** Whoever operates
+   the book starts on *one* date — one draw from a −39%..+197% cone. The live monitor must present
+   **start-time-conditional confidence** (the cone), never a single P&L.
+3. **This is not a falsification.** The champion still beats the seed OOS on identical folds; the
+   sweep just measures a *different, orthogonal* risk (start-luck) the fold-gate never touched. It
+   raises the bar for "trust it": pair it with the friction re-run (Tier A.2) and a real forward
+   quarter before sizing.
+
+### Forward shadow book — the monitor this finding demands (Phase 4, Thing 1)
+
+Because the edge is start-conditional, the live check is a **paper shadow**, not a re-derived number.
+`scripts/run_shadow_book.py --strategy champion --start-date <inception>` **replays** the champion
+start→today (a pure function of scores/prices/regime — replay beats fragile state serialization) and
+persists what it *would* do to `shadow_book` (open positions, keyed by `book_id`) + `shadow_action`
+(append-only enter/target/stop/trend). It's a synchronous **next-open** mirror of the BackTrader
+engine (`src/backtest/forward_engine.py`), gated by `tests/test_forward_parity.py` (entry overlap >
+0.85 vs the backtest over the same window). Steps 1–5 shipped 2026-07-05; the orchestrator/nightly
+wiring (Step 6, `sh019`) is deferred and supervised. Full spec:
+`docs/architecture/backtest_productionisation_plan.md` §Phase 4.
+
+## The whole journey — prototype → champion, each step and what it meant
+
+A single read of how we got here, so the conclusion isn't mistaken for a lucky endpoint. The through-
+line: **falsify the seductive selection ideas, then find where the edge actually lives (exits),
+validate it doesn't overfit the split, then stress it on the axis the split-gate ignores (start-time).**
+
+| # | Step | What we did | Result | What it meant practically |
+|---|---|---|---|---|
+| 0 | **Rotation prototype** | Delayed entry + score-drop exit + $25k-capped rebalance | complex, unvalidated | The starting hypothesis: "trade the signal cleverly." Everything below strips it down. |
+| 1 | **Delayed entry** (E2) | wait 1–5d for a pullback before entering | +405% (0d) → −32% (5d), monotone | **FALSIFIED.** The alpha *is* the day-0 breakout; there is no paying pullback. Enter immediately. |
+| 2 | **Rotation / score-drop exit** | sell names whose score decays, rotate capital | −0.05 Sharpe, churns 48% of exits | **FALSIFIED.** Fights A3 non-monotonicity (sells names that mean-revert up). Don't rotate on score. |
+| 3 | **Persistence** (trailing-avg score) | require sustained high rank, not a spike | −0.86 Sharpe | **FALSIFIED.** The signal is *fresh*, not smoothed. Same lesson as delay. |
+| 4 | **Is the seed overfit?** | walk-forward OOS on E1 seed | IS ~2.0 → **OOS 0.84** | Not overfit. Fold decay is 2026-chop weakness, a known steady-state — not curve-fit. |
+| 5 | **Selection sweep (vectorized)** | N-width, skip-top-K, random-arm controls, both signals | *rank-only* — abs. Sharpes sign-flipped | Fast screen, but the vec engine **lacked a slot book + bear-gate** → absolute numbers unusable. |
+| 6 | **Fix the vec engine** | add `regime_gate` + `max_concurrent_positions` (honest slot book) | N-ranking *reversed* | The old "widen N to 8–10" was a **dilution artifact**; binary peaks at N=5. Engine fidelity matters. |
+| 7 | **BackTrader confirm** | run the 5-arm vec shortlist on the fidelity engine | **seed E1 top-5 wins outright** (0.87) | Vec can't rank *across* signals/exit-styles (it can't see the 3-tranche TP). `skip_top` = a narrow DD tool, not a return tool. |
+| 8 | **Exit grid (Tiers 1+2)** | 16 arms varying stop width, TP timing, SMA vs gated | champion holds; `atr_stop_mult` **inert** | The "stop" is a **profit-LOCK, not a loss-cut** (avg PnL *at stop* is positive). The edge lives in the exits. Dropped a dead knob. |
+| 9 | **Tier-3 interaction + OOS gate** | stop-width × TP-timing cross, then gate the winner | **sl15×tpTight → IS 1.10, OOS 1.47** | **NEW CHAMPION.** `sl15` alone (0.75) and `tpTight` alone (0.76) each *lose* to the seed — together they win. A marginal sweep would have discarded both halves. |
+| 10 | **Productionisation (Phases 1–3)** | registry + fixed-config OOS gate + shared population runner | champion is a named, tested config | The champion stops being a kwargs dict in a script; it's referenceable, diffable, regression-gated. |
+| 11 | **Start-time sweep** | locked champion over 53 rolling start dates | ann_return **−39%..+197%**, 17/53 Sharpe-neg | The edge is a **regime ride.** The fold-gate proved "not overfit to the split"; this proved "still fragile to *when* you start." |
+| 12 | **Forward shadow book** | pure `step()` engine, parity-gated, persists a paper book | Steps 1–5 shipped, parity green | The live check for a start-conditional edge is a **paper shadow**, not a number — replays the champion to today as a faithful mirror. |
+
+**The one sentence:** *the selection was a red herring, the edge is a wide-stop / early-partial exit
+interaction that survives an honest OOS split but rides the market regime — so we trade it forward on
+paper, gated, and size only after a friction re-run and a real forward quarter confirm it.*
+
 ## Path forward — what would actually strengthen the case (ranked by value)
 
 Ordered by *how much each would change our confidence*, not by ease. The first tier is what stands
@@ -312,14 +401,18 @@ between "promising backtest" and "trust real capital."
 ### Tier A — de-risk before scaling capital (do these first)
 1. **Forward paper-trade the champion for a quarter.** The single highest-value step. The OOS gate
    is 3 historical folds; a live forward quarter on unseen 2026-H2 data is the real out-of-sample.
-   Wire into SEPAFlatV1, run it in the nightly pipeline shadow (no capital), log fills vs backtest.
+   **The rails exist:** `scripts/run_shadow_book.py` (registry-sourced champion, parity-gated) already
+   replays and persists the paper book. Remaining: Step 6 — wire it into the nightly pipeline
+   (`sh019`, supervised) so it steps forward automatically, and add `shadow_book`/`shadow_action` to
+   the `build_dashboard_db` MANIFEST. NOT a `SEPAFlatV1` edit (rejected — see TL;DR).
 2. **Model realistic frictions at size.** Current run uses flat 0.1% commission + 0.1% slippage on a
    microcap universe — optimistic. Re-run with (a) a liquidity floor (drop names below $X ADV),
    (b) slippage scaled to ADR/spread, (c) a capacity ceiling. If the edge survives a $5–10M ADV
    floor, it's tradeable; if it evaporates, it was a microcap-illiquidity artifact.
 3. **Widen the OOS gate.** 3 folds is thin and 2024 was flat. Add an *anchored*-train variant and a
    2026-inclusive test fold; report a fold-Sharpe distribution, not a point estimate. Cheap
-   (`run_strategy_confirm.py --wfo-gate <arm> --anchored`).
+   (`scripts/run_oos_gate.py --strategy champion --anchored`). *Partly addressed by the start-time
+   sweep above — the rolling grid already gives a start-conditional Sharpe distribution.*
 
 ### Tier B — understand the edge better (parallel, informs Tier A)
 4. **Stress the trailing-stop mechanic directly.** The whole edge is the profit-lock stop. Sweep
