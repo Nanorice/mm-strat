@@ -1,9 +1,24 @@
 # Sprint 13 — Research Agenda
 
+**Dates:** 2026-06-21 → 2026-07-06 · **Status:** ✅ CLOSED · **Next:** [sprint_14](../sprint_14/README.md)
+
 > Infra (Prefect nightly, dashboard, DuckDB memory governance) is operational — see
-> [2026-06-22_prefect.md](2026-06-22_prefect.md). Sprint 13's research half asks one
+> [2026-06-22_prefect.md](logs/2026-06-22_prefect.md). Sprint 13's research half asks one
 > core question: **is the M01 score real alpha, or a structural artifact (industry mix,
 > regime, survivorship)?**
+
+### Folder map
+- **`logs/`** — dated session handovers (`YYYY-MM-DD.md`, one per work session).
+- **`plans/`** — forward-looking design/plan docs written before the work.
+- **`verdicts/`** — findings, reports, issues, playbooks (the "what we concluded" record).
+- **`cells/`** — notebook-cell artifacts (per the no-direct-`.ipynb`-edit rule); scratch once applied.
+
+### Headline outcomes
+- **M01 is real ranking alpha, not a sector/survivorship artifact** (Goal A: A1 no Healthcare bug, A2 arena Sharpe).
+- **The edge is in the EXITS, not delayed entry** — rotation / delayed-entry / persistence all falsified; **E1 top-5 immediate** is champion (OOS Sharpe 0.84).
+- **VIX-banded sizing adds risk-timing value; M03-banded is a no-op** → M03 retired as a sizing lever.
+- **Stage gate & m02-breakout-as-return-signal both FALSIFIED**; kept only as candidate features / event-predictors.
+- **CAPE_OURS** self-computed valuation pillar shipped (zero Shiller dependency); **DQ layer hardened** (dirty-shares tiers, R2 publish gate).
 
 ## Consolidated Sprint Roadmap & Goals
 
@@ -27,12 +42,12 @@
     and Stage 4 (washout bounces) *outrun* Stage 2 at 60d. Mean reversion > momentum within
     the pre-selected set.
   - **Outcome:** primitives kept as *candidate* M02 features, inclusion **DEFERRED to its own
-    study**; nothing wired. See [goal_b_stage_classifier_plan.md](goal_b_stage_classifier_plan.md)
-    (PHASE 3 VERDICT). Cache: `stage_gate_panel.parquet`.
+    study**; nothing wired. See [goal_b_stage_classifier_plan.md](plans/goal_b_stage_classifier_plan.md)
+    (PHASE 3 VERDICT). Cache: `stage_gate_panel.parquet` (cache now in `data/backtest_cache/`).
 - **Parameter Optimizer.** ✅ **BUILT** (2026-07-02). Optuna over the vectorized engine.
   - `scripts/run_strategy_optimizer.py` — single IS/OOS split, maximize Sharpe.
   - `scripts/run_strategy_wfo.py` — rolling/anchored walk-forward variant (the overfit gate).
-  - See [2026-07-02_backtest_arena_session.md](2026-07-02_backtest_arena_session.md) for full results.
+  - See [2026-07-02_backtest_arena_session.md](logs/2026-07-02_backtest_arena_session.md) for full results.
 - **Evaluate the model and strategy.** ✅ **Model Arena built + first results** (2026-07-02).
   - `scripts/run_model_arena.py` — all scoreable variants on shared strategy infra, ranked by honest mark-to-market Sharpe. m01_binary ≈ m01_prototype at top; m01_no_macro (4-class) worst.
 
@@ -105,9 +120,9 @@
     (score each date with the WF fold whose *test* window covers it), renaming
     `breakout_proximity → prob_elite`. **The one real build is a short-hold exit policy** (M01's
     SMA50/252d hold is the wrong job); everything else — enter/rank/dedup/size/metrics — is reuse.
-    Full plan + reuse map + the two job configs: [goal_a3_m02_strategy_plan.md](goal_a3_m02_strategy_plan.md).
+    Full plan + reuse map + the two job configs: [goal_a3_m02_strategy_plan.md](plans/goal_a3_m02_strategy_plan.md).
     - **A3 Phase-0 gate: ❌ NO-GO for the trade build** (2026-07-04,
-      [m02_signal_quality_report.md](m02_signal_quality_report.md), all scores OOS via fold models
+      [m02_signal_quality_report.md](verdicts/m02_signal_quality_report.md), all scores OOS via fold models
       + final-model tail). Job 2 head-start is real for the *event* (91.7% coverage, median 42d
       lead) but the return claim was selection-biased; the unconditional test kills it: **top-50
       forward return ≈ universe mean (+12bps/21d excess pre-cost, negative 2022–2025)**. Ignition
@@ -133,7 +148,7 @@
   "VIX only, don't over-complicate" conclusion; the actionable remainder is the sizing experiment.
 
 ### 4. Infrastructure & Housekeeping
-- **Macro Dashboard.** ✅ **IN PLACE** — weather/climate gauge live (see [macro_dashboard_implementation_plan.md](macro_dashboard_implementation_plan.md)). **Remaining: final gap/pending check** (see TODO).
+- **Macro Dashboard.** ✅ **IN PLACE** — weather/climate gauge live (see [macro_dashboard_implementation_plan.md](plans/macro_dashboard_implementation_plan.md)). **Remaining: final gap/pending check** (see TODO).
 - **ITX.** ⏸ Deferred — being implemented on another branch; not a Sprint 13 concern.
 - **Goal D: Feature Correctness & Housekeeping.** ✅ **DONE.**
   - `_pct_change` vs `_delta` features are likely duplicates — confirm and drop `_pct_change`.
@@ -153,8 +168,8 @@
   + 5 fixes): bounds centralized in `config.T1_PLAUSIBILITY_BOUNDS`; write-time clamps at all
   3 engines; **Phase 1.6 fast plausibility gate** (0.5s) that **withholds the R2 publish**
   while red; new-FAIL delta alerting in `run_all_audits`; filing-date thresholds unified (8d
-  — killed 22.5k warn-noise rows). Issue: [ISSUE_dirty_shares_cap_dq_gap.md](ISSUE_dirty_shares_cap_dq_gap.md);
-  assessment + tracker: [DQ_orchestrator_hardening.md](DQ_orchestrator_hardening.md).
+  — killed 22.5k warn-noise rows). Issue: [ISSUE_dirty_shares_cap_dq_gap.md](verdicts/ISSUE_dirty_shares_cap_dq_gap.md);
+  assessment + tracker: [DQ_orchestrator_hardening.md](verdicts/DQ_orchestrator_hardening.md).
   **⚠️ Remaining ops:** run `clean_dirty_shares_price.py` on sh019 (its DB copy still dirty);
   investigate standing FAILs (t1_macro missing 8 June-2026 dates + NULL vix row, 4 gap tickers).
 
@@ -166,7 +181,7 @@
   ceiling (`implied_cap_max`) masks impossible caps first (dirt guard), winsorize retained
   deliberately. CAPE_OURS rewritten on clean data (dirt-era months moved ≤2.1%); tracking
   unchanged (0.871/0.874). Full write-up:
-  [cape_fred_proxy_findings.md](cape_fred_proxy_findings.md) (closing section).
+  [cape_fred_proxy_findings.md](verdicts/cape_fred_proxy_findings.md) (closing section).
   - **Root cause (b):** the old `econ.yale.edu` URL was a **dead mirror** (froze 2023-09)
     *and* the current canonical host (`shillerdata.com`, `Last-Modified 2024-09-04`) is
     itself **dormant** — Shiller hasn't updated the workbook in ~22mo. FRED has no S&P EPS
@@ -195,7 +210,7 @@
   `slope_r2_63d` / `prior_slope_sign` (`src/features/trend_segments.py`) kept as *candidate*
   features after the hard gate was falsified. Study whether they add lift to M02 breakout-timing
   as a soft signal — LOW priority, only worth it if Goal A shows M02 needs help. Casing guard
-  (`COLUMN_CASE_MAP`) applies if adopted. Cache: `stage_gate_panel.parquet`.
+  (`COLUMN_CASE_MAP`) applies if adopted. Cache: `stage_gate_panel.parquet` (cache now in `data/backtest_cache/`).
 
 - **Macro-driven position sizing in backtest — the "no double-count" experiment.** ✅
   **LARGELY DONE** (2026-07-02). Equity-curve fix landed (bar-by-bar mark-to-market);
@@ -271,3 +286,36 @@ VIX-sizing lever into the WFO gate (confirm the sizing uplift OOS). Not a blocke
   → M03 does not earn a sizing slot. The "retire vs replace M03" question is effectively decided
   on the sizing axis (retire as a sizing lever); its only remaining role is as a model feature,
   which the no-macro study already found redundant for 4-class. See manual §6.
+
+**Side Quest — Watchlist Cohort-Return Tracker.** ✅ **BUILT** (2026-07-05).
+- Original ask: dashboard plot, x = days-before-today, y = realized-return distribution
+  (median/mean + quantile bands, box-plot ok) of the tickers scored **that day** (per-day
+  membership, not a fixed basket), with a **P(Home Run) knob** to filter membership. Tests the
+  hypothesis that hit-rate collapses in stressed vs. bull markets (*站在风口上猪都能飞*).
+- **Shipped** as a new section on Page 1 (Today):
+  - `load_cohort_return_panel()` in `dashboard_utils.py` — per-signal-day return distribution via
+    `daily_predictions × price_data` lateral joins; **two modes** (return-to-latest / fixed
+    forward N-day). Membership = tickers scored that day, knob on `prob_class_3`.
+  - `render_cohort_return_tracker()` in `dashboard.py` — cohort selectbox, P(HomeRun) slider,
+    mode radio, horizon input; median line + p25–p75 / p10–p90 bands, zero-line, range caption.
+    Wired after the rank bump chart.
+  - `tests/test_cohort_return_panel.py` — 3 asserts (shape/finite returns, threshold shrinks
+    membership, forward mode runs); **passes** against live `dashboard.duckdb`.
+  - **Constraint (by design):** plottable x-range is bounded by the slim DB's ~252d `price_data`
+    window, not by `daily_predictions`. No manifest change needed. Early read: on `pre_breakout`,
+    hit-rate 65%→58% as the knob goes 0.0→0.5 — the conviction-vs-outcome relationship surfaces,
+    but the ~1y window has no real drawdown yet, so don't over-read the stressed-vs-bull contrast.
+
+**Side Quest follow-up — pre-breakout population + m02 knob.** ⏸️ **DEFERRED to next sprint**
+(2026-07-05; finding: `2026-07-05_prebreakout_tracker_m02_finding.md`).
+- The **m01-keyed** pre-breakout tracker already works — Page 1 → select cohort `pre_breakout`
+  (population = `trend_ok=TRUE AND breakout_ok=FALSE`, in-setup, not yet entered). No build.
+- The requested **m02-keyed** version is deferred: **m02_breakout is an XGBoost *regressor***
+  (`objective: reg:squarederror`, target `breakout_proximity`), **not binary**. Its `prob_elite`
+  column is a **misnomer** — clipped `breakout_proximity`, **uncalibrated, RANK-ONLY**, range
+  [0, 0.31] (never near 0.6), so an absolute-threshold knob is meaningless. Panel is a `.parquet`
+  not in the `build_dashboard_db` MANIFEST (would break the R2 remote if read directly).
+- **To do it honestly next sprint:** either a **rank-percentile knob** (top X% of m02 score that
+  day — honors the rank-only contract, lowest effort) or **calibrate m02 (G4)**; then add
+  pre-breakout-windowed m02 scores as a *table* in the manifest + a loader variant joining m02
+  instead of `prob_class_3`.

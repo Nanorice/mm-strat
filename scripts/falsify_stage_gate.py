@@ -40,7 +40,7 @@ from src.features.trend_segments import compute_trend_segments, compute_market_s
 DB_PATH = "data/market_data.duckdb"
 HORIZONS = [5, 20, 60]
 START = "2018-01-01"
-CACHE = Path("docs/session_logs/sprint_13/stage_gate_panel.parquet")
+CACHE = Path("data/backtest_cache/stage_gate_panel.parquet")
 # columns kept for re-analysis (drop the raw price path / pivots — not needed downstream)
 CACHE_COLS = ["ticker", "date", "trend_ok", "breakout_ok", "breakout", "in_watchlist",
               "market_stage", "slope_63d", "slope_r2_63d", "prior_slope_sign",
