@@ -1104,6 +1104,104 @@ def load_rank_cohorts(model_version_id: str) -> list[str]:
         con.close()
 
 
+@st.cache_data(ttl=300)
+def load_cohort_return_panel(
+    model_version_id: str,
+    cohort: str = "breakout",
+    min_score: float = 0.0,
+    mode: str = "to_today",
+    horizon: int = 20,
+) -> pd.DataFrame:
+    """Realized-return distribution per signal day, for the watchlist-health plot.
+
+    For each prediction_date D (the "x days before today" axis), takes the tickers
+    scored that day in `daily_predictions` for `model_version_id`/`cohort` with
+    `prob_class_3 >= min_score`, and computes each name's realized return from its
+    close on D. Membership is genuinely per-day — a name counts on D only if it was
+    scored (and cleared the threshold) that day.
+
+    `mode`:
+      - "to_today": return from D's close to the latest available close (horizon
+        grows for older days — answers "how has the recent watchlist done since").
+      - "forward": N-day forward return (close on D → close ~`horizon` trading days
+        later). Fixed horizon, but the last ~`horizon` days have no complete future
+        and drop out.
+
+    Bounded by the slim DB's price window: signal days whose close (or forward
+    close) falls outside `price_data` yield no rows and are absent from the panel.
+    The caller reads the returned `days_before_today` span to caption the real range.
+
+    Returns tidy per-(day, ticker) rows: prediction_date, days_before_today, ticker,
+    prob_class_3, ret_pct. Empty df when nothing matches. Aggregation (median/mean/
+    quantiles/count) is left to the caller — cheaper in pandas at this row count.
+    """
+    if mode not in ("to_today", "forward"):
+        raise ValueError(f"mode must be 'to_today' | 'forward', got {mode!r}")
+
+    con = _connect()
+    try:
+        # Entry close = first bar on/after D. Exit close = latest bar (to_today) or
+        # first bar on/after D + horizon calendar days (forward). Calendar-day math
+        # over-reaches vs trading days, but "first bar on/after" snaps to the next
+        # real bar, so ~horizon*(7/5) days lands close enough for a distribution view.
+        if mode == "to_today":
+            exit_join = """
+                LEFT JOIN LATERAL (
+                    SELECT close FROM price_data px
+                    WHERE px.ticker = s.ticker
+                    ORDER BY px.date DESC LIMIT 1
+                ) pe ON TRUE
+            """
+        else:
+            exit_join = f"""
+                LEFT JOIN LATERAL (
+                    SELECT close FROM price_data px
+                    WHERE px.ticker = s.ticker
+                      AND px.date >= s.prediction_date + INTERVAL {int(horizon)} DAY
+                    ORDER BY px.date ASC LIMIT 1
+                ) pe ON TRUE
+            """
+        df = con.execute(f"""
+            WITH sig AS (
+                SELECT prediction_date, ticker, prob_class_3
+                FROM daily_predictions
+                WHERE model_version_id = ? AND cohort = ?
+                  AND prob_class_3 >= ?
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, prediction_date ORDER BY rank_within_day
+                ) = 1
+            ),
+            s AS (SELECT * FROM sig)
+            SELECT
+                s.prediction_date,
+                s.ticker,
+                s.prob_class_3,
+                p0.close AS entry_close,
+                pe.close AS exit_close
+            FROM s
+            LEFT JOIN LATERAL (
+                SELECT close FROM price_data px
+                WHERE px.ticker = s.ticker AND px.date >= s.prediction_date
+                ORDER BY px.date ASC LIMIT 1
+            ) p0 ON TRUE
+            {exit_join}
+        """, [model_version_id, cohort, float(min_score)]).fetchdf()
+    finally:
+        con.close()
+
+    if df.empty:
+        return df
+    df = df.dropna(subset=["entry_close", "exit_close"])
+    df = df[df["entry_close"] > 0]
+    if df.empty:
+        return df
+    df["ret_pct"] = (df["exit_close"] / df["entry_close"] - 1.0) * 100.0
+    max_d = df["prediction_date"].max()
+    df["days_before_today"] = (max_d - df["prediction_date"]).dt.days
+    return df[["prediction_date", "days_before_today", "ticker",
+               "prob_class_3", "ret_pct"]].reset_index(drop=True)
+
+
 @st.cache_data(ttl=60)
 def load_past_decisions(model_version_id: str, limit: int = 200) -> pd.DataFrame:
     """Past decisions joined against screener_watchlist for realized outcomes.

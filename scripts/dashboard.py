@@ -32,6 +32,7 @@ from dashboard_utils import (
     P_HR_COL,
     P_STRONG_COL,
     load_activity_feed,
+    load_cohort_return_panel,
     load_daily_predictions_today,
     load_macro_pillars,
     load_past_decisions,
@@ -634,6 +635,94 @@ def render_rank_bump_chart(model_version_id: str | None) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_cohort_return_tracker(model_version_id: str | None) -> None:
+    st.subheader("Watchlist Cohort-Return Tracker — did recent signals actually pay?")
+    if not model_version_id:
+        st.info("No prod model registered — nothing to score.")
+        return
+    cohorts = load_rank_cohorts(model_version_id)
+    if not cohorts:
+        st.info("No daily predictions for the prod model yet.")
+        return
+
+    st.caption(
+        "Each x-position is a signal day (days before the latest data). The band is "
+        "the realized-return distribution of the tickers scored **that day** — "
+        "membership is per-day, so it turns over. Raise the P(Home Run) knob to keep "
+        "only high-conviction names and watch the distribution shift. Bounded by the "
+        "slim DB's ~1y price window."
+    )
+
+    default_cohort = "breakout" if "breakout" in cohorts else cohorts[0]
+    with st.form("cohort_ret_controls", border=False):
+        c1, c2, c3, c4 = st.columns([1.2, 1.4, 1.4, 1])
+        with c1:
+            cohort = st.selectbox("Cohort", cohorts,
+                                  index=cohorts.index(default_cohort),
+                                  key="cohort_ret_cohort")
+        with c2:
+            min_score = st.slider("P(Home Run) ≥", 0.0, 1.0, 0.0, 0.05,
+                                  key="cohort_ret_score")
+        with c3:
+            mode_label = st.radio("Return", ["To latest", "Forward N-day"],
+                                  horizontal=True, key="cohort_ret_mode")
+        with c4:
+            horizon = st.number_input("N (days)", 5, 120, 20, 5,
+                                      key="cohort_ret_horizon")
+        st.form_submit_button("Apply", type="primary")
+
+    mode = "to_today" if mode_label == "To latest" else "forward"
+    df = load_cohort_return_panel(model_version_id, cohort=cohort,
+                                  min_score=float(min_score), mode=mode,
+                                  horizon=int(horizon))
+    if df.empty:
+        st.info("No scored names with a computable return in this cohort/threshold.")
+        return
+
+    # Per-day distribution: median line + p25–p75 / p10–p90 bands, x = days ago
+    # (reversed so recent is on the right, reading left→right = past→present).
+    g = df.groupby("days_before_today")["ret_pct"]
+    stats = pd.DataFrame({
+        "median": g.median(), "mean": g.mean(),
+        "p10": g.quantile(0.10), "p25": g.quantile(0.25),
+        "p75": g.quantile(0.75), "p90": g.quantile(0.90),
+        "n": g.size(),
+    }).reset_index().sort_values("days_before_today", ascending=False)
+    x = stats["days_before_today"]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=stats["p90"], mode="lines",
+                             line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=stats["p10"], mode="lines", line=dict(width=0),
+                             fill="tonexty", fillcolor="rgba(31,119,180,0.12)",
+                             name="p10–p90", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=stats["p75"], mode="lines",
+                             line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=stats["p25"], mode="lines", line=dict(width=0),
+                             fill="tonexty", fillcolor="rgba(31,119,180,0.25)",
+                             name="p25–p75", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(
+        x=x, y=stats["median"], mode="lines", name="median",
+        line=dict(color="#1f77b4", width=2),
+        customdata=stats[["mean", "n"]],
+        hovertemplate=("%{x} d ago<br>median %{y:.1f}%<br>"
+                       "mean %{customdata[0]:.1f}%<br>n=%{customdata[1]}<extra></extra>"),
+    ))
+    fig.add_hline(y=0, line=dict(color="grey", width=1, dash="dot"))
+    fig.update_layout(
+        height=460, margin=dict(l=30, r=30, t=20, b=30),
+        xaxis=dict(title="days before latest data", autorange="reversed"),
+        yaxis=dict(title="return %"),
+        legend=dict(orientation="h", y=1.05),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    span = f"{int(x.min())}–{int(x.max())} days back"
+    tail = (f" · forward mode: the newest ~{int(horizon)} days lack a full "
+            "future window and drop out." if mode == "forward" else "")
+    st.caption(f"{len(df):,} name-days across {span}, "
+               f"{stats['n'].sum():,} return observations.{tail}")
+
+
 # ── Sector heat ───────────────────────────────────────────────────────────────
 
 def render_sector_heat() -> None:
@@ -1014,6 +1103,11 @@ def page_today() -> None:
 
     # Daily rank bump chart (2b) — top-N P(Home Run) rank trajectories over time
     render_rank_bump_chart(version_id)
+
+    st.markdown("---")
+
+    # Watchlist cohort-return tracker — per-day return distribution of scored names
+    render_cohort_return_tracker(version_id)
 
     st.markdown("---")
 
