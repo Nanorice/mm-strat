@@ -36,6 +36,11 @@
 7. **How many home-runs do we miss?**
    → 23.4% missed, but they're near-misses (median raw 0.41 vs 0.48 gate). ⟳ **flawed measure —
    home-run treated as binary >30%, ignores the fat tail we actually care about. Re-cut needed.**
+   → ✅ **M1 re-cut (magnitude): only 14.2% of tail MAGNITUDE missed, not 23.4% of events — the
+   gate keeps big winners, drops small ones (missed mean-excess +12% vs captured +23%). AND the
+   raw score DOES rank the tail (top-1% fwd at score-pctile 0.89; top-1% scores hold 6.1× their
+   share of tail) — "weak ranker" was only true within the gated pool, not on the full universe.**
+   `verdicts/2026-07-07_tail_magnitude_recut.md`
 
 ## Thread C — can we refine / rotate the gated pool?
 
@@ -60,14 +65,45 @@
     → reference doc written; sizing-not-selection; VIX works, M03 no-op (S13). Credit pillar is the
     top candidate to test next to VIX. `docs/research/macro_pillars_reference.md`
 
+## Thread E — capital deployment: bad-day risk, basket width, scope (user Qs, 2026-07-07)
+
+13. **Is the crash pro-cyclicality a model defect?** → **No — a scope boundary.** SEPA screening
+    (Stage-2 uptrend, rising MAs, high RS) structurally EXCLUDES beaten-down reversal names at their
+    bottom; they only enter the full-universe test set later, after re-building a trend. The model is
+    a CONTINUATION model, not a reversal model. → accept it; the 25-yr full-universe bad-regime floor
+    is a slightly pessimistic read of the SEPA-gated live system (which wasn't down there ranking
+    reversals). `verdicts/2026-07-07_capital_deployment.md`
+14. **Does top-10 catch more winners than top-5?** → **No.** Both from the same ~284 gated/day.
+    Pooled 25y: top-5 +2.36% / HR 8.75% ≈ top-10 +2.30% / 8.34%; names 6–10 average +2.23%. The
+    score's power is a SHARP CLIFF at the top-5 then flat. **Widening the basket dilutes, doesn't
+    help** — argues AGAINST the S13 "widen it" instinct. Inside the 5, no order (IC≈0). Same verdict.
+15. **Can we tell good days from bad EX-ANTE (the limited-capital start-date problem)?** → Partly.
+    **SPY-above-200d is a real deploy gate:** top-5 fwd +3.0% (above) vs +0.6% (below), 25y — a 5×
+    gap from one binary known at the open. **VIX is NOT a gate** (corr +0.03; high VIX>30 days are
+    the BEST +4.5% — crash-rebound, don't cut them). Residual: even in the best state 42% of days
+    still go negative → the un-removable part is STAGGERED entry (dose-average the start), not
+    day-timing. Confirms M2's cone-not-point; SPY-200d tightens the cone's downside. Same verdict.
+
 ## Open meta-questions (deferred — carry to next session)
 
-- **M1. Are we evaluating on the wrong metric?** Home-run as binary >30% ignores the fat tail
-  (a +35% and a +400% count equally). The strategy's alpha IS the tail → objective should be
-  tail-magnitude (Σ max(fwd−30%,0), or rank-of-top-1%), not hit-count. Re-cut Q7 this way.
-- **M2. Single-Sharpe decisions are unsafe** given start-date dependence. Every raw-vs-cal /
-  gate-height decision should be a **start-date cone** (Sharpe *distribution* across start months),
-  not one aggregate. cf [[project_champion_starttime_dependent]].
+- ✅ **M1. DONE — objective re-cut to tail-magnitude, validated across 25 regimes.** New reusable
+  metrics: captured/missed `Σ max(fwd−30%,0)` (2025 leak 14.2% not binary 23.4%) and **tail-lift@k**.
+  Scope clarified: the "good ranker" claim is point-in-time full-universe RAW score, 20d fwd; the
+  "weak ranker (4×)" was the OPPOSITE conditioning (inside the gated pool / calibrated score).
+  Selection edge honestly bounded: 2025 top-1% lift 6.1× is ~half gate; **above-gate residual 3.2×**.
+  **Multi-year (2001–2025, `data/model_output_eda/multiyear/`): the ranker is PRO-CYCLICAL** — median
+  6.8× but 0.68× (below no-skill) in 2001/2008 crashes; above-gate edge negative in 5/25 yrs;
+  corr(lift,HR-rate)=−0.44. Only regime-robust result: `miss_mag<miss_count` 25/25. → adopt the
+  metric; treat ranking as a distribution; M3 judges the bad-regime floor, M4 must be
+  regime-conditioned. `verdicts/2026-07-07_tail_magnitude_recut.md`
+- 🔀 **M2. ABSORBED, not skipped — it's the evaluation LENS, not a standalone deliverable.**
+  Single-Sharpe is unsafe → decisions go through a start-date cone (distribution not aggregate).
+  Validated 3× this session (the 25-yr sweep is a coarse cone; Q15 "42% neg days → stagger not time";
+  and the next step (b) IS a cone test). No separate harness to "do" — (b) applies M2. Don't
+  re-litigate. cf [[project_champion_starttime_dependent]].
+  → **(b) NEXT SESSION:** does the SPY>200d deploy gate (Q15) SHRINK the start-date cone — narrow the
+  Sharpe *distribution* across start-months, not just lift the mean? Needs `run_strategy_wfo.py`, not
+  a cache re-slice. This is the entry into M3. `verdicts/2026-07-07_capital_deployment.md`
 - **M3. Did we start the whole strategy search on the wrong foot?** (user, 2026-07-07) — we ran a
   strategy grid over ONE fixed horizon, picked a winner, THEN discovered start-date dependence and
   swept it. Every early decision was backed by one horizon's result. Proposed re-frame: pick a
