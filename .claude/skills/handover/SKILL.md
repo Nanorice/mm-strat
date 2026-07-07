@@ -56,6 +56,17 @@ When the user says "Wrap up", "End session", or "Generate handover":
 
 5.  **Action**: After writing, ask the user whether to `git add` + commit the handover (+ RESEARCH_LOG).
 
+6.  **Resume prompt**: After the doc is written (and after the commit, if the user commits), output a
+    ready-to-paste **resume prompt for the next session** in a fenced code block. It must be
+    self-contained — the next session starts cold. Include:
+    - which files to read first, in order (this handover; the sprint `RESEARCH_LOG.md`; the 1–3 most
+      relevant memory files by name);
+    - a one-line state-of-play (where we are / what's settled vs open);
+    - the concrete next steps in dependency order (from ⏭️ Next Steps / the ledger's open questions);
+    - any hard caveat the next session must not violate (e.g. "don't act on a single-horizon result").
+    Keep it tight — a prompt, not a duplicate of the handover. End by telling the next session to
+    confirm scope with the user before large work.
+
 ## Day meta-file template (`logs/YYYY-MM-DD_index.md`, only when >1 session that day)
 ```markdown
 # Sessions — YYYY-MM-DD
