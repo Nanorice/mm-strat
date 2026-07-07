@@ -77,7 +77,7 @@ def run_arm(job: Job, start: str, end: str, initial_cash: float, out_dir: Path,
     (run_dir / "metrics.json").write_text(json.dumps(metrics_flat, indent=2, default=str))
     (run_dir / "config.json").write_text(json.dumps({
         "id": job.id, "description": job.description, "signal": job.signal,
-        "model": job.model, "strategy_kwargs": job.strategy_kwargs,
+        "model": job.model, "strategy_kwargs": _config_safe(job.strategy_kwargs),
     }, indent=2, default=str))
 
     return {
@@ -90,6 +90,18 @@ def run_arm(job: Job, start: str, end: str, initial_cash: float, out_dir: Path,
         "sqn": metrics_flat.get("sqn"),
         "n_rejections": len(rejs),
     }
+
+
+def _config_safe(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Collapse un-serializable / bulky kwargs (e.g. the SPY-200d gate's date-keyed
+    dict) to a summary so config.json stays JSON-valid and readable."""
+    out = {}
+    for k, v in kwargs.items():
+        if k == "spy_deploy_gate" and isinstance(v, dict):
+            out[k] = f"<{len(v)} days, {sum(1 for x in v.values() if not x)} shut>"
+        else:
+            out[k] = v
+    return out
 
 
 def run_population(jobs: List[Job], start: str, end: str, initial_cash: float,

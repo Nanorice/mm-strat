@@ -84,6 +84,48 @@
     still go negative → the un-removable part is STAGGERED entry (dose-average the start), not
     day-timing. Confirms M2's cone-not-point; SPY-200d tightens the cone's downside. Same verdict.
 
+## Thread F — entry-timing / regime lens: what marks the best vs worst deploy dates? (user pivot, 2026-07-07)
+
+> User steered off the SPY-200d gate ("too early to invest in the gate") toward an EXPLORATORY
+> correlation: not realistic backtesting, but finding a feature around the best (and worst) entry
+> dates. Outcome = mean top-5 fwd return per day, over a horizon grid (fwd 20/50/100 — SEPA holds
+> longer, so does a weak 20d entry get a second chance?). `scripts/entry_timing_features.py`,
+> panel `data/model_output_eda/entry_timing/entry_timing_daily.parquet`.
+
+16. **Does M03 flag good/bad entry timing?** → **No.** 25-yr: every M03 feature ρ ∈ [−0.09,+0.02];
+    m03_score best-vs-worst-date gap −0.08 (zero separation). M03 is a trend-STATE label, not a
+    timing signal — consistent with M03-sizing being a no-op. `verdicts/2026-07-07_entry_timing_features.md`
+17. **Does the dashboard 6-PILLAR macro (≠ M03) do better?** → **Yes — a VALUE/STRESS axis.**
+    Strongest, most horizon-consistent signal in the panel: rates −0.12 (high 10y → worse),
+    credit spread +0.09 (WIDE spreads → BETTER, contrarian), CAPE −0.11 (expensive → worse), VIX
+    +0.08. Best dates = macro-stress/cheap moments — opposite of trend, which is WHY M03 misses it.
+    ⚠️ used RAW pillar levels; the dashboard percentiles are look-ahead ("do NOT feed to backtest").
+18. **Weak@20d entries — second chance on a longer hold?** → **Partial, regime-robust.** worst-20d
+    decile: −20.7% (20d) → −17.5% (50d) → −8.1% (100d). Heals ~12pp by 100d but doesn't turn
+    positive. Bad entry = drag, not write-off, on SEPA's longer hold.
+    - **CAVEATS:** all |ρ|≤0.12 (tilts not gates); univariate + full-pooled → resolved by Q19.
+19. **(option b) Combine the pillars + split by regime.** → **Two upgrades.**
+    (a) **Stress composite** = mean z(+credit, −rates, −cape) **BEATS every single pillar** — fwd100
+    ρ +0.167 vs +0.10 best-single (~60% lift), strengthening with horizon (0.04→0.14→0.17). Combining
+    is NOT redundant; each pillar adds a piece. (b) **Regime split (SPY>200d):** the composite works
+    **equally in bull AND bear** (+0.176 / +0.190 @ fwd100) — NOT a bear-only buy-the-dip. Robust
+    because parts are REGIME-DIVERSIFIED: credit fires in bull (+0.142/+0.017), rates & VIX in bear
+    (−0.263, +0.206). Much stronger story than the "contrarian" framing of Q17's pooled ρ.
+    ⚠️ z/percentiles are full-sample (look-ahead, EDA-only) — needs expanding-window before it can
+    size real capital. n(bear)=1094 vs n(bull)=4556. `verdicts/2026-07-07_entry_timing_features.md`
+20. **Make it live (expanding-window z) + measure the tilt.** → **The look-ahead flattered it;
+    honest = a BULL-ONLY, top-quintile tilt.** (a) Live-safe expanding-z HALVES the signal: stress_ew
+    fwd100 ρ +0.074 (vs +0.167 full-sample look-ahead); best variant stress_ew_vix +0.084; rank-based
+    worse (+0.043); dropping CAPE ~neutral (+0.072). (b) Live regime split FLIPS bull-only: bull
+    +0.139, **bear −0.150** — high stress in a downtrend = falling knife; the look-ahead z borrowed
+    future normalization that faked all-weather robustness (Q19b overturned). → tilt must be GATED by
+    SPY>200d. (c) Tilt is a TOP-QUINTILE step, not linear: Q1..Q4 flat (~+10%), Q5 +18.5%;
+    stress-weighted +14.2% vs flat +12.3% = **+1.8% fwd100 uplift** (marginal, as expected).
+    → **Deploy more when stress EXTREME & SPY>200d.** Small but real. `entry_timing_features.md` F5.
+    - **NEXT:** wire stress_ew_vix (SPY>200d-gated, threshold not linear) as an exposure input if
+      pursued (low priority, small effect); judge the strategy on fwd100 not fwd20 (signal + recovery
+      both live long).
+
 ## Open meta-questions (deferred — carry to next session)
 
 - ✅ **M1. DONE — objective re-cut to tail-magnitude, validated across 25 regimes.** New reusable

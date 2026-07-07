@@ -40,6 +40,29 @@ M03_BANDS = [
 ]
 
 
+def spy_above_200d(start: str, end: str, db_path: Optional[str] = None) -> dict:
+    """Date -> bool: was SPY above its 200d SMA at that day's close? The ex-ante
+    deploy gate from Thread E Q15 (SPY-200d, not VIX). Uses close through `date`
+    only, so it's known at the day's open the strategy would act on — no lookahead.
+
+    The 200d window needs history BEFORE `start`; we fetch a full lookback so the
+    first in-window days aren't NaN. Returned dict is date(py) -> bool over [start,end].
+    """
+    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+    con = db.connect(str(path), read_only=True)
+    try:
+        df = con.execute(
+            "SELECT date, spy_close FROM t1_macro WHERE date <= ? ORDER BY date", [end],
+        ).df()
+    finally:
+        con.close()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date")["spy_close"].ffill()
+    above = df > df.rolling(200).mean()
+    above = above[above.index >= pd.Timestamp(start)]
+    return {d.date(): bool(v) for d, v in above.items()}
+
+
 class MacroSizer:
     def __init__(self, db_path: Optional[str] = None, lag_days: int = 1):
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH

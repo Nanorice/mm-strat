@@ -169,6 +169,17 @@ _register(StrategyDef(
 ))
 
 _register(StrategyDef(
+    name="champion_spygate",
+    signal="binary",
+    # Same config as champion; the SPY-200d deploy gate is window-dependent so the
+    # {date->bool} dict is injected at run time (run_starttime_sweep), not baked here.
+    strategy_kwargs=_champion_kwargs(),
+    description="Champion + SPY-200d ex-ante deploy gate (Thread E Q15): block new "
+                "entries when SPY < 200d SMA. Gate dict injected per-window.",
+    status="candidate",
+))
+
+_register(StrategyDef(
     name="e1_seed",
     signal="binary",
     strategy_kwargs=_base_kwargs(5),

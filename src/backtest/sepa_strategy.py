@@ -155,6 +155,12 @@ class SEPAHybridV1(bt.Strategy):
 
         # Score data (DataFrame from UniverseScorer.score_from_t3())
         ('scores_df', None),
+
+        # SPY-200d deploy gate (Thread E Q15): {date -> bool} of "SPY above 200d SMA".
+        # When set and False for the current bar, block NEW entries (open positions
+        # and exits run unchanged) — the ex-ante market filter, separate from M03
+        # regime sizing. None = no gate (default). A missing date defaults to open.
+        ('spy_deploy_gate', None),
     )
 
     def __init__(self):
@@ -584,6 +590,11 @@ class SEPAHybridV1(bt.Strategy):
         max_positions = self.p.regime_max_pos[regime]
         current_count = self.position_tracker.get_open_count()
         available_slots = max_positions - current_count
+
+        # SPY-200d deploy gate: shut => no new entries this bar (existing no_slots
+        # path below logs the rejects). Exits already ran; open positions untouched.
+        if self.p.spy_deploy_gate is not None and not self.p.spy_deploy_gate.get(current_date, True):
+            available_slots = 0
 
         # Get candidates sorted by trailing percentile (Top N Competition)
         candidates = self.score_lookup.get_candidates(

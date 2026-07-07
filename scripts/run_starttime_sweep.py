@@ -39,6 +39,7 @@ if str(REPO_ROOT) not in sys.path:
 import pandas as pd
 
 from src.backtest import strategy_registry as reg
+from src.backtest.macro_sizer import spy_above_200d
 from src.backtest.population_runner import Job, run_arm
 from scripts.run_strategy_confirm import _load_scores, DB_PATH, MODEL
 from scripts.run_strategy_wfo import sharpe_from_returns
@@ -90,10 +91,16 @@ def build_cells(grid: str, cache_end: str) -> List[Tuple[str, str, str]]:
 
 def _cell_job(d: reg.StrategyDef, cell_id: str, start: str, end: str) -> Job:
     """One (start,end) cell -> a population Job. Scores lazy-loaded IN the worker
-    via a picklable partial (windowed to the cell) so parallel workers stay light."""
+    via a picklable partial (windowed to the cell) so parallel workers stay light.
+
+    For `champion_spygate` the SPY-200d deploy gate (window-dependent, so not baked
+    into the registry) is injected here as a {date->bool} dict — small, picklable."""
+    kwargs = dict(d.strategy_kwargs)
+    if d.name == "champion_spygate":
+        kwargs["spy_deploy_gate"] = spy_above_200d(start, end, str(DB_PATH))
     return Job(
         id=cell_id, description=f"{d.name} {start}..{end}", signal=d.signal,
-        model="/".join(MODEL[d.signal]), strategy_kwargs=d.strategy_kwargs,
+        model="/".join(MODEL[d.signal]), strategy_kwargs=kwargs,
         score_loader=partial(_load_scores, d.signal, start, end),
     )
 
@@ -189,6 +196,58 @@ def _write_report(d: reg.StrategyDef, grid: str, rows: List[Dict[str, Any]],
     logger.info("Wrote %s", out_dir / "report.md")
 
 
+def _cone_stats(rows: List[Dict[str, Any]]) -> Dict[str, float]:
+    """The distribution summary that IS the cone: floor, spread, %negative — not mean."""
+    shs = pd.Series([r["sharpe"] for r in rows if r.get("sharpe") == r.get("sharpe")])
+    if shs.empty:
+        return {"n": 0}
+    return {
+        "n": int(shs.size), "min": float(shs.min()), "p25": float(shs.quantile(.25)),
+        "median": float(shs.median()), "p75": float(shs.quantile(.75)), "max": float(shs.max()),
+        "iqr": float(shs.quantile(.75) - shs.quantile(.25)), "std": float(shs.std()),
+        "pct_neg": float((shs < 0).mean()),
+    }
+
+
+def compare_cone(grid: str, initial_cash: float, workers: int, smoke: bool) -> None:
+    """Task (b): does the SPY-200d deploy gate SHRINK the start-date cone? Run the
+    same rolling sweep with (champion_spygate) and without (champion) the gate;
+    compare Sharpe DISTRIBUTIONS across start-months — floor / IQR / %neg, not mean."""
+    off = run_sweep("champion", grid, initial_cash, workers, smoke)
+    on = run_sweep("champion_spygate", grid, initial_cash, workers, smoke)
+    s_off, s_on = _cone_stats(off), _cone_stats(on)
+    out = OUT_ROOT / "spygate_compare"
+    out.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f"# SPY-200d deploy gate — start-date cone comparison (grid `{grid}`)", "",
+        "Same rolling start-month cone, champion config, gate OFF vs ON. The question "
+        "is the DISTRIBUTION across start-months (floor, spread, %negative) — not the mean.", "",
+        "| metric | gate OFF | gate ON | Δ |", "|---|--:|--:|--:|",
+    ]
+    for k, label in [("n", "cells"), ("min", "min Sharpe (floor)"), ("p25", "p25"),
+                     ("median", "median"), ("p75", "p75"), ("max", "max"),
+                     ("iqr", "IQR (spread)"), ("std", "std (spread)"), ("pct_neg", "% cells Sharpe<0")]:
+        a, b = s_off.get(k, float("nan")), s_on.get(k, float("nan"))
+        fmt = (lambda x: f"{x:.0f}") if k == "n" else ((lambda x: f"{x:.0%}") if k == "pct_neg" else (lambda x: f"{x:.2f}"))
+        d = "" if k == "n" else fmt(b - a)
+        lines.append(f"| {label} | {fmt(a)} | {fmt(b)} | {d} |")
+    lines += ["",
+              "> Cone SHRINKS if the gate raises the floor (min↑), narrows the spread "
+              "(IQR↓/std↓), and cuts %negative — even if the median barely moves. That is "
+              "the real M2-cone test: a distribution shrinker, not just a mean lifter."]
+    (out / "cone_compare.md").write_text("\n".join(lines), encoding="utf-8")
+
+    print("\n" + "=" * 70)
+    print(f"SPY-200d CONE COMPARE — grid {grid}")
+    print(f"  {'':<18}{'OFF':>10}{'ON':>10}{'Δ':>10}")
+    for k in ("min", "median", "iqr", "std", "pct_neg"):
+        a, b = s_off.get(k, float('nan')), s_on.get(k, float('nan'))
+        print(f"  {k:<18}{a:>10.2f}{b:>10.2f}{b - a:>10.2f}")
+    print("=" * 70)
+    print(f"Artifacts: {out / 'cone_compare.md'}")
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Start-time / horizon sensitivity sweep")
     p.add_argument("--strategy", default="champion", help=f"Registry name. Known: {sorted(reg.STRATEGIES)}")
@@ -196,11 +255,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--initial-cash", type=float, default=25_000.0)
     p.add_argument("--workers", type=int, default=3, help="Parallel cells. Each loads a price universe — watch RAM.")
     p.add_argument("--smoke", action="store_true", help="First 2 cells, serial — smoke test before the full run.")
+    p.add_argument("--compare-spygate", action="store_true",
+                   help="Task (b): run champion vs champion_spygate on the same cone; "
+                        "emit a Sharpe-DISTRIBUTION diff (floor/IQR/%neg, not mean).")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.compare_spygate:
+        compare_cone(args.grid, args.initial_cash, args.workers, args.smoke)
+        return
     rows = run_sweep(args.strategy, args.grid, args.initial_cash, args.workers, args.smoke)
     valid = [r for r in rows if r.get("sharpe") == r.get("sharpe")]
     print("\n" + "=" * 70)
