@@ -65,9 +65,15 @@ def resolve_model_path(model: str) -> str:
     raise FileNotFoundError(f"No model.json for slug '{model}' under {MODELS_DIR}")
 
 
-def prescore(model_path: str, start: str, end: str) -> pd.DataFrame:
-    logger.info(f"Pre-scoring {start} -> {end} ...")
+def prescore(model_path: str, start: str, end: str, raw_prob: bool = False) -> pd.DataFrame:
+    """raw_prob=True disables the isotonic calibrator so prob_elite = raw p_pos.
+    The calibrator's step-function flattens ranking (see project_isotonic_flattens_ranking);
+    this arm lets WFO reconcile ranking on calibrated vs raw prob."""
+    logger.info(f"Pre-scoring {start} -> {end} ({'raw' if raw_prob else 'calibrated'}) ...")
     scorer = UniverseScorer(m01_path=model_path, calibration_path=None)
+    if raw_prob:
+        scorer.load_model()  # populate _iso_calibrator before we null it
+        scorer._iso_calibrator = None
     scores = scorer.score_from_t3(start, end)
     if "prob_elite" not in scores.columns:
         raise RuntimeError("Scorer produced no prob_elite — model must be a classifier.")

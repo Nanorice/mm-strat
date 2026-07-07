@@ -162,6 +162,9 @@ def main() -> None:
     p.add_argument("--anchored", action="store_true", help="Expanding train window (default: rolling)")
     p.add_argument("--n-trials", type=int, default=60)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--raw-prob", action="store_true",
+                   help="Rank/gate on raw p_pos (disable isotonic calibrator). Reconciles "
+                        "raw-vs-calibrated ranking — see project_isotonic_flattens_ranking.")
     p.add_argument("--out", type=str, default=None)
     args = p.parse_args()
 
@@ -177,7 +180,7 @@ def main() -> None:
         model_path = "models/m01_binary/v1/model.json"  # only used for price loading
     else:
         model_path = resolve_model_path(args.model)
-        scores = prescore(model_path, args.start, args.end)
+        scores = prescore(model_path, args.start, args.end, raw_prob=args.raw_prob)
 
     folds = make_folds(args.start, args.end, train_span, test_span, args.anchored)
     if not folds:
@@ -204,10 +207,11 @@ def main() -> None:
     stitched = pd.concat(all_oos_returns).sort_index() if all_oos_returns else pd.Series(dtype=float)
     agg = sharpe_from_returns(stitched)
 
-    out_dir = Path(args.out) if args.out else (MODELS_DIR / args.model / "wfo")
+    arm = "raw" if args.raw_prob else "calibrated"
+    out_dir = Path(args.out) if args.out else (MODELS_DIR / args.model / "wfo" / arm)
     out_dir.mkdir(parents=True, exist_ok=True)
     result = {
-        "model": args.model, "window": [args.start, args.end],
+        "model": args.model, "window": [args.start, args.end], "rank_prob": arm,
         "mode": "anchored" if args.anchored else "rolling",
         "n_trials_per_fold": args.n_trials, "n_folds": len(folds),
         "aggregate_oos": agg, "folds": fold_records,

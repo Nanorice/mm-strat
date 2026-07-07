@@ -28,11 +28,13 @@ else infer the current sprint = highest-numbered `docs/session_logs/sprint_N/`.
 ## The taxonomy (enforce this)
 ```
 sprint_N/
-  README.md      front page (see template below)
-  logs/          dated session handovers  YYYY-MM-DD.md
-  plans/         forward-looking design/plan docs (written BEFORE the work)
-  verdicts/      findings / reports / issues / playbooks (what we CONCLUDED)
-  cells/         notebook-cell artifacts (no-direct-.ipynb-edit rule); scratch once applied
+  README.md         front page (see template below)
+  RESEARCH_LOG.md   linear question ledger (train-of-thought by sequence; middle zoom)
+  logs/             dated session handovers  YYYY-MM-DD.md
+                    (multi-session days: YYYY-MM-DD_NN_<slug>.md + YYYY-MM-DD_index.md meta)
+  plans/            forward-looking design/plan docs (written BEFORE the work)
+  verdicts/         findings / reports / issues / playbooks (what we CONCLUDED)
+  cells/            notebook-cell artifacts (no-direct-.ipynb-edit rule); scratch once applied
 ```
 Rules:
 - Caches, `.parquet`, large `.log`, model outputs → **`data/`** (e.g. `data/backtest_cache/`), NEVER `docs/`. If a script references the old path, patch the script.
@@ -60,6 +62,12 @@ Rules:
 5. **Roll up.** Skim `logs/*.md` — each has ✅ Accomplished / ⏭️ Next Steps. Distil the sprint's
    headline outcomes (5–8 bullets, verdict-first: what got banked, what got falsified) into the
    README header. This is the one place a human reads to know what the sprint achieved.
+   - **RESEARCH_LOG roll-up.** If `RESEARCH_LOG.md` exists, it already IS the sequenced train-of-thought
+     — don't rewrite it. Do two things: (a) ensure its "Open meta-questions" block is current (move
+     resolved ones to memory, keep genuinely-open ones), and (b) in the README header add a one-line
+     **"→ full question ledger: [RESEARCH_LOG.md](RESEARCH_LOG.md)"** pointer + carry the still-open
+     meta-questions into the next sprint's Carried-over checklist. The ledger is the sprint's audit
+     trail of *how it thought*; the README header is *what it concluded*.
 
 6. **Carryover → next sprint.** Grep the sprint for unchecked TODOs and "deferred / next sprint /
    remaining / optional" notes. Create `sprint_{N+1}/README.md` from the template, pre-filled with a
@@ -85,7 +93,8 @@ Rules:
 > <one-paragraph framing: the core question / goal of the sprint.>
 
 ### Folder map
-- **`logs/`** — dated session handovers.
+- **`RESEARCH_LOG.md`** — the linear question ledger (how the thinking evolved, by sequence).
+- **`logs/`** — dated session handovers (`YYYY-MM-DD_NN_<slug>.md` + `_index.md` on multi-session days).
 - **`plans/`** — forward-looking design/plan docs.
 - **`verdicts/`** — findings, reports, issues, playbooks.
 - **`cells/`** — notebook-cell artifacts.
