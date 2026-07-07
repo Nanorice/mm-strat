@@ -3,7 +3,7 @@
 Chronological record of research sprints. Each sprint's **`README.md` is its front page** —
 start there. Older sprints predate the folder convention and keep flat layouts.
 
-## Layout convention (sprint_13 onward)
+## Layout convention (sprint_12 onward)
 ```
 sprint_N/
   README.md      <- front page: dates, status, headline outcomes, folder map, roadmap

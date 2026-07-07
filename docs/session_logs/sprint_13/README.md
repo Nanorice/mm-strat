@@ -319,3 +319,12 @@ VIX-sizing lever into the WFO gate (confirm the sizing uplift OOS). Not a blocke
   day — honors the rank-only contract, lowest effort) or **calibrate m02 (G4)**; then add
   pre-breakout-windowed m02 scores as a *table* in the manifest + a loader variant joining m02
   instead of `prob_class_3`.
+## Migrated Documents
+**Plans:**
+- [materialized_scoring_plan_2026_06_12.md](plans/materialized_scoring_plan_2026_06_12.md)
+- [model_diff_implementation_plan.md](plans/model_diff_implementation_plan.md)
+- [model_card_drift_window.md](plans/model_card_drift_window.md)
+
+**Verdicts:**
+- [2026-06-11_model_card_gate.md](verdicts/2026-06-11_model_card_gate.md)
+- [regime_model/](verdicts/regime_model/) (Late June Regime Model Research)
