@@ -151,9 +151,19 @@
   swept it. Every early decision was backed by one horizon's result. Proposed re-frame: pick a
   strategy → sweep start-month × horizon (done) → **in both good AND bad months, sweep strategies to
   find the most STABLE one** (not the highest-mean) → refine/iterate. Stability-first, not mean-first.
-- **M4. Classifier can't express fat tails.** m01_binary outputs P(>30%); +35% and +400% are
-  identical to it. A **regressor / quantile model targeting forward-return magnitude** (working
-  name **m03**) could rank by expected tail contribution. Eval on rank-of-tail, not RMSE. Design
-  doc next session. (Note: name m03 collides with the existing regime model M03 — pick a distinct id.)
+- 📋 **M4. DESIGNED — premise CONFIRMED against artifacts (doc was misleading).** Checked the shipped
+  `model.json` objectives: `m01_prototype` = `multi:softprob` (4-class), `m01_binary` = `binary:logistic`
+  — **both classifiers, NO regressor in the live family.** (⚠️ `model_doc/m01.md` §3 wrongly calls the
+  champion a "regressor on log_space MFE" — stale/wrong, flagged to fix.) So the fat tail is quantized
+  at label time: +35% and +400% both collapse into the "Elite" (MFE>30) bin; the model can't express
+  M1's tail-lift@k. M4 = **build the first magnitude-aware model** — regressor/quantile head on `mfe_pct`
+  directly (winsorized-magnitude A / τ=0.90 quantile B / tail-contribution C). **Mechanism (falsifiable):**
+  among already-elite names (all P(>30%)≈1, unranked by the classifier) does *conditional expected
+  magnitude* carry residual ranking signal? If it's luck once elite, M4 dies. Eval on **tail-lift@k not
+  RMSE**, bar = champion's ABOVE-GATE lift on the BAD years (regime-conditioned; pooled fit inherits
+  M1's pro-cyclicality). **Design decision (§1b): target AND bar both on `mfe_pct`** — re-cut the M1
+  champion lift (was fwd20) on mfe_pct so the comparison is same-outcome. id = `m04_regressor` (≠ shipped
+  M03). Target+objective swap in the existing XGB trainer, reuses the multi-year toolkit; smoke-first.
+  `verdicts/2026-07-07_m4_magnitude_regressor_design.md`
 - **M5. Persistent continuous-score top-N** (from Q10) is a different, lower-turnover product than
   the day-0 breakout champion — worth prototyping + cone-testing.

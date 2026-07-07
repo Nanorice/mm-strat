@@ -52,6 +52,16 @@ is the exact confusion the reader came to escape.
 - **Cite real numbers.** Prose docs round and drift. Pull metrics from the actual artifacts —
   `models/**/summary.json`, `*_config.json`, `ablation_summary.json`, calibration reports — and
   quote the run/version id. If a research doc says "~50%" and `summary.json` says 0.5011, use 0.5011.
+- **Read the model's IDENTITY from `model.json`, never from prose.** The Spec §3 fields that define
+  *what the model is* — algorithm, objective, target/label, num_class, tree count — get inherited
+  from research notes that describe *experiments that never shipped* (a `log_space` regressor was
+  documented for `m01_prototype`; the artifact is `multi:softprob` 4-class). Before writing §3, open
+  `models/<champion>/v*/model.json` and read `learner.objective.name` (+ `num_class`, `num_trees`).
+  That is the only authority for classifier-vs-regressor and the target family. Cross-check the
+  target *bins/transform* against the loader/label code (`training_data_loader.py`), not the doc it
+  was copied from. If the artifact and the prose disagree, **the artifact wins and you fix the prose.**
+  Train-time hyperparams (`learning_rate`, `max_depth`, …) are NOT persisted in `model.json`; if no
+  config artifact records them, mark them unverified rather than copying a plausible-looking value.
 - **Verify before you link.** A cross-link is a claim the target is current and consistent. Before
   emitting one, open the target. If it's **contaminated** (describes a retired thing under the live
   name — as `docs/modules/model_m02.md` was), *fix it too* — a stale linked doc spreads the same
