@@ -189,3 +189,36 @@
   predict the transition. This is a PREREQUISITE — it unblocks (a) testing M4's pro-cyclicality
   non-circularly (M4 above), and (b) M4 regime-reweighting (can't weight rows by a label we don't have).
   Large scope → DEFERRED to next session. `[[project_regime_during_period_goal]]`
+- ✅ **M6. BUILT (2026-07-08) — state label shipped; M4's pro-cyclicality OVERTURNED non-circularly.**
+  Built a model-agnostic date→state label (`regime_state.py`) reusing Thread F's live-safe machinery:
+  **bear** (SPY≤200d) / **bull-stress** (SPY>200d & top-tercile `stress_ew_vix`) / **bull-calm**. HARD
+  scope: label is **2013+ only** — credit/CAPE start 2003/2012 so the stress composite is only fully
+  populated then; a full-span tercile cut left just 45 stressed-bull days (unstratifiable), fixed by
+  cutting the tercile WITHIN the clean era (704). Consequence: NO 2008-scale crash in-window (worst bear
+  = 2022). Joined M4 target-A's per-row OOS preds (new `--dump-preds`) to the label:
+  **cond_lift10 is WEAKEST in calm-bull (1.62), STRONGEST under stress (bull-stress 2.44, bear 2.37) —
+  the edge is NOT pro-cyclical, if anything counter-cyclical.** hr_rate flat (~12.5%) across states →
+  genuine ranking power (best when dispersion high), not a base-rate artifact. The M4 smoke's "dies in
+  the GFC" was CONFIRMED circular. ⚠️ bear thin (1,647 rows, 41% is 2022) → directional not settled;
+  bull-stress (n=5,036, well-distributed) is the trustworthy cell. Doesn't contradict M1's 2001/2008
+  pro-cyclicality (deeper-crash era this label can't reach → needs the drawdown/vol axis, next step).
+  Next: model-agnostic SEPA-candidate behaviour by state (consumer #2), then drawdown/vol axis.
+  `verdicts/2026-07-08_m6_regime_state_label.md`
+- ✅ **M6 consumer #2 (2026-07-08) — m01 score×regime, full universe, all tickers, NO backtest.**
+  User Qs answered: (trunk) a BAKEOFF shows NO pillar trunk (credit/term/composite) beats spx200 at
+  separating fwd return — all have NEGATIVE bull-minus-bear separation (rebound lives on bear days),
+  spx200 least-negative → kept, pillars REJECTED on evidence. (m01×regime) the score RANKS fwd20 in
+  EVERY state — top−bottom decile gradient +2.1%/+1.6%/+1.7% (calm/stress/bear), monotone all three:
+  ranking skill is regime-ROBUST (level shifts, ordering survives — complements M4's tail-specific
+  counter-cyclicality). (stress gap) bear/stress precede HIGHER returns than calm bull; gap(stress-calm)
+  +0.85%, 95% block-bootstrap CI [+0.47,+1.20] EXCLUDES 0 → REAL (buy-the-stress, cf Thread F). (stat)
+  ran BOTH — bootstrap CI (day-resampled, honest) excludes 0 on 25y but STRADDLED 0 on the 3y smoke;
+  Kruskal-Wallis p≈0 is meaningless at 9M autocorrelated rows → trust the CI. ⚠️ fwd20 only,
+  directional. Next: dashboard current-state badge + regime strip beneath the 6-pillar table.
+  `verdicts/2026-07-08_m01_by_regime.md`
+- ✅ **fwd50/100 ENRICHED (2026-07-08) — the regime story is a LONG-HOLD one.** Enriched the full 25y
+  universe with fwd50/fwd100 (`enrich_fwd_horizons.py`, per-ticker `groupby.shift(-H)` reproducing
+  cached fwd20 EXACTLY, 27s). Horizon sweep: stress-calm gap +0.86%(fwd20)→+2.43%(fwd50)→+2.87%(fwd100)
+  ~triples; m01 top−bottom decile gradient grows ~4× (e.g. calm +2.1%→+9.1%) in EVERY state. fwd20
+  UNDERSTATED both effects → judge m01/regime on fwd100 (Thread F "signals live long", confirmed at
+  full-universe scale). Dashboard badge+strip DEFERRED as a separate deliverable (user).

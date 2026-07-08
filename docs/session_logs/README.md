@@ -17,6 +17,8 @@ Caches, parquets, `.log` output → **`data/`**, never `docs/`. Cross-session fa
 ## Sprints
 | Sprint | Dates | Theme | Status |
 |---|---|---|---|
+| [sprint_15](sprint_15/README.md) | 2026-07-08 → TBD | (seeded — regime stress-axis · during-period lens · dashboard) | 🔄 Active |
+| [sprint_14](sprint_14/README.md) | 2026-07-06 → 07-08 | Strategy consistency & deployment · tail-magnitude objective · M4 regressor · M6 regime state · m01×regime | ✅ Closed |
 | [sprint_13](sprint_13/README.md) | 2026-06-21 → 07-06 | M01 alpha validity · strategy arena · backtest productionisation · CAPE/DQ | ✅ Closed |
 | [sprint_12](sprint_12/README.md) | 2026-06-11 → 06-16 | Slim dashboard DB · remote parity · lifecycle scoring | ✅ Closed |
 | [sprint_11](sprint_11/README.md) | 2026-05-23 → 05-26 | Evaluation framework · model cards · binary model | ✅ Closed |

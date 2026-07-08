@@ -1,10 +1,41 @@
 # Sprint 14 — Strategy Consistency & Deployment
 
-**Dates:** 2026-07-06 → TBD · **Status:** 🔄 Active · **Prev:** [sprint_13](../sprint_13/README.md)
+**Dates:** 2026-07-06 → 2026-07-08 · **Status:** ✅ Closed · **Prev:** [sprint_13](../sprint_13/README.md) · **Next:** [sprint_15](../sprint_15/README.md)
 
 > Sprint 13 proved M01 is real alpha and that the edge lives in the exits (E1 top-5 immediate).
 > Sprint 14 turns that into a **deployable, capital-efficient** strategy: fix the rotation/turnover
 > problem, ship it to ITX + the remote dashboard, and settle the macro-sizing question against M03.
+
+### Headline outcomes (what the sprint banked / falsified)
+- **M01 is a strong GATE, and a strong RANKER on the full universe** — but "weak ranker (4×)" was only
+  true *within* the homogeneous gated pool / on the *flattened calibrated* score (the ties were a
+  calibrator artifact, not the model). On the raw full-universe score the tail concentrates at the top.
+- **Objective re-cut to tail-MAGNITUDE** (`Σmax(fwd−30%,0)` + tail-lift@k) — the gate misses 14% of
+  magnitude, not 23% of events; reusable metric adopted, regime-robust.
+- **M4 (magnitude regressor) SMOKE-BUILT then PARKED** — a plain winsorized regressor ranks the tail
+  within the elite pool better than the classifier (median), but noisy; no artifact shipped.
+- **M4's pro-cyclicality OVERTURNED** — with an independent regime label the tail-ranking edge is
+  **counter-cyclical** (strongest under stress/bear), cross-validated on two stress axes. The
+  "dies in the GFC" story was a circular hand-picked-fold artifact.
+- **M6 regime STATE label shipped** — bull/bear trunk (SPY-200MA) solid & regime-matching; the
+  stress sub-split (dd / macro axes) NOT yet settled (leaky/sparse/flickery) — a known refinement.
+- **m01 ranking is REGIME-ROBUST** (full universe, all tickers): the score ranks fwd return in every
+  state; stress/bear precede HIGHER returns than calm (gap statistically real by block-bootstrap), and
+  **both gap and gradient GROW with the hold** (judge on fwd100). NO pillar trunk beats SPX-200MA.
+- **VIX ≈ the bear/drawdown axis** (≈ realized vol) — VIX-sizing and the regime overlay are the same
+  bet, not independent inputs.
+- **Deployment facts:** SPY>200d is a real ex-ante deploy gate (+3.0% vs +0.6%); VIX is NOT a gate
+  (high-VIX = rebound); widening top-5→10 dilutes (sharp cliff at 5); champion is start-time dependent
+  → judge on a start-date cone, not one Sharpe. Stage-gate & τ=0.90-quantile theses FALSIFIED.
+
+**→ full question ledger (how the thinking evolved):** [RESEARCH_LOG.md](RESEARCH_LOG.md)
+
+### Folder map
+- **`RESEARCH_LOG.md`** — linear question ledger (M1–M6 + threads A–F, by sequence).
+- **`logs/`** — dated session handovers (`YYYY-MM-DD_NN_<slug>.md` + `_index.md` on multi-session days).
+- **`verdicts/`** — findings / reports (one per question).
+- **`cells/`** — notebook-cell artifacts (`*_cells.md`).
+- **`scripts/`** — reusable research harnesses built this sprint.
 
 ## 🧭 Research questions we're answering (the big picture)
 

@@ -137,7 +137,7 @@ def run_fold(df, valid, target, test_start, test_end):
             & (df["date"] < pd.Timestamp(f"{test_end}-01-01"))]
     if len(te) < 200 or len(tr) < 1000:
         _log(f"  fold {test_start}-{test_end}: SKIP (train={len(tr)} test={len(te)})")
-        return None
+        return None, None
     y_all, params, score_fn = build_target(target, df["mfe_pct"])
     Xtr = tr[valid].replace([np.inf, -np.inf], np.nan)
     Xte = te[valid].replace([np.inf, -np.inf], np.nan)
@@ -169,7 +169,11 @@ def run_fold(df, valid, target, test_start, test_end):
                cond_lift10=cond[0.10], best_iter=int(booster.best_iteration), model=mp.name)
     _log(f"  fold {test_start}-{test_end}: n_te={len(te)} lift@1%={lift[0.01]:.2f} "
          f"lift@10%={lift[0.10]:.2f} cond@top10={cond[0.10]:.2f} (best_iter={booster.best_iteration})")
-    return res
+    # per-row OOS predictions for downstream regime-state stratification (M6 consumer).
+    # emitting from HERE keeps this harness the single source of fold scores — no re-scoring.
+    preds = pd.DataFrame({"date": te["date"].to_numpy(), "ticker": te["ticker"].to_numpy(),
+                          "score": score, "mfe_pct": mfe_te, "test_start": test_start})
+    return res, preds
 
 
 def main():
@@ -177,6 +181,8 @@ def main():
     ap.add_argument("--target", choices=["champion", "A", "B"], default="champion")
     ap.add_argument("--smoke", action="store_true", help="two folds only (2013-15, 2021-23)")
     ap.add_argument("--folds", type=int, nargs="+", help="explicit test_start years")
+    ap.add_argument("--dump-preds", action="store_true",
+                    help="also write per-row OOS (date,ticker,score,mfe_pct) for regime stratification")
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -191,17 +197,22 @@ def main():
     else:
         folds = DEFAULT_FOLDS
 
-    rows = []
+    rows, pred_frames = [], []
     for ts, te in folds:
-        r = run_fold(df, valid, args.target, ts, te)
+        r, preds = run_fold(df, valid, args.target, ts, te)
         if r:
             rows.append(r)
+            pred_frames.append(preds)
 
     if not rows:
         _log("no folds ran"); return
     res = pd.DataFrame(rows)
     outp = OUT / f"wfo_{args.target}.csv"
     res.to_csv(outp, index=False)
+    if args.dump_preds:
+        pp = OUT / f"preds_{args.target}.parquet"
+        pd.concat(pred_frames, ignore_index=True).to_parquet(pp, index=False)
+        _log(f"saved per-row preds {pp}")
     _log(f"\n=== {args.target} WFO tail-lift (OOS mfe_pct, {len(res)} folds) ===")
     pd.set_option("display.width", 160)
     print(res[["test_start", "test_end", "n_test", "hr_rate", "lift1", "lift5",
