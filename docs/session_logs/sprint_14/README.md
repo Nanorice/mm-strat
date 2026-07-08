@@ -1,12 +1,12 @@
 # Sprint 14 — Strategy Consistency & Deployment
 
-**Dates:** 2026-07-06 → 2026-07-08 · **Status:** ✅ Closed · **Prev:** [sprint_13](../sprint_13/README.md) · **Next:** [sprint_15](../sprint_15/README.md)
+**Dates:** 2026-07-06 → TBD · **Status:** 🔄 Active · **Prev:** [sprint_13](../sprint_13/README.md)
 
 > Sprint 13 proved M01 is real alpha and that the edge lives in the exits (E1 top-5 immediate).
 > Sprint 14 turns that into a **deployable, capital-efficient** strategy: fix the rotation/turnover
 > problem, ship it to ITX + the remote dashboard, and settle the macro-sizing question against M03.
 
-### Headline outcomes (what the sprint banked / falsified)
+### Progress so far (banked / falsified)
 - **M01 is a strong GATE, and a strong RANKER on the full universe** — but "weak ranker (4×)" was only
   true *within* the homogeneous gated pool / on the *flattened calibrated* score (the ties were a
   calibrator artifact, not the model). On the raw full-universe score the tail concentrates at the top.
@@ -137,23 +137,28 @@ top-5?* The open questions, each mapped to a goal below:
 ## TODOs
 _(sprint-local isolated TODOs; cross-session facts go to memory, not here.)_
 
-**Deferred to a fresh session (2026-07-07 — carry the meta-questions from [RESEARCH_LOG.md](RESEARCH_LOG.md)):**
-- [ ] **M1 — fat-tail-weighted objective.** Re-cut the "home-runs captured/missed" analysis with
-  magnitude, not the binary >30% count (a +35% and a +400% must not count equally). Metric:
-  Σ max(fwd−30%, 0) or rank-of-top-1%. This is the objective everything else should optimise.
+**Meta-questions status (full detail in [RESEARCH_LOG.md](RESEARCH_LOG.md)):**
+- [x] **M1 — fat-tail-weighted objective** — DONE, `Σmax(fwd−30%,0)` + tail-lift@k adopted.
+- [x] **M4 — magnitude/quantile regressor** — SMOKE-BUILT then PARKED (A-target ranks tail better but noisy).
+- [x] **M6 — regime state expression + during-period behaviour** — label shipped; M4 counter-cyclical; m01 regime-robust.
 - [ ] **M2 — decisions on a start-date CONE, not a single Sharpe.** Re-open raw-vs-calibrated and
-  gate-height using the Sharpe *distribution* across start months (reuse the S13 start-time sweep),
-  not one WFO aggregate. The 0.12 cal-vs-raw gap is inside start-time noise → not settled.
-- [ ] **M3 — did the whole strategy search start on the wrong foot?** We grid-searched strategies
-  over ONE horizon, picked a winner, THEN found start-date dependence. Re-frame: sweep strategies
-  in BOTH good and bad months and pick the most **stable** (not highest-mean); refine/iterate.
-  Stability-first methodology — decide before more strategy work.
-- [ ] **M4 — magnitude/quantile regressor (candidate new model).** m01_binary can't express fat
-  tails (outputs P(>30%)). Design a regressor / quantile model targeting forward-return magnitude
-  to rank by expected tail contribution. Eval = rank-of-tail, not RMSE. ⚠️ pick a model id that
-  does NOT collide with the existing regime model M03. Design doc first.
-- [ ] **M5 — prototype the persistent continuous-score top-N** (top-5 by raw = +5.7%/19% HR, 50%
-  overnight persistence, ~7-place drift) — a lower-turnover product distinct from day-0 breakouts.
+  gate-height using the Sharpe *distribution* across start months. 0.12 gap inside start-time noise.
+- [ ] **M3 — stability-first strategy search** — sweep strategies in BOTH good and bad months, pick the
+  most STABLE (not highest-mean). Decide the methodology before more strategy work.
+- [ ] **M5 — persistent continuous-score top-N** (top-5 raw = +5.7%/19% HR, 50% overnight persistence)
+  — a lower-turnover product distinct from day-0 breakouts.
+
+**Regime follow-ups (opened 2026-07-08 by M6, still open):**
+- [ ] **Settle the regime STRESS sub-split** — persistence filter (de-flicker) + a vol/VIX-percentile
+  stress cut (`spy_vol20` already computed; ≈ a VIX cut → grounds it in the S13 sizing signal, fixes
+  dd-sparsity / macro-leak). cf `verdicts/2026-07-08_m6_regime_state_label.md` §3b/§5.
+- [ ] **dd regime axis on the SEPA-CANDIDATE population pre-2013** — the "reaches 2008" test + the
+  model-agnostic during-period lens on the actual watchlist (consumer #2 used the full universe).
+- [ ] **Dashboard: current-state regime badge + regime strip** beneath the 6-pillar table — DEFERRED as
+  a separate deliverable (user). Payload = state→level+CI (`verdicts/2026-07-08_m01_by_regime.md`).
+- [ ] **Feed regime as a training FEATURE into m01/m04** (once the stress axis is settled) — label is
+  date-keyed/joinable; finding suggests regime helps LEVEL calibration more than ranking.
+- [ ] **M4 regime-reweighting** — runnable, but the counter-cyclical finding argues AGAINST it. Parked.
+
 - [ ] **Docs infra — fold RESEARCH_LOG maintenance into `handover` + `sprint-wrap-up` skills** (append
-  the session's question→outcome lines at session/sprint close), plus a light manual "log this"
-  trigger for mid-session key points. Do NOT auto-detect "key points" on every turn (spam/noise risk).
+  the session's question→outcome lines at session/sprint close), plus a light manual "log this" trigger.
