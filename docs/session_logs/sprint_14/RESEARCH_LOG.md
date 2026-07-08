@@ -222,3 +222,67 @@
   ~triples; m01 top−bottom decile gradient grows ~4× (e.g. calm +2.1%→+9.1%) in EVERY state. fwd20
   UNDERSTATED both effects → judge m01/regime on fwd100 (Thread F "signals live long", confirmed at
   full-universe scale). Dashboard badge+strip DEFERRED as a separate deliverable (user).
+- ✅ **THE m01 SCORE IS REGIME-BLIND (2026-07-08 synthesis + confirm) — this is WHY the rule is a
+  lottery.** Confirmed a user suspicion directly: through the entire 2022 bear, the daily mean m01 score
+  is FLAT (0.37–0.45, std 0.021) while mean fwd20 swings −9%..+9.5% (std 0.054, 2.5× more variable).
+  The technical continuation score has NO idea a drawdown is happening — SEPA-eligible names stay in
+  uptrends (by construction) right up until they break, so the score keeps emitting "buy these 5" into
+  a falling market. **Consequence (the sharp point): the trading rule has no internal brake → outcome
+  is dominated by WHEN you start = a lottery, not a strategy.** The fix CANNOT be trained in (SEPA
+  structurally excludes crash-bottom names — the model is continuation-only BY DESIGN); it must be an
+  EXTERNAL regime governor (sizing/gating overlay) on top of the model. This closes the loop from Thread
+  A (start-time dependence) → M6 (regime label) → the governor. Trunk for the governor = SPY vs 200d MA
+  (coincident bull/bear is ENOUGH per the user's point-4 logic: worst case you start the day before a
+  drawdown and stop the next day); the calm/stress sub-split is NOT needed for a first cut.
+- ✅ **POINT-8 DONE (2026-07-08) — regime-weighting the panel REDUCES the drag → the governor earns a
+  backtest.** Reweighted the existing per-day top-5 fwd100 panel (`entry_timing_daily.parquet` ⋈ dd
+  regime label, 5650 days) by ENTRY-DATE regime, two weights: **(a) SPY-200MA bear=0** cuts the
+  worst-decile +5.0pp (−34.9%→−29.8%) but costs −1.0pp mean — a VARIANCE BRAKE, not free alpha, because
+  bear days carry BOTH the highest mean fwd100 (+16.6% rebound) AND the worst tail (−51% knife). **(b)
+  stress_ew_vix bull-gated improves BOTH** (mean +0.8pp, worst-decile +6.0pp) by concentrating into
+  bull-stress (good-mean/contained-tail) — the better governor, ⚠️ but deploys only ~18% of capital
+  (per-$-deployed mean; a full-book scaling decision the backtest must force). Effect is a LONG-HOLD one
+  (fwd20 deltas ~⅓ fwd100). **Verdict: promote to backtest, carry BOTH weights** — (a) simple full-deploy
+  brake, (b) concentration tilt. Re-confirms Thread F's "deploy more when stress EXTREME & SPY>200d" now
+  shown to cut DRAG not just lift mean. EDA reweight, no exits/sizing — backtest through the start-date
+  cone (M2) before wiring. `scripts/regime_weight_panel.py`, `cells/regime_weight_panel_cells.md`,
+  `data/model_output_eda/regime_weight/`.
+  - **+2 charts (user, 2026-07-08):** (Q1) deploy-from-any-day drift — cumulative top-1/5/10 fwd20 per
+    representative period: steady up-slope in every bull/rebound (2020 COVID +13.2/100d, 2003-07 +2.8,
+    2023-25 +3.2, 2013-15 +1.6) but **−1.9 in the 2007-09 GFC** → the edge is a bull-regime property
+    (regime-blindness as an equity curve); top-5≈top-10, top-1 noisier (cliff-at-5 confirmed). (Q2)
+    6-pillar expanding-percentile stack vs the full-span top-5 curve — legible macro backdrop (credit/VIX
+    spike into 2008/2020 where the curve stalls) but NOT a consolidated signal (that's stress_ew_vix).
+    `scripts/start_date_drift.py` (+`_chart.py`), cells 8-12.
+  - **+3 follow-up charts (user, 2026-07-08):** (C3) NON-cumulative — raw per-day top-5 fwd20 scatter the
+    cumulative curve sums; (C4) whole-period 2001-25 with dd-regime shading → bear bands (2001-02/2008/
+    2020/2022) sit ON the flat/declining cumulative stretches (regime change visible at 25y scale). (C5)
+    FIXED the pillar viz: expanding percentile is BROKEN for TRENDING pillars — Net Liquidity (corr+0.96)
+    & CAPE (+0.91) only ramp up so expanding-pct pins at ~100% after 2004 (re-encodes "later=higher");
+    replaced with ROLLING 2yr percentile → Liq now dips in QT (2018/2022). Data-fact answers: CAPE
+    genuinely starts 2012-12 (`CAPE_OURS` self-computed, cf [[project_cape_ours_pillar]]); the Liq pin
+    was transform not data. `scripts/start_date_drift_extra.py`, cells 13-16.
+  - **+2 charts / a QUANTIFICATION (user, 2026-07-08):** (C6) daily top-5 return by horizon (cumulative
+    panel stripped — no realistic meaning; mean +2.6/+5.9/+12.1% fwd20/50/100, regime-shaded). (C7)
+    **CAN macro quantify high/low-return periods? YES, all on ONE stress/VIX axis.** fwd100 top−bottom-
+    tercile spread: VIX +11.5%, VIX-raw +11.0%, stress composite +10.5%, credit +9.6% (all buy-the-
+    stress); rates −8.9% & CAPE −8.3% INVERT (same axis, flipped); **SPY>200d −5.1%** (rebound lives
+    sub-200d → SPY-trend is a TAIL gate not a return-level ranker; two jobs). Stress composite NOT better
+    than raw VIX (VIX carries it, cf [[project_entry_timing_macro_axis]]). THE CATCH: high-stress tercile
+    = best mean (+18.5%) AND worst tail (−43.3% worst-decile) → survives only WITH the SPY>200d gate =
+    the point-8 governor (b). All |ρ|≤0.09 = tilts not gates; tercile cuts full-sample (EDA).
+    `scripts/return_vs_macro.py`, cells 17-21, `return_vs_macro_quantify.csv`.
+  - ✅ **INSIDE the high-stress tercile + 150d/200d (user, 2026-07-08) — THE GOVERNOR IS A GATE × A
+    TILT.** Enriched fwd150/200 (smoke-tested, 99.6/98.7% cov) → top-5 panel at 5 horizons
+    (`build_top5_horizons.py`, `top5_horizons.parquet`). Within the top stress tercile (n=1800),
+    SPY>200d cleanly splits the outcome: bull-stress vs bear-stress earn ~EQUAL MEAN at every horizon
+    (fwd100 +18.9 vs +18.0%) but bear-stress worst-decile is ~2.5× DEEPER (−56 vs −24% fwd100, −65 vs
+    −31% fwd200); reward/|tail| bull dominates all horizons (fwd150 1.27 vs 0.45). Bear-stress's higher
+    fwd200 mean is a mirage of 2008/09 crash clusters (248+101 of its 709 days = catch-the-bottom bets).
+    **STRATEGY CONCLUSION: two signals, two jobs — stress/VIX ranks the MEAN (size up on stress),
+    SPY>200d is the TAIL GATE (removes the bear-stress knife at ~0 mean cost); don't stack a 2nd
+    vol-sizing factor (double-counts). Confirms & explains point-8(b). Hold long & only above 200d — the
+    edge & tail-heal both strengthen with horizon.** The regime-blind m01 doesn't need to become
+    regime-aware; it needs this 2-part external governor. Falsifiable spec → backtest via M2 cone.
+    ⚠️ bear-stress n=709 crash-clustered (few-episode tail); full-sample cuts (EDA). `high_stress_
+    conditional.py`, cells 22-25, `high_stress_conditional.{csv,png}`.
