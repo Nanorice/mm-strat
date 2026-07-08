@@ -165,5 +165,27 @@
   champion lift (was fwd20) on mfe_pct so the comparison is same-outcome. id = `m04_regressor` (≠ shipped
   M03). Target+objective swap in the existing XGB trainer, reuses the multi-year toolkit; smoke-first.
   `verdicts/2026-07-07_m4_magnitude_regressor_design.md`
+- ✅ **M4. SMOKE-BUILT (2026-07-08) — a magnitude regressor ranks better ON AVERAGE, but noisily.**
+  Fixed the setup: M4 trains on `d2_training_cache` (the table m01 already trains on, has `mfe_pct`) —
+  NOT the multi-year full-universe parquets (those only have `fwd20`), which is where the design wrongly
+  pointed. Shipped m01_prototype was no-holdout (saw all rows) → built a model-level WFO harness
+  (`m4_wfo_taillift.py`, expanding train, retrain+score per fold). 11 folds, 3 targets scored on OOS
+  `mfe_pct`, metric `cond_lift10` (= does the score rank the big winners WITHIN its own top-10% pool):
+  **A (plain winsorized-magnitude regressor, the design's null control) wins on the median** — 1.73 vs
+  champion 1.29; **B (τ=0.90 quantile, the design's primary thesis) ties the champion** (quantile loss
+  barely learns). So the design's bet on which target wins was wrong — the simple regressor beat the
+  fancy one. **But the result is NOISY (A swings 0.21–3.41 across folds, fails 3/11).** The 2007-09 (GFC)
+  fold is <1× for all three — tempting to call "pro-cyclical, dies in crash" BUT that split is CIRCULAR
+  (hand-picked the GFC as "bad" because it was the weakest fold; two calm-year folds are nearly as weak).
+  Can't attribute the weakness to regime vs noise without a real regime label → see M6. Settled cheaply
+  on the cached table; the expensive full-universe sweep was NOT needed (wrong population/outcome).
+  Next unblocked step = re-cut on SEPA-eligible-only names. `verdicts/2026-07-08_m4_smoke_wfo_taillift.md`
 - **M5. Persistent continuous-score top-N** (from Q10) is a different, lower-turnover product than
   the day-0 breakout champion — worth prototyping + cone-testing.
+- 📋 **M6. Quantify a REGIME state expression + characterize DURING-period behaviour.** (user, 2026-07-08)
+  The sprint over-indexed on *leading-vs-coincident* (can a macro signal predict WHEN to deploy —
+  Thread F). Under-served: a clean **state label** (stress / bull / bear) and how the strategy behaves
+  WHILE inside each state (drawdown shape, tail-rankability, dispersion), regardless of whether we can
+  predict the transition. This is a PREREQUISITE — it unblocks (a) testing M4's pro-cyclicality
+  non-circularly (M4 above), and (b) M4 regime-reweighting (can't weight rows by a label we don't have).
+  Large scope → DEFERRED to next session. `[[project_regime_during_period_goal]]`
