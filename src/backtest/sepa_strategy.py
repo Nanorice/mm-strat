@@ -161,6 +161,15 @@ class SEPAHybridV1(bt.Strategy):
         # and exits run unchanged) — the ex-ante market filter, separate from M03
         # regime sizing. None = no gate (default). A missing date defaults to open.
         ('spy_deploy_gate', None),
+
+        # Progressive fills (Minervini scale-in) — the vectorized winner (M2 cone).
+        # Enter a starter fraction of the target size, add the remainder once price
+        # first clears +add_trigger_pct above entry. Path-dependent: losers that
+        # never trigger stay small; winners scale to full. Tranche math keys off the
+        # FINAL target size. Default off => existing strategies byte-identical.
+        ('progressive_fills', False),
+        ('starter_frac', 0.5),
+        ('add_trigger_pct', 0.05),
     )
 
     def __init__(self):
@@ -217,12 +226,22 @@ class SEPAHybridV1(bt.Strategy):
             ticker = order.data._name
 
             if order.isbuy():
-                # Entry order filled - NOW create position in tracker
-                self.position_tracker.confirm_entry(
-                    order_ref=order.ref,
-                    executed_price=order.executed.price,
-                    executed_size=int(order.executed.size),
-                )
+                # A buy is either a progressive-fill ADD (tracked in pending_orders
+                # with reason 'add') or a fresh ENTRY (has a pending entry intent).
+                if self.pending_orders.get(order.ref, {}).get('reason') == 'add':
+                    self.pending_orders.pop(order.ref, None)
+                    self.position_tracker.confirm_add(
+                        ticker=ticker,
+                        executed_price=order.executed.price,
+                        executed_size=int(order.executed.size),
+                    )
+                else:
+                    # Entry order filled - NOW create position in tracker
+                    self.position_tracker.confirm_entry(
+                        order_ref=order.ref,
+                        executed_price=order.executed.price,
+                        executed_size=int(order.executed.size),
+                    )
             else:
                 # Exit order filled - NOW update tranche state
                 exit_info = self.pending_orders.pop(order.ref, {})
@@ -313,6 +332,10 @@ class SEPAHybridV1(bt.Strategy):
         # === CHECK GAP-DOWN EXITS (before other checks) ===
         # self._check_gap_down_exits()
 
+        # === PROGRESSIVE-FILL ADDS (before stops/targets; scale winners up) ===
+        if self.p.progressive_fills:
+            self._check_adds()
+
         # === UPDATE TRAILING STOPS ===
         self._update_all_stops()
 
@@ -399,6 +422,25 @@ class SEPAHybridV1(bt.Strategy):
                     gap_pct = (pos.entry_price - today_open) / pos.entry_price * 100
                     logger.info(f"Gap-down exit {ticker}: Open {today_open:.2f} <= stop {pos.current_stop:.2f} "
                                f"({gap_pct:.1f}% below entry)")
+
+    def _check_adds(self):
+        """Progressive-fill scale-in: buy the remainder once price first clears
+        the add trigger. Fires at most once per position (add_pending/added guard).
+        """
+        for ticker, pos in list(self.position_tracker.positions.items()):
+            if pos.added or pos.add_pending or pos.exit_pending:
+                continue
+            if pos.add_target_shares <= 0:
+                continue
+            data = self.stock_feeds.get(ticker)
+            if data is None:
+                continue
+            if data.high[0] >= pos.add_trigger_price:
+                order = self.buy(data=data, size=pos.add_target_shares)
+                self.pending_orders[order.ref] = {'reason': 'add', 'ticker': ticker}
+                pos.add_pending = True
+                logger.info(f"Progressive add {ticker}: +{pos.add_target_shares} shares "
+                            f"(high {data.high[0]:.2f} >= trigger {pos.add_trigger_price:.2f})")
 
     def _update_all_stops(self):
         """Update trailing stops for all open positions."""
@@ -814,8 +856,20 @@ class SEPAHybridV1(bt.Strategy):
         # Calculate target 2: target1 + 2*ATR
         target2 = target1 + (self.p.atr_target2_add * atr)
 
+        # Progressive fills: buy only the starter fraction now; the add fires later
+        # when price clears +add_trigger_pct. full_target keeps tranche math right.
+        if self.p.progressive_fills:
+            starter = int(shares * self.p.starter_frac)
+            if starter < 1:
+                starter = shares  # too small to split — take it whole
+            buy_size = starter
+            add_trigger_price = price * (1.0 + self.p.add_trigger_pct)
+        else:
+            buy_size = shares
+            add_trigger_price = 0.0
+
         # Submit market order
-        order = self.buy(data=data, size=shares)
+        order = self.buy(data=data, size=buy_size)
 
         # Register INTENT (not the actual position - that happens in notify_order)
         self.position_tracker.register_entry_intent(
@@ -824,7 +878,9 @@ class SEPAHybridV1(bt.Strategy):
                 'ticker': ticker,
                 'entry_date': current_date,
                 'entry_atr': atr,
-                'initial_size': shares,
+                'initial_size': buy_size,
+                'full_target_size': shares,
+                'add_trigger_price': add_trigger_price,
                 'initial_stop': initial_stop,
                 'target1': target1,
                 'target2': target2,

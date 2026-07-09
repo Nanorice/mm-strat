@@ -31,8 +31,12 @@ def prototype_scores_to_contract(df: pd.DataFrame) -> pd.DataFrame:
     out['trailing_pct'] = out['daily_pct_rank']
     if 'calibrated_score' not in out.columns:
         out['calibrated_score'] = out['prob_elite']
-    return out[['date', 'ticker', 'normalized_score', 'daily_pct_rank',
-                'trailing_pct', 'prob_elite', 'calibrated_score']]
+    keep = ['date', 'ticker', 'normalized_score', 'daily_pct_rank',
+            'trailing_pct', 'prob_elite', 'calibrated_score']
+    # Carry the SEPA gate flags through when present so ScoreLookup keeps the
+    # breakout entry gate; dropping them silently re-inflates the population.
+    keep += [f for f in ('trend_ok', 'breakout_ok') if f in out.columns]
+    return out[keep]
 
 
 class ScoreLookup:
@@ -60,7 +64,16 @@ class ScoreLookup:
         self._build_index()
 
     def _build_index(self):
-        """Build date -> {ticker: (norm_score, daily_rank, trailing_pct, prob_elite)} index."""
+        """Build date -> {ticker: (norm_score, daily_rank, trailing_pct, prob_elite,
+        sepa_ok)} index.
+
+        sepa_ok = (trend_ok AND breakout_ok): the ticker is a GENUINE SEPA breakout
+        on that day, not just an off-setup row score_from_t3 happens to carry (that
+        method scores the whole trend-active panel — see its docstring). Selection
+        gates on this so the strategy buys breakouts, not arbitrary price action.
+        Absent flags default sepa_ok=True (backward-compatible for legacy score
+        frames that predate the columns).
+        """
         self.df['date'] = pd.to_datetime(self.df['date'])
 
         required = {'normalized_score', 'daily_pct_rank', 'trailing_pct', 'prob_elite'}
@@ -71,6 +84,14 @@ class ScoreLookup:
                 "Re-score with UniverseScorer.score_from_t3()."
             )
 
+        has_gate = {'trend_ok', 'breakout_ok'} <= set(self.df.columns)
+        if not has_gate:
+            logger.warning(
+                "ScoreLookup: no trend_ok/breakout_ok columns — SEPA entry gate "
+                "disabled (every scored row is selectable). Re-cache scores with "
+                "the flags to restore the breakout gate."
+            )
+
         for date, group in self.df.groupby('date'):
             date_key = date.date() if hasattr(date, 'date') else date
             self._index[date_key] = {
@@ -79,6 +100,7 @@ class ScoreLookup:
                     row['daily_pct_rank'],
                     row['trailing_pct'],
                     row['prob_elite'],
+                    bool(row['trend_ok'] and row['breakout_ok']) if has_gate else True,
                 )
                 for _, row in group.iterrows()
             }
@@ -93,6 +115,7 @@ class ScoreLookup:
         min_percentile: float = 0.0,
         min_prob_elite: float = 0.0,
         rank_by: Literal['trailing', 'daily', 'prob_elite'] = 'trailing',
+        require_sepa: bool = True,
     ) -> List[Tuple[str, float, float, float]]:
         """
         Get tickers passing score floor, sorted by rank.
@@ -103,6 +126,11 @@ class ScoreLookup:
             min_percentile: Minimum percentile rank (0-1) - optional gate
             min_prob_elite: Minimum P(Class 3) Elite probability (0-1)
             rank_by: Sort key — 'trailing' | 'daily' | 'prob_elite'
+            require_sepa: keep only genuine SEPA breakouts (trend_ok AND
+                breakout_ok). ON by default — score_from_t3 scores the whole
+                trend-active panel, so without this the top-N is drawn from an
+                inflated population of off-setup rows. Set False for the
+                (research-only) unfiltered universe.
 
         Returns:
             List of (ticker, normalized_score, trailing_pct, prob_elite) tuples,
@@ -122,7 +150,9 @@ class ScoreLookup:
 
         # Filter candidates by score floor, percentile gate, and elite threshold
         candidates = []
-        for ticker, (score, daily_rank, trailing_rank, prob_elite) in day_data.items():
+        for ticker, (score, daily_rank, trailing_rank, prob_elite, sepa_ok) in day_data.items():
+            if require_sepa and not sepa_ok:
+                continue
             if score < min_score:
                 continue
             if prob_elite < min_prob_elite:
@@ -166,7 +196,10 @@ class ScoreLookup:
         if day_data is None:
             return None
 
-        return day_data.get(ticker)
+        rec = day_data.get(ticker)
+        # Index stores a 5-tuple (…, sepa_ok); the public contract is the 4-tuple
+        # (normalized_score, daily_pct_rank, trailing_pct, prob_elite).
+        return rec[:4] if rec is not None else None
 
     def check_persistence(
         self,

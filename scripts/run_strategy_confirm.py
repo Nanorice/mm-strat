@@ -48,6 +48,9 @@ DB_PATH = REPO_ROOT / "data" / "market_data.duckdb"
 CACHE = {
     "binary": REPO_ROOT / "data" / "score_cache" / "binary_2021_2026.parquet",
     "proto_cali": REPO_ROOT / "data" / "score_cache" / "proto_cali_2021_2026.parquet",
+    # SEPA-gated full-span cache (M2b) — genuine breakouts only, 2003→2026.
+    "binary_gated": REPO_ROOT / "data" / "score_cache" /
+        "m01_binary_calibrated_2003-01-01_2026-05-22_sepa_gated.parquet",
 }
 MODEL = {  # for provenance in artifacts; scores come from cache, not re-scored
     "binary": ("m01_binary", "v1"),
@@ -151,10 +154,24 @@ def _tier3_grid() -> List[Arm]:
     return arms
 
 
+def _m2b_arms() -> List[Arm]:
+    """M2b: BackTrader confirm of the vectorized minervini cone (M2 winner) on the
+    SEPA-gated population. Two arms — the native tranche exit with and without
+    progressive fills — to isolate the scale-in's fidelity-engine effect."""
+    base = _base_kwargs(5)
+    return [
+        Arm("M2b_gated_baseline", "binary_gated",
+            "GATED baseline: native tranche exit, no progressive fills", base),
+        Arm("M2b_gated_progfill", "binary_gated",
+            "GATED + progressive fills (Minervini scale-in) — the M2 winner",
+            {**base, "progressive_fills": True, "starter_frac": 0.5, "add_trigger_pct": 0.05}),
+    ]
+
+
 def _all_arms() -> Dict[str, Arm]:
     """Every arm across every grid, keyed by id — for --wfo-gate lookup."""
     out: Dict[str, Arm] = {}
-    for a in POPULATION + _exit_grid() + _tier3_grid():
+    for a in POPULATION + _exit_grid() + _tier3_grid() + _m2b_arms():
         out[a.id] = a
     return out
 
@@ -205,8 +222,15 @@ def wfo_gate(arm: Arm, start: str, end: str, initial_cash: float,
 
 
 def _load_scores(signal: str, start: str, end: str) -> pd.DataFrame:
-    """Load cached scores (not re-scored) and adapt to the ScoreLookup contract."""
+    """Load cached scores (not re-scored) and adapt to the ScoreLookup contract.
+
+    Preserves trend_ok/breakout_ok when the cache carries them (the SEPA-gated
+    cache) so ScoreLookup restores the breakout entry gate — dropping them here
+    silently re-inflates the population (the exact M2b bug)."""
+    import pyarrow.parquet as pq
+    have = set(pq.ParquetFile(CACHE[signal]).schema.names)
     cols = ["date", "ticker", "prob_elite", "calibrated_score"]
+    cols += [f for f in ("trend_ok", "breakout_ok") if f in have]
     df = pd.read_parquet(CACHE[signal], columns=cols)
     df["date"] = pd.to_datetime(df["date"])
     df = df[(df["date"] >= pd.Timestamp(start)) & (df["date"] <= pd.Timestamp(end))]

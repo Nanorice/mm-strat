@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -111,7 +112,13 @@ def suggest_params(trial) -> dict:
         min_prob_elite=trial.suggest_float("min_prob_elite", 0.0, 0.35),
         max_positions_per_day=trial.suggest_int("max_positions_per_day", 1, 5),
         stop_loss_pct=trial.suggest_float("stop_loss_pct", 0.05, 0.15),
-        exit_policy=trial.suggest_categorical("exit_policy", ["sma", "nday", "atr_trail"]),
+        # LOCK_EXIT_POLICY env var pins the exit policy for a head-to-head cone
+        # (e.g. minervini vs sma each with the full trial budget in its own
+        # subspace, instead of one optimizer under-sampling across all four).
+        exit_policy=(
+            os.environ["LOCK_EXIT_POLICY"] if os.environ.get("LOCK_EXIT_POLICY")
+            else trial.suggest_categorical(
+                "exit_policy", ["sma", "nday", "atr_trail", "minervini"])),
         max_hold_days=trial.suggest_categorical("max_hold_days", [60, 120, 252]),
     )
     # Exit-type-specific knobs — only the active policy's params matter.
@@ -119,8 +126,15 @@ def suggest_params(trial) -> dict:
         params["sma_exit_period"] = trial.suggest_categorical("sma_exit_period", [20, 50, 100])
     elif params["exit_policy"] == "nday":
         params["nday_hold"] = trial.suggest_categorical("nday_hold", [5, 10, 21])
-    else:  # atr_trail
+    elif params["exit_policy"] == "atr_trail":
         params["atr_trail_mult"] = trial.suggest_categorical("atr_trail_mult", [1.5, 2.0, 2.5])
+    else:  # minervini — breakeven-ratchet trail + optional progressive fills
+        params["be_trigger_pct"] = trial.suggest_categorical("be_trigger_pct", [0.05, 0.10, 0.15])
+        params["trail_pct"] = trial.suggest_categorical("trail_pct", [0.10, 0.15, 0.20])
+        params["progressive_fills"] = trial.suggest_categorical("progressive_fills", [True, False])
+        if params["progressive_fills"]:
+            params["starter_frac"] = trial.suggest_categorical("starter_frac", [0.3, 0.5])
+            params["add_trigger_pct"] = trial.suggest_categorical("add_trigger_pct", [0.03, 0.05, 0.08])
     return params
 
 

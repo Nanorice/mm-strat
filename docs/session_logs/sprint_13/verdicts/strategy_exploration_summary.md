@@ -1,5 +1,14 @@
 # Strategy Exploration — Summary (Sprint 13, 2026-07-05)
 
+> ⚠️⚠️ **POPULATION-INFLATED — the champion here is SUPERSEDED (2026-07-09).** This whole arena selected
+> top-5 from the ~99% off-setup scored panel (no `trend_ok AND breakout_ok` gate at selection). On the
+> corrected SEPA-gated population, minervini+progressive-fills beats even the re-derived honest sma across
+> the start-date cone (%neg folds 25→5%, worst fold −1.30→−0.09). The `sl15×tpTight` champion below is
+> retired. See `../../sprint_14/verdicts/2026-07-09_m2_minervini_vs_sma_gated_cone.md` +
+> `../../sprint_14/plans/population_rectification_plan.md`. The *methodology* (kill selection red
+> herrings, edge is in exits, gate on the cone) still stands — only the population and the champion config
+> were wrong.
+>
 > **The question that drove the day:** is the M01 edge in *what* we pick (selection) or *how/when* we
 > trade it (timing/exits)? We started from a clever rotation design and stripped it down by
 > falsification until only the load-bearing mechanic remained. **Answer: the edge is in the EXITS.**

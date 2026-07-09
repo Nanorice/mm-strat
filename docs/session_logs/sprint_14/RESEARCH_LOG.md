@@ -286,3 +286,186 @@
     regime-aware; it needs this 2-part external governor. Falsifiable spec → backtest via M2 cone.
     ⚠️ bear-stress n=709 crash-clustered (few-episode tail); full-sample cuts (EDA). `high_stress_
     conditional.py`, cells 22-25, `high_stress_conditional.{csv,png}`.
+  - ✅ **POINT-8 PROMOTED TO A REAL BACKTEST (2026-07-09, M2→M3) — the governor is a start-date-ROBUST
+    DRAWDOWN CONTROLLER, not the "improves both" story.** Built the live-safe governor as a MacroSizer
+    mode (`governor_weight`: full size in the top EXPANDING-quintile of stress_ew_vix, base 0.5 below,
+    ZERO when SPY≤200d; expanding-z + expanding-quantile threshold + 1-day lag — the EDA's full-sample
+    cuts can't size live capital), wired `--sizing governor` into `run_strategy_wfo.py` + a per-fold
+    cone metric, cached m01_binary scores once to parquet (`cache_model_scores.py`, chunked by year to
+    fix a 12.6 GiB OOM — score_from_t3 carries ~190 t3 cols; trim to date/ticker/prob_elite/cal_score).
+    **25y cone, 20 anchored yearly folds, 40 trials, flat vs vix vs governor:** governor HALVES drawdown
+    at EVERY start-year — worst fold DD **−46%→−19%**, median fold DD **−29%→−14%**, agg maxDD
+    −50.7%→−25.4% — the durable win, survives the cone. BUT it does NOT improve Sharpe or the fold-sign
+    mix: all three arms 35% negative folds, same worst folds (2008/2011); governor cone MEDIAN is the
+    LOWEST (0.51 vs flat 0.76) and total return collapses (615%→212%). A pure brake can't lift the mean,
+    and the losing folds are BEAR years where the SPY gate already flattened exposure (nothing left to
+    protect). VIX strictly dominated (same axis, blunter). **WHY the EDA "improves both" didn't survive:
+    GATE × TILT CANCEL** — of ~467 top-quintile-stress days (2007-22) only 18 are also SPY>200d
+    (bull-stress), so the gate zeroes ~96% of "size up on stress" days (high stress ≈ sub-200d ≈ falling
+    knife) → tilt inert → governor ≡ point-8(a) variance brake. point-8(b)'s "improves both" was
+    per-$-on the rare bull-stress cell (~18% capital); at full book the brake dominates. **BANK as a
+    DD-control overlay (user 2026-07-09), NOT alpha/stability; flat wins the median cone. Un-tuned
+    (base-weight & hard gate deliberately not swept — the cancellation is a finding, not a knob to fit).**
+    `verdicts/2026-07-09_regime_governor_backtest.md`, `macro_sizer.py`, `run_strategy_wfo.py`,
+    `cache_model_scores.py`, `models/m01_binary/wfo/calibrated_{flat,vix,governor}/`.
+    - ✅ **WHAT DD DOES IT CONTROL vs the 15% stop-loss? (user, 2026-07-09) — REGIME BLEED, not
+      gap-down; complements the stop, no double-count.** Stop-loss runs INSIDE run() (per-position,
+      intraday, `low≤entry×0.85`, truncates each trade's window); governor runs in equity_curve()
+      (per-calendar-day, scales the BOOK return by exposure). Different layers → compose by
+      multiplication, no conflict. PROVEN in 2007-09: the stop fired **64-76×** (−15% each) and the
+      flat book STILL fell **−56%** (regime-blind re-entry into the decline, stopped again & again);
+      governor gated 58-93% of the window → **−12%**. So the governor is *"don't re-enter a falling
+      market"* control — a portfolio brake the per-name stop can't provide; NOT gap control (gaps are
+      the stop's job). **⚠️ separate caveat (own ticket): the stop books gap-downs at the −15% level
+      (`_simulate_exits` fill=stop_level), so the flat −56% baseline UNDERSTATES true gap severity; the
+      governor cuts gap EXPOSURE but not gap MODELLING.** `cells/governor_vs_stoploss_cells.md`,
+      `governor_vs_stoploss_2008.png`.
+    - ⚠️ **GAP-DOWN LOSS UNDERSTATED — quantified (user "account for the real loss", 2026-07-09).**
+      `_simulate_exits` (vectorized_backtest.py:342-344) books every stop-out at `exit_price=stop_level`
+      (=entry×0.85) UNCONDITIONALLY, but `hit_stop` fires on `low≤stop_level` — so on a gap-down OPEN
+      below the stop the real fill is the open, not −15%. Over the 25y stop-out population (329 stops):
+      **7.0% gap through**; on those the real loss averages **−19.7% (worst −39.8%)** vs booked −15%;
+      averaged over ALL stops the understatement is only **−0.33%** (doesn't distort the cone, but the
+      −40% tail matters for a tail strategy). **FIX = book gap-outs at `min(stop_level, open)`** — a
+      stop-loss realism change, orthogonal to the governor, LOGGED as its own ticket (not yet applied,
+      awaiting user go-ahead). `cells/governor_vs_stoploss_cells.md` Cell 5.
+    - ℹ️ **EQUITY MODEL HAS NO CAPITAL LEDGER (user Q, 2026-07-09).** `equity_curve` (vectorized_backtest.py
+      :483-514) is pure RETURN-compounding, not a cash account: `equity = cash × cumprod(1+daily_return)`,
+      `daily_return = Σ(open-position returns) × position_size_pct × scale`; `scale` (pro-rata dilution
+      above `1/position_size_pct` open slots) is the ONLY capital constraint. So idle capital earns
+      nothing & costs nothing (0-position or exposure=0 day → return 0 → equity FLAT); the governor `w`
+      SCALES THE RETURN, not a cash allocation (`w=0` ≡ 100% cash 0% return); under-deployment is
+      invisible. The chart answers "return of selected trades × exposure", NOT "how capital was
+      allocated / what idle cash did". Extension A.
+    - ℹ️ **GATE RE-DEPLOYS AT 200d RECLAIM, NOT THE TROUGH — quantified rebound-miss (user Q, 2026-07-09).**
+      2008-09: SPY bottomed 2009-03-09 (−55% peak, −35% below 200d), reclaimed 200d **81 days later**;
+      over that leg SPY +36.8%, FLAT strategy **+38.6%**, GOVERNOR **+0.0%** (gated off, mean exp 0.0) —
+      the gate misses the snap-back because the rebound STARTS sub-200d. NET the governor still ends
+      ahead (DD-avoided > rebound-missed). Trough hard to catch ex-ante (VIX peaked 109d BEFORE price
+      trough) but a naive off-20d-low momentum trigger moves +25% within 45d → a "release near the
+      bottom" v2 (recovery-momentum re-deploy) is the natural extension to recover the miss. Not built.
+      `governor_missed_rebound_2009.png`, Extension B.
+    - ⚠️ **ENTRY MODEL = ROLLING SLOT-BOOK + the governor MISMODELS RE-ENTRY (user Q, 2026-07-09).**
+      `_select_entries`/`_enforce_capacity`: new top-N candidates DAILY, but each ticker enters ONCE
+      (`drop_duplicates keep=first`, no pyramiding/re-entry), gated by a greedy concurrent-slot cap
+      (over-subscribed picks DROPPED, not queued). NOT locked-day-1, NOT fresh-basket-daily — a rolling
+      book. **Governor catch:** it's a RETURN multiplier applied AFTER run(), so entries KEEP FIRING
+      during the gated-off window (13 entered mid-freeze Mar-2009); their returns are just zeroed. On
+      unfreeze (200d reclaim) you INHERIT those stale mid-flight positions (16 open, only 2 new in 20d),
+      NOT a fresh bottom basket. So the proxy = "fully invested throughout, P&L zeroed on gated days,
+      switch flipped back holding tired names" — DD-control result unaffected (zeroed P&L is right) but
+      RE-ENTRY is mismodelled, compounding the Extension-B rebound-miss. A faithful gate (flatten →
+      redeploy fresh on unfreeze) is part of the v2. Extension C.
+    - ⚠️ **GROSS EXPOSURE IS AN ARTIFACT OF BREAKOUT SUPPLY, not a sizing decision (user Q "unlimited
+      capital → equity always up?", 2026-07-09).** `daily_return = Σ(open-pos returns) × pos_size_pct ×
+      scale`; `scale` (dilution) only fires when open_count > 1/pos_size (=10 at default 0.10), i.e.
+      96.6% of days scale=1 → gross exposure = open_count × 0.10, UNCAPPED in practice. So position
+      count = gross exposure. **"Always up" is FALSE** — returns are signed, summing positions in a bear
+      sums LOSSES (2008 −56% *because* it kept entering); and it's mostly UNDER-deployed (mean gross
+      43%, 57% of days <50% invested, only 5% >90%, capped at 10 concurrent) so no runaway compounding.
+      **The REAL flaw: exposure DRIFTS 28%(2017)→66%(2021) with breakout supply** → cross-period
+      comparisons contaminated (good year may = high-supply/high-exposure year), and the governor `w`
+      multiplies on top of this drifting base. A fixed-fractional / vol-targeted book would separate
+      edge from accidental leverage — orthogonal backtest-fidelity upgrade. `gross_exposure_drift.png`,
+      Extension D.
+    - ✅ **START-DAY LOTTERY REFRAME + EQUITY FAN (user idea, 2026-07-09) — fixes the exposure artifact,
+      shows start-time dependence VISUALLY.** New lens (`start_day_basket_paths.py`): every start-day =
+      one lottery draw — buy that day's GOVERNOR-GATED top-5 (gate off on SPY≤200d = deploy nothing, a
+      REAL cash gate at entry, unlike Ext-C's return-multiplier proxy), hold each name under SL(−15%)/
+      150d, equal-weight basket forward return. Removes exposure drift (fixed 5-name notional/start-day,
+      no shared-pool leverage). **Plot A (lottery):** 943 deployed start-days, mean **+13.4%** median
+      **+6.3%** but std **29.6%**, **41% lose** (hard cluster at the −15% full-stop floor), max +202% —
+      the histogram width IS the start-time risk. **Plot B (equity fan):** every start-day curve aligned
+      at origin (x=days-after-start), VARIABLE LENGTH (ends where the basket fully exits = the
+      "when-do-we-stop" variable made visual); the 10-90 fan is ~flat at entry and ENORMOUS by 150d →
+      start-time dependence rendered. **TP variant (+25%):** cuts std 29.6%→10.8% (tighter fan) but mean
+      +13.4%→+4.2% & max +202%→+25% — TP caps the exact right tail SEPA's edge lives in
+      ([[project_tail_magnitude_objective]]). This is the honest capital-artifact-free picture; the
+      natural home for the governor's value (shift the start-day DISTRIBUTION, not one curve). Directional
+      basket study, NOT the shared-pool backtest. `cells/start_day_lottery_cells.md`, `start_day_lottery.png`.
+      - ✅ **WITH vs WITHOUT governor on the lottery (user, 2026-07-09) — the governor's value SHOWN on
+        the distribution.** No-gov (every start-day trades, n=1177): mean +14.4% median +5.6% **std
+        39.6%** 42% losing max **+823%**. With-gov (n=943): mean +13.4% median **+6.3%** **std 29.6%**
+        41% losing max +202%. **The gate TIGHTENS the fan (std −25%), lifts the MEDIAN, clips the extreme
+        right tail** — it does NOT lift the mean (can't: it's a filter, and the 234 SPY≤200d days it
+        DROPS have a HIGH mean +18.1% from crash-rebound jackpots but a LOW median +1.9% & 47% losing =
+        the falling-knife-or-jackpot bear-stress cell). **So it trades tail-return for CONSISTENCY** —
+        same variance/DD-tool conclusion as the cone, now shown on the start-day lottery itself. Cell 2b.
+      - ⚠️ **REASSESSMENT (user challenge, 2026-07-09) — at the SINGLE-BASKET level the governor trims
+        the UPSIDE, not the downside.** By-percentile: p05/p10 IDENTICAL (−15% floor untouched), losing%
+        42→41% (trivial), but p95 −6.5% and max +823%→+202% — the trim is ALL upper-tail. Mean of
+        WINNING trades +32.9%→+30.2%. RECONCILES with the cone's −46%→−19% DD win: a single 5-name basket
+        can only lose 15% (no sequencing), so the cone's DD is a COMPOUNDING effect — up to **51
+        CONSECUTIVE gated start-days** in a bear compound into the −46% book drawdown; the governor avoids
+        that SEQUENCE, which an independent basket can't show. **Honest verdict: the governor buys
+        compounding-DD protection by sacrificing the exact right tail SEPA's edge lives in — a BAD trade
+        for a tail strategy, and it does NOT fix the lottery.** TP doesn't either (shrinks the whole
+        distribution). Tighter Minervini stops (5-8%) NAIVELY HURT (SL5% → median −5%, 56% losing) —
+        whipsaw on a fixed-hold basket; a tight stop only works WITH pivot-timed entry + add-on. → the
+        lottery is structural: fixed day-0 basket + fixed hold. FIX = Minervini's CONDITIONAL entry
+        (VCP pivot trigger, most watchlist names never fire) + PROGRESSIVE exposure (add only on
+        confirmation) + tight position-level stop + asymmetric exits. Next: quantify a pivot-trigger +
+        add-on-confirmation overlay on the watchlist, NOT more sizing knobs. Cell 2b + follow-up.
+      - ✅ **4-PART DIAGNOSIS (user, 2026-07-09) — governor apply, VCP, progressive exposure, tight stop.**
+        (1) **Governor in Plot A does NOTHING between base(0.5) & stress(1.0)** — the weight is {0.0:1222,
+        0.5:4925, 1.0:29 days} but a fwd-return basket has no capital ledger, so `deployed = w>0` collapses
+        base/stress to a pure BINARY entry gate (SPY>200d). Correct behavior; sizing is meaningless here.
+        (2) **VCP IS ALREADY IN THE MODEL** — m01_binary features include `vcp_ratio(_delta)`,
+        `consolidation_width(_delta)`, `natr(_delta)`, `dist_from_20d/52w_high`, `breakout_momentum`,
+        `immediate_thrust`. → do NOT re-weight by VCP score (double-counts, same trap as regime/isotonic).
+        BUT the pivot BREAKOUT-TRIGGER EVENT (cleared pivot on volume TODAY) is NOT in the model (it's a
+        static setup-quality score, not a timing event) → the trigger is the non-redundant piece to add.
+        (3) **Progressive exposure PROTOTYPED in the fwd lens** (path-dependent name weights): half-size
+        entry, add to full only if name up +10% by day10. vs equal-weight, both 6% stop: mean +9.5%→+12.7%,
+        max +429%→+602% — concentrates into confirmed winners (std rises, expected). Provable without the
+        backtest engine. (4) **TIGHT STOP re-examined — I WAS WRONG that it 'hurts'.** Stop sweep payoff
+        ratio (avg_win/|avg_loss|): 5%→**5.26**, 8%→3.84, 15%→2.85, 20%→2.61. Tight stop nearly DOUBLES the
+        payoff ratio (Minervini's core edge: tiny losses → modest win-rate hugely profitable). Its mean
+        only drops on a FIXED-HOLD basket because that can't exploit the asymmetry — **tight stop +
+        progressive add-on are TWO HALVES OF ONE mechanism** (cut losers small, concentrate into winners).
+        → BUILD PLAN: pivot-trigger entry + progressive add-on + tight (6-8%) stop, re-run the lottery lens;
+        test = fan TIGHTENS *without* kneecapping the tail (what the governor failed).
+      - ✅ **PIVOT-TRIGGER IS ALREADY IN t3 — no recompute (user asked to check, 2026-07-09).**
+        `t3_sepa_features.breakout_momentum = (close − high_20d)/atr_14` (>0 = cleared the 20d-high pivot
+        today, ATR-normalized) + `vol_ratio = volume/vol_avg_50` (volume confirmation). Trigger =
+        `breakout_momentum>0 AND vol_ratio>~1.4`. REGIME-AWARE FOR FREE: 28% of names trigger in the 2013
+        bull vs 0-1% in the 2008/2020 crashes → self-throttles by breakout supply (a cleaner, more
+        fundamental version of the governor's macro gate). (daily_features table doesn't exist; t3 is the
+        source. VCP itself stays in the model, not re-weighted — only the TRIGGER EVENT is added.) Build
+        scope confirmed: forward-return lens first, join t3 trigger cols into start_day_basket_paths.
+      - ⚠️ **MINERVINI OVERLAY BUILT + TESTED — does NOT beat the naive basket IN THIS LENS (honest null,
+        2026-07-09).** `basket_paths_minervini` (pivot-trigger `breakout_momentum>0 & vol_ratio>1.4` +
+        progressive half→full add-on + tight stop). Head-to-head vs baseline (all-top5, 15%): at EVERY
+        stop level the trigger version has WORSE median (−8%..+1.7% vs +5.4%), HIGHER losing% (48-62% vs
+        42%), similar/wider std, LOWER max (595% vs 1025%). Trigger-without-progressive also worse. **BUT
+        win/loss payoff ratio doubles (6.18 @7% vs 2.85) — the asymmetry IS there.** WHY the null: (1) the
+        model ALREADY priced the breakout (`prob_elite` trains on breakout_momentum/dist_20d_high) → the
+        trigger is ~a double-count, just subsets to the MOST-EXTENDED = most whipsaw-prone names (confirms
+        the #2 don't-re-weight-VCP concern). (2) The fwd-return lens CANNOT model Minervini's real edge —
+        no TRAILING stop, no BREAKEVEN-move, no intraday progressive adds; "add half @d10 if +10%" is a
+        pale shadow. The 6.18 asymmetry needs the BACKTEST ENGINE to harvest (trailing stop to breakeven +
+        progressive fills). **Honest verdict: don't oversell — the overlay is a null in this lens; the
+        payoff-ratio signal says port the trailing-stop + progressive-fill mechanism to the engine, OR
+        accept the naive basket is the honest arena candidate.** `start_day_basket_paths.py::basket_paths_minervini`.
+
+## Thread G — population rectification: re-derive the champion honestly, then confirm on BackTrader (2026-07-09)
+
+21. **The SEPA-gate fix invalidated the governor verdict — did it also break the Sprint 13 Arena?**
+    → **Yes.** The arena selected top-5 from the ~99% off-setup scored panel (no trend_ok/breakout_ok
+    gate at selection). The `sl15×tpTight` champion + the m2 cone were all population-inflated.
+    `plans/population_rectification_plan.md`, annotated `sprint_13/.../strategy_exploration_summary.md`.
+22. **Build a Minervini exit+entry and re-run the arena on the gated population.** → M1: built
+    `exit_policy='minervini'` (breakeven-ratchet) + progressive fills in `vectorized_backtest.py`.
+    Prog-fills is the load-bearing piece (ratchet alone NULLs; single-window Sharpe 0.35→1.19).
+23. **Does minervini+prog-fills beat the honest (gated) sma across the start-date cone?** → **Vec cone:
+    YES** — median 1.44 vs 1.00, %neg 5% vs 25%, prog-fills chosen 20/21 folds, rescues GFC/2017 losers.
+    `verdicts/2026-07-09_m2_minervini_vs_sma_gated_cone.md`.
+24. **Does it survive the BackTrader confirm (M2b)?** → ⟳ **NO.** Ported prog-fills to `SEPAHybridV1`;
+    BT cone median 0.53(base)/0.35(prog), %neg 45% — a WASH. `verdicts/2026-07-09_m2b_backtrader_confirm_FAILS.md`.
+25. **Is the vec↔BT gap tuning or engine?** → **ENGINE.** Same fixed config both engines: vec median
+    1.51/%neg 10% vs BT 0.35/%neg 45%; ~3× optimism, concentrated in bear folds. → memory
+    [[project_vec_engine_optimistic]]. **Champion stays the native tranche exit; minervini NOT promoted.**
+
+## Open meta-questions (carried)
+- **M4 (open):** re-confirm the deploy gate (SPY 50/100/200 EMA/SMA trunk + 6-pillar stress) on the
+  GATED population and on BackTrader (not vec). Independent of the champion choice.

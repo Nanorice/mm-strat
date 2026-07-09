@@ -56,6 +56,15 @@ class SEPAPosition:
     # Stop tracking (high-water mark - never moves down)
     current_stop: float = 0.0
 
+    # Progressive fills (Minervini scale-in). When enabled, the position enters
+    # at a starter fraction and adds the remainder once price clears the add
+    # trigger. initial_size is still the FINAL (post-add) target so tranche_size
+    # stays correct; add_target_shares is the not-yet-filled remainder.
+    add_target_shares: int = 0     # remainder to buy on the add (0 = none/done)
+    add_trigger_price: float = 0.0  # buy the remainder once high >= this
+    add_pending: bool = False       # an add order is in flight
+    added: bool = False             # the add has filled (or was never needed)
+
     # Exit tracking
     exit_date: Optional[datetime] = None
     exit_price: Optional[float] = None
@@ -67,7 +76,10 @@ class SEPAPosition:
 
     # Calculated fields
     def __post_init__(self):
-        self.remaining_shares = self.initial_size
+        # remaining_shares defaults to the full target; confirm_entry overrides it
+        # to the executed starter size when progressive fills are on.
+        if self.remaining_shares == 0:
+            self.remaining_shares = self.initial_size
         self.current_stop = self.initial_stop
 
     @property
@@ -197,18 +209,28 @@ class PositionTracker:
 
         ticker = intent['ticker']
 
+        # Progressive fills: initial_size is the FINAL target (for tranche math);
+        # remaining_shares starts at the executed starter fill; the remainder is
+        # bought on the add. No prog-fills => full_target == executed_size (default).
+        full_target = intent.get('full_target_size', executed_size)
+        add_remainder = max(0, full_target - executed_size)
+
         # Create position with executed values
         pos = SEPAPosition(
             ticker=ticker,
             entry_date=intent['entry_date'],
             entry_price=executed_price,
             entry_atr=intent['entry_atr'],
-            initial_size=executed_size,
+            initial_size=full_target,
             score=intent['score'],
             regime=intent['regime'],
             initial_stop=intent['initial_stop'],
             target1=intent['target1'],
             target2=intent['target2'],
+            remaining_shares=executed_size,
+            add_target_shares=add_remainder,
+            add_trigger_price=intent.get('add_trigger_price', 0.0),
+            added=(add_remainder == 0),
         )
 
         self.positions[ticker] = pos
@@ -216,6 +238,36 @@ class PositionTracker:
                    f"size={executed_size}, stop={pos.current_stop:.2f}")
 
         return pos
+
+    def confirm_add(
+        self,
+        ticker: str,
+        executed_price: float,
+        executed_size: int,
+    ) -> bool:
+        """Confirm a progressive-fill add when the add BUY order is FILLED.
+
+        Grows remaining_shares and blends the entry price to the size-weighted
+        average cost, so pnl_percent / stop / target math stay honest. Called
+        from notify_order() when an add order (tracked in pending_orders as an
+        'add') completes.
+        """
+        pos = self.positions.get(ticker)
+        if pos is None:
+            logger.warning(f"No position found for add on {ticker}")
+            return False
+
+        held = pos.remaining_shares
+        new_total = held + executed_size
+        # Size-weighted average cost basis.
+        pos.entry_price = (pos.entry_price * held + executed_price * executed_size) / new_total
+        pos.remaining_shares = new_total
+        pos.add_target_shares = max(0, pos.add_target_shares - executed_size)
+        pos.add_pending = False
+        pos.added = pos.add_target_shares == 0
+        logger.info(f"Add filled {ticker}: +{executed_size} @ {executed_price:.2f}, "
+                    f"total={new_total}, blended entry={pos.entry_price:.2f}")
+        return True
 
     def record_partial_exit(
         self,
