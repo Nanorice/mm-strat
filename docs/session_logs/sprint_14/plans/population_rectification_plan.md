@@ -113,7 +113,18 @@ the median. Do NOT build the full Minervini stack speculatively.
   Re-confirm SPY 50/100/200 EMA/SMA as the deploy trunk + 6-pillar score as stress/calm, on the
   gated population. Mostly re-validation of [[project_capital_deployment]] /
   [[project_entry_timing_macro_axis]] — cheap, not blocked by the new champion.
-  **Status:** not started.
+  **Status:** ✅ DONE (2026-07-09). Scoped (with user) to the one genuinely new thing: run the
+  SPY-200d gate through **BackTrader** (`run_strategy_confirm.py --wfo-gate`), not the
+  engine-optimistic vec cone the governor verdict used. Added `M4_gated_{baseline,spygate}` arms +
+  a `spy_gated` flag that injects `spy_above_200d()` per fold. **RESULT — the gate IMPROVES every
+  metric** (agg Sharpe 0.52→0.79, return 299%→794%, maxDD −61%→−37%, %neg 45%→35%, cone median
+  0.53→0.68). Baseline reproduces the M2b BT baseline exactly (consistency check). Win = 3 deep-bear
+  rescues (2008 −1.86→+2.50, 2022 −1.69→−0.33, 2009) dwarf 4 mid-cycle whipsaws (2007/2018/2010/2014).
+  **This UPGRADES the vec governor verdict** ("DD-only, costs the mean") — that was a vec artifact:
+  vec understates the bear damage the gate prevents, so on the fidelity engine the gate is net-positive.
+  `champion_spygate` (already `status="candidate"`) is the promotion candidate for the deployment layer,
+  flagged to the user (not auto-promoted). Verdict:
+  `../verdicts/2026-07-09_m4_deploy_gate_backtrader_confirm.md`.
 
 ## Done when
 One re-derived comparison table (signal × exit-policy incl. minervini) on the **gated** population,

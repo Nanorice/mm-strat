@@ -67,6 +67,9 @@ class Arm:
     signal: str  # 'binary' | 'proto_cali'
     description: str
     strategy_kwargs: Dict[str, Any] = field(default_factory=dict)
+    # M4: inject the SPY-200d deploy gate ({date->bool}) per fold at run time
+    # (window-dependent, so not baked into strategy_kwargs). See wfo_gate.
+    spy_gated: bool = False
 
 
 # _base_kwargs now lives in src/backtest/strategy_registry.py (single source of
@@ -168,10 +171,28 @@ def _m2b_arms() -> List[Arm]:
     ]
 
 
+def _m4_arms() -> List[Arm]:
+    """M4: BackTrader confirm of the SPY-200d deploy GATE on the SEPA-gated
+    population. Same native-tranche baseline as M2b (`_base_kwargs(5)`); the gated
+    arm blocks new entries when SPY<200d (spy_deploy_gate, injected per fold). The
+    governor's stress-TILT is inert once gated (gate x tilt cancel, verdict
+    2026-07-09_regime_governor_backtest), so the honest BT confirm of "the governor"
+    IS this binary gate. The governor cone was VEC (engine-optimistic in bear folds
+    where a DD-controller earns its keep); this re-runs it on the fidelity engine."""
+    base = _base_kwargs(5)
+    return [
+        Arm("M4_gated_baseline", "binary_gated",
+            "GATED baseline: native tranche exit, no deploy gate", base),
+        Arm("M4_gated_spygate", "binary_gated",
+            "GATED + SPY-200d deploy gate (block new entries when SPY<200d)",
+            base, spy_gated=True),
+    ]
+
+
 def _all_arms() -> Dict[str, Arm]:
     """Every arm across every grid, keyed by id — for --wfo-gate lookup."""
     out: Dict[str, Arm] = {}
-    for a in POPULATION + _exit_grid() + _tier3_grid() + _m2b_arms():
+    for a in POPULATION + _exit_grid() + _tier3_grid() + _m2b_arms() + _m4_arms():
         out[a.id] = a
     return out
 
@@ -196,9 +217,13 @@ def wfo_gate(arm: Arm, start: str, end: str, initial_cash: float,
     oos_slices, fold_recs = [], []
     for i, fold in enumerate(folds):
         ts, te = fold["test_start"], fold["test_end"]
+        kwargs = dict(arm.strategy_kwargs)
+        if arm.spy_gated:  # M4: window-dependent {date->bool}, built per fold
+            from src.backtest.macro_sizer import spy_above_200d
+            kwargs["spy_deploy_gate"] = spy_above_200d(ts, te, str(DB_PATH))
         runner = SEPABacktestRunner(start_date=ts, end_date=te, initial_cash=initial_cash,
                                     db_path=str(DB_PATH), model_path=None)
-        runner.setup(scores_df=scores_full, strategy_kwargs=arm.strategy_kwargs)
+        runner.setup(scores_df=scores_full, strategy_kwargs=kwargs)
         runner.run()
         eq = runner.get_equity_curve_dataframe()
         if eq is None or eq.empty:
@@ -282,10 +307,18 @@ def main() -> None:
         r = wfo_gate(arm, args.start, args.end, args.initial_cash,
                      args.train_years, args.test_years, args.anchored)
         agg = r["aggregate_oos"]
+        import numpy as np
+        sh = [f["sharpe"] for f in r["folds"] if f["sharpe"] == f["sharpe"]]  # drop NaN
+        dd = [f["max_drawdown"] for f in r["folds"] if f["max_drawdown"] == f["max_drawdown"]]
         print("\n" + "=" * 70)
         print(f"WFO GATE — {arm.id}")
         print(f"  AGGREGATE OOS Sharpe={agg['sharpe']:.2f}  ret={agg.get('total_return', 0):.0%}  "
               f"maxDD={agg['max_drawdown']:.0%}  ({agg['n_days']} days, {len(r['folds'])} folds)")
+        if sh:
+            neg = sum(1 for s in sh if s < 0)
+            print(f"  CONE Sharpe: median={np.median(sh):.2f}  min={min(sh):.2f}  "
+                  f"%neg={100*neg/len(sh):.0f}%  |  fold DD: median={np.median(dd):.0%}  "
+                  f"worst={min(dd):.0%}")
         print("=" * 70)
         return
 
