@@ -94,10 +94,11 @@ def _cell_job(d: reg.StrategyDef, cell_id: str, start: str, end: str) -> Job:
     """One (start,end) cell -> a population Job. Scores lazy-loaded IN the worker
     via a picklable partial (windowed to the cell) so parallel workers stay light.
 
-    For `champion_spygate` the SPY-200d deploy gate (window-dependent, so not baked
-    into the registry) is injected here as a {date->bool} dict — small, picklable."""
+    Any arm carrying a `spy_deploy_gate` sentinel (empty dict in the registry) gets
+    the window-dependent SPY-200d gate injected here as a {date->bool} dict — small,
+    picklable. Covers champion_spygate and champion_trail_spygate."""
     kwargs = dict(d.strategy_kwargs)
-    if d.name == "champion_spygate":
+    if "spy_deploy_gate" in kwargs:
         kwargs["spy_deploy_gate"] = spy_above_200d(start, end, str(DB_PATH))
     return Job(
         id=cell_id, description=f"{d.name} {start}..{end}", signal=d.signal,

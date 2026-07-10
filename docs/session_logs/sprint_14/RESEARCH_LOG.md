@@ -554,13 +554,19 @@
     work; monotone worse tighter (e25 0.32, e15 −0.29 vs 0.46). The median bleed and the tail are the
     same coin → champion_trail is a local optimum. `verdicts/2026-07-10_r3b_rising_trail_from_entry.md`.
 
-**SEPA funnel program CLOSED** — R1/R1b/R2/R3/R3b/R4 all resolved. Selection = one-column RS (+ size
-axis, label-level); exit = champion_trail candidate (+0.21, FINAL); the 63d MFE tail is
-watchlist-ordering value, NOT systematic alpha. Only open action = champion_trail deploy-gate re-confirm.
+40. **Does the SPY-200d deploy gate stack on the trail exit → promote champion_trail?** → **YES —
+    PROMOTED.** Built the missing `champion_trail_spygate` arm, ran the 90-cell cone: all-metric win over
+    ungated arm D (floor −2.62→−1.93, median 0.46→0.76, %neg 33%→28%, era-robust) — same signature M4
+    found on tranche. Paired count (36% wins) misleads: gate inert in bull windows, all value in bears →
+    judge distribution not pairs. New champion; tranche demoted. `verdicts/2026-07-10_r3_deploy_gate_reconfirm.md`.
+
+**SEPA funnel program CLOSED** — R1/R1b/R2/R3/R3b/R4 + deploy-gate re-confirm all resolved. Selection =
+one-column RS (+ size axis, label-level); exit+deployment = `champion_trail_spygate` (PROMOTED); the 63d
+MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action remains.**
 
 ## Open meta-questions (carried)
-- 📋 **champion_trail deploy-gate re-confirm (from Q36/Q39) — THE only open action.** SPY-200d trunk
-  ([[project_capital_deployment]]); then promote to champion or park as confirmed-but-marginal (+0.21).
+- ✅ **champion_trail deploy-gate re-confirm (Q40, DONE 2026-07-10):** gate STACKS on the trail →
+  `champion_trail_spygate` PROMOTED to champion. `verdicts/2026-07-10_r3_deploy_gate_reconfirm.md`.
 - ✅ **M4 (DONE 2026-07-09):** SPY-200d deploy gate CONFIRMED on BackTrader (Q26) — improves every
   metric on the gated population; upgrades the vec governor verdict. `champion_spygate` flagged for
   promotion to the live deployment layer (user decision, not auto-promoted).

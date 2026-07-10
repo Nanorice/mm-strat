@@ -181,8 +181,10 @@ _register(StrategyDef(
     name="champion",
     signal="binary",
     strategy_kwargs=_champion_kwargs(),
-    description="OOS-gated champion (2026-07-05): 15% stop x +10% T1, decoupled SMA50, top-5.",
-    status="champion",
+    description="OOS-gated tranche champion (2026-07-05): 15% stop x +10% T1, decoupled SMA50, "
+                "top-5. Demoted to candidate 2026-07-10 — champion_trail_spygate superseded it "
+                "(R3 trail +0.21, deploy-gate re-confirm all-metric win).",
+    status="candidate",
 ))
 
 _register(StrategyDef(
@@ -247,6 +249,21 @@ _register(StrategyDef(
 # exit WITH a stop that ratchets up from the first bar (trail_from_entry_atr), to
 # protect the median path champion_trail bled (R3 §mechanism). Ex-ante tight/wide
 # pair, no post-hoc sweeping. SMA50 trend exit still active as the trend backstop.
+# R3 deploy-gate re-confirm: champion_trail (R3 arm D, the +0.21 winner) + the
+# SPY-200d ex-ante gate that M4 confirmed on the tranche exit. Tests whether the
+# gate stacks additively on the trail exit the same way it did on tranche. Gate
+# dict is window-dependent → injected per-cell in run_starttime_sweep (see the
+# spy_deploy_gate sentinel), not baked here (same pattern as champion_spygate).
+_register(StrategyDef(
+    name="champion_trail_spygate",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()), "spy_deploy_gate": {}},
+    description="CHAMPION (2026-07-10): champion selection x trend-exit-only (R3 arm D, trail) + "
+                "SPY-200d deploy gate. C3-validated all-metric win over the tranche champion "
+                "(floor +0.68, median +0.29, %neg -5pp, era-robust). Gate dict injected per-window.",
+    status="champion",
+))
+
 _register(StrategyDef(
     name="champion_trail_e25",
     signal="binary_gated",
@@ -342,4 +359,10 @@ if __name__ == "__main__":
         assert t.strategy_kwargs.get("disable_tranches") is True, trail
         assert "Xt" not in t.fingerprint, t.fingerprint
         assert t.strategy_kwargs != get(base).strategy_kwargs, f"{trail} == {base} (no-op!)"
+    # champion_trail_spygate = champion_trail + gate sentinel ONLY (trail preserved).
+    cts = get("champion_trail_spygate")
+    assert cts.strategy_kwargs.get("disable_tranches") is True, "spygate arm lost the trail"
+    assert "spy_deploy_gate" in cts.strategy_kwargs, "gate sentinel missing"
+    assert {k: v for k, v in cts.strategy_kwargs.items() if k != "spy_deploy_gate"} \
+        == get("champion_trail").strategy_kwargs, "spygate arm differs from champion_trail beyond the gate"
     print(f"OK — {len(STRATEGIES)} strategies. champion = {champ.fingerprint}")

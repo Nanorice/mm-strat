@@ -169,12 +169,15 @@ R3 (RS-tail un-monetizable under both exits; `champion_trail` a candidate *exit*
 
 - **Selection** = the one-column RS rule. Steps 1–3 of the book all collapse to it. Second axis =
   size/coverage (G7), label-level only.
-- **Exit** = `champion_trail` (trend-exit-only) — candidate refinement (+0.21 median Sharpe, era-robust),
-  **deploy-gate re-confirm pending** before registry promotion. NOT promoted off the R3 cone.
+- **Exit + deployment** = `champion_trail_spygate` (trend-exit-only trail + SPY-200d deploy gate) —
+  **PROMOTED to champion 2026-07-10.** The deploy-gate re-confirm ([verdict](../verdicts/2026-07-10_r3_deploy_gate_reconfirm.md))
+  landed an all-metric win over the tranche champion (floor +0.68, median +0.29, %neg −5pp, era-robust
+  across all three thirds) — the gate stacks additively on the trail, same signature M4 found on tranche.
+  Tranche `champion` demoted to candidate.
 - **The 63d MFE tail is NOT systematic alpha beyond the incumbent** — doesn't convert under available
   exits (R3), and no trait adds rank-lift over RS (R2). It is watchlist-ordering value.
 
-**Durable deliverables:** the RS rule, the size axis, and the R2 passport (manual-review aid).
-**No live modelling thread remains** — R3b closed the last exit idea (rising-trail-from-entry falsified).
-The ONLY open action is the deploy-gate re-confirm for `champion_trail` (+0.21, trend-exit-only) before
-it is promoted or parked. Roll into the sprint README at wrap-up.
+**Durable deliverables:** the RS rule, the size axis, the R2 passport (manual-review aid), and the
+`champion_trail_spygate` deployment config.
+**No open action remains** — R3b closed the last exit idea (rising-trail-from-entry falsified), and the
+deploy-gate re-confirm resolved the last pending decision (promote). Roll into the sprint README at wrap-up.
