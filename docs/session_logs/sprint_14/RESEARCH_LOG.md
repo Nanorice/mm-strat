@@ -506,8 +506,27 @@
     Label guard then removed; M2 table bit-identical. RS-only bar: top-decile tail_mag lift 3.5×,
     top-5% 4.2× (home-run 2.5×/2.7×), stable across date-thirds.
     `verdicts/2026-07-10_m1_label_m2_rs_baseline.md`.
-33. **?** Does an ML ranker (m01a_v1_h63) beat the RS-only bar out-of-sample and across start dates
-    (M3)? → OPEN, next.
+33. **Does an ML ranker (m01a_v1_h63) beat the RS-only bar out-of-sample and across start dates
+    (M3)?** → **NO — kill criterion #2 fires, ship the one-column RS rule (2026-07-10).** Tweedie
+    on tail_mag + binary logistic on home_run (fs_m01_prototype ∩ cache = 86 feats, anchored WF
+    2003→, 15 OOS folds 2012–26, embargo 100d, no reweighting): D10 lift 3.88×/3.93× vs RS-same-fold
+    3.87× — a WASH (7–8/15 folds, worst margin −1.2). Temporal break: ML beats RS 6/7 folds
+    2012–2018, loses 13/16 variant-folds 2019+ (not data scarcity — anchored folds GROW). Both
+    objectives agree fold-by-fold → features/population bind, not the loss. Un-tuned by design
+    (tuning to scrape +0.1 = forcing the ML). M4 selection = top-X% RS, no model registration.
+    `verdicts/2026-07-10_m3_ml_vs_rs_bar.md`.
+34. **Does RS-selection × breakout-trigger × SEPA-exit beat the incumbent champion on the
+    BackTrader start-date cone (M4)?** → **NO — kill criterion #3, incumbent stays champion
+    (2026-07-10). m01a plan CLOSED.** Clean A/B (champion exits/slots, 90 quarterly-start × 12m
+    BackTrader cells 2003–26, post-gate-fix pop): rs_tail median Sharpe 0.10 / 47% neg vs
+    champion_gated 0.47 / 33%; rs wins 33/90 paired cells, loses every era; equal trade counts (not
+    cash drag). Why: RS concentrates the TAIL but its MEDIAN inverts — stop+tranche exits realize the
+    median path and truncate the tail the label measures ("label lift ≠ trade edge", the m02 lesson
+    on the selection side; exactly what M4 exists to catch). RS rule stays banked as the LABEL-level
+    watchlist axis. Side deliverable: the incumbent's first post-gate-fix full-span reference cone
+    (the Jul-5 −39..+197% lottery numbers were inflated-population). Un-pursued (would be cone-
+    fitting): top-X sweep, tail-harvesting exits, RS×prob_elite combo.
+    `verdicts/2026-07-10_m4_rs_tail_backtrader_cone.md`.
 
 ## Open meta-questions (carried)
 - ✅ **M4 (DONE 2026-07-09):** SPY-200d deploy gate CONFIRMED on BackTrader (Q26) — improves every
@@ -517,5 +536,9 @@
   `max(MFE_63−0.30,0)`. `verdicts/2026-07-10_m0_horizon_sweep.md`.
 - ✅ **m01a M1+M2 (Q32, DONE 2026-07-10):** label clean, RS-only bar = top-decile tail_mag lift 3.5×
   / top-5% 4.2×. `verdicts/2026-07-10_m1_label_m2_rs_baseline.md`.
-- ⏳ **m01a M3 (Q33, OPEN):** ML ranker vs the RS-only bar. (Corrupt-high source-null DONE
-  2026-07-10, part G; corrupt-LOW cleanup deliberately deferred — real flash crashes.)
+- ✅ **m01a M3 (Q33, DONE 2026-07-10):** ML ranker vs RS-only bar = WASH → kill criterion #2,
+  **selection signal = the one-column RS rule**. `verdicts/2026-07-10_m3_ml_vs_rs_bar.md`.
+  (Corrupt-high source-null DONE 2026-07-10, part G; corrupt-LOW cleanup deliberately deferred.)
+- ✅ **m01a M4 (Q34, DONE 2026-07-10):** RS-selection LOSES the BackTrader cone (median 0.10 vs
+  0.47) → kill criterion #3, **incumbent stays champion; m01a plan CLOSED** (M5 moot — SPY-gate
+  already confirmed Q26). `verdicts/2026-07-10_m4_rs_tail_backtrader_cone.md`.

@@ -54,7 +54,9 @@ CACHE = {
 }
 MODEL = {  # for provenance in artifacts; scores come from cache, not re-scored
     "binary": ("m01_binary", "v1"),
+    "binary_gated": ("m01_binary", "v1"),
     "proto_cali": ("m01_prototype_cali", "v1"),
+    "rs": ("rs_universe_rank", "rule"),  # no model — the m01a one-column RS rule
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -246,12 +248,45 @@ def wfo_gate(arm: Arm, start: str, end: str, initial_cash: float,
     return result
 
 
+def _load_rs_scores(start: str, end: str) -> pd.DataFrame:
+    """The m01a one-column RS rule as a candidate stream (no model, no cache).
+
+    prob_elite = per-date PERCENT_RANK of RS_Universe_Rank over the FULL trend_ok
+    panel (selection happens on the watchlist — computing it within breakouts
+    would re-create the within-pool ranking M3 falsified). The frame is then
+    pre-filtered to top-decile breakout rows: non-breakout rows are never
+    selectable and only existed to anchor the percentile, which the window
+    function has already seen."""
+    import duckdb
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        df = con.execute("""
+            WITH panel AS (
+              SELECT date, ticker, breakout_ok,
+                     PERCENT_RANK() OVER (PARTITION BY date ORDER BY RS_Universe_Rank) AS rs_pct
+              FROM t3_sepa_features
+              WHERE trend_ok AND RS_Universe_Rank IS NOT NULL
+                AND ticker NOT IN ('LIF', 'CUE')
+                AND date BETWEEN ? AND ?
+            )
+            SELECT date, ticker, rs_pct AS prob_elite, rs_pct AS calibrated_score,
+                   TRUE AS trend_ok, breakout_ok
+            FROM panel
+            WHERE rs_pct >= 0.90 AND breakout_ok
+        """, [start, end]).df()
+    finally:
+        con.close()
+    return prototype_scores_to_contract(df)
+
+
 def _load_scores(signal: str, start: str, end: str) -> pd.DataFrame:
     """Load cached scores (not re-scored) and adapt to the ScoreLookup contract.
 
     Preserves trend_ok/breakout_ok when the cache carries them (the SEPA-gated
     cache) so ScoreLookup restores the breakout entry gate — dropping them here
     silently re-inflates the population (the exact M2b bug)."""
+    if signal == "rs":
+        return _load_rs_scores(start, end)
     import pyarrow.parquet as pq
     have = set(pq.ParquetFile(CACHE[signal]).schema.names)
     cols = ["date", "ticker", "prob_elite", "calibrated_score"]

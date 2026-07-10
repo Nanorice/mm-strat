@@ -180,6 +180,27 @@ _register(StrategyDef(
 ))
 
 _register(StrategyDef(
+    name="champion_gated",
+    signal="binary_gated",
+    strategy_kwargs=_champion_kwargs(),
+    description="Champion exits on the SEPA-gated FULL-SPAN cache (2003-2026) — the "
+                "incumbent arm for the m01a M4 cone (post gate-fix population).",
+    status="candidate",
+))
+
+_register(StrategyDef(
+    name="rs_tail",
+    signal="rs",
+    # min_prob_elite here = per-date RS percentile floor over the trend_ok panel
+    # (top decile), NOT a model probability — the m01a M3 verdict shipped the
+    # one-column RS rule (ML tied it). Exits/slots identical to champion.
+    strategy_kwargs={**_champion_kwargs(), "min_prob_elite": 0.90},
+    description="m01a challenger: top-decile RS_Universe_Rank selection on the trend_ok "
+                "panel x breakout trigger x champion exits (no model).",
+    status="candidate",
+))
+
+_register(StrategyDef(
     name="e1_seed",
     signal="binary",
     strategy_kwargs=_base_kwargs(5),

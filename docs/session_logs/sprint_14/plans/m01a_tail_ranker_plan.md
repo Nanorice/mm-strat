@@ -73,7 +73,12 @@ exit** (undefined horizon). Fixed horizon to *rank*, undefined horizon to *hold*
   must **beat RS-alone** to justify its existence (ponytail: don't train a model to reproduce one column).
   **Deliverable:** RS-only lift table = the bar M3 must clear.
 
-- [ ] **M3 — ML ranker (m01a_v1).**
+- [x] **M3 — ML ranker (m01a_v1).** ❌ GATE FAILS 2026-07-10 → **kill criterion #2: ship the
+  one-column RS rule.** Tweedie + binary variants (86 feats, anchored WF 2003→, 15 OOS folds
+  2012–26, embargo 100d): D10 lift 3.88×/3.93× vs RS 3.87× — a wash; beats RS only pre-2019
+  (6/7 folds), loses 2019+ (13/16). Objective-agnostic, un-tuned by design. Selection signal =
+  `RS_Universe_Rank` top decile. `../verdicts/2026-07-10_m3_ml_vs_rs_bar.md`,
+  `scripts/train_m01a_tail.py`.
   XGBoost on the `trend_ok` panel, tail label, `fs_m01_prototype`-style feature set (RS + fundamentals +
   alphas + regime). Objective matched to label (binary logistic or ranking/regression on tail-magnitude).
   **No balanced-class reweighting that fights the imbalance** — the imbalance IS the signal
@@ -81,14 +86,21 @@ exit** (undefined horizon). Fixed horizon to *rank*, undefined horizon to *hold*
   **Gate:** must beat M2 RS-only lift by a margin that survives the start-date cone, else RS-only wins and
   ML is dropped.
 
-- [ ] **M4 — Backtest: rank (M3) × breakout-trigger × SEPA exit, on the CONE + BackTrader.**
+- [x] **M4 — Backtest.** ❌ GATE FAILS 2026-07-10 → **kill criterion #3: incumbent stays champion.**
+  Clean A/B (champion exits, top-5 slots, BackTrader, 90 quarterly-start × 12m cells 2003–26, gated
+  pop): `rs_tail` median Sharpe 0.10 / 47% neg cells vs `champion_gated` 0.47 / 33%; rs wins 33/90
+  paired cells, loses every era. Not under-deployment (equal trade counts) — label-level tail lift
+  doesn't convert under stop+tranche exits (median inverts, exits truncate the tail). Side
+  deliverable: first post-gate-fix incumbent reference cone (median 0.47, floor −2.81).
+  `../verdicts/2026-07-10_m4_rs_tail_backtrader_cone.md`.
   Selection = top-X% of m01a score on the trend panel; entry trigger = breakout/VCP on those names; exit =
   event-terminated SEPA trail. Judge on the **start-date cone** (not single window —
   [[project_champion_starttime_dependent]]) and confirm on **BackTrader** (vec is ~3× optimistic —
   [[project_vec_engine_optimistic]], [[project_minervini_progfills_fails_bt]]).
   **Deliverable:** cone median Sharpe + %neg folds vs the incumbent native-tranche champion on the gated pop.
 
-- [ ] **M5 — Deploy/regime gate (parallel, from M4 of the old plan).**
+- [x] **M5 — MOOT 2026-07-10:** champion unchanged by M4, and its SPY-200d deploy gate was already
+  BackTrader-confirmed on the gated population (2026-07-09, Q26). Nothing to re-confirm.
   Tail edge is likely pro-cyclical ([[project_tail_magnitude_objective]]). Re-confirm SPY-200d deploy trunk
   + 6-pillar stress dial ([[project_capital_deployment]], [[project_entry_timing_macro_axis]]) as the
   during-period DD control on the new champion.
@@ -98,6 +110,13 @@ exit** (undefined horizon). Fixed horizon to *rank*, undefined horizon to *hold*
 m01a champion named + registered, horizon N data-justified, ranker beats RS-only, backtest confirmed on
 the **BackTrader cone** (not vec, not single window) vs the incumbent, deploy-gate re-confirmed. Every
 superseded selection claim in `population_rectification_plan.md` annotated "selection superseded → m01a".
+
+> **CLOSED 2026-07-10 — outcome: kill criteria #2 and #3 both fired.** M0–M2 passed (N=63 label,
+> RS-only bar 3.5×/4.2×); M3 ML tied RS → the selection signal is the one-column RS rule; M4 the RS
+> rule lost the BackTrader cone to the incumbent → **champion unchanged**. The durable deliverables:
+> the `m01a_tail_v1` label + registry, the RS tail-lift finding (label-level watchlist ranking), the
+> incumbent's first post-gate-fix reference cone, and the arms/loaders in the registry for future A/Bs.
+> Every kill was reached in the plan's cheap-first order — this is the plan working, not failing.
 
 ## Kill criteria (state upfront, honesty guard)
 

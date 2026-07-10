@@ -93,6 +93,7 @@ models/m01_prototyoe*/
 models/m02_prototype*/
 # Backtest / optimizer / arena / sizing output dirs (generated reports + json)
 models/arena/
+models/m01a_tail/
 models/**/optimizer/
 models/**/wfo/
 models/**/sizing/

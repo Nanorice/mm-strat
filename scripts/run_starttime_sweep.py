@@ -58,7 +58,8 @@ def _month_starts(first: str, last: str, step_months: int) -> List[pd.Timestamp]
     return list(pd.date_range(first, last, freq=pd.DateOffset(months=step_months)))
 
 
-def build_cells(grid: str, cache_end: str) -> List[Tuple[str, str, str]]:
+def build_cells(grid: str, cache_start: str, cache_end: str,
+                step_months: int = 1) -> List[Tuple[str, str, str]]:
     """(cell_id, start, end) triples for the chosen grid. Every end is clamped to
     the cache span, so a horizon that would run off the end is silently shortened
     (its shorter n_days is visible in the report — annualized metrics stay fair)."""
@@ -70,17 +71,17 @@ def build_cells(grid: str, cache_end: str) -> List[Tuple[str, str, str]]:
 
     cells: List[Tuple[str, str, str]] = []
     if grid == "rolling":
-        # fixed 12m horizon, start every 1 month across all but the last year
-        starts = _month_starts(CACHE_START, (end_ts - pd.DateOffset(months=12)).strftime("%Y-%m-%d"), 1)
+        # fixed 12m horizon, start every `step_months` across all but the last year
+        starts = _month_starts(cache_start, (end_ts - pd.DateOffset(months=12)).strftime("%Y-%m-%d"), step_months)
         for s in starts:
             cells.append((f"r_{s:%Y%m}_h12", s.strftime("%Y-%m-%d"), clamp(s, 12)))
     elif grid == "horizon":
         # fixed start (cache start), growing end
         for h in horizons_m + [36, 48, 60]:
-            cells.append((f"h_start_h{h}", CACHE_START, clamp(pd.Timestamp(CACHE_START), h)))
+            cells.append((f"h_start_h{h}", cache_start, clamp(pd.Timestamp(cache_start), h)))
     elif grid == "matrix":
         # every quarter-start x every horizon
-        starts = _month_starts(CACHE_START, (end_ts - pd.DateOffset(months=3)).strftime("%Y-%m-%d"), 3)
+        starts = _month_starts(cache_start, (end_ts - pd.DateOffset(months=3)).strftime("%Y-%m-%d"), 3)
         for s in starts:
             for h in horizons_m:
                 cells.append((f"m_{s:%Y%m}_h{h}", s.strftime("%Y-%m-%d"), clamp(s, h)))
@@ -118,16 +119,21 @@ def _cell_metrics(run_dir: Path) -> Dict[str, Any]:
 
 def _run_cell(cid: str, s: str, e: str, job: Job, initial_cash: float,
               out_dir: Path) -> Dict[str, Any]:
-    """One cell, module-level so ProcessPoolExecutor can pickle it."""
-    run_arm(job, s, e, initial_cash, out_dir, str(DB_PATH))
+    """One cell, module-level so ProcessPoolExecutor can pickle it.
+
+    Resume: a cell whose equity.parquet already exists is not re-run — delete the
+    cell dir to force. Cheap checkpointing for multi-hour full-span sweeps."""
+    if not (out_dir / cid / "equity.parquet").exists():
+        run_arm(job, s, e, initial_cash, out_dir, str(DB_PATH))
     m = _cell_metrics(out_dir / cid)
     return {"cell": cid, "start": s, "end": e, **m}
 
 
 def run_sweep(strategy: str, grid: str, initial_cash: float, workers: int,
-              smoke: bool) -> List[Dict[str, Any]]:
+              smoke: bool, cache_start: str = CACHE_START, cache_end: str = CACHE_END,
+              step_months: int = 1) -> List[Dict[str, Any]]:
     d = reg.get(strategy)
-    cells = build_cells(grid, CACHE_END)
+    cells = build_cells(grid, cache_start, cache_end, step_months)
     if smoke:
         cells = cells[:2]
         workers = 1
@@ -255,6 +261,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--initial-cash", type=float, default=25_000.0)
     p.add_argument("--workers", type=int, default=3, help="Parallel cells. Each loads a price universe — watch RAM.")
     p.add_argument("--smoke", action="store_true", help="First 2 cells, serial — smoke test before the full run.")
+    p.add_argument("--cache-start", default=CACHE_START,
+                   help="Sweep span start (bound it to the strategy's score-cache span; "
+                        "binary_gated/rs arms span 2003-01-01..2026-05-22).")
+    p.add_argument("--cache-end", default=CACHE_END)
+    p.add_argument("--step-months", type=int, default=1,
+                   help="Rolling-grid start spacing in months (3 = quarterly, for full-span sweeps).")
     p.add_argument("--compare-spygate", action="store_true",
                    help="Task (b): run champion vs champion_spygate on the same cone; "
                         "emit a Sharpe-DISTRIBUTION diff (floor/IQR/%neg, not mean).")
@@ -266,7 +278,9 @@ def main() -> None:
     if args.compare_spygate:
         compare_cone(args.grid, args.initial_cash, args.workers, args.smoke)
         return
-    rows = run_sweep(args.strategy, args.grid, args.initial_cash, args.workers, args.smoke)
+    rows = run_sweep(args.strategy, args.grid, args.initial_cash, args.workers, args.smoke,
+                     cache_start=args.cache_start, cache_end=args.cache_end,
+                     step_months=args.step_months)
     valid = [r for r in rows if r.get("sharpe") == r.get("sharpe")]
     print("\n" + "=" * 70)
     print(f"START-TIME SWEEP — {args.strategy} — grid {args.grid} — {len(valid)}/{len(rows)} cells ok")
