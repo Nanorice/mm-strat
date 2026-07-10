@@ -397,12 +397,15 @@ class PositionTracker:
         ticker: str,
         current_atr: float,
         current_high: float,
+        trail_from_entry_atr: float = 0.0,
     ) -> Optional[float]:
         """
         Update trailing stop for a position.
 
         The stop logic depends on tranche state:
-        - Before T1: Don't trail (stay at initial stop)
+        - Before T1: Don't trail (stay at initial stop) — UNLESS trail_from_entry_atr
+          is set, then trail at that ATR multiple from the first bar (tail-harvesting
+          exit: protects the runner's median path with no tranche take-profit).
         - After T1: Moderate trail (1.5 * ATR from high)
         - After T2: Tight trail (1.0 * ATR from high)
 
@@ -410,6 +413,7 @@ class PositionTracker:
             ticker: Stock ticker
             current_atr: Current 14-day ATR
             current_high: Today's high price
+            trail_from_entry_atr: ATR multiple to trail from entry (0 = off, legacy).
 
         Returns:
             New stop price if updated, None if not found or not moved
@@ -425,6 +429,10 @@ class PositionTracker:
         elif pos.tranche1_sold:
             # Moderate trail after T1
             new_stop = current_high - (1.5 * current_atr)
+        elif trail_from_entry_atr > 0:
+            # Rising trail from entry (no tranche take-profit); high-water logic
+            # below still guarantees it only ratchets up, never below initial_stop.
+            new_stop = current_high - (trail_from_entry_atr * current_atr)
         else:
             # No trailing before T1 - keep initial stop
             return None

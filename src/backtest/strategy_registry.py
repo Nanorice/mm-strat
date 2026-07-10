@@ -111,10 +111,16 @@ def to_fingerprint(kwargs: Dict[str, Any]) -> str:
     parts.append("E1.d0" if delay == 0 else f"E2.d{delay}")
     if "max_stop_pct" in kwargs:
         parts.append(f"X1.sl{round(kwargs['max_stop_pct'] * 100)}")
-    if "min_target1_pct" in kwargs:
+    # No Xt component when tranches are disabled (R3 trail-only arms) — the
+    # fingerprint must not imply a take-profit the strategy won't take.
+    if "min_target1_pct" in kwargs and not kwargs.get("disable_tranches"):
         parts.append(f"Xt.t1_{round(kwargs['min_target1_pct'] * 100)}")
     if kwargs.get("sma_exit_independent") and "sma_exit_period" in kwargs:
         parts.append(f"X3.sma{kwargs['sma_exit_period']}")
+    # Rising trail from entry (R3b). Emit-only — no parse round-trip (research knob,
+    # arms are built from kwargs not this fingerprint); keeps trail arms distinct.
+    if kwargs.get("trail_from_entry_atr"):
+        parts.append(f"Xtr.e{round(kwargs['trail_from_entry_atr'] * 10)}")
     if kwargs.get("entry_mode") == "top_n" and kwargs.get("entry_top_n"):
         parts.append(f"S0.top{kwargs['entry_top_n']}")
     if kwargs.get("selection_skip_top"):
@@ -149,6 +155,17 @@ def _champion_kwargs() -> Dict[str, Any]:
     # E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5 — the 2026-07-05 OOS-gated champion.
     # atr_stop_mult stays at the base 2.0 but is INERT (10-15% floor always wins).
     return {**_base_kwargs(5), "max_stop_pct": 0.15, "min_target1_pct": 0.10}
+
+
+def _trail_only(base: Dict[str, Any]) -> Dict[str, Any]:
+    # R3 tail-harvesting exit: disable the tranche take-profit entirely so the
+    # runner breathes to full excursion. NB zeroing the target legs does NOT work
+    # — target1 = max(price+atr*mult, price*(1+pct)) is always >= entry, so zeros
+    # fire T1 at the entry price. disable_tranches is the only correct off-switch.
+    # With no tranche sold, update_stops never trails (it gates on tranche1_sold)
+    # → runner held by the fixed initial stop + independent SMA trend exit.
+    return {**base, "disable_tranches": True,
+            "sma_exit_independent": True, "sma_exit_period": 50}
 
 
 # --- the registry -------------------------------------------------------------
@@ -197,6 +214,54 @@ _register(StrategyDef(
     strategy_kwargs={**_champion_kwargs(), "min_prob_elite": 0.90},
     description="m01a challenger: top-decile RS_Universe_Rank selection on the trend_ok "
                 "panel x breakout trigger x champion exits (no model).",
+    status="candidate",
+))
+
+_register(StrategyDef(
+    name="rs_tail_trail",
+    signal="rs",
+    # R3 arm C — THE test: RS-tail selection (top-decile RS on the trend_ok panel)
+    # x tail-harvesting exit (no tranches, runner exits on SMA50 break / initial
+    # stop). The one pair M4 left un-run. Isolates 'remove profit-taking' as the
+    # single change vs rs_tail (arm B).
+    strategy_kwargs=_trail_only({**_champion_kwargs(), "min_prob_elite": 0.90}),
+    description="R3-C: top-decile RS selection x trend-exit-only (no tranche TP, SMA50 "
+                "trend exit). Tests whether removing tranche truncation converts the tail.",
+    status="candidate",
+))
+
+_register(StrategyDef(
+    name="champion_trail",
+    signal="binary_gated",
+    # R3 arm D — control: champion selection x the same tail-harvesting exit.
+    # Isolates the exit main effect from the selection x exit interaction: if D>A
+    # but C is no better than B's tranche->trail lift, the trail helps ANY
+    # selection and the selection question stays closed (meta-plan R3 branch 2).
+    strategy_kwargs=_trail_only(_champion_kwargs()),
+    description="R3-D: champion selection x trend-exit-only (no tranche TP, SMA50 trend "
+                "exit) on the SEPA-gated full-span cache. Control for the exit main effect.",
+    status="candidate",
+))
+
+# R3b — rising-trail-from-entry: champion selection (the R3 winner) x tail-harvesting
+# exit WITH a stop that ratchets up from the first bar (trail_from_entry_atr), to
+# protect the median path champion_trail bled (R3 §mechanism). Ex-ante tight/wide
+# pair, no post-hoc sweeping. SMA50 trend exit still active as the trend backstop.
+_register(StrategyDef(
+    name="champion_trail_e25",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()), "trail_from_entry_atr": 2.5},
+    description="R3b-wide: champion x trend-exit + 2.5xATR rising trail from entry. "
+                "Lets the runner breathe while ratcheting the stop up.",
+    status="candidate",
+))
+
+_register(StrategyDef(
+    name="champion_trail_e15",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()), "trail_from_entry_atr": 1.5},
+    description="R3b-tight: champion x trend-exit + 1.5xATR rising trail from entry. "
+                "Protects the median path harder; likelier to clip the tail.",
     status="candidate",
 ))
 
@@ -270,4 +335,11 @@ if __name__ == "__main__":
         assert rt[k] == champ.strategy_kwargs[k], (k, rt[k], champ.strategy_kwargs[k])
     assert get("e1_seed").fingerprint == "E1.d0_X1.sl10_X3.sma50_S0.top5", get("e1_seed").fingerprint
     assert "S1_baseline_top3" in STRATEGIES and len(by_status("baseline")) >= 6
+    # R3 trail arms: tranches OFF, no Xt in fingerprint, and structurally distinct
+    # from their tranche partners (the M4 no-op trap — guard it here).
+    for trail, base in (("rs_tail_trail", "rs_tail"), ("champion_trail", "champion_gated")):
+        t = get(trail)
+        assert t.strategy_kwargs.get("disable_tranches") is True, trail
+        assert "Xt" not in t.fingerprint, t.fingerprint
+        assert t.strategy_kwargs != get(base).strategy_kwargs, f"{trail} == {base} (no-op!)"
     print(f"OK — {len(STRATEGIES)} strategies. champion = {champ.fingerprint}")

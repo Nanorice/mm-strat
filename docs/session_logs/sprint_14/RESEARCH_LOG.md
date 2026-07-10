@@ -528,7 +528,39 @@
     fitting): top-X sweep, tail-harvesting exits, RS×prob_elite combo.
     `verdicts/2026-07-10_m4_rs_tail_backtrader_cone.md`.
 
+## Thread I — the SEPA funnel program: consolidate ground truth, then close steps 2–4 (2026-07-10)
+
+> After m01a closed (Thread H), a review set the frame: **"null" is 3 currencies** — C1 label-ranking /
+> C2 OOS-ranking / C3 exit-aware P&L. m01a-null (C2+C3) ≠ m01-null (m01 won C3). Steering doc
+> `plans/sepa_ground_truth_roadmap.md`; memory [[project_sepa_three_currencies]].
+
+35. **Are Minervini's step-2 fundamentals a real ranker beyond RS (R1/R1b)?** → **NO — SUBSUMED by RS.**
+    rev-growth/margin-trend have real unconditional ramps but are RS-correlated (mediator); EPS
+    growth/accel U-shaped nulls; verbatim screen dominated 3× depth-matched, era-fragile. Second axis =
+    SIZE (label-level). `verdicts/2026-07-10_r1b_step2_screen.md`, `_r1b_axis2_smallcap.md`.
+36. **Does a tail-harvesting exit convert RS-tail selection, or help the champion (R3)?** → **Helps the
+    CHAMPION (+0.21 median Sharpe, era-robust), NOTHING for RS-tail (C≈B).** RS-tail un-monetizable
+    under BOTH exits (0.10 tranche AND trail). Selection dominates exit (D vs C +0.42). de-gate NOT
+    triggered. `verdicts/2026-07-10_r3_exit_selection_coupling.md`.
+37. **Should we de-gate m01's breakout gate to expand training?** → **NO, PARKED.** De-gating =
+    reproducing RS-tail selection, which stays null under the best exit (Q36) → inherits its null.
+    Gated behind R3 by design; R3 landed on "exit helps, selection doesn't" → de-gate unjustified.
+38. **Does any leadership trait (step 3) stack ≥1.3× on RS-D10 (R2)?** → **NO — step 3 collapses into
+    RS.** Group-leadership = RS-clones (ρ 0.57–0.80); base-character (vcp/tight/52w-high) flat-to-
+    inverted; only residual = upside-only vol tilt (adr_20d/natr 1.28×, below gate). Passport = manual
+    aid. `verdicts/2026-07-10_r2_leadership_profile.md`.
+39. **Does a rising-trail-from-entry fix champion_trail's median bleed (R3b)?** → ⟳ **NO — FALSIFIED.**
+    The ratchet ELIMINATES the trend exit (38%→2%→1%), clipping the winners that made champion_trail
+    work; monotone worse tighter (e25 0.32, e15 −0.29 vs 0.46). The median bleed and the tail are the
+    same coin → champion_trail is a local optimum. `verdicts/2026-07-10_r3b_rising_trail_from_entry.md`.
+
+**SEPA funnel program CLOSED** — R1/R1b/R2/R3/R3b/R4 all resolved. Selection = one-column RS (+ size
+axis, label-level); exit = champion_trail candidate (+0.21, FINAL); the 63d MFE tail is
+watchlist-ordering value, NOT systematic alpha. Only open action = champion_trail deploy-gate re-confirm.
+
 ## Open meta-questions (carried)
+- 📋 **champion_trail deploy-gate re-confirm (from Q36/Q39) — THE only open action.** SPY-200d trunk
+  ([[project_capital_deployment]]); then promote to champion or park as confirmed-but-marginal (+0.21).
 - ✅ **M4 (DONE 2026-07-09):** SPY-200d deploy gate CONFIRMED on BackTrader (Q26) — improves every
   metric on the gated population; upgrades the vec governor verdict. `champion_spygate` flagged for
   promotion to the live deployment layer (user decision, not auto-promoted).

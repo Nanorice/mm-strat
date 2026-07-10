@@ -108,6 +108,15 @@ class SEPAHybridV1(bt.Strategy):
         ('atr_target1_mult', 3.0),
         ('min_target1_pct', 0.15),
         ('atr_target2_add', 2.0),
+        # Tail-harvesting exit: no tranche take-profit at all. target1 is always
+        # >= entry price (max of two price+... legs), so zeroing the legs fires T1
+        # at entry instead of disabling it — the tranche can only be turned off
+        # here. Runner then exits on the initial stop / independent SMA trend break.
+        ('disable_tranches', False),
+        # Rising trail from entry (0 = off). With disable_tranches the normal trail
+        # never engages (it gates on tranche1_sold), leaving the runner on its fixed
+        # initial stop — this protects the median path it otherwise bleeds (R3 §mechanism).
+        ('trail_from_entry_atr', 0.0),
         ('sma_exit_period', 50),
 
         # Exit params (rank-based exits)
@@ -454,7 +463,9 @@ class SEPAHybridV1(bt.Strategy):
             current_high = data.high[0]
 
             # Update stop (high-water mark logic in tracker)
-            self.position_tracker.update_stops(ticker, current_atr, current_high)
+            self.position_tracker.update_stops(
+                ticker, current_atr, current_high,
+                trail_from_entry_atr=self.p.trail_from_entry_atr)
 
     def _check_stops(self, current_date: datetime):
         """Check and execute stop-outs."""
@@ -478,6 +489,8 @@ class SEPAHybridV1(bt.Strategy):
 
     def _check_targets(self):
         """Check and execute profit target exits."""
+        if self.p.disable_tranches:  # tail-harvesting exit: hold runner, no TP
+            return
         for ticker, pos in list(self.position_tracker.positions.items()):
             data = self.stock_feeds.get(ticker)
             if data is None:
