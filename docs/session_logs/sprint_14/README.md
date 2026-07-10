@@ -121,6 +121,24 @@ top-5?* The open questions, each mapped to a goal below:
   → fold the winner into `run_strategy_wfo.py` so the uplift is confirmed OOS (this also closes the
   S13 carryover below).
 
+- [ ] **Enhance macro stress expression via Market Breadth / Internal Indicators.**
+  The current 6-pillar macro mostly relies on external pricing and yields (credit spreads, rates, VIX, CAPE). We should evaluate internal equity market breadth to see if it improves or confirms the stress signal. Candidate metrics to test:
+  - Advance/Decline (A/D) line
+  - Equal-Weight S&P 500 (RSP) relative to market-cap weight (SPY)
+  - Percentage of stocks above their 50-day moving average
+  - New Highs vs. New Lows
+  *Goal:* Determine if internal market deterioration provides a better or complementary "stress" sizing input than the existing composite.
+
+- [ ] **Incorporate recent Sector Strength / Clustering into stock selection.**
+  Mimic discretionary intuition (e.g., noticing a semiconductor boom) by quantifying sector clustering within the SEPA watchlist. If an increasing density of SEPA breakout candidates belongs to the same sector, it strongly suggests a thematic, sustained capital rotation (a "major hike").
+  *Goal:* Test whether overlaying a recent sector momentum or SEPA-density score improves stock selection. For example, do we see a higher hit rate if we favor names in sectors that are actively expanding their representation in the SEPA pool?
+
+- [ ] **Stock Selection EDA: Impact of Market Cap and P/E on Top-N Returns.**
+  We need to deeply understand the fundamental and size characteristics of our daily top picks.
+  - Plot the daily range/distribution of Market Cap for the top 1/5/10 selected stocks (similar to how we plotted forward returns).
+  - Investigate the correlation between Market Cap within the SEPA candidate pool and forward returns. Does the model's alpha live exclusively in micro/small caps, or does it scale to larger names?
+  - Perform the same correlation analysis for P/E ratios to see if the "value-rebound" effect (cheap names working better) holds robustly across the entire 25-year backtest.
+
 ## Carried over from sprint 13
 
 - [ ] **WFO fold the VIX-sizing lever** into `run_strategy_wfo.py` — confirm the S13 in-sample sizing
@@ -137,6 +155,37 @@ top-5?* The open questions, each mapped to a goal below:
 ## TODOs
 _(sprint-local isolated TODOs; cross-session facts go to memory, not here.)_
 
+**Population-inflation fix (2026-07-09):**
+- [x] **FIXED — candidate selection now gates on genuine SEPA breakouts (trend_ok AND breakout_ok).**
+  `score_from_t3` scores the WHOLE trend-active panel; consumers were selecting top-N by prob_elite from
+  that inflated pool (a stock scored mid-downtrend is out-of-distribution for a breakout model). Gate
+  added at every selection layer: `ScoreLookup.get_candidates` (→ sepa_strategy + forward_engine),
+  `VectorizedSEPABacktest._select_entries`, `start_day_basket_paths.py` (both variants), and
+  `run_strategy_wfo.py` (after the parquet/daily_predictions read). The **per-(ticker,date) scores are
+  unchanged and the existing cache stays valid** — the flags aren't cached; they're joined from
+  `t3_sepa_features` at read time via `src/backtest/sepa_gate.py::attach_sepa_flags` (an exact
+  (date,ticker) join, rows preserved). NO re-score needed. Measured: only **~1% of scored rows are
+  genuine breakouts** (~20/day median), so the old top-5 was drawn from ~99% off-setup rows. Guards:
+  `tests/test_sepa_gate.py` + `sepa_gate.py::__main__`. Gate ON by default; `require_sepa=False` for the
+  research unfiltered view.
+- [ ] **RE-RUN the 25y cone + start-day lottery on the gated population** and check whether the sprint-14
+  conclusions still hold (governor = DD-dial-not-alpha; the lottery shape; champion=flat). No cache
+  regen — the WFO/lottery now attach the flags at read time, so just re-run the cone
+  (`run_strategy_wfo.py --scores-parquet …`) and the lottery notebook. This is the substantive question:
+  do the conclusions survive once the population is real breakouts?
+- [ ] **DEFERRED — Minervini trailing-stop-to-breakeven exit in `vectorized_backtest.py`** (was sprint-14
+  task (a)). **Recommendation:** add as a NEW `exit_policy='minervini'` (do NOT mutate sma/nday/atr_trail)
+  so it A/Bs cleanly on the cone: tight initial stop (~7%), ratchet the stop UP to breakeven once the
+  trade is up ~X% (e.g. +10%), then trail (ATR or a fixed give-back) from the running high. The lottery
+  lens proved the tight-stop *payoff ratio* doubles (2.85→6.18) but a fixed-hold basket whipsaws that
+  away — the asymmetry only harvests with this breakeven ratchet in the engine. Re-test on cone + lottery
+  to see if it tightens the start-day distribution WITHOUT kneecapping the tail.
+  cf `verdicts/2026-07-09_regime_governor_backtest.md` §6d, `cells/minervini_overlay_cells.md`.
+- [ ] **DEFERRED — "MA50 governor" side-quest** — revisit only AFTER the gated re-run above, to see if the
+  cleaner population changes the conclusion. (Note: a per-name price<MA50 exit already exists as
+  `exit_policy='sma'`, `sma_exit_period=50`; if the intent is a portfolio SPY-MA50 deploy gate, it's a
+  faster sibling of the existing SPY-200d gate in `MacroSizer` — a small new method.)
+
 **Meta-questions status (full detail in [RESEARCH_LOG.md](RESEARCH_LOG.md)):**
 - [x] **M1 — fat-tail-weighted objective** — DONE, `Σmax(fwd−30%,0)` + tail-lift@k adopted.
 - [x] **M4 — magnitude/quantile regressor** — SMOKE-BUILT then PARKED (A-target ranks tail better but noisy).
@@ -149,9 +198,15 @@ _(sprint-local isolated TODOs; cross-session facts go to memory, not here.)_
   — a lower-turnover product distinct from day-0 breakouts.
 
 **Regime follow-ups (opened 2026-07-08 by M6, still open):**
-- [ ] **Settle the regime STRESS sub-split** — persistence filter (de-flicker) + a vol/VIX-percentile
-  stress cut (`spy_vol20` already computed; ≈ a VIX cut → grounds it in the S13 sizing signal, fixes
-  dd-sparsity / macro-leak). cf `verdicts/2026-07-08_m6_regime_state_label.md` §3b/§5.
+- [ ] **⭐ NEXT: regime-weight the DAY-SWEEP fwd-return panel (not a backtest yet).** Apply an
+  SPY-200MA (≡ VIX) 2-state weight to the existing per-day top-5 fwd panel + full-universe fwd-by-state
+  table; check if it lowers the AVERAGE + WORST-DECILE loss. Cheapest test of the "regime governor" the
+  regime-blind finding calls for. Judge on fwd100. If it helps → promote to backtest; if not → saved it.
+  Trunk = SPY-200MA only; the calm/stress sub-split is NOT needed for this first cut.
+- [ ] **Settle the regime STRESS sub-split** (only if the 2-state weight above isn't enough) —
+  persistence filter (de-flicker) + a vol/VIX-percentile stress cut (`spy_vol20` already computed; ≈ a
+  VIX cut → grounds it in the S13 sizing signal, fixes dd-sparsity / macro-leak). cf
+  `verdicts/2026-07-08_m6_regime_state_label.md` §3b/§5.
 - [ ] **dd regime axis on the SEPA-CANDIDATE population pre-2013** — the "reaches 2008" test + the
   model-agnostic during-period lens on the actual watchlist (consumer #2 used the full universe).
 - [ ] **Dashboard: current-state regime badge + regime strip** beneath the 6-pillar table — DEFERRED as
