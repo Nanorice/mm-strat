@@ -357,7 +357,7 @@ class LeakageGuard:
                 window_end = label_date + pd.Timedelta(days=int(horizon * 1.5) + 5)
                 window = con.execute(
                     f"""
-                    SELECT date, close
+                    SELECT *
                     FROM {price_table}
                     WHERE ticker = ?
                       AND date > ?

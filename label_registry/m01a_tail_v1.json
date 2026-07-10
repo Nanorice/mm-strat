@@ -1,0 +1,13 @@
+{
+  "bins": [
+    30.0
+  ],
+  "description": "Continuous tail-magnitude label for the m01_tail suite: max(MFE_63 - 30%, 0), where MFE_63 is the entry-conditioned fixed-horizon Maximum Favorable Excursion \u2014 enter at day-t close, MFE = MAX(GREATEST(high, close)) over trading bars t+1..t+63 (entry day excluded, full 63-bar forward window required) divided by entry close, minus 1. Corrupt isolated highs (EXEL 999.99 sentinel class) are nulled AT SOURCE by clean_dirty_shares_price.py part G (2026-07-10), so no label-side guard. Population = full trend_ok panel (Minervini stage-1 watchlist), NOT the breakout slice \u2014 see verdicts/2026-07-09_population_reframe_tail_ranker.md. Horizon N=63 and label form chosen by the M0 horizon sweep (verdicts/2026-07-10_m0_horizon_sweep.md): top-end strictly monotone in RS deciles across all date-thirds, D10/D1 home-run ratio 5.7-6.7x. Binary diagnostic home_run_63 = 1[MFE_63 > 30%] (bins field). horizon_days counts TRADING BARS (~91 calendar days). Two-clock split: this fixed horizon RANKS; the SEPA event-terminated exit HOLDS (backtest policy, not the label).",
+  "exit_rule": "fixed_horizon",
+  "generated_at": "2026-07-10T11:01:53",
+  "git_sha": "c268d66",
+  "horizon_days": 63,
+  "label_id": "m01a_tail_v1",
+  "source_query": "WITH panel AS (\n  SELECT ticker, date\n  FROM t3_sepa_features\n  WHERE trend_ok\n    AND RS_Universe_Rank IS NOT NULL\n    AND ticker NOT IN ('LIF', 'CUE')\n),\npx AS (\n  SELECT ticker, date, close,\n    MAX(GREATEST(high, close)) OVER w AS fh63,\n    COUNT(close) OVER w AS c63\n  FROM price_data\n  WHERE ticker IN (SELECT DISTINCT ticker FROM panel)\n  WINDOW w AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 1 FOLLOWING AND 63 FOLLOWING)\n)\nSELECT p.ticker, p.date, x.close AS entry_close, x.fh63,\n       x.fh63 / x.close - 1 AS mfe_63,\n       GREATEST(x.fh63 / x.close - 1 - 0.30, 0) AS tail_mag_63,\n       CAST(x.fh63 / x.close - 1 > 0.30 AS INT) AS home_run_63\nFROM panel p\nJOIN px x USING (ticker, date)\nWHERE x.c63 = 63 AND x.close > 0",
+  "target_col": "tail_mag_63"
+}

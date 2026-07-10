@@ -14,6 +14,15 @@ so this runs identically on the research box (Hang) and the infra/ITX box (sh019
      incl. sub-30B dirt that survived part B: CALC 15B, OPTT 1.3-1.9B at ~10x scale).
   F. price_data     : null OHLC on corrupt-ordering bars (high<close / low>close / high<low
      by >10%). 99.9% of ordering violations are <0.1% rounding epsilon — left alone.
+  G. price_data     : null HIGH (only) on isolated corrupt spikes — high >2x GREATEST(open,
+     close) AND (high = 999.99 feed sentinel OR dollar volume < $50k). Real one-day squeezes
+     (PHUN 2021-10-22, UPXI 2025-04-21) have $100M+ traded and are KEPT; dirt prints (EXEL
+     2007-10-22 high=999.99, MRDN vol-0 spikes, reverse-split micro-cap junk) have no market
+     support. AIG's 999.99 highs are ~1x body (real ~$50 pre-1:20-split price) and are kept
+     by the 2x-body condition. open/low/close stay — they are plausible on these bars.
+     Found 2026-07-10 building the m01a tail label (one EXEL bar = 82% of an RS-decile cell's
+     tail_mag). Lows deliberately NOT touched: isolated low dips include real history (UAL
+     2008-09-08 false-bankruptcy $3 print, 2010-05-06 Flash Crash) — no mechanical separator.
 
   NOTE on C: refetch was investigated and REJECTED. yfinance's own period="max" history for
   these low-float / reverse-split tickers is ALSO dirty at the source (e.g. ADTX serves
@@ -48,7 +57,11 @@ OHLC_EXCESS = T1_PLAUSIBILITY_BOUNDS['ohlc_excess_fail']
 # standing unattended check.
 SCALE_RATIO = 100
 # Legit rows the relative rule would flag (verified point-in-time pre-reverse-split counts).
-SCALE_WHITELIST = [("EXE", "2020-04-10")]  # Chesapeake 1.957B shares before 1:200 split
+SCALE_WHITELIST = [
+    ("EXE", "2020-04-10"),  # Chesapeake 1.957B shares before 1:200 split
+    ("QXO", "2026-07-02"),  # real 725M->1.04B step (cap ~$15B); micro-cap-era median makes
+                            # the 100x-median rule misfire — expect more QXO rows to trip it
+]
 
 
 def _log(msg: str) -> None:
@@ -156,6 +169,25 @@ def clean_fundamentals_relative(con, dry_run: bool) -> int:
     return n
 
 
+SPIKE_BODY_RATIO = 2        # high >2x max(open, close) = uncorroborated spike shape
+SPIKE_DOLLAR_MIN = 50_000   # real spikes have dollar-volume support; dirt prints don't
+SENTINEL_HIGH = 999.99      # yfinance capped-feed sentinel
+
+
+def clean_high_spikes(con, dry_run: bool) -> int:
+    where = f"""
+        close > 0 AND open > 0
+        AND high > {SPIKE_BODY_RATIO} * GREATEST(open, close)
+        AND (high = {SENTINEL_HIGH} OR close * volume < {SPIKE_DOLLAR_MIN})
+    """
+    n = con.execute(f"SELECT COUNT(*) FROM price_data WHERE {where}").fetchone()[0]
+    _log(f"  G. price_data isolated corrupt highs (>{SPIKE_BODY_RATIO}x body, sentinel or <${SPIKE_DOLLAR_MIN/1000:.0f}k traded): {n}")
+    if n and not dry_run:
+        con.execute(f"UPDATE price_data SET high = NULL WHERE {where}")
+        _log(f"     -> nulled {n} highs (open/low/close/volume kept — plausible on these bars)")
+    return n
+
+
 def clean_ohlc_corrupt(con, dry_run: bool) -> int:
     where = f"""
         (high < close OR low > close OR high < low)
@@ -190,6 +222,7 @@ def main() -> None:
         if not args.skip_price:
             clean_price(con, args.dry_run, args.smoke_test)
             clean_ohlc_corrupt(con, args.dry_run)
+            clean_high_spikes(con, args.dry_run)
         if not args.dry_run:
             con.commit()
     finally:

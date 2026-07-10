@@ -465,7 +465,57 @@
 25. **Is the vec↔BT gap tuning or engine?** → **ENGINE.** Same fixed config both engines: vec median
     1.51/%neg 10% vs BT 0.35/%neg 45%; ~3× optimism, concentrated in bear folds. → memory
     [[project_vec_engine_optimistic]]. **Champion stays the native tranche exit; minervini NOT promoted.**
+26. **Does the SPY-200d deploy gate confirm on BackTrader (M4)?** → **YES, and it UPGRADES the vec
+    verdict.** 25y gated cone, native-tranche baseline vs +SPY-200d gate: the gate improves EVERY metric
+    (agg Sharpe 0.52→0.79, return 299%→794%, maxDD −61%→−37%, %neg 45%→35%). Win = 3 deep-bear rescues
+    (2008 −1.86→+2.50 gate-open 2%, 2022 −1.69→−0.33) dwarf 4 mid-cycle whipsaws (2007/2018/2010/2014).
+    The vec governor verdict's "DD-controller only, costs the mean" was a vec ARTIFACT — vec understates
+    the bear damage the gate prevents ([[project_vec_engine_optimistic]]), so only BackTrader can value a
+    crash-avoidance overlay. `champion_spygate` = the promotion candidate for the deployment layer.
+    `verdicts/2026-07-09_m4_deploy_gate_backtrader_confirm.md`.
+
+## Thread H — step back: why is the population limited to breakouts? (population reframe, 2026-07-10)
+
+27. **Why do we train the ranker only on breakout rows — does that cause the start-date lottery?**
+    → **Yes.** The project collapsed Minervini's watchlist(rank)+breakout(trigger) funnel into one:
+    `trend_ok AND breakout_ok` = both universe AND training pop. Ranking the post-trigger slice is
+    circular (signal already spent, IC≈−0.03); a breakout-only universe is a clustered event stream →
+    lottery. `verdicts/2026-07-09_population_reframe_tail_ranker.md`.
+28. **Does ranking the full trend panel by RS recover a selection edge?** → **Only on the TAIL, not the
+    median.** MEDIAN inverts (weak-RS > strong-RS) AND the breakout pool ramp = trend panel ramp (no
+    privileged info) → naive pivot refuted. TAIL: home-run rate monotone 2.21%→12.66% (**5.7×**), P90 2×.
+    → memory [[project_population_reframe_tail_ranker]].
+29. **Is this just the parked m02_breakout relitigated?** → **No.** m02 = event-timing regressor,
+    returns NON-monotone (peaked D7, died D10 = selection bias); this = outcome-magnitude ranker, monotone
+    to D10. Lesson carried: "signal works ≠ trade works" → must survive entry-conditioning + cone + BT.
+30. **How is the target horizon defined if SEPA's is undefined?** → **Two-clock split:** FIXED
+    policy-free horizon to RANK, UNDEFINED SEPA event-terminated horizon to HOLD (in the backtest exit,
+    not the label). Keeps selection un-entangled from exit mechanics. `plans/m01a_tail_ranker_plan.md`.
+31. **At which fixed N is the RS→tail ramp strongest, monotone-to-D10, and date-stable?** → **N=63,
+    GATE PASSES (M0 done 2026-07-10).** Entry-conditioned MFE, N∈{21,42,63,126}: top-end strictly
+    monotone in EVERY horizon × date-third (m02 anti-test passes everywhere); N=63 most date-stable
+    (D10/D1 = 5.7–6.7× across thirds, D10 home-run 28.45%); N=21/42 steeper but sparse pre-2020,
+    N=126 threshold saturates. Label = continuous `max(MFE_63−0.30, 0)`, binary home-run as diagnostic.
+    `verdicts/2026-07-10_m0_horizon_sweep.md`.
+32. **Does the fixed-horizon MFE label survive LeakageGuard, and what's the RS-only bar (M1–M2)?**
+    → **YES + bar set (2026-07-10).** `m01a_tail_v1` registered (1.61M rows, 11.45% positive), 1500-row
+    audit clean. Side-find: NEW dirt class — isolated corrupt highs (EXEL 999.99 sentinel) poison
+    unwinsorized tail_mag means AND would poison M3's high-based features → **fixed at source**:
+    part G of clean_dirty_shares_price.py nulled 178 highs (>2× body + no dollar-volume support;
+    real pumps like PHUN 2021-10-22 kept; corrupt LOWS deferred — real flash crashes, no separator).
+    Label guard then removed; M2 table bit-identical. RS-only bar: top-decile tail_mag lift 3.5×,
+    top-5% 4.2× (home-run 2.5×/2.7×), stable across date-thirds.
+    `verdicts/2026-07-10_m1_label_m2_rs_baseline.md`.
+33. **?** Does an ML ranker (m01a_v1_h63) beat the RS-only bar out-of-sample and across start dates
+    (M3)? → OPEN, next.
 
 ## Open meta-questions (carried)
-- **M4 (open):** re-confirm the deploy gate (SPY 50/100/200 EMA/SMA trunk + 6-pillar stress) on the
-  GATED population and on BackTrader (not vec). Independent of the champion choice.
+- ✅ **M4 (DONE 2026-07-09):** SPY-200d deploy gate CONFIRMED on BackTrader (Q26) — improves every
+  metric on the gated population; upgrades the vec governor verdict. `champion_spygate` flagged for
+  promotion to the live deployment layer (user decision, not auto-promoted).
+- ✅ **m01a/m01_tail M0 (Q31, DONE 2026-07-10):** GATE PASSES — N=63, tail-magnitude label
+  `max(MFE_63−0.30,0)`. `verdicts/2026-07-10_m0_horizon_sweep.md`.
+- ✅ **m01a M1+M2 (Q32, DONE 2026-07-10):** label clean, RS-only bar = top-decile tail_mag lift 3.5×
+  / top-5% 4.2×. `verdicts/2026-07-10_m1_label_m2_rs_baseline.md`.
+- ⏳ **m01a M3 (Q33, OPEN):** ML ranker vs the RS-only bar. (Corrupt-high source-null DONE
+  2026-07-10, part G; corrupt-LOW cleanup deliberately deferred — real flash crashes.)
