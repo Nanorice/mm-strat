@@ -630,6 +630,22 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     portfolio knob tested (cadence Q45, breadth Q46, stops §6a, gates §2c) removes.
     `verdicts/2026-07-11_q46_capacity_n10.md`.
 
+47. **prob_elite gate mismatch: the backtest floor (0.15 CALIBRATED ≈ raw 0.48 coin-flip) was never
+    reconciled with the EDA's 0.6-RAW gate — does raising it help? (⚠️ OPEN)** → **NO for the
+    champion — it's a VARIANCE knob, not alpha.** Motivation: on famine days the day's best breakout
+    is itself low-score, so 0.15 enters 'the best of a bad lot' — a higher floor blocks REAL entries
+    (415/20% at 0.20, measured; overlap with SPY-gate ≈0%, these are bull-regime entries). ⟳ FIRST
+    took the wrong angle — post-filtered persisted trades + read a paired win-rate as absolute →
+    "no rerun" (WRONG; corrected [[feedback_rerun_dont_postfilter]]). Real rerun: registered
+    `champion_trail_spygate_g{20,25,30}`, paired 90-cell cone. **0.15 WINS median Sharpe (0.59 vs
+    0.46/0.51/0.35)**; higher gates buy floor (−1.74→−1.44), p25 (+0.03 @0.25), %neg (30→24%) but
+    cost median return and — at 0.30 — the TAIL (p90 totret 51→31%, trades halve). Reconciles the EDA
+    (§2b: raw gate lifts label mean+tail but flat median / worse loss-rate) with the engine (exits
+    truncate the exact tail the gate concentrates → label lift ≠ trade edge). Fix as proposed is
+    wrong-signed; g0.25 = a defensive-variant candidate only; champion stays 0.15. **NOT resolved** —
+    user has further checks (different exit, gate×selection, non-Sharpe objective).
+    `verdicts/2026-07-11_prob_elite_gate_sensitivity.md`, `plans/2026-07-11_prob_elite_gate_mismatch.md`.
+
 ## Open meta-questions (carried)
 - ✅ **champion_trail deploy-gate re-confirm (Q40, DONE 2026-07-10):** gate STACKS on the trail →
   `champion_trail_spygate` PROMOTED to champion. `verdicts/2026-07-10_r3_deploy_gate_reconfirm.md`.
