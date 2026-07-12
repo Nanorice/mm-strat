@@ -532,6 +532,44 @@ def load_scored_watchlist(model_version_id: str) -> pd.DataFrame:
     return _attach_class_labels(df)
 
 
+@st.cache_data(ttl=300)
+def load_shortlist() -> pd.DataFrame:
+    """Today's ranked manual-review shortlist — the sprint-14 tail edge as a product.
+
+    Reads `v_d3_shortlist` (materialized nightly), which is a pure join of the
+    active SEPA breakouts with the prod model's score, ranked by the strong-RS ×
+    small-cap × prob_elite composite and tagged liquid/posture. Model-swap safe by
+    construction — the view resolves the `status_flag='prod'` model itself, so no
+    version id is threaded through here (unlike `load_scored_watchlist`). Present
+    as tail-odds, NOT a point return (the median inverts).
+    """
+    con = _connect()
+    try:
+        return con.execute("SELECT * FROM v_d3_shortlist").fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_weather_gauge(history_days: int = 250) -> pd.DataFrame:
+    """Weather-gauge state rows — the latest deploy posture + a history strip.
+
+    Reads `weather_gauge` (computed nightly by weather_engine), one row/day of the
+    combined SPY-200d brake + stress + breakout-supply state. Returns the last
+    `history_days` rows (oldest→newest) so the caller has both the current headline
+    (`.iloc[-1]`) and the transition strip. `stress_z` is PROVISIONAL (flicker
+    stabilization open); the posture leans on the brake + supply.
+    """
+    con = _connect()
+    try:
+        return con.execute(
+            "SELECT * FROM weather_gauge ORDER BY date DESC LIMIT ?",
+            [history_days],
+        ).fetchdf().iloc[::-1].reset_index(drop=True)
+    finally:
+        con.close()
+
+
 # ── F2: watchlist activity / exit tracking ────────────────────────────────────
 #
 # `screener_watchlist` is the materialized trade log (every ACTIVE + EXITED

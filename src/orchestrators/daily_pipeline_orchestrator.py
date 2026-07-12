@@ -370,6 +370,18 @@ class DailyPipelineOrchestrator:
             critical_success = False
             return False
 
+        # Phase 7.45: Weather gauge (best-effort). Recompute the deploy-posture
+        # state BEFORE the slim DB build (7.5) so weather_gauge ships in it.
+        phase_success, phase_stats = self._execute_phase(
+            "weather",
+            lambda: self._run_phase_7_45_weather(target_date),
+            target_date,
+        )
+        run_stats['phase_7_45'] = phase_stats
+        if not phase_success and self._is_critical("weather"):
+            critical_success = False
+            return False
+
         # Phase 7.5: Slim dashboard DB rebuild (best-effort; a slow rebuild must
         # never block the daily pipeline). Snapshots the freshly-refreshed cache
         # + latest features into data/dashboard.duckdb for cross-device sync.
@@ -1423,6 +1435,17 @@ class DailyPipelineOrchestrator:
             self._log_shadow_predictions_and_divergence(target_date)
         except Exception as e:
             logger.warning(f"[Phase 7.4] Shadow comparison skipped: {e}")
+        return {'rows_processed': n}
+
+    def _run_phase_7_45_weather(self, target_date: str) -> Dict:
+        """Phase 7.45: Recompute the weather_gauge deploy-posture table.
+
+        Runs after scoring and before the dashboard build so the fresh state ships
+        in the slim DB. Full recompute (expanding stats need all history; the table
+        is one row/day). Best-effort — a failure never fails the daily run.
+        """
+        from src.weather_engine import WeatherEngine
+        n = WeatherEngine(db_path=self.db_path).refresh(end=target_date)
         return {'rows_processed': n}
 
     def _run_phase_7_5_dashboard_db(self) -> Dict:

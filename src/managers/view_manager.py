@@ -83,6 +83,7 @@ class ViewManager:
             self._create_v_screener_dashboard,
             self._refresh_screener_watchlist,
             self._create_v_d3_lifecycle,  # after watchlist table — it joins it
+            self._create_v_d3_shortlist,  # after lifecycle — it builds on it
         ]
         # NOTE: t3_training_cache (v_t3_training materialization) is NOT in this list.
         # Its ASOF joins cost ~215s and its inputs (fundamentals/shares) change weekly at
@@ -1015,6 +1016,98 @@ class ViewManager:
             ORDER BY base.date DESC, base.ticker
         """)
         print(f"   [OK] v_d3_lifecycle: MECE lifecycle population (pre_breakout|active|removed), last 252d")
+
+    # ------------------------------------------------------------------
+    # VIEW 7d: v_d3_shortlist — the daily manual-review shortlist
+    # ------------------------------------------------------------------
+
+    def _create_v_d3_shortlist(self, con: duckdb.DuckDBPyConnection) -> None:
+        """Ranked, tagged daily shortlist — the sprint-14 tail edge as a product.
+
+        Pure JOIN of already-materialized parts (no new compute):
+            v_d3_lifecycle (cohort='active')  ⋈  daily_predictions (prod model score)
+
+        The edge (summary_eda §E/§H): a TAIL phenomenon at strong-RS × small-cap,
+        m01's unique add is industry-tail, liquidity-capped (~$7.5M/day), median
+        inverts. So the shortlist ranks today's ACTIVE breakouts by a composite of
+        RS-percentile × small-cap × prob_elite and presents TAIL-ODDS, not a point
+        return (a forecast would mislead — the median inverts).
+
+        Model-swap free: the score joins the model flagged `status_flag='prod'` in
+        the `models` table (ModelRegistry.get_prod_version). Swapping the model =
+        set_prod() + backfill_daily_predictions; this view re-points, no edit.
+
+        Columns are display lowercase (this is a display artifact, NOT model-fed) so
+        the COLUMN_CASE_MAP casing bridge does not apply — RS_* ranks are referenced
+        quoted verbatim.
+
+        Tags, not hard filters (let the reviewer see borderline names; sort buries):
+            liquidity_ok  — dollar_volume_avg_20 >= $7.5M/day (the R3 constraint)
+            posture       — 'aggressive' (tail: high RS ∧ small-cap) vs 'defensive'
+                            (calmer: lower rel-vol proxy natr) — a coarse split.
+        """
+        con.execute("""
+            CREATE OR REPLACE VIEW v_d3_shortlist AS
+            WITH prod AS (
+                SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1
+            ),
+            preds AS (
+                -- prod-model score per (ticker, date); best-ranked row on any tag.
+                SELECT ticker, prediction_date,
+                       prob_class_3 AS prob_elite, rank_within_day
+                FROM daily_predictions
+                WHERE model_version_id = (SELECT version_id FROM prod)
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, prediction_date
+                    ORDER BY rank_within_day
+                ) = 1
+            ),
+            active AS (
+                -- today's ACTIVE breakouts only (held SEPA positions in-hand).
+                SELECT
+                    lc.ticker, lc.date, lc.sector, lc.industry,
+                    lc.close, lc.market_cap,
+                    lc."RS_Universe_Rank"  AS rs_universe_rank,
+                    lc."RS_Sector_Rank"    AS rs_sector_rank,
+                    lc."RS_Industry_Rank"  AS rs_industry_rank,
+                    lc.dollar_volume_avg_20 AS dollar_volume,
+                    lc.natr
+                FROM v_d3_lifecycle lc
+                WHERE lc.cohort = 'active'
+                  AND lc.date = (SELECT MAX(date) FROM v_d3_lifecycle)
+            ),
+            scored AS (
+                SELECT
+                    a.*,
+                    p.prob_elite,
+                    p.rank_within_day,
+                    -- small-cap percentile within today's active set (small = 1.0).
+                    1.0 - PERCENT_RANK() OVER (ORDER BY a.market_cap) AS smallcap_pctl,
+                    a.dollar_volume >= 7.5e6 AS liquidity_ok
+                FROM active a
+                LEFT JOIN preds p
+                    ON p.ticker = a.ticker AND p.prediction_date = a.date
+            )
+            SELECT
+                ticker, date, sector, industry, close, market_cap,
+                rs_universe_rank, rs_sector_rank, rs_industry_rank,
+                dollar_volume, liquidity_ok, natr,
+                prob_elite, rank_within_day,
+                smallcap_pctl,
+                -- composite: strong-RS × small-cap × prob_elite (the §E/§H tail cell).
+                -- COALESCE prob to 0.25 (base rate) for un-scored fresh breakouts so a
+                -- NULL score doesn't NULL the whole composite (NaN-passthrough intent).
+                (rs_universe_rank + smallcap_pctl + COALESCE(prob_elite, 0.25)) / 3.0
+                    AS shortlist_score,
+                CASE
+                    WHEN rs_universe_rank >= 0.8 AND smallcap_pctl >= 0.6 THEN 'aggressive'
+                    ELSE 'defensive'
+                END AS posture
+            FROM scored
+            -- liquid names first, then by tail composite. Borderline (illiquid) sink.
+            ORDER BY liquidity_ok DESC, shortlist_score DESC
+        """)
+        print(f"   [OK] v_d3_shortlist: ranked/tagged active-breakout shortlist (tail edge)")
 
     # ------------------------------------------------------------------
     # VIEW 8: v_screener_dashboard — SEPA Screener Tracker

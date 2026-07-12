@@ -646,7 +646,33 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     user has further checks (different exit, gate×selection, non-Sharpe objective).
     `verdicts/2026-07-11_prob_elite_gate_sensitivity.md`, `plans/2026-07-11_prob_elite_gate_mismatch.md`.
 
+## Thread K — bridge to ship: the two deliverables (2026-07-12)
+
+> Product assembly, not research: turn banked verdicts into two artifacts a human reviews each
+> morning (roadmap `plans/2026-07-12_deliverables_roadmap.md`). Both are HUMAN-IN-THE-LOOP outputs
+> (Thread J purpose). SHIPPED this session.
+
+48. **Shortlist: how to present the validated tail edge as a daily artifact?** → `v_d3_shortlist`
+    view ON `v_d3_lifecycle` active cohort (not a re-join), ranked `(RS %ile + smallcap %ile +
+    prob_elite)/3`, liquidity + posture tags, tail-odds not point returns. Model-swap = `status_flag='prod'`
+    (NO champion flag exists). SHIPPED. [[project_weather_gauge_shortlist]]
+
+49. **Weather gauge: combine SPY-200d + stress + supply into one posture?** → `weather_gauge` table
+    (`src/weather_engine.py`, Phase 7.45, reuses MacroSizer). §B3 rule: SPY≤200d=STAND ASIDE (brake);
+    above → famine∧high-stress=DEPLOY MORE / flood∧low-stress=TRIM NEW / else DEPLOY. SHIPPED.
+    ⚠️ **DEPLOY MORE fires once in 23yrs** (bull-stress-famine is rare — GATE×TILT tension); chip
+    near-dead live but faithful to the rule. [[project_weather_gauge_shortlist]]
+
+50. **B5 — stabilize the stress sub-axis so `stress_z` graduates from provisional? (? OPEN)** →
+    the dd/macro stress split is leaky/sparse/flickery (README M6); `stress_ew_vix` is the best
+    live-safe variant (Thread F) but needs hysteresis/EMA to kill flicker + a leak check. THE ONLY
+    OPEN RESEARCH ITEM. Do AFTER the gauge ships provisional (brake+supply carry it). May loosen
+    `stress_high` (top-quintile) once closed — which is why Q49's DEPLOY MORE rarity is parked, not patched.
+
 ## Open meta-questions (carried)
+- ? **B5 stress sub-axis stabilization (Q50, OPEN):** the only open study. Flicker-stabilize
+  `stress_ew_vix`, verify no leak, promote `stress_z` from provisional. Gauge already ships on
+  brake+supply. `plans/2026-07-12_deliverables_roadmap.md` §B5.
 - ✅ **champion_trail deploy-gate re-confirm (Q40, DONE 2026-07-10):** gate STACKS on the trail →
   `champion_trail_spygate` PROMOTED to champion. `verdicts/2026-07-10_r3_deploy_gate_reconfirm.md`.
 - ✅ **M4 (DONE 2026-07-09):** SPY-200d deploy gate CONFIRMED on BackTrader (Q26) — improves every

@@ -45,6 +45,8 @@ from dashboard_utils import (
     load_scored_pre_breakout,
     load_scored_watchlist,
     load_sector_heat,
+    load_shortlist,
+    load_weather_gauge,
     load_ticker_history,
     load_watchlist,
     update_decision_taken,
@@ -183,6 +185,112 @@ def _lookback_selector(key: str, default: str = "1y") -> int | None:
 
 
 
+
+
+# ── Weather gauge (deploy posture) ────────────────────────────────────────────
+
+# Posture → (ordinal level for the history strip, colour). Higher = more risk-on.
+_POSTURE_META = {
+    "STAND ASIDE":      (0, "#c62828"),  # red — the brake
+    "DEPLOY, TRIM NEW": (1, "#fb8c00"),  # amber — late-cycle
+    "DEPLOY":           (2, "#2e7d32"),  # green — baseline bull
+    "DEPLOY MORE":      (3, "#1565c0"),  # blue — rare stress-famine pocket
+}
+
+
+def render_weather_gauge() -> None:
+    st.subheader("🌦️ Weather Gauge — deploy posture")
+    df = load_weather_gauge()
+    if df.empty:
+        st.info("No weather-gauge state available.")
+        return
+
+    latest = df.iloc[-1]
+    posture = latest["deploy_posture"]
+    _, colour = _POSTURE_META.get(posture, (2, "#666"))
+    as_of = pd.Timestamp(latest["date"]).date()
+
+    st.markdown(
+        f"<div style='background:{colour};color:white;padding:12px 18px;border-radius:8px;"
+        f"font-size:1.4rem;font-weight:700;display:inline-block'>{posture}</div>"
+        f"<span style='margin-left:12px;color:#888'>as of {as_of}</span>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "SPY-200d is the BRAKE (below it → STAND ASIDE, regardless of everything). "
+        "Above it, breakout-supply + stress are the during-period STEER. `stress_z` is "
+        "**provisional** (flicker-stabilization open) — the posture leans on the brake + "
+        "supply. 6-pillar macro below is context, not a gate."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("SPY vs 200d", "ABOVE ✅" if latest["spy_above_200d"] else "BELOW 🛑")
+    c2.metric("Breakout supply", latest["supply_regime"].upper(),
+              help="famine = early-recovery scarcity (the +10.5% pocket); flood = late-cycle over-supply")
+    c3.metric("Stress z (provisional)", f"{latest['stress_z']:.2f}",
+              delta="high" if latest["stress_high"] else "normal")
+
+    # History strip: posture level over the loaded window (regime transitions, not a point).
+    strip = df.copy()
+    strip["level"] = strip["deploy_posture"].map(lambda p: _POSTURE_META.get(p, (2, ""))[0])
+    strip["date"] = pd.to_datetime(strip["date"])
+    fig = go.Figure(go.Scatter(
+        x=strip["date"], y=strip["level"], mode="lines",
+        line=dict(shape="hv", width=1),
+        marker=dict(color=[_POSTURE_META.get(p, (2, "#666"))[1] for p in strip["deploy_posture"]]),
+        hovertext=strip["deploy_posture"], hoverinfo="text+x",
+    ))
+    fig.update_layout(
+        height=140, margin=dict(l=0, r=10, t=6, b=0),
+        yaxis=dict(tickvals=[0, 1, 2, 3],
+                   ticktext=["Aside", "Trim", "Deploy", "More"], range=[-0.3, 3.3]),
+        xaxis=dict(title=None),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ── Daily shortlist (tail-edge artifact) ──────────────────────────────────────
+
+def render_shortlist() -> None:
+    st.subheader("📋 Daily Shortlist — tail-edge candidates")
+    df = load_shortlist()
+    if df.empty:
+        st.info("No shortlist for the latest pipeline date.")
+        return
+
+    as_of = pd.Timestamp(df["date"].iloc[0]).date()
+    st.caption(
+        f"Today's ACTIVE SEPA breakouts ({as_of}), ranked by the validated tail cell — "
+        "**strong-RS × small-cap × prob_elite**. These are **tail-odds, not a return "
+        "forecast** (the median inverts — the edge is a minority of home-runs, not the "
+        "typical name). Liquidity <$7.5M/day is tagged, not hidden — those names sink to "
+        "the bottom. `aggressive` = the high-RS small-cap tail pocket; `defensive` = calmer."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Candidates", len(df))
+    c2.metric("Aggressive (tail)", int((df["posture"] == "aggressive").sum()))
+    c3.metric("Liquid (≥$7.5M/day)", int(df["liquidity_ok"].sum()))
+
+    show = df.head(50).copy()
+    show["dollar_volume"] = (show["dollar_volume"] / 1e6).round(1)
+    show["market_cap"] = (show["market_cap"] / 1e6).round(0)
+    cols = {
+        "ticker": "Ticker", "sector": "Sector", "close": "Close",
+        "market_cap": "Mkt Cap ($M)", "rs_universe_rank": "RS %ile",
+        "smallcap_pctl": "Small-cap %ile", "prob_elite": "P(Home Run)",
+        "dollar_volume": "$Vol/day ($M)", "liquidity_ok": "Liquid",
+        "posture": "Posture", "shortlist_score": "Score",
+    }
+    show = show[list(cols)].rename(columns=cols)
+    st.dataframe(
+        show.style.format({
+            "Close": "{:.2f}", "RS %ile": "{:.2f}", "Small-cap %ile": "{:.2f}",
+            "P(Home Run)": "{:.1%}", "$Vol/day ($M)": "{:.1f}",
+            "Mkt Cap ($M)": "{:,.0f}", "Score": "{:.3f}",
+        }, na_rep="—"),
+        use_container_width=True, hide_index=True,
+    )
 
 
 # ── Active trades table ───────────────────────────────────────────────────────
@@ -1069,7 +1177,18 @@ def page_today() -> None:
     render_pipeline_status(load_pipeline_status())
     st.markdown("---")
 
+    # Weather gauge — the headline deploy posture (brake + supply + stress)
+    render_weather_gauge()
+
+    st.markdown("---")
+
+    # 6-pillar macro — context panel below the gauge (value/stress axis, not a gate)
     render_macro_dashboard()
+
+    st.markdown("---")
+
+    # Daily shortlist — the sprint-14 tail edge as a ranked morning artifact
+    render_shortlist()
 
     st.markdown("---")
 

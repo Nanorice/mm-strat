@@ -393,6 +393,7 @@ PIPELINE_FAILURE_MODES = {
     "views":               PipelineFailureMode.WARN,
     "cache":               PipelineFailureMode.WARN,
     "scoring":             PipelineFailureMode.WARN,
+    "weather":             PipelineFailureMode.WARN,   # advisory gauge; never halts the run
     "dashboard_db":        PipelineFailureMode.WARN,
     "r2_sync":             PipelineFailureMode.WARN,
     "monitoring":          PipelineFailureMode.WARN,

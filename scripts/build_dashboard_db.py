@@ -71,6 +71,8 @@ MANIFEST: list[tuple[str, str, dict]] = [
     #    via `SELECT * FROM v_d3_*`, table or view is transparent) ──────────────
     ("v_d3_deployment",      "materialize_view",   {"view": "v_d3_deployment"}),
     ("v_d3_prebreakout",     "materialize_view",   {"view": "v_d3_prebreakout"}),
+    # Daily manual-review shortlist (single latest day; ranked tail-edge artifact).
+    ("v_d3_shortlist",       "materialize_view",   {"view": "v_d3_shortlist"}),
     # ── Small tables copied whole ────────────────────────────────────────────
     ("company_profiles",     "full", {}),
     ("d2_training_cache",    "full", {}),
@@ -81,6 +83,7 @@ MANIFEST: list[tuple[str, str, dict]] = [
     ("t1_macro",             "full", {}),
     ("t2_regime_scores",     "full", {}),
     ("t2_risk_scores",       "full", {}),
+    ("weather_gauge",        "full", {}),   # one row/day deploy-posture state (250d history strip)
     ("screener_membership",  "full", {}),   # ticker add/remove effective-date history
     ("screener_watchlist",   "full", {}),   # every ACTIVE + EXITED trade (removals via exit_date/status)
     ("sepa_watchlist",       "full", {}),
