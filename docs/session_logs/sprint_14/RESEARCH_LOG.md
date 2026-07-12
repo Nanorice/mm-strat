@@ -564,6 +564,72 @@
 one-column RS (+ size axis, label-level); exit+deployment = `champion_trail_spygate` (PROMOTED); the 63d
 MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action remains.**
 
+## Thread J — the portfolio layer: from per-draw lottery to aggregated book (2026-07-11)
+
+> Mid-sprint review (summary EDA + §6 follow-up closures, `logs/2026-07-11_summary_eda_linear_story.md`)
+> concluded the SELECTION layer is saturated (Threads H/I kills) — the open questions live in the
+> PORTFOLIO layer. **Strategy PURPOSE locked in (user, 2026-07-11):** the ideal trade is a stock with a
+> confirmative breakout + strong fundamentals + momentum + institutional money coming in — so the
+> BREAKOUT population is the intended hunting ground BY DESIGN (conviction over coverage), not a
+> historical accident. End product is HUMAN-IN-THE-LOOP: the system outputs a handful of names for
+> human review; technicals/price action are applied by the human at the last mile. Not an automatic
+> trading system.
+
+41. **Is the champion still a lottery?** → **Reframe, not a defect.** The equity fan is a PER-DRAW
+    instrument (no re-entry; stopped names freeze); the BackTrader champion is already a ROTATING BOOK
+    (exits free slots → later signals refill, cash-blocked). The fat-tail/flat-median population makes
+    each draw a lottery by construction; every "safety" lever tested (score gate, per-name SL, macro
+    model, governor, sector) is a variance knob, not an alpha knob. The way out is AGGREGATION (earn the
+    mean, not the median) — but the rotation anatomy of the champion book has never been examined
+    (slot utilization, exit→refill latency, refill-vs-fresh trade quality, concurrent exposure).
+    → **planned: rotation-anatomy instrumentation of the champion trade logs (Direction A).**
+42. **Temporal breadth vs cross-sectional breadth?** → **Temporal wins on existing evidence.** Widening
+    top-5→10 within a day dilutes (Q14 cliff); day-over-day the gated pool is a FRESH draw (Q8, 0%
+    persistence) → spreading entries across days adds diversification at full score. Caveat: consecutive
+    days share the regime — temporal spread diversifies name-luck, not regime-luck (SPY-200d gate owns
+    that axis). Test design (user): **max-1-position-per-day strategy**, top-1 by model score, exits/SL
+    identical to champion; candidate-pool variants: (i) full breakout pool, (ii) today's NEW candidates
+    only, (iii) highest trailing-average score, (iv) score down-weighted by age.
+    → **planned after Direction A (Direction B).**
+43. **If trend_ok becomes the population, retrain m01?** → **NO.** Covariate shift is real (m01 trained
+    on breakout snapshots; trend_ok rows are off-manifold, calibration population-specific) BUT m01a M3
+    (Q33) already ran the retrain-equivalent: a fresh ML on the trend_ok panel TIES one-column RS OOS.
+    For the trend_ok tier use RULES (RS × size × liquidity + defensive relvol tag from §6c geometry);
+    keep m01 on the breakout tier where its industry-shaped residual is real (+9.7pp within-cell).
+    → two-tier watchlist architecture; feeds the human-review product.
+44. **What does the champion's rotation actually look like (Direction A)?** → **Slot-constrained, not
+    signal-constrained.** From the 90 persisted cone cells (no re-runs): book runs at 3.8/5 mean
+    occupancy, 55% of days full, refills the SAME day a slot frees; ~23 trades/12m, hold ~29d,
+    52% stop / 45% trend exits. Headline: the `no_slots` QUEUE (~1,300 rejected signals/cell-yr) is
+    nearly as good as the book at label level (fwd100 +5.7% / HR 17.5% vs entered +6.4% / 21.0%) —
+    marginal capital would earn ~90% of the booked edge. Refill timing is quality-neutral (the
+    apparent refill penalty decomposes into regime composition). → licence for breadth via slots /
+    cadence, feeds Q45. `verdicts/2026-07-11_rotation_anatomy.md`.
+45. **Temporal breadth: max-1-position-per-day (top-1 by score), exits identical** → **WASH — the
+    cadence knob doesn't bind (2026-07-11).** 90-cell paired cone: top1 drip median 0.65 vs champion
+    0.76 (−0.10), IQR −0.32 (narrower), %neg −2pp, floor −0.13; wins only 40% of cells, worst in
+    2003-09 momentum eras. Anatomy: with ~29d holds the book turns over ≤1 slot/day anyway — drip
+    reaches 5/5 in ~5 days, only ~14 daily_cap rejections/yr; the stagger the fan motivated is ALREADY
+    implicit in the slow rotation. Champion unchanged. Wave 2 pool variants (new-only / trailing-avg /
+    age-decay) PARKED — cadence doesn't bind, and within-pool re-ranking is a closed kill (Q33, §3c).
+    **Next honest lever = slot COUNT (capacity), one ex-ante arm (10 slots @ 10%), NOT a sweep** —
+    distinct from the closed Q14 (same-day widening): it deepens the book across days, drawing from
+    the near-book-quality no_slots queue Q44 priced. `verdicts/2026-07-11_q45_temporal_breadth_top1.md`.
+    **Side find (FIXED)**: `entry_top_n` was declared but NEVER ENFORCED in `SEPAHybridV1._process_entries`
+    — entries were sliced by available_slots only. Champion unaffected (slots=5 ≡ top5; regression-verified
+    byte-identical), but any arm with entry_top_n < max_pos was mislabeled (e.g. S1_baseline_top3 could
+    enter up to 8-12/day). Fix: per-bar cadence cap `min(available_slots, entry_top_n)` + new `daily_cap`
+    rejection reason. Verified: top1 arm max 1 entry/day, daily_cap logged, smoke tests pass.
+46. **Capacity: does the edge survive a 2× book (10 slots @ 10%)?** → **YES — Sharpe holds (capacity
+    fact, NOT a promotion).** One ex-ante arm, 90-cell paired cone: median 0.81 vs 0.76 (+0.05 ≈
+    noise), floor +0.16, but p25 −0.29 / IQR +0.42 — 47 trades/yr, book genuinely fills (7.3/10).
+    Q44's queue-quality prediction confirmed in realized P&L: the marginal name is as good as the
+    booked one; 2× capital deployable at flat expectancy. Extra names add regime-correlated exposure,
+    not diversification. **Champion stays at 5 slots.** Thread J portfolio conclusion: the book design
+    isn't leaving Sharpe on the table — the residual constraint is REGIME CONCENTRATION, which no
+    portfolio knob tested (cadence Q45, breadth Q46, stops §6a, gates §2c) removes.
+    `verdicts/2026-07-11_q46_capacity_n10.md`.
+
 ## Open meta-questions (carried)
 - ✅ **champion_trail deploy-gate re-confirm (Q40, DONE 2026-07-10):** gate STACKS on the trail →
   `champion_trail_spygate` PROMOTED to champion. `verdicts/2026-07-10_r3_deploy_gate_reconfirm.md`.

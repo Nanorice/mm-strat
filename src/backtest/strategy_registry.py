@@ -264,6 +264,55 @@ _register(StrategyDef(
     status="champion",
 ))
 
+# Thread J Q46 — capacity: the Q44 rotation anatomy priced the no_slots queue at
+# near-book quality (fwd100 +5.7% vs +6.4%), so slot COUNT is the honest capacity
+# lever. ONE ex-ante arm (10 slots @ 10% sizing, same exits/gate/pool) — no sweep,
+# cone-fitting guard. NOT the closed Q14 (same-day top-10 widening): this deepens
+# the book ACROSS days, drawing from the queue.
+# Gate-sensitivity arms (2026-07-11) — the champion at a TIGHTER calibrated prob_elite
+# floor. The 0.15 base is the model's ~coin-flip line; a higher floor refuses the
+# 'best-of-a-bad-lot' famine-day entries (0.20 removes ~20% of entries, 0.25 ~26%,
+# 0.30 ~76%). RESULT (verdicts/2026-07-11_prob_elite_gate_sensitivity.md, OPEN): raising
+# the gate is a VARIANCE knob — 0.15 wins the median-Sharpe cone (0.59 vs 0.46/0.51/0.35);
+# higher gates buy floor/%neg, cost median/tail (EDA's label-tail is discarded by the exit).
+# g0.25 is a defensive-variant candidate only; champion stays at 0.15. Kept for replication.
+# Everything else IS the champion — only min_prob_elite changes.
+for _gate in (0.20, 0.25, 0.30):
+    _register(StrategyDef(
+        name=f"champion_trail_spygate_g{round(_gate * 100)}",
+        signal="binary_gated",
+        strategy_kwargs={**_trail_only(_champion_kwargs()),
+                         "spy_deploy_gate": {}, "min_prob_elite": _gate},
+        description=f"Gate-sensitivity (OPEN): champion_trail_spygate at min_prob_elite={_gate} "
+                    f"(base 0.15). Variance knob — 0.15 wins median-Sharpe cone; higher = "
+                    f"floor/%neg up, median/tail down. See gate_sensitivity verdict.",
+        status="candidate",
+    ))
+
+_register(StrategyDef(
+    name="champion_trail_spygate_n10",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only({**_base_kwargs(10), "max_stop_pct": 0.15,
+                                    "min_target1_pct": 0.10}), "spy_deploy_gate": {}},
+    description="Q46 capacity arm: champion_trail_spygate at 10 slots / 10% sizing. "
+                "Tests whether doubling the book dilutes (queue quality says it shouldn't).",
+    status="candidate",
+))
+
+# Thread J Q45 — temporal breadth: identical book (5 slots, 20% sizing, trail exit,
+# SPY-200d gate) but at most ONE new entry per day (top-1 by prob_elite). Staggers the
+# fill across days instead of same-day top-5: tests whether entry-cadence diversification
+# beats the instant fill on the start-date cone. Pool/exits/sizing unchanged.
+_register(StrategyDef(
+    name="champion_trail_spygate_top1",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()), "spy_deploy_gate": {},
+                     "entry_top_n": 1},
+    description="Q45 temporal-breadth arm: champion_trail_spygate with max 1 new position "
+                "per day (top-1 by score). Same 5-slot book — only the entry cadence changes.",
+    status="candidate",
+))
+
 _register(StrategyDef(
     name="champion_trail_e25",
     signal="binary_gated",
@@ -365,4 +414,11 @@ if __name__ == "__main__":
     assert "spy_deploy_gate" in cts.strategy_kwargs, "gate sentinel missing"
     assert {k: v for k, v in cts.strategy_kwargs.items() if k != "spy_deploy_gate"} \
         == get("champion_trail").strategy_kwargs, "spygate arm differs from champion_trail beyond the gate"
+    # Q45 drip arm = champion_trail_spygate with ONLY the entry cadence changed.
+    top1 = get("champion_trail_spygate_top1")
+    assert top1.strategy_kwargs["entry_top_n"] == 1 and \
+        top1.strategy_kwargs["regime_max_pos"][1] == 5, "top1 arm must keep the 5-slot book"
+    _strip = lambda kw: {k: v for k, v in kw.items() if k != "entry_top_n"}
+    assert _strip(top1.strategy_kwargs) == _strip(cts.strategy_kwargs), \
+        "top1 arm differs from champion beyond entry_top_n"
     print(f"OK — {len(STRATEGIES)} strategies. champion = {champ.fingerprint}")

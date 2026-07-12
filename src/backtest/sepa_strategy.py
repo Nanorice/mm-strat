@@ -50,7 +50,7 @@ class SignalRejection:
     date: datetime
     ticker: str
     score: float
-    reason: str  # 'cooldown', 'already_holding', 'no_slots', 'low_liquidity', 'low_price', 'no_data'
+    reason: str  # 'cooldown', 'already_holding', 'no_slots', 'daily_cap', 'low_liquidity', 'low_price', 'no_data'
 
 
 class SEPAHybridV1(bt.Strategy):
@@ -771,14 +771,26 @@ class SEPAHybridV1(bt.Strategy):
                 ))
             return
 
+        # Per-day entry cadence: entry_top_n caps NEW entries per bar (Q45 fix — the
+        # param was declared but never enforced; entries were sliced by available_slots
+        # only, so any arm with entry_top_n < max_pos was mislabeled).
+        n_enter = available_slots
+        if self.p.entry_mode == 'top_n' and self.p.entry_top_n is not None:
+            n_enter = min(available_slots, self.p.entry_top_n)
+
         # Track "no_slots" for candidates beyond available slots
         for ticker, score, trailing_pct, data, prob_elite in valid_candidates[available_slots:]:
             self.signal_rejections.append(SignalRejection(
                 date=current_date, ticker=ticker, score=score, reason='no_slots'
             ))
+        # Within slots but beyond today's cadence cap — distinct audit reason
+        for ticker, score, trailing_pct, data, prob_elite in valid_candidates[n_enter:available_slots]:
+            self.signal_rejections.append(SignalRejection(
+                date=current_date, ticker=ticker, score=score, reason='daily_cap'
+            ))
 
         # Enter top N by trailing percentile (already sorted)
-        for ticker, score, trailing_pct, data, prob_elite in valid_candidates[:available_slots]:
+        for ticker, score, trailing_pct, data, prob_elite in valid_candidates[:n_enter]:
             self._entry_prob_elite[ticker] = prob_elite
             self._enter_position(ticker, score, trailing_pct, data, regime, current_date)
 

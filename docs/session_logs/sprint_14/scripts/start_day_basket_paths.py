@@ -96,7 +96,8 @@ def _name_path(close: np.ndarray, sl_pct: float, tp_pct: float | None,
 
 def basket_paths(top_n: int = 5, horizon: int = 150, sl_pct: float = 0.15,
                  tp_pct: float | None = None, sample_every: int = 1,
-                 use_governor: bool = True) -> tuple[pd.DataFrame, np.ndarray, list]:
+                 use_governor: bool = True,
+                 min_score: float | None = None) -> tuple[pd.DataFrame, np.ndarray, list]:
     """Build per-start-day basket equity paths.
 
     Returns:
@@ -133,7 +134,10 @@ def basket_paths(top_n: int = 5, horizon: int = 150, sl_pct: float = 0.15,
             paths.append(np.ones(horizon + 1)); starts.append(d)
             continue
 
-        day_top = scores.loc[scores["date"] == d].nlargest(top_n, "prob_elite")["ticker"].tolist()
+        day = scores.loc[scores["date"] == d]
+        if min_score is not None:
+            day = day[day["prob_elite"] >= min_score]     # quality gate (Q11)
+        day_top = day.nlargest(top_n, "prob_elite")["ticker"].tolist()
         name_curves = []
         for t in day_top:
             if t not in by_tkr:
