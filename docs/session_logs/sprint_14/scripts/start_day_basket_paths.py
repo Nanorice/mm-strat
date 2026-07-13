@@ -94,7 +94,7 @@ def _name_path(close: np.ndarray, sl_pct: float, tp_pct: float | None,
     return ret
 
 
-def basket_paths(top_n: int = 5, horizon: int = 150, sl_pct: float = 0.15,
+def basket_paths(top_n: int | None = 5, horizon: int = 150, sl_pct: float = 0.15,
                  tp_pct: float | None = None, sample_every: int = 1,
                  use_governor: bool = True,
                  min_score: float | None = None) -> tuple[pd.DataFrame, np.ndarray, list]:
@@ -137,7 +137,9 @@ def basket_paths(top_n: int = 5, horizon: int = 150, sl_pct: float = 0.15,
         day = scores.loc[scores["date"] == d]
         if min_score is not None:
             day = day[day["prob_elite"] >= min_score]     # quality gate (Q11)
-        day_top = day.nlargest(top_n, "prob_elite")["ticker"].tolist()
+        # top_n=None → NO clip: hold EVERY gate-survivor (isolates scoring from the
+        # top-N selection problem). Else keep the top_n by score.
+        day_top = (day if top_n is None else day.nlargest(top_n, "prob_elite"))["ticker"].tolist()
         name_curves = []
         for t in day_top:
             if t not in by_tkr:

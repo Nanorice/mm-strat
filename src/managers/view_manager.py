@@ -84,6 +84,7 @@ class ViewManager:
             self._refresh_screener_watchlist,
             self._create_v_d3_lifecycle,  # after watchlist table — it joins it
             self._create_v_d3_shortlist,  # after lifecycle — it builds on it
+            self._create_v_d3_vip,        # after lifecycle — it LEFT-joins cohort
         ]
         # NOTE: t3_training_cache (v_t3_training materialization) is NOT in this list.
         # Its ASOF joins cost ~215s and its inputs (fundamentals/shares) change weekly at
@@ -1053,8 +1054,11 @@ class ViewManager:
             ),
             preds AS (
                 -- prod-model score per (ticker, date); best-ranked row on any tag.
+                -- COALESCE: 4-class writes prob_class_3; a binary model writes only
+                -- class_0/1 (2/3 padded NULL) → fall back to class_1 = P(pos). 4-class
+                -- always takes the first arg, so its behaviour is unchanged.
                 SELECT ticker, prediction_date,
-                       prob_class_3 AS prob_elite, rank_within_day
+                       COALESCE(prob_class_3, prob_class_1) AS prob_elite, rank_within_day
                 FROM daily_predictions
                 WHERE model_version_id = (SELECT version_id FROM prod)
                 QUALIFY ROW_NUMBER() OVER (
@@ -1108,6 +1112,110 @@ class ViewManager:
             ORDER BY liquidity_ok DESC, shortlist_score DESC
         """)
         print(f"   [OK] v_d3_shortlist: ranked/tagged active-breakout shortlist (tail edge)")
+
+    # ------------------------------------------------------------------
+    # VIEW 7e: v_d3_vip — manually-curated VIP watchlist monitor
+    # ------------------------------------------------------------------
+
+    def _create_v_d3_vip(self, con: duckdb.DuckDBPyConnection) -> None:
+        """Daily status monitor for the human-curated VIP watchlist.
+
+        VIP names are forced into the T3 universe (feature_pipeline widens the T3
+        candidate filter with `vip_watchlist`), so each has daily t3 features + a
+        prod score even if it never passes the SEPA screen. This view surfaces, per
+        VIP name, its LATEST daily state:
+            vip_watchlist  ⟕  latest t3 row (raw flags)  ⟕  lifecycle cohort  ⟕  prod score
+
+        Built from t3 directly (NOT v_d3_lifecycle) because lifecycle drops names
+        that are 'nothing yet' (¬trend_ok, not in a session) — exactly the ripening
+        VIP names we most want to watch. LEFT joins throughout so a VIP name with no
+        t3 row yet (just added / not in the price universe) still shows up.
+
+        Status (derived, one glyph the reviewer scans):
+            not_in_universe — no t3 row at all (needs a data fetch)
+            watching        — has features but ¬trend_ok (nothing yet)
+            trend_ok        — in a valid uptrend setup, no breakout yet
+            breakout        — breakout_ok today
+            active/removed  — in / recently out of a SEPA session (from lifecycle)
+
+        Display view (not model-fed): RS_* referenced quoted verbatim, no CASE_MAP.
+        Model-swap free (score joins the `status_flag='prod'` model, like shortlist).
+        """
+        # Ensure the base table exists so this view resolves on a fresh DB (the CLI
+        # normally creates it; guard the case where views are built before any add).
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS vip_watchlist (
+                ticker      VARCHAR  PRIMARY KEY,
+                added_date  DATE     NOT NULL,
+                source      VARCHAR,
+                comment     VARCHAR,
+                active      BOOLEAN  NOT NULL DEFAULT TRUE,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        con.execute(f"""
+            CREATE OR REPLACE VIEW v_d3_vip AS
+            WITH prod AS (
+                SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1
+            ),
+            latest_t3 AS (
+                -- most recent t3 row per VIP ticker (raw flags, whatever state it's in)
+                SELECT
+                    f.ticker, f.date,
+                    f.close, f.trend_ok, f.breakout_ok,
+                    f."RS_Universe_Rank" AS rs_universe_rank,
+                    f.dollar_volume_avg_20 AS dollar_volume
+                FROM t3_sepa_features f
+                JOIN vip_watchlist v ON f.ticker = v.ticker AND v.active
+                WHERE f.feature_version = '{self.feature_version}'
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY f.ticker ORDER BY f.date DESC
+                ) = 1
+            ),
+            cohort AS (
+                -- lifecycle cohort for that latest date, if the name is in lifecycle
+                SELECT ticker, date, cohort FROM v_d3_lifecycle
+            ),
+            score AS (
+                -- COALESCE: binary model writes prob_class_1 (P pos), not class_3.
+                SELECT ticker, prediction_date,
+                       COALESCE(prob_class_3, prob_class_1) AS prob_elite, rank_within_day
+                FROM daily_predictions
+                WHERE model_version_id = (SELECT version_id FROM prod)
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, prediction_date ORDER BY rank_within_day
+                ) = 1
+            )
+            SELECT
+                v.ticker,
+                v.added_date,
+                v.source,
+                v.comment,
+                t.date            AS as_of_date,
+                t.close,
+                t.rs_universe_rank,
+                t.dollar_volume,
+                t.trend_ok,
+                t.breakout_ok,
+                lc.cohort,
+                s.prob_elite,
+                (t.ticker IS NULL) AS not_in_universe,
+                -- one status the reviewer scans, most-advanced state wins
+                CASE
+                    WHEN t.ticker IS NULL                       THEN 'not_in_universe'
+                    WHEN lc.cohort IN ('active', 'removed')     THEN lc.cohort
+                    WHEN t.breakout_ok                          THEN 'breakout'
+                    WHEN t.trend_ok                             THEN 'trend_ok'
+                    ELSE 'watching'
+                END AS status
+            FROM vip_watchlist v
+            LEFT JOIN latest_t3 t  ON v.ticker = t.ticker
+            LEFT JOIN cohort lc    ON t.ticker = lc.ticker AND t.date = lc.date
+            LEFT JOIN score s      ON t.ticker = s.ticker  AND t.date = s.prediction_date
+            WHERE v.active
+            ORDER BY v.added_date DESC, v.ticker
+        """)
+        print(f"   [OK] v_d3_vip: manually-curated VIP watchlist monitor")
 
     # ------------------------------------------------------------------
     # VIEW 8: v_screener_dashboard — SEPA Screener Tracker

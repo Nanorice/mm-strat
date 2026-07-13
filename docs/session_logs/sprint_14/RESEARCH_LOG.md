@@ -663,16 +663,57 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     ⚠️ **DEPLOY MORE fires once in 23yrs** (bull-stress-famine is rare — GATE×TILT tension); chip
     near-dead live but faithful to the rule. [[project_weather_gauge_shortlist]]
 
-50. **B5 — stabilize the stress sub-axis so `stress_z` graduates from provisional? (? OPEN)** →
-    the dd/macro stress split is leaky/sparse/flickery (README M6); `stress_ew_vix` is the best
-    live-safe variant (Thread F) but needs hysteresis/EMA to kill flicker + a leak check. THE ONLY
-    OPEN RESEARCH ITEM. Do AFTER the gauge ships provisional (brake+supply carry it). May loosen
-    `stress_high` (top-quintile) once closed — which is why Q49's DEPLOY MORE rarity is parked, not patched.
+50. **B5 — stabilize the stress sub-axis so `stress_z` graduates from provisional? (✅ CLOSED 2026-07-13)** →
+    **EMA10 the composite before the expanding-80th cut → chatter gone (65→19 toggles, 19→≤1 blips).**
+    Raw `stress_high` was a same-day threshold crossing: 33 True episodes, 58% were 1-2 day blips.
+    Swept EMA5/10/20 — EMA10 is the knee (0 chatter blips, 43d median run; EMA5 leaves 3, EMA20 no
+    better). Scope (user-confirmed): EMA10 ONLY (no hysteresis band — redundant), in `weather_engine`
+    ONLY (NOT source `_stress_ew_vix`, which feeds the backtested governor — would need re-backtest).
+    Only the `stress_high` TRIGGER is smoothed; displayed `stress_z` stays raw. **LEAK-FREE: as-of-date
+    identity test = 0 mismatches** (recompute ending early vs full-history bit-identical; EMA past-
+    weighted + expanding-quantile .shift(1)). `stress_z` PROMOTED from provisional. Side effect:
+    DEPLOY MORE now fires 0× (was 1× 2010-05-07 — EMA delays onset off the famine∧>200d day); same
+    GATE×TILT rarity, not a regression. **Follow-on (open, don't patch blind): loosen `stress_high`
+    from top-quintile now the trigger is stable.** `verdicts/2026-07-13_b5_stress_deflicker.md`.
+
+## Thread L — binary-over-4class: practical implications of the swap (2026-07-13)
+
+51. **What does promoting binary practically require?** → `set_prod` + backfill ONE table
+    (`daily_predictions`) + rebuild dashboard DB; no feature/price rebuild. **Found+FIXED a bug:**
+    `v_d3_shortlist`/`v_d3_vip` read `prob_class_3 AS prob_elite` → NULL for a binary model
+    (shortlist collapses to 0.25 base rate). Fix = `COALESCE(prob_class_3, prob_class_1)`,
+    verified byte-identical for 4-class prod. ⚠️ UNCOMMITTED. [[project_weather_gauge_shortlist]]
+
+52. **How different are the 4-class-homerun vs binary-threshold shortlist populations?** → Spearman
+    0.96 but top-3/day overlap only 70%. `prob_elite` IS the same operation for both (p(homerun)
+    = P(pos)); scales differ (0.315 vs 0.163) → gate by per-model quantile/top-N, never absolute.
+
+53. **Is the binary shortlist actually better (equity fan of daily candidates, §6)?** → **WASH on
+    raw top-5 return** (median +3.2 vs +2.9%, per-start +0.0pp). Binary's cone edge (0.81 vs 0.52
+    Sharpe) is threshold/risk-adjusted, invisible in a threshold-free return fan. [[project_4class_vs_binary]]
+
+54. **Why is binary `prob_elite` discrete (~447 levels)?** → **Model structure, NOT calibration**
+    (scorer had no iso-calibrator). 100-tree binary booster + sigmoid collapses rows onto shared
+    leaf-sums; 4-class (400 trees, softmax) is continuous. No smooth score hides under a plateau.
+
+55. **Does raising the score gate improve fwd return (§7b/§9)?** → **NO — it's a RISK knob.** Median
+    FALLS for both (monotone once selection removed); binary plateau cliff (>=0.35==>=0.45). Higher
+    gate = lower median + fatter/skewed tail. Consistent with [[project_prob_elite_gate_variance_knob]].
+
+56. **Isolate scoring from selection — drop the top-N clip (§9)?** → **The top-5 clip HURTS median:
+    all-survivors +4.3% BEATS top-5-by-score +3.2%.** The model earns its keep at the GATE, not the
+    within-pool rank (IC≈−0.03). [[project_scoring_vs_selection_unclipped]], [[project_breakout_pool_refinement]]
+
+57. **Which attribute carries the shortlist edge (§8)?** → **mcap monotone LARGE>small on MEDIAN**
+    (mega +6.8% vs micro −3.8%) — OPPOSITE the shortlist small-cap tilt. Not a bug: tail-odds (small)
+    vs median (large) OBJECTIVE FORK. ? Sector: Industrials/Real Estate lead, Energy/Healthcare lag.
+    Open: resolve the objective fork (user decision). [[project_r1b_step2_subsumed]]
 
 ## Open meta-questions (carried)
-- ? **B5 stress sub-axis stabilization (Q50, OPEN):** the only open study. Flicker-stabilize
-  `stress_ew_vix`, verify no leak, promote `stress_z` from provisional. Gauge already ships on
-  brake+supply. `plans/2026-07-12_deliverables_roadmap.md` §B5.
+- ✅ **B5 stress sub-axis stabilization (Q50, DONE 2026-07-13):** EMA10-smooth the composite before
+  the expanding-80th cut → chatter gone (65→19 toggles, 0 blips), leak-free (as-of identity test),
+  `stress_z` promoted from provisional. Follow-on OPEN: loosen `stress_high` from top-quintile now
+  the trigger is stable (don't patch blind — needs its own check). `verdicts/2026-07-13_b5_stress_deflicker.md`.
 - ✅ **champion_trail deploy-gate re-confirm (Q40, DONE 2026-07-10):** gate STACKS on the trail →
   `champion_trail_spygate` PROMOTED to champion. `verdicts/2026-07-10_r3_deploy_gate_reconfirm.md`.
 - ✅ **M4 (DONE 2026-07-09):** SPY-200d deploy gate CONFIRMED on BackTrader (Q26) — improves every
