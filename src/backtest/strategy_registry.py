@@ -264,6 +264,24 @@ _register(StrategyDef(
     status="champion",
 ))
 
+# Thread L (2026-07-13) — binary-vs-4class confirm ON THE CHAMPION TRAIL EXIT.
+# Same deployment config as the champion (trail + SPY-200d gate), but selection runs
+# the 4-class PROD prototype (prob_class_3) instead of binary. Gate = 0.60 (NOT the
+# binary 0.15: prob_class_3 lives on a different scale — median 0.24, max 0.81 — so
+# 0.60 is a deliberate ~96th-pctile HIGH-CONVICTION gate, tight capacity by design).
+# The binary champion cone (median 0.76) is the A/B reference. Caveat carried in the
+# verdict: this compares each model at its OWN gate, not a shared absolute cut.
+_register(StrategyDef(
+    name="champion_trail_spygate_4cls",
+    signal="proto_cali_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()),
+                     "spy_deploy_gate": {}, "min_prob_elite": 0.60},
+    description="Thread-L confirm: champion trail-exit + SPY-200d gate, but 4-class prod "
+                "prototype selection @ gate 0.60 (high-conviction, prob_class_3 scale). "
+                "A/B vs the binary champion_trail_spygate cone.",
+    status="candidate",
+))
+
 # Thread J Q46 — capacity: the Q44 rotation anatomy priced the no_slots queue at
 # near-book quality (fwd100 +5.7% vs +6.4%), so slot COUNT is the honest capacity
 # lever. ONE ex-ante arm (10 slots @ 10% sizing, same exits/gate/pool) — no sweep,
@@ -421,4 +439,10 @@ if __name__ == "__main__":
     _strip = lambda kw: {k: v for k, v in kw.items() if k != "entry_top_n"}
     assert _strip(top1.strategy_kwargs) == _strip(cts.strategy_kwargs), \
         "top1 arm differs from champion beyond entry_top_n"
+    # Thread-L 4-class arm = binary champion config with signal + gate swapped ONLY.
+    fourc = get("champion_trail_spygate_4cls")
+    assert fourc.signal == "proto_cali_gated" and fourc.strategy_kwargs["min_prob_elite"] == 0.60, fourc
+    _strip_gate = lambda kw: {k: v for k, v in kw.items() if k != "min_prob_elite"}
+    assert _strip_gate(fourc.strategy_kwargs) == _strip_gate(cts.strategy_kwargs), \
+        "4cls arm differs from champion beyond the gate"
     print(f"OK — {len(STRATEGIES)} strategies. champion = {champ.fingerprint}")

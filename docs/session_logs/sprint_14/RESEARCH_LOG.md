@@ -709,7 +709,46 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     vs median (large) OBJECTIVE FORK. ? Sector: Industrials/Real Estate lead, Energy/Healthcare lag.
     Open: resolve the objective fork (user decision). [[project_r1b_step2_subsumed]]
 
+## Thread M — trail-exit confirm + regime tiering / system-usage synthesis (2026-07-13, session 02)
+
+58. **Does 4-class catch up to binary on the CHAMPION TRAIL-EXIT (not the simple exit), at a
+    tight high-conviction gate?** → **NO — binary wins decisively.** `champion_trail_spygate_4cls`
+    (4-class prod @ gate 0.60, else == binary champion), 90-cell cone: median Sharpe 0.76 vs 0.33,
+    floor −1.93 vs −2.38, %neg 28% vs 38%, paired 4-class wins 32%, loses every era. Tight gate
+    did NOT rescue it. **Binary confirmed as deploy candidate (NOT auto-promoted).**
+    `verdicts/2026-07-13_4class_vs_binary_TRAIL_cone.md`. [[project_4class_vs_binary]]
+59. **Does raising the gate widen the harvestable tail on the trail exit?** → **NO — label
+    illusion.** Raising the gate lifts only the single `max` cell but LOWERS p90/p95 (the tail
+    body). The exits truncate the tail the gate concentrates → median-for-tail trade isn't on the
+    menu here. Third confirm of "label lift ≠ trade edge". [[project_prob_elite_gate_variance_knob]]
+60. **Is the rotation infra working (can we jump ship to a better ticker)?** → **YES, works as
+    designed — that's the problem.** Worst 2015 cell: 24 trades/23 tickers rotated over 6mo, stop
+    at −11% MAE, 71% stop-out. In chop the replacement pool is the same failing population
+    (IC≈−0.03) → rotating faster just pays the stop more. Not a bug; structural. [[project_scoring_vs_selection_unclipped]]
+61. **Does the weather gauge flag 2015 as a bad regime (coincident is fine)?** → **YES — STAND
+    ASIDE 53% of the 2015-07..2016-03 window**, SPY>200d only 47% (gate flipped 11×). BUT
+    `stress_high`=0 → the **SPY-200d axis** caught it, not stress (trend breakdown ≠ stress event).
+    Backtest gate = SPY-200d ALONE (verified). No portfolio-level DD breaker exists. Residual loss
+    happens THROUGH the open gate (71% stop-out on gate-open days). [[project_weather_gauge_shortlist]]
+62. **How should the system be used, and is one all-weather usage too generalised?** → **It's a
+    FILTER, the human is the ranker** (~30 gated breakouts/day → human last mile). SEPA is a
+    bull-regime TAIL strategy, not all-weather → **regime-TIERED usage** is the honest reframe
+    (per-regime fan/cone; test whether higher gate pays in bull — user's live-pick hunch, Q47 never
+    split by regime). Explore+document only this session; ideas → to-do tracker.
+    `plans/2026-07-13_regime_tiering_and_system_usage.md`. [[project_capital_deployment]]
+
 ## Open meta-questions (carried)
+- 📋 **Thread M ideas (DOCUMENTED 2026-07-13, NOT implemented) — implementation separate.**
+  🔨 IMMEDIATE: (a) earnings-proximity entry/exit rule; (b) 1-day entry-delay on the equity FAN.
+  🔍 NEXT: per-regime gate sweep, portfolio-level DD circuit breaker, regime-tiered fan/cone,
+  m02 breakout-PROBABILITY reframe (event-prob not fwd-return, watchlist-ripeness not alpha).
+  ⏸️ DEFERRED: granular day-dispersion within good/bad months.
+  `plans/2026-07-13_regime_tiering_and_system_usage.md`.
+- ⏭️ **Binary promotion (Thread L/M, user go/no-go):** trail cone confirms binary wins → if
+  promoting: `set_prod(binary)` + `backfill_daily_predictions` + rebuild dashboard DB; threshold
+  by per-day RANK not absolute floor. NOT auto-promoted.
+- ⏭️ **mcap objective fork (Q57, OPEN):** shortlist as tail-odds (keep small-cap tilt) vs
+  median/Sharpe (drop/invert `smallcap_pctl`). One-liner either way; user decision.
 - ✅ **B5 stress sub-axis stabilization (Q50, DONE 2026-07-13):** EMA10-smooth the composite before
   the expanding-80th cut → chatter gone (65→19 toggles, 0 blips), leak-free (as-of identity test),
   `stress_z` promoted from provisional. Follow-on OPEN: loosen `stress_high` from top-quintile now

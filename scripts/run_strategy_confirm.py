@@ -51,11 +51,17 @@ CACHE = {
     # SEPA-gated full-span cache (M2b) — genuine breakouts only, 2003→2026.
     "binary_gated": REPO_ROOT / "data" / "score_cache" /
         "m01_binary_calibrated_2003-01-01_2026-05-22_sepa_gated.parquet",
+    # 4-class prod prototype, same SEPA-gated full-span span — the Thread-L
+    # binary-vs-4class confirm ON THE CHAMPION TRAIL EXIT (prob_elite = prob_class_3;
+    # its scale differs from binary, so the arm carries its own gate, not 0.15).
+    "proto_cali_gated": REPO_ROOT / "data" / "score_cache" /
+        "m01_prototype_2003-01-01_2026-05-22_sepa_gated.parquet",
 }
 MODEL = {  # for provenance in artifacts; scores come from cache, not re-scored
     "binary": ("m01_binary", "v1"),
     "binary_gated": ("m01_binary", "v1"),
     "proto_cali": ("m01_prototype_cali", "v1"),
+    "proto_cali_gated": ("m01_prototype", "v1"),
     "rs": ("rs_universe_rank", "rule"),  # no model — the m01a one-column RS rule
 }
 
