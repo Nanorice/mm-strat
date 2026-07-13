@@ -1,6 +1,6 @@
 # Deliverables Roadmap — Shortlist + Weather Gauge (bridge to ship)
 
-**Date**: 2026-07-12 · **Sprint**: 14 (deployment) · **Status**: ✅ A + B SHIPPED (2026-07-12) — B5 stress stabilization still open
+**Date**: 2026-07-12 · **Sprint**: 14 (deployment) · **Status**: ✅ A + B SHIPPED (2026-07-12); ✅ B5 stress de-flicker DONE (2026-07-13, `stress_z` promoted from provisional — `verdicts/2026-07-13_b5_stress_deflicker.md`)
 
 > **Shipped 2026-07-12**
 > - **Part A** — `v_d3_shortlist` view (built ON `v_d3_lifecycle` active cohort, not a fresh

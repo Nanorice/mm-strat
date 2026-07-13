@@ -46,6 +46,7 @@ from dashboard_utils import (
     load_scored_watchlist,
     load_sector_heat,
     load_shortlist,
+    load_vip_watchlist,
     load_weather_gauge,
     load_ticker_history,
     load_watchlist,
@@ -288,6 +289,46 @@ def render_shortlist() -> None:
             "Close": "{:.2f}", "RS %ile": "{:.2f}", "Small-cap %ile": "{:.2f}",
             "P(Home Run)": "{:.1%}", "$Vol/day ($M)": "{:.1f}",
             "Mkt Cap ($M)": "{:,.0f}", "Score": "{:.3f}",
+        }, na_rep="—"),
+        use_container_width=True, hide_index=True,
+    )
+
+
+def render_vip_watchlist() -> None:
+    st.subheader("⭐ VIP Watchlist — your manually-curated names")
+    df = load_vip_watchlist()
+    if df.empty:
+        st.info("No VIP names. Add via `python scripts/vip_add.py add TICKER "
+                "--source ... --comment ...` — takes effect next nightly run.")
+        return
+
+    st.caption(
+        "Names **you** added (from reports/tips) forced into the pipeline so you can "
+        "monitor their daily SEPA status + prod model score even if they'd never pass "
+        "the screen. `watching` = has data, nothing yet · `trend_ok` = valid setup · "
+        "`breakout` = breakout today · `active`/`removed` = in/out of a SEPA session. "
+        "⚠️ `not_in_universe` = no price data yet (needs a data fetch)."
+    )
+
+    GLYPH = {
+        "active": "🟢 active", "breakout": "🔵 breakout", "trend_ok": "🟡 trend_ok",
+        "watching": "⚪ watching", "removed": "🔴 removed",
+        "not_in_universe": "⚠️ no data",
+    }
+    show = df.copy()
+    show["status"] = show["status"].map(GLYPH).fillna(show["status"])
+    show["dollar_volume"] = (show["dollar_volume"] / 1e6).round(1)
+    cols = {
+        "ticker": "Ticker", "status": "Status", "prob_elite": "P(Home Run)",
+        "rs_universe_rank": "RS %ile", "close": "Close",
+        "dollar_volume": "$Vol/day ($M)", "as_of_date": "As of",
+        "added_date": "Added", "source": "Source", "comment": "Why I added it",
+    }
+    show = show[list(cols)].rename(columns=cols)
+    st.dataframe(
+        show.style.format({
+            "P(Home Run)": "{:.1%}", "RS %ile": "{:.2f}", "Close": "{:.2f}",
+            "$Vol/day ($M)": "{:.1f}",
         }, na_rep="—"),
         use_container_width=True, hide_index=True,
     )
@@ -1189,6 +1230,11 @@ def page_today() -> None:
 
     # Daily shortlist — the sprint-14 tail edge as a ranked morning artifact
     render_shortlist()
+
+    st.markdown("---")
+
+    # VIP watchlist — your manually-curated names + their live status/score
+    render_vip_watchlist()
 
     st.markdown("---")
 

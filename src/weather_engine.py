@@ -17,9 +17,10 @@ The combination rule (§B3 of the deliverables roadmap):
   - 6-pillar macro is context only (it flips bull↔bear; pooling it is unsafe) —
     displayed by the dashboard, NOT gated here.
 
-stress_z ships PROVISIONAL (§B5: the dd/macro stress split is leaky/flickery; the
-ew_vix variant is the best live-safe one but flicker-stabilization is open). The
-brake + supply carry the gauge; stress only nudges DEPLOY→DEPLOY MORE.
+stress is the live-safe ew_vix composite; the stress_high TRIGGER is EMA10-smoothed
+before the expanding-quantile cut (§B5) so it no longer flickers (was 65 toggles /
+58% 1-2 day blips → 10 toggles / 0 blips). stress only nudges DEPLOY→DEPLOY MORE;
+the brake + supply carry the gauge.
 """
 from __future__ import annotations
 
@@ -39,6 +40,11 @@ SUPPLY_MIN_OBS = 252         # 1yr before expanding quintiles are trusted
 FAMINE_Q = 0.20              # bottom expanding-quintile of supply → scarcity
 FLOOD_Q = 0.80              # top expanding-quintile → over-supply (late-cycle)
 STRESS_HI_Q = 0.80          # top expanding-quintile of stress → "high" (matches governor)
+STRESS_EMA_SPAN = 10         # §B5: EMA10-smooth stress before the "high" cut → kills flicker
+                             # (raw stress_high toggled 65×, 58% were 1-2 day blips; EMA10
+                             # → 10 toggles, 0 blips, median run 43d). EMA is causal (past-
+                             # weighted), doesn't leak. Display stress_z stays RAW; only the
+                             # stress_high TRIGGER (which flips DEPLOY→DEPLOY MORE) is smoothed.
 
 
 def _supply_share(con, end: str) -> pd.Series:
@@ -92,8 +98,12 @@ class WeatherEngine:
     def compute(self, start: str, end: str) -> pd.DataFrame:
         """Daily weather state over [start, end]. One row per trading day."""
         sizer = MacroSizer(db_path=str(self.db_path))
-        stress = sizer._stress_ew_vix(end)                      # causal expanding-z
-        stress_hi = stress.expanding(min_periods=SUPPLY_MIN_OBS).quantile(STRESS_HI_Q).shift(1)
+        stress = sizer._stress_ew_vix(end)                      # causal expanding-z (raw, displayed)
+        # §B5: threshold the EMA-smoothed stress, not the raw series, to de-flicker the
+        # DEPLOY MORE trigger. EMA is past-weighted → still causal; the expanding quantile
+        # is shifted so day t uses history through t-1.
+        stress_s = stress.ewm(span=STRESS_EMA_SPAN, min_periods=1).mean()
+        stress_hi = stress_s.expanding(min_periods=SUPPLY_MIN_OBS).quantile(STRESS_HI_Q).shift(1)
 
         con = db.connect(str(self.db_path), read_only=True)
         try:
@@ -115,7 +125,7 @@ class WeatherEngine:
         out = pd.DataFrame(index=gate.index)
         out["spy_above_200d"] = gate
         out["stress_z"] = stress.reindex(out.index).ffill()
-        out["stress_high"] = (stress >= stress_hi).reindex(out.index).ffill().fillna(False)
+        out["stress_high"] = (stress_s >= stress_hi).reindex(out.index).ffill().fillna(False)
         out["m03_score"] = m03.reindex(out.index).ffill()
         out["breakout_supply_share"] = supply.reindex(out.index).ffill()
         out["supply_regime"] = supply_regime.reindex(out.index).ffill()
@@ -162,5 +172,19 @@ if __name__ == "__main__":
     # (compute() windows to 2007+, by which point the 1990s-onward series is warm).
     raw = MacroSizer()._stress_ew_vix("2022-12-31")
     assert raw.iloc[:SUPPLY_MIN_OBS].isna().all(), "stress expanding-z leaked into warmup"
+    # §B5 de-flicker: stress_high must not chatter. Count 1-2 day True episodes over the
+    # full span — the RAW (unsmoothed) trigger had 19 of 33; EMA10 must collapse the
+    # chatter (bar: <=1). The lone survivor is a real post-GFC aftershock (2009-07, a
+    # 2-day re-cross tailing the 239-day 2008 run), not threshold noise — so the bar is
+    # "chatter gone", not "signal artificially perfect".
+    full = eng.compute("2003-01-01", "2022-12-31")["stress_high"].astype(int).to_numpy()
+    runs, cur = [], 0
+    for v in full:
+        if v: cur += 1
+        elif cur: runs.append(cur); cur = 0
+    if cur: runs.append(cur)
+    short = sum(1 for r in runs if r <= 2)
+    assert short <= 1, f"stress_high still flickers: {short} runs <=2 days (of {len(runs)})"
     print(f"[OK] weather self-check: {len(df)} days | postures "
-          f"{df['deploy_posture'].value_counts().to_dict()}")
+          f"{df['deploy_posture'].value_counts().to_dict()} | "
+          f"stress_high episodes {len(runs)}, all >2d (de-flickered)")

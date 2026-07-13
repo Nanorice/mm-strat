@@ -551,6 +551,22 @@ def load_shortlist() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def load_vip_watchlist() -> pd.DataFrame:
+    """Manually-curated VIP watchlist with each name's latest live status.
+
+    Reads `v_d3_vip` (materialized nightly) — the VIP names you added via the CLI,
+    LEFT-joined to their latest t3 flags, lifecycle cohort, and prod score, so you
+    monitor the prod model score + SEPA status on your own picks even if they'd
+    never pass the screen. `not_in_universe` flags a name with no price data yet.
+    """
+    con = _connect()
+    try:
+        return con.execute("SELECT * FROM v_d3_vip").fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_weather_gauge(history_days: int = 250) -> pd.DataFrame:
     """Weather-gauge state rows — the latest deploy posture + a history strip.
 

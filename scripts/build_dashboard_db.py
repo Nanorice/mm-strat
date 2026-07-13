@@ -73,6 +73,9 @@ MANIFEST: list[tuple[str, str, dict]] = [
     ("v_d3_prebreakout",     "materialize_view",   {"view": "v_d3_prebreakout"}),
     # Daily manual-review shortlist (single latest day; ranked tail-edge artifact).
     ("v_d3_shortlist",       "materialize_view",   {"view": "v_d3_shortlist"}),
+    # VIP watchlist monitor (manually-curated names; latest status per name).
+    # Materialized flat → no runtime join to vip_watchlist on the remote.
+    ("v_d3_vip",             "materialize_view",   {"view": "v_d3_vip"}),
     # ── Small tables copied whole ────────────────────────────────────────────
     ("company_profiles",     "full", {}),
     ("d2_training_cache",    "full", {}),

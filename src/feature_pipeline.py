@@ -615,9 +615,13 @@ class FeaturePipeline:
             con.execute(f"""
                 INSERT INTO t3_sepa_features BY NAME
                 WITH candidates AS (
-                    -- Universe = sepa_watchlist (any ticker that ever entered a SEPA session).
+                    -- Universe = sepa_watchlist (any ticker that ever entered a SEPA session)
+                    -- UNION vip_watchlist (manually-curated names forced into T3 so the
+                    -- pipeline reports their daily status even if they never pass the screen).
                     -- Carries full history for those tickers — gating happens at session level
-                    -- inside sepa_watchlist, not via row inclusion in T3.
+                    -- inside sepa_watchlist, not via row inclusion in T3. VIP names are
+                    -- forward-only in practice: they only appear in chunks run after they're
+                    -- added (T3 is incremental per date-chunk), with the normal 200d warmup.
                     -- Date upper bound is critical: without it the t2 join below scans all
                     -- history per ticker (O(cumulative) per-chunk wall time).
                     SELECT p.ticker, p.date,
@@ -627,7 +631,11 @@ class FeaturePipeline:
                     FROM {self.price_source} p
                     WHERE p.date >= '{fetch_start}'
                       AND p.date <= '{end_date}'
-                      AND p.ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)
+                      AND p.ticker IN (
+                          SELECT ticker FROM sepa_watchlist
+                          UNION
+                          SELECT ticker FROM vip_watchlist WHERE active
+                      )
                     WINDOW w_tk AS (PARTITION BY p.ticker ORDER BY p.date)
                 ),
                 per_ticker AS (
