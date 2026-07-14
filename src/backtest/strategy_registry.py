@@ -282,6 +282,37 @@ _register(StrategyDef(
     status="candidate",
 ))
 
+# Q70 Stage 2 (2026-07-14) — score-conditional exit: does the tail Stage 1 found on
+# the price path (MFE ceiling 7.8%→35.6% by score decile, but only ~24% captured)
+# survive slots + capital + costs? Built on the 4CLASS base. hi_score_thresh MUST sit
+# ABOVE the 0.60 entry gate or it's a uniform wide stop (every entry already clears
+# 0.60) — a no-op vs a plain wide-stop arm, not a CONDITIONAL test. 0.665 = ~90th
+# pctile of the gated pool (0.60–0.79) = the top slice WITHIN what we actually trade.
+# Hi-score names get a WIDER hard stop (Stage-1: the hard stop truncates winners; the
+# TRAIL was the real killer, so we widen the stop, not add a trail). PRIMARY (stop-only)
+# read first; +hold is the attribution follow-up (only if stop-only lifts the cone).
+_HISCORE_BASE = {**_trail_only(_champion_kwargs()), "spy_deploy_gate": {},
+                 "min_prob_elite": 0.60, "hi_score_thresh": 0.665}
+_register(StrategyDef(
+    name="champion_trail_spygate_4cls_histop",
+    signal="proto_cali_gated",
+    strategy_kwargs={**_HISCORE_BASE, "hi_score_stop_pct": 0.25},
+    description="Q70 Stage-2 PRIMARY (stop-only): 4-class champion trail+gate, but names with "
+                "prob_class_3>=0.35 get a 25% hard stop vs the 15% base — tests whether NOT "
+                "stopping high-score winners out early monetizes the tail. Start-time cone vs "
+                "champion_trail_spygate_4cls. IN-SAMPLE-derived threshold → go-look-OOS, not a promotion.",
+    status="candidate",
+))
+_register(StrategyDef(
+    name="champion_trail_spygate_4cls_histop_hold",
+    signal="proto_cali_gated",
+    strategy_kwargs={**_HISCORE_BASE, "hi_score_stop_pct": 0.25, "hi_score_sma_period": 100},
+    description="Q70 Stage-2 FOLLOW-UP (stop+hold): as _histop, plus hi-score names use SMA100 "
+                "(vs SMA50) trend exit so winners hold longer. Run ONLY if _histop lifts the cone, "
+                "to attribute how much the longer hold adds over the wider stop alone.",
+    status="candidate",
+))
+
 # Thread J Q46 — capacity: the Q44 rotation anatomy priced the no_slots queue at
 # near-book quality (fwd100 +5.7% vs +6.4%), so slot COUNT is the honest capacity
 # lever. ONE ex-ante arm (10 slots @ 10% sizing, same exits/gate/pool) — no sweep,

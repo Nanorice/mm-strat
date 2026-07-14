@@ -259,7 +259,7 @@ def compare_cone(grid: str, initial_cash: float, workers: int, smoke: bool) -> N
 
     print("\n" + "=" * 70)
     print(f"SPY-200d CONE COMPARE — grid {grid}")
-    print(f"  {'':<18}{'OFF':>10}{'ON':>10}{'Δ':>10}")
+    print(f"  {'':<18}{'OFF':>10}{'ON':>10}{'delta':>10}")
     for k in ("min", "median", "iqr", "std", "pct_neg"):
         a, b = s_off.get(k, float('nan')), s_on.get(k, float('nan'))
         print(f"  {k:<18}{a:>10.2f}{b:>10.2f}{b - a:>10.2f}")

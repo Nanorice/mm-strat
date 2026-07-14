@@ -653,3 +653,134 @@ plt.show()
 `entry_timing_features.py` drew per-day top-5 from the INFLATED pool — their macro/regime *correlations*
 likely survive (ρ is scale-free) but return *levels* were overstated; §2/§3/§5 are the corrected versions.
 ```
+
+---
+
+## §A (appendix) — Q65 curiosity: day-1 score vs realized exit return
+
+> **⚠️ OVERFIT BY CONSTRUCTION — intuition only, never a selection claim.** We plot each trade's day-1
+> model score against its *realized* exit return, so the relationship is reverse-engineered from outcomes.
+> Question: *were the bigger winners higher-scored on day 1?*
+>
+> **Two substrates, ONE exit each (the point of this section).** The exit mechanism decides what the score
+> looks like it does — so we hold it fixed and read each separately:
+> - **A1 — cone (`champion_trail`), TRAILING-STOP exit, `exit_reason=='trend'` only** — the trades allowed to run.
+> - **A2/A3 — `d2_training_cache`, NATIVE-SEPA-STOP exit (`return_at_exit`)** — every trade, scored fresh
+>   with prod `m01_prototype`. This is the cleaner read (one SL), but ⚠️ **IN-SAMPLE** (the cache is the
+>   training set), so the rank looks optimistic vs live.
+>
+> Cells are self-contained (bootstrap re-derives ROOT), so §A runs standalone.
+
+### Cell A0 — bootstrap
+
+```python
+import sys, glob
+from pathlib import Path
+import numpy as np, pandas as pd, duckdb
+import matplotlib.pyplot as plt
+from scipy.stats import spearmanr
+
+def _root():
+    p = Path.cwd().resolve()
+    for d in (p, *p.parents):
+        if (d / "config.py").exists() and (d / "src").is_dir():
+            return d
+    raise RuntimeError("root not found")
+ROOT = _root(); sys.path.insert(0, str(ROOT))
+```
+
+### Cell A1 — CONE contrast: trailing-stop, trend exits only (ρ +0.18)
+
+```python
+# Cone trades already carry the persisted day-1 score, so no scoring needed here.
+fs = sorted(glob.glob(str(ROOT / "data/selection_sweep/starttime/champion_trail/rolling/r_*/trades.parquet")))
+cone = pd.concat([pd.read_parquet(f) for f in fs], ignore_index=True)
+cone = cone[cone["exit_reason"] == "trend"].copy()   # trailing-stop, trend-break exits only
+d = cone.dropna(subset=["prob_elite", "pnl_percent"])
+rho, _ = spearmanr(d["prob_elite"], d["pnl_percent"])
+top = d[d.prob_elite >= d.prob_elite.quantile(.9)]["pnl_percent"].median()
+bot = d[d.prob_elite <= d.prob_elite.quantile(.1)]["pnl_percent"].median()
+print(f"CONE trend-exit ({len(d)}): rho={rho:+.3f} | top-dec median {top:+.1f}% vs bot {bot:+.1f}%")
+# -> weak-positive: the trades ALLOWED TO RUN reward the higher score (median lens works here).
+```
+
+### Cell A2 — CACHE: score it fresh with prod m01_prototype (native-SEPA exit)
+
+```python
+# Reuse UniverseScorer's model + encode/predict path VERBATIM (no reinvented scoring).
+from src.backtest.universe_scorer import UniverseScorer, encode_categoricals, load_categorical_map
+import xgboost as xgb
+CASE_MAP = {"RS_Sector_Rank":"rs_sector_rank","RS_Industry_Rank":"rs_industry_rank",
+            "RS_vs_Sector":"rs_vs_sector","RS_vs_Industry":"rs_vs_industry",
+            "Sector_Momentum":"sector_momentum","Industry_Momentum":"industry_momentum",
+            "RS_Universe_Rank":"rs_universe_rank"}
+scorer = UniverseScorer(m01_path=str(ROOT/"models/m01_prototype_2003_2026/v1/model.json"))
+scorer.load_model()
+
+con = duckdb.connect(str(ROOT/"data/market_data.duckdb"), read_only=True)
+cache = con.execute("SELECT * FROM d2_training_cache WHERE return_at_exit IS NOT NULL AND date=entry_date").fetchdf()
+con.close()
+for s_, d_ in CASE_MAP.items():
+    if s_ in cache.columns and d_ not in cache.columns: cache[d_] = cache[s_]
+for f in scorer._m01_features:
+    if f not in cache.columns: cache[f] = np.nan            # NaN-passthrough = prod ScoreEngine
+X = cache[scorer._m01_features].replace([np.inf, -np.inf], np.nan)
+X = encode_categoricals(X, scorer._m01_features, load_categorical_map(scorer.m01_path))
+cache["prob_elite"] = scorer.m01_model.get_booster().predict(xgb.DMatrix(X, enable_categorical=True))[:, -1]
+print(f"scored {len(cache)} cache trades | prob_elite {cache.prob_elite.min():.3f}..{cache.prob_elite.max():.3f}")
+assert cache.prob_elite.nunique() > 10, "score collapsed — path broke"
+```
+
+### Cell A3 — the two lenses: median (misleading) vs tail (the real signal)
+
+```python
+d = cache.dropna(subset=["prob_elite", "return_at_exit"]).copy()
+d["ret_pct"] = d.return_at_exit*100 if d.return_at_exit.abs().median() < 5 else d.return_at_exit
+d["dec"] = pd.qcut(d.prob_elite, 10, labels=False, duplicates="drop")
+d["home_run"] = (d.ret_pct > 30).astype(float)
+d["tail"] = np.maximum(d.ret_pct - 30, 0.0)
+rho, _ = spearmanr(d.prob_elite, d.ret_pct)
+rho_t, _ = spearmanr(d.prob_elite, d["tail"])   # d.tail is the DataFrame method, not the column — use brackets
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(15, 6))
+# LEFT — median lens (why the naive rho looks flat/negative under a hard stop)
+axL.scatter(d.prob_elite, d.ret_pct, s=8, alpha=.15, color="#607d8b", edgecolors="none")
+g = d.groupby("dec").agg(x=("prob_elite","median"), med=("ret_pct","median"),
+                         q25=("ret_pct", lambda v: v.quantile(.25)), q75=("ret_pct", lambda v: v.quantile(.75)))
+axL.plot(g.x, g.med, "o-", color="#c62828", lw=2, label="decile median")
+axL.fill_between(g.x, g.q25, g.q75, color="#c62828", alpha=.12, label="decile IQR")
+axL.axhline(0, color="k", lw=.7, alpha=.5)
+axL.set_xlabel("day-1 prob_elite"); axL.set_ylabel("return_at_exit % (native SEPA stop)")
+axL.set_title(f"MEDIAN lens: flat/negative at every score\nrho={rho:+.3f} — the misleading number"); axL.legend(fontsize=9)
+# RIGHT — tail lens: the signal the median hides
+t = d.groupby("dec").agg(x=("prob_elite","median"), hr=("home_run","mean"), mean_tail=("tail","mean"))
+pool = d.home_run.mean()
+axR.bar(t.x, t.mean_tail, width=.045, color="#2e7d32", alpha=.8, label="mean tail Σmax(ret−30,0)")
+axR.set_ylabel("mean tail magnitude (pts)", color="#2e7d32"); axR.set_xlabel("day-1 prob_elite (decile medians)")
+axt = axR.twinx(); axt.plot(t.x, t.hr*100, "o-", color="#c62828", lw=2, label="home-run rate P(ret>30%)")
+axt.axhline(pool*100, color="#c62828", ls=":", alpha=.6, label=f"pool {pool*100:.1f}%")
+axt.set_ylabel("home-run rate %", color="#c62828")
+axR.set_title(f"TAIL lens: score DOES rank winners\nrho(tail)={rho_t:+.3f}; HR {t.hr.iloc[0]*100:.1f}%→{t.hr.iloc[-1]*100:.1f}% low→high")
+h1,la1 = axR.get_legend_handles_labels(); h2,la2 = axt.get_legend_handles_labels()
+axR.legend(h1+h2, la1+la2, fontsize=8, loc="upper left")
+fig.suptitle(f"Q65 cache — day-1 score vs NATIVE-SEPA exit return (IN-SAMPLE, overfit, {len(d)} trades)", weight="bold")
+plt.tight_layout(rect=[0,0,1,0.96])
+plt.savefig(ROOT/"docs/session_logs/sprint_14/verdicts/2026-07-14_q65_cache_score_vs_return.png", dpi=110, bbox_inches="tight")
+plt.show()
+print(f"MEDIAN rho={rho:+.3f} | TAIL rho={rho_t:+.3f} | HR {t.hr.iloc[0]*100:.1f}%→{t.hr.iloc[-1]*100:.1f}% (pool {pool*100:.1f}%)")
+```
+
+![§A Q65 cache score vs native-SEPA return](../verdicts/2026-07-14_q65_cache_score_vs_return.png)
+
+**Read (OVERFIT, in-sample — intuition only).** The exit mechanism decides the story:
+- **Cone, trailing-stop, trend exits only** — median lens works: **ρ +0.18**, top-decile median **+8.1%** vs
+  bottom **+1.5%**. The trades allowed to run reward the score.
+- **Cache, native-SEPA hard stop, all trades** — the **median lens is misleading** (ρ −0.09, every decile a
+  small loss: the stop caps the typical trade regardless of score). The **tail lens** is the real signal:
+  home-run rate **0.2% → 14.2%** low→high score decile (pool 4.4%, ρ_tail **+0.19**, monotone). The score
+  ranks *winner magnitude*, not the median trade — the same median-is-the-wrong-lens lesson as the
+  tail-magnitude work (`project_scoring_vs_selection_unclipped`, `project_tail_magnitude_objective`).
+
+Net: same model, and once you fix the exit mechanism the read is consistent — **the score grades the tail.**
+Not a selection edge (in-sample + overfit-by-construction); a sanity check that resolves the cone-vs-cache
+confusion into one statement.

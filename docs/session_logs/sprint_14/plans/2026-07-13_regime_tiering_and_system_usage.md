@@ -420,8 +420,8 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   ([[project_scoring_vs_selection_unclipped]], [[project_tail_magnitude_objective]]). ⚠️ IN-SAMPLE
   (cache = training set) so rank reads optimistic. Net: fix the exit → the score grades the TAIL,
   consistently. §A of `cells/sprint_summary_eda_cells.md` carries both reads as pasteable cells.
-- [ ] **Q70 — does an exit MONETIZE the score's tail? (the C1→C3 test the Q66 gap raises).**
-  ⏸️ DEFERRED — run when the backtest queue is clear (user: other backtests running; will greenlight).
+- [x] **Q70 — does an exit MONETIZE the score's tail? (the C1→C3 test the Q66 gap raises). CLOSED
+  2026-07-14: Stage-1 KEEP (in-sample) → Stage-2 KILL (C3). The tail did NOT survive the portfolio path.**
   **The gap that motivates it:** Q66 shows the score ranks the fat right TAIL of forward outcomes
   (home-run rate 0.2%→14.2% low→high decile, ρ_tail +0.19) — a **C1 label-ranking** win
   ([[project_sepa_three_currencies]]). But the champion cone is a start-date lottery (median Sharpe
@@ -436,30 +436,57 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   **TWO-STAGE, NOTEBOOK-FIRST (user steer: validate the premise as a notebook PROXY before any
   backtest arm).**
 
-  **Stage 1 — notebook path-replay proxy (NO backtest engine; runs in `sprint_summary_eda` cells).**
-  The cache's `return_at_exit` is booked under ONE exit (native SEPA stop); post-filtering it does NOT
-  test a different exit — it reweights the same one. So the proxy must REPLAY exits on the price PATH:
-  per trade pull forward daily bars from `price_data` (entry → entry+~60d), re-simulate a SMALL exit
-  set on each path, book realized return with the gap-fill stub (`min(stop_level, open)`,
-  [[project_backtest_stop_gap_fill]] — else loose stops get free fills), group by day-1 `prob_elite`
-  decile. This is single-trade, no slots / no capital → isolates the EXIT question from the
-  portfolio-path confound (a C1.5 test, not portfolio C3). Exit set (coarse ON PURPOSE — in-sample, a
-  big grid overfits): incumbent −15% SEPA · loose (−25% stop / 60d / 20% trail) · time-only. Plus the
-  **score-conditional arm** = loosest exit for the TOP decile only, incumbent for the rest.
-  **THE READ (fixed before running, decile A/B only, TAIL not mean):**
-  (1) does the **top-minus-bottom decile REALIZED spread WIDEN** as the exit loosens? (a loose stop
-  lifts everything via survivorship; the score earns slack only if it lifts the top decile MORE);
-  (2) does **loose-for-top-decile-only BEAT loose-for-everyone**? (else you've only shown loose stops
-  help in-sample, not that the score chose WHERE to spend slack).
-  **Kill/keep:** if the score-conditional arm does NOT widen the top−bottom spread vs incumbent, the
-  tail is un-monetizable under stops (= the RS de-gate outcome, [[project_sepa_three_currencies]]) →
-  bank the C1 null, Q66 stays a curiosity, DONE in the notebook at zero backtest cost.
+  **Stage 1 — notebook path-replay proxy ✅ DONE 2026-07-14 →
+  `cells/q67_stage1_exit_replay.ipynb` + `verdicts/2026-07-14_q67_stage1_exit_replay.png`.**
+  Scored the cache fresh (m01_prototype), pulled each trade's forward 60d bars from `price_data`,
+  replayed 4 exits per path (tight −8%/20d · incumbent −15%/60d · loose −25%/60d/trail20 · time-only)
+  with the gap-fill stub, read the tail by score decile. **RESULT — KEEP (qualified):**
+  (a) **the tail is real and ON THE PATH** — mean MFE ceiling rises **7.8%→35.6%** bottom→top score
+  decile (Q66 confirmed on the price path, not just the label);
+  (b) **every exit gives most of it back** — top decile realizes only **~24%** of its ceiling (bottom
+  ~9%); the upside is reached intrabar then round-tripped;
+  (c) **the killer is the TRAILING stop, not the hard stop** — the −25%+trail20 "loose" arm
+  UNDERperforms the incumbent (mean_spread 3.66 vs 6.01), while a wider/absent hard stop WIDENS the
+  tail (time-only mean_spread 7.75, hr_spread 21pp). So the promising lever = **wider/later HARD stop +
+  longer HOLD for high-score names, NOT a tighter trail.**
+  ⚠️ Methodological note (caught mid-run): the first-cut decile-MEDIAN spread was STOP-PINNED (top_med
+  = −15 = the stop, not the score) — swapped to mean / home-run-rate / tail-magnitude (not stop-pinned)
+  + an MFE-ceiling diagnostic, which is what flipped a hasty KILL to the correct qualified KEEP. The
+  median-lens trap [[project_scoring_vs_selection_unclipped]] bites the metric too, not just the result.
 
-  **Stage 2 — backtest confirm (ONLY if Stage 1 passes; ONLY when the BT queue clears).** Promote the
-  ONE winning arm to the start-date cone / WFO for the portfolio-path C3 confirm (where every prior C1
-  winner has died — RS, minervini+progfills). ⚠️ Stage 1 is still IN-SAMPLE, so a pass is a
-  **go-look-OOS** signal, NOT a promotion. Feeds the live `champion_trail` rising-trail thread.
-  Grid/arm design deferred to when Stage 1 greenlights it. (RESEARCH_LOG Q70.)
+  **Stage 2 — backtest confirm — BUILT 2026-07-14, awaiting full-cone run (BT queue).**
+  Score-conditional exit wired into the engine (`sepa_strategy.py`): 3 params `hi_score_thresh` /
+  `hi_score_stop_pct` / `hi_score_sma_period`, all default None → **every existing strategy
+  byte-identical** (regression-checked). Hooks: wider hard stop at the initial-stop calc, longer SMA
+  trend-exit via a second precomputed SMA, both gated on `_entry_prob_elite[ticker] >= thresh`.
+  Two registry arms on the 4-CLASS base (so Stage-1's decile threshold transfers):
+  - `champion_trail_spygate_4cls_histop` — **PRIMARY (stop-only)**: hi-score names get a 25% hard stop
+    vs 15% base.
+  - `champion_trail_spygate_4cls_histop_hold` — **FOLLOW-UP (stop+hold)**: +SMA100 trend exit; run
+    only if the primary lifts the cone (attribution).
+  ⚠️ **Threshold bug caught in smoke (fixed):** first cut used `hi_score_thresh=0.35`, but every entry
+  already clears the `min_prob_elite=0.60` gate → 0.35 = a UNIFORM wide stop (no-op vs a plain
+  wide-stop arm, not conditional). Fixed to **0.665** = ~90th pctile of the gated pool (0.60–0.79) =
+  the top slice WITHIN what we actually trade. Smoke (2 cells) confirms the arm now DIFFERS from the
+  4cls incumbent (min 20% vs 32%, max 62% vs 57% — wide stop widens the dist, floor↓ tail↑, as
+  expected; 2-cell signal only, not a result).
+  **RESULT 2026-07-14 — KILL (paired cone, 53 shared 2021+ cells, identical window).** The hi-score
+  wide stop makes the Sharpe cone STRICTLY WORSE: median **0.25 → −0.01** (−0.26), %neg **38% → 51%**
+  (+13pp), max **1.76 → 1.32** (−0.44, the wide stop didn't even buy upside), p75 −0.17, floor
+  unchanged (−1.48). histop beats incumbent in only **17%** of cells; mean paired Sharpe delta −0.145.
+  **Mechanism:** a 25% vs 15% stop makes each losing hi-score name bleed deeper before cutting; under
+  slot contention those deeper losses tie up capital and deepen drawdowns in bad cells — you pay more
+  on losers without capturing enough extra on winners (the trend-exit already harvested most upside).
+  Wide stop widens LOSS magnitude more reliably than GAIN magnitude once slots + capital are real.
+  **The Stage-1 in-sample tail (MFE ceiling 7.8→35.6%) did NOT survive the portfolio path** — the same
+  C1→C3 death as RS and minervini+progfills ([[project_sepa_three_currencies]],
+  [[project_vec_engine_optimistic]]). The `_histop_hold` (stop+hold) follow-up is MOOT — primary
+  failed, nothing to attribute; not run. Champion unchanged. Both arms banked as documented nulls in
+  the registry (status stays `candidate`, not promoted).
+  ⚠️ Engine change KEPT (the 3 `hi_score_*` params + hooks) — default-None, byte-identical to prod,
+  reusable if a future score-conditional idea arises; the NULL is the config, not the mechanism.
+  Notebook methodological caveat that still stands: replay proxy read the tail correctly; it just
+  isn't monetizable under the real book. (RESEARCH_LOG Q70.)
 - [ ] **Granular day-level dispersion within good vs bad months.** How much does picking the wrong
   DAY inside a known-good month cost — quantifies residual day-luck after regime is controlled.
   Cheap on the existing `entry_timing_daily.parquet` × regime label. Deferred per user.

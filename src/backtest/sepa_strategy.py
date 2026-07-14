@@ -119,6 +119,13 @@ class SEPAHybridV1(bt.Strategy):
         # initial stop — this protects the median path it otherwise bleeds (R3 §mechanism).
         ('trail_from_entry_atr', 0.0),
         ('sma_exit_period', 50),
+        # Q70 score-conditional exit: high-prob_elite names (>= hi_score_thresh at
+        # entry) get a WIDER hard stop / LONGER SMA hold, to stop truncating the
+        # score's tail (Stage-1 finding: the tail is score-ranked but every uniform
+        # exit gives it back). None = off → every other strategy is byte-identical.
+        ('hi_score_thresh', None),
+        ('hi_score_stop_pct', None),     # wider max_stop_pct for hi-score names
+        ('hi_score_sma_period', None),   # longer sma_exit_period for hi-score names
 
         # Exit params (rank-based exits)
         ('exit_percentile_max', 0.40),  # Exit if rank falls below 40th percentile
@@ -232,6 +239,11 @@ class SEPAHybridV1(bt.Strategy):
         self.sma50 = {}
         for name, data in self.stock_feeds.items():
             self.sma50[name] = bt.indicators.SMA(data.close, period=self.p.sma_exit_period)
+        # Q70 stop+hold arm: second, longer SMA for hi-score names (None = off).
+        self.sma_hi = {}
+        if self.p.hi_score_sma_period is not None:
+            for name, data in self.stock_feeds.items():
+                self.sma_hi[name] = bt.indicators.SMA(data.close, period=self.p.hi_score_sma_period)
 
         # Order tracking for notify_order
         self.pending_orders: Dict[int, dict] = {}
@@ -578,8 +590,12 @@ class SEPAHybridV1(bt.Strategy):
             if data is None:
                 continue
 
-            # Get SMA50
+            # Get SMA50 — Q70: hi-score names use the longer SMA (looser trend exit)
+            # when the stop+hold arm is on, so winners hold longer.
             sma = self.sma50.get(ticker)
+            if self.sma_hi and self.p.hi_score_thresh is not None \
+                    and self._entry_prob_elite.get(ticker, 0.0) >= self.p.hi_score_thresh:
+                sma = self.sma_hi.get(ticker, sma)
             if sma is None:
                 continue
 
@@ -995,9 +1011,15 @@ class SEPAHybridV1(bt.Strategy):
         if shares < 3:  # Need at least 3 for 3 tranches
             return
 
-        # Calculate initial stop: max(2*ATR, 10% of price) below entry
+        # Calculate initial stop: max(2*ATR, 10% of price) below entry.
+        # Q70: hi-score names get a wider hard stop so the exit stops truncating
+        # the score's tail. prob_elite was stashed in _open just before this call.
+        max_stop = self.p.max_stop_pct
+        if self.p.hi_score_thresh is not None and self.p.hi_score_stop_pct is not None \
+                and self._entry_prob_elite.get(ticker, 0.0) >= self.p.hi_score_thresh:
+            max_stop = self.p.hi_score_stop_pct
         stop_atr = price - (self.p.atr_stop_mult * atr)
-        stop_pct = price * (1 - self.p.max_stop_pct)
+        stop_pct = price * (1 - max_stop)
         initial_stop = max(stop_atr, stop_pct)
 
         # Calculate target 1: max(3*ATR, 15%) above entry

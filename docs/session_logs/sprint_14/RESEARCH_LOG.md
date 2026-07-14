@@ -815,19 +815,33 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     don't assume the axis is bull/bear at all** — the periods that matter may be liquidity / risk-on-off
     / other, not trend; AND don't assume the model is good — put a question mark on that too. User: a
     real topic, explore later, not this session. (Curiosity chart = Q66, DONE.)
-70. **?OPEN (deferred, user 2026-07-14) — does an EXIT MONETIZE the score's tail (C1→C3)?** The gap Q66
-    raises: the score ranks the fat right tail (home-run 0.2%→14.2% low→high decile, ρ_tail +0.19 — a C1
-    label-ranking win) but the champion cone is a start-date near-null (median Sharpe ~0.47 — a C3
-    exit-aware null). Not a contradiction: Q66 is in-sample; ranking ≠ capturing (stop+trail truncate
-    the label-tail); per-trade ≠ portfolio-path. **Two-stage, notebook-first (user):** Stage 1 = a
-    single-trade path-REPLAY proxy in `sprint_summary_eda` cells (pull `price_data` bars per trade,
-    re-sim a coarse exit set + a score-conditional "loose-for-top-decile-only" arm, gap-fill stub, group
-    by day-1 `prob_elite` decile); read = does the top−bottom-decile REALIZED spread WIDEN as the exit
-    loosens, and does loose-for-top-only BEAT loose-for-everyone? Kill = if not, tail un-monetizable
-    under stops (RS-de-gate outcome) → C1 null banked. Stage 2 = backtest cone confirm ONLY if Stage 1
-    passes AND the BT queue clears (still in-sample → go-look-OOS, not a promotion). Feeds the live
-    `champion_trail` rising-trail thread. `plans/2026-07-13_regime_tiering_and_system_usage.md` §3.
-    [[project_sepa_three_currencies]], [[project_prob_elite_gate_variance_knob]]
+70. **✅ CLOSED 2026-07-14 — does an EXIT MONETIZE the score's tail (C1→C3)? NO. Stage-1 in-sample KEEP
+    → Stage-2 backtest KILL.** The gap Q66 raises: the score ranks the fat right tail (home-run 0.2%→14.2%
+    low→high decile, ρ_tail +0.19 — a C1 label-ranking win) but the champion cone is a start-date
+    near-null (a C3 exit-aware null). Two-stage, notebook-first.
+    **Stage 1 — path-replay proxy (`cells/q67_stage1_exit_replay.ipynb`, `verdicts/2026-07-14_q67_stage1_exit_replay.png`):**
+    scored the cache fresh (m01_prototype), pulled each trade's forward 60d `price_data` bars, replayed
+    4 exits with a gap-fill stub, read by score decile. **KEEP (qualified):** (a) the tail is real and ON
+    THE PATH — mean MFE ceiling rises **7.8%→35.6%** bottom→top decile; (b) every exit gives most of it
+    back — top decile realizes only **~24%** of its ceiling; (c) the killer is the TRAILING stop, not the
+    hard stop (loose −25%+trail20 UNDERperforms incumbent) → the promising lever = wider/later HARD stop
+    + longer HOLD for hi-score names. ⚠️ methodological catch: the first decile-MEDIAN spread metric was
+    STOP-PINNED (top_med = −15 = the stop) → swapped to mean/home-run/tail-magnitude + an MFE-ceiling
+    diagnostic; that flipped a hasty KILL to the correct qualified KEEP (the median-lens trap bites the
+    METRIC, not just the result).
+    **Stage 2 — backtest cone confirm (engine change `sepa_strategy.py`: 3 `hi_score_*` params + hooks,
+    default-None → prod byte-identical; arms `champion_trail_spygate_4cls_histop{,_hold}`):** hi-score
+    names (prob_class_3 ≥ 0.665, the top slice ABOVE the 0.60 gate — a threshold-bug caught in smoke: 0.35
+    was below the gate = a uniform wide stop) get a 25% hard stop. **KILL (paired cone, 53 shared 2021+
+    cells):** median Sharpe **0.25→−0.01**, %neg **38%→51%**, max **1.76→1.32** (wide stop didn't even buy
+    upside), beats incumbent in only **17%** of cells (mean paired Δ −0.145). Mechanism: a 25% vs 15% stop
+    bleeds losers deeper; under slot contention those deeper losses tie up capital and deepen bad-cell
+    drawdowns — wide stop widens LOSS magnitude more reliably than GAIN once slots + capital are real.
+    **The Stage-1 in-sample tail did NOT survive the portfolio path** — the same C1→C3 death as RS and
+    minervini+progfills. `_histop_hold` follow-up MOOT (primary failed), not run. Champion unchanged; both
+    arms banked as documented registry nulls; engine params KEPT (reusable, the null is the config not the
+    mechanism). `plans/2026-07-13_regime_tiering_and_system_usage.md` §3.
+    [[project_sepa_three_currencies]], [[project_prob_elite_gate_variance_knob]], [[project_vec_engine_optimistic]]
 
 ## Open meta-questions (carried)
 - ✅ **Regime-EXPRESSION question CLOSED (Q63, DONE 2026-07-14):** 15-candidate manual — nothing beats
