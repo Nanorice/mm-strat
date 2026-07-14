@@ -737,12 +737,41 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     split by regime). Explore+document only this session; ideas → to-do tracker.
     `plans/2026-07-13_regime_tiering_and_system_usage.md`. [[project_capital_deployment]]
 
+### Thread M cont. (2026-07-14, session 01) — regime-indicator test manual + §1.2 assessment
+
+63. **Does ANY coincident regime gauge (15 candidates: SPY/QQQ technicals + breadth) beat SPY-200d
+    at telling bad-days from good?** → **NO — all 15 FAIL, lever RETIRED (5th falsification).**
+    Block A (nowcaster AUC, fwd50 cohort bad-day, WFO 50d-embargo): best = breadth **0.55** vs
+    SPY-200d baseline **0.531** (0.65 wall); only significant deltas are candidates *worse* than
+    baseline. Block C (cone, §7 leads §6.8 slope + §4 breadth): both **worse** standalone (median
+    Sharpe 0.59 / 0.46 vs 0.76), composed-OR arms washes (overlap trap → candidate ≡ SPY-200d).
+    Breadth calm-AUC 0.71 did NOT convert to P&L (label lift ≠ trade edge, 4th confirm). Regime is a
+    mean-shift not day-separability, reconfirmed from a fresh feature set. **→ regime-expression CLOSED:
+    SPY-200d is the whole axis; §0.5.4 fork = ONE axis; §1.2 unblocked, tiers on SPY-200d only.**
+    `verdicts/2026-07-14_regime_indicator_manual.md` + `cells/regime-indicator-results.ipynb`.
+    [[project_regime_indicator_manual_null]]
+64. **§1.2 regime-tiered usage — feasible, and how?** → **ASSESSED (design only).** §1.2a/§1.2b are a
+    CHEAP re-cut of existing cone `trades.parquet` (ungated `champion_trail`: 90 cells, 2664 trades
+    both regimes), NOT new backtests. Order: §1.2b (bull-only gate sweep 0.15→0.30, tests the Q47
+    hunch) FIRST → §1.2a (per-regime cone) if the split matters. Re-cut is DIAGNOSTIC only; promotion
+    needs a fresh per-regime CONE (trade-log lift ≠ cone edge). Honest prior: 200d gate already
+    captures most of "bull-trade/chop-standaside" → realistic upside = confirm gate is regime-
+    conditional + formalize a chop tier, NOT a 2nd alpha engine. `plans/2026-07-13_regime_tiering_and_system_usage.md`.
+
 ## Open meta-questions (carried)
-- 📋 **Thread M ideas (DOCUMENTED 2026-07-13, NOT implemented) — implementation separate.**
-  🔨 IMMEDIATE: (a) earnings-proximity entry/exit rule; (b) 1-day entry-delay on the equity FAN.
-  🔍 NEXT: per-regime gate sweep, portfolio-level DD circuit breaker, regime-tiered fan/cone,
-  m02 breakout-PROBABILITY reframe (event-prob not fwd-return, watchlist-ripeness not alpha).
-  ⏸️ DEFERRED: granular day-dispersion within good/bad months.
+- ✅ **Regime-EXPRESSION question CLOSED (Q63, DONE 2026-07-14):** 15-candidate manual — nothing beats
+  SPY-200d (Block A all <0.55 AUC vs 0.65 wall; §7 cone leads worse standalone / OR-washes). 5th
+  falsification; SPY-200d is the whole regime axis. `verdicts/2026-07-14_regime_indicator_manual.md`,
+  [[project_regime_indicator_manual_null]].
+- ⏭️ **§1.2b — per-regime gate sweep = NEXT ACTIONABLE (Q64, assessed 2026-07-14):** cheap re-cut of
+  the ungated `champion_trail` cone's `trades.parquet` (2664 trades) — tag by SPY-200d-at-entry, sweep
+  gate 0.15→0.30 on the bull subset. Diagnostic → promote to bull-only CONE if the split shows a
+  regime interaction Q47's pooled median hid. Then §1.2a (per-regime cone).
+- 📋 **Thread M ideas (remaining, NOT implemented) — implementation separate.**
+  🔨 IMMEDIATE: (a) earnings-proximity + (b) DD-breaker cone floor-lift runs (both WIRED, un-run);
+  (c) 1-day entry-delay on the equity FAN.
+  🔍 NEXT: §1.2a regime-tiered fan/cone, m02 breakout-PROBABILITY reframe (event-prob not fwd-return,
+  watchlist-ripeness not alpha). ⏸️ DEFERRED: granular day-dispersion within good/bad months.
   `plans/2026-07-13_regime_tiering_and_system_usage.md`.
 - ⏭️ **Binary promotion (Thread L/M, user go/no-go):** trail cone confirms binary wins → if
   promoting: `set_prod(binary)` + `backfill_daily_predictions` + rebuild dashboard DB; threshold
