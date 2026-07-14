@@ -181,6 +181,26 @@ the per-day entry gate.
 
 ### 1.2 Regime-TIERED strategy usage  *(the honest reframe)*
 
+> **✅ §1.2b RESOLVED 2026-07-14 — the MARKET-regime gate hypothesis is DEAD; a NARROWER hypothesis
+> stays open (scoped, deferred).** Re-cut the ungated `champion_trail` cone (2664 trades) tagged by
+> SPY-200d-at-entry; swept the gate 0.15→0.30 on the **bull (SPY>200d) subset alone**
+> (`scripts/regime_gate_recut.py`). Result: the bull-only median FALLS monotonically with the gate
+> (−5.46 @0.15 → −6.17 → −6.35 → −8.00 @0.30) — **exactly the pooled Q47 finding, NOT hiding a
+> bull/chop interaction.** %losing flat ~69% across gates; the only thing a higher gate buys is the
+> same tail-vs-median fork (0.30: mean +0.92 / p90 +28 but median −8, 25% of trades kept) = the
+> variance-knob signature within the bull regime. Chop reference (not swept): chop@0.15 mean −1.11
+> vs bull@0.15 +0.05 — the 200d gate earns its keep by removing the negative-mean chop cohort, which
+> is the whole regime lever. **→ NO-GO on a bull-only gate cone** (diagnostic shows no separation to
+> confirm; a cone would be cone-fitting). Q47's 0.15 stays champion in bull too.
+>
+> **⚠️ SCOPE OF THIS CONCLUSION (user, 2026-07-14) — do NOT over-read it.** §1.2b tested ONE
+> conditioning variable: **market regime (SPY>200d)**. It found that market-bull does not make a
+> higher gate pay. It does **NOT** kill a DIFFERENT hypothesis: *there exist periods — defined by the
+> **model's own tail-capture skill**, not by market trend — where raising the score gate DOES give
+> better return.* Model-skill-regime ≠ market-regime; §1.2b conditioned on the wrong axis to speak to
+> it. That hypothesis is **untouched and stays OPEN** (deferred, not this session — see RESEARCH_LOG
+> Q66). The settled part: *market-regime does not tier the gate.*
+>
 > **📋 ASSESSMENT 2026-07-14 (regime-expression now LOCKED → §1.2 unblocked).** The regime-indicator
 > program is closed (SPY-200d is the whole axis; §0.5.3 + the 15-candidate manual, 5 falsifications).
 > So §1.2 tiers on **SPY-200d up/down, coarse, full stop** — exactly the caveat §1.2 already bakes in.
@@ -294,7 +314,12 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
 ## 3. To-do (prioritized) — IMPLEMENTATION IS SEPARATE
 
 ### 🔨 IMMEDIATE (design known, just execute — separate implementation session)
-- [x] **Earnings-proximity entry/exit rule.** ✅ IMPLEMENTED 2026-07-13. Block entry / force-exit
+- [x] **Earnings-proximity entry/exit rule. ❌ REJECTED 2026-07-14 (cone run).** Costs return AND
+  drawdown: Sharpe median 0.49 vs 0.76, floor −1.97 vs −1.93, %neg 36% vs 28%, maxDD uniformly worse.
+  Force-exits 630 trades (23.6% of book), 77% of them WINNERS at +17.4% mean (vs champion trend winners
+  +21.7%) → clips the tail. Avoided gap-loss (−0.33% agg) ≪ tail forfeited. `verdicts/2026-07-14_overlay_floor_lift_cones.md`,
+  RESEARCH_LOG Q68. (Implementation notes below.)
+  ✅ IMPLEMENTED 2026-07-13. Block entry / force-exit
   N days before a scheduled earnings date (Minervini: never hold a binary gap you can't stop out
   of; the 15% stop understates gap loss, [[project_backtest_stop_gap_fill]]). **Cone verdict still
   OPEN** — wiring done + smoke-verified, the floor-lift test is the next run.
@@ -317,7 +342,12 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   - **NEXT RUN**: `python scripts/run_starttime_sweep.py --strategy champion_trail_spygate_earn5
     --grid rolling --workers 3` → compare cone (floor/IQR/%neg) vs `champion_trail_spygate`.
 
-- [x] **Portfolio-level DD circuit breaker (§1.1).** ✅ IMPLEMENTED 2026-07-13. Book-level brake:
+- [x] **Portfolio-level DD circuit breaker (§1.1). ❌ REJECTED 2026-07-14 (cone run).** Lowers the
+  Sharpe floor (−2.82 vs −1.93), median −0.04 vs +0.76, %neg 50% vs 28%; buys only drawdown. 92% of
+  179 trips fire on gate-open bull days clustered in the strongest bull years → halts on routine bull
+  pullbacks, misses the recovery that carries the tail. Governor's fate, worse. Not re-tunable.
+  `verdicts/2026-07-14_overlay_floor_lift_cones.md`, RESEARCH_LOG Q67. (Implementation notes below.)
+  ✅ IMPLEMENTED 2026-07-13. Book-level brake:
   peak-to-trough equity DD ≥ X% (6%) halts NEW entries (open positions/exits untouched) until equity
   recovers within Y% (2%) of the high-water mark. All flexible: `dd_breaker_pct`,
   `dd_breaker_release_pct`, `dd_breaker_require_spy_uptrend`. Elder, *Trading for a Living*. Full
@@ -346,12 +376,11 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   trade edge). **5th independent falsification of "a second regime axis beats SPY-200d."** →
   **REGIME-EXPRESSION QUESTION CLOSED: SPY-200d is the whole axis; §0.5.4 fork resolves to ONE axis;
   §1.2 is unblocked and splits on SPY-200d up/down only.**
-- [ ] **§1.2b — per-regime gate sweep. ← NEXT ACTIONABLE (assessed 2026-07-14, §1.2 above).** Split
-  the Q47 gate result by SPY-200d regime: does a higher gate pay in clean bull while hurting in chop?
-  **Cheap re-cut confirmed**: `champion_trail` (UNGATED) cone's 90 `trades.parquet` = 2664 trades in
-  both regimes; tag each by SPY-200d-at-entry, sweep gate 0.15→0.30 on the above-200d subset. Diagnostic
-  only → promote to a bull-only cone if the split shows the pooled median hid a regime interaction. The
-  concrete test of the user's live-pick hunch.
+- [x] **§1.2b — per-regime gate sweep. ✅ DONE 2026-07-14 (NO-GO, market-regime hypothesis dead).**
+  Re-cut 2664 champion_trail trades by SPY-200d-at-entry, swept gate 0.15→0.30 on the bull subset
+  (`scripts/regime_gate_recut.py`). Bull-only median falls monotonically with the gate (−5.46→−8.00),
+  = pooled Q47, no bull/chop interaction. NO-GO on a bull-only cone. **Scope: killed MARKET-regime
+  gate-tiering only; model-skill-regime stays open → Q66.** See §1.2 header + RESEARCH_LOG Q65.
 - [x] **§1.1 — portfolio-level DD circuit breaker.** ✅ IMPLEMENTED 2026-07-13 (see IMMEDIATE
   above); cone floor-lift test is the next run.
 - [ ] **§1.2a — regime-tiered fan/cone.** Run the equity-fan / cone analysis PER regime (coarse:
@@ -360,6 +389,77 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   selection alpha). Only if §1.2 shows tiering has legs.
 
 ### ⏸️ DEFERRED (after the above)
+- [ ] **Q66 — model-skill-regime gate hypothesis (the axis §1.2b did NOT test).** §1.2b killed only
+  the MARKET-regime (SPY>200d) version. OPEN: do periods defined by the *model's own tail-capture
+  skill* exist where a higher gate pays? Would need a live-safe proxy for "the model is scoring well
+  right now" (NOT SPY-trend) to condition on — the hard part is a leak-free skill-state label. User
+  flagged as a real topic, not now. 
+  
+  from another angle, we've been assuming regime is the variable that correlates how the model perform, but maybe the key periods have other meanings (liquid market, risk on market etc. not just difference between bull/bear). We are also assuming the model is good, but need to put a question mark as well. 
+  
+  (RESEARCH_LOG Q66.)
+- [x] **Q65-curiosity chart — day-1 score vs trend-break-exit return scatter (OVERFIT, for intuition).**
+  ✅ DONE 2026-07-14 → `scripts/q65_score_vs_trendexit_scatter.py` +
+  `verdicts/2026-07-14_q65_score_vs_trendexit.png`. Filtered the 2664 `champion_trail` cone trades to
+  the 1009 `exit_reason=='trend'` exits; scatter of `pnl_percent` vs day-1 `entry_score` and
+  `prob_elite` with a decile-median/IQR overlay. **Read: weak-positive monotone lift** — Spearman
+  rho **+0.18** (both scores; `prob_elite` is a monotone transform of `entry_score` → identical
+  ranking); top-score-decile median trend-exit return **+8.1%** vs bottom-decile **+1.5%**. So the
+  best trend-runners ARE higher-scored on day 1, but weakly and with huge overlap (discrete score
+  stripes = booster structure). **OVERFIT by construction (score plotted against realized result) —
+  intuition only, not a selection claim.**
+  **Follow-up 2026-07-14 (user: score the cache to fix the exit-mechanism confusion) →
+  `scripts/q65_cache_score_vs_return.py` + `verdicts/2026-07-14_q65_cache_score_vs_return.png`.**
+  Scored `d2_training_cache` (38,556 entry-day trades) FRESH with prod 4-class `m01_prototype` via
+  UniverseScorer's own encode/predict path (97 feats, 1 missing=NaN-passthrough), then read day-1
+  `prob_elite` vs the cache's NATIVE-SEPA exit (`return_at_exit`) — ONE stop, vs the cone's trailing
+  stop. **The exit mechanism decides the read:** under the hard SEPA stop the MEDIAN lens is
+  misleading (ρ −0.09, every decile a small loss — stop caps the typical trade), but the TAIL lens is
+  the real signal: home-run rate P(ret>30%) **0.2%→14.2%** low→high score decile (pool 4.4%, ρ_tail
+  +0.19, monotone). Same median-is-wrong-lens lesson as the tail-magnitude work
+  ([[project_scoring_vs_selection_unclipped]], [[project_tail_magnitude_objective]]). ⚠️ IN-SAMPLE
+  (cache = training set) so rank reads optimistic. Net: fix the exit → the score grades the TAIL,
+  consistently. §A of `cells/sprint_summary_eda_cells.md` carries both reads as pasteable cells.
+- [ ] **Q67 — does an exit MONETIZE the score's tail? (the C1→C3 test the Q65 gap raises).**
+  ⏸️ DEFERRED — run when the backtest queue is clear (user: other backtests running; will greenlight).
+  **The gap that motivates it:** Q65 shows the score ranks the fat right TAIL of forward outcomes
+  (home-run rate 0.2%→14.2% low→high decile, ρ_tail +0.19) — a **C1 label-ranking** win
+  ([[project_sepa_three_currencies]]). But the champion cone is a start-date lottery (median Sharpe
+  ~0.47, 33% neg cells, [[project_champion_starttime_dependent]]) — a **C3 exit-aware-P&L** near-null.
+  The gap is NOT a contradiction; it's five known effects stacked: (1) Q65 is IN-SAMPLE (cache =
+  training set) so the tail reads optimistic; (2) ranking the tail ≠ CAPTURING it — the 15% stop +
+  trailing exit truncate the exact label-tail the score concentrates
+  ([[project_prob_elite_gate_variance_knob]]); (3) per-trade independence ≠ portfolio path (slot
+  contention + regime-clustered = correlated entries, [[project_vec_engine_optimistic]]); (4) the
+  cache's OWN median lens is −0.09 (backtest reports median-type quantities, closer to the left panel
+  than the tail panel); (5) no costs/fills in the cache.
+  **TWO-STAGE, NOTEBOOK-FIRST (user steer: validate the premise as a notebook PROXY before any
+  backtest arm).**
+
+  **Stage 1 — notebook path-replay proxy (NO backtest engine; runs in `sprint_summary_eda` cells).**
+  The cache's `return_at_exit` is booked under ONE exit (native SEPA stop); post-filtering it does NOT
+  test a different exit — it reweights the same one. So the proxy must REPLAY exits on the price PATH:
+  per trade pull forward daily bars from `price_data` (entry → entry+~60d), re-simulate a SMALL exit
+  set on each path, book realized return with the gap-fill stub (`min(stop_level, open)`,
+  [[project_backtest_stop_gap_fill]] — else loose stops get free fills), group by day-1 `prob_elite`
+  decile. This is single-trade, no slots / no capital → isolates the EXIT question from the
+  portfolio-path confound (a C1.5 test, not portfolio C3). Exit set (coarse ON PURPOSE — in-sample, a
+  big grid overfits): incumbent −15% SEPA · loose (−25% stop / 60d / 20% trail) · time-only. Plus the
+  **score-conditional arm** = loosest exit for the TOP decile only, incumbent for the rest.
+  **THE READ (fixed before running, decile A/B only, TAIL not mean):**
+  (1) does the **top-minus-bottom decile REALIZED spread WIDEN** as the exit loosens? (a loose stop
+  lifts everything via survivorship; the score earns slack only if it lifts the top decile MORE);
+  (2) does **loose-for-top-decile-only BEAT loose-for-everyone**? (else you've only shown loose stops
+  help in-sample, not that the score chose WHERE to spend slack).
+  **Kill/keep:** if the score-conditional arm does NOT widen the top−bottom spread vs incumbent, the
+  tail is un-monetizable under stops (= the RS de-gate outcome, [[project_sepa_three_currencies]]) →
+  bank the C1 null, Q65 stays a curiosity, DONE in the notebook at zero backtest cost.
+
+  **Stage 2 — backtest confirm (ONLY if Stage 1 passes; ONLY when the BT queue clears).** Promote the
+  ONE winning arm to the start-date cone / WFO for the portfolio-path C3 confirm (where every prior C1
+  winner has died — RS, minervini+progfills). ⚠️ Stage 1 is still IN-SAMPLE, so a pass is a
+  **go-look-OOS** signal, NOT a promotion. Feeds the live `champion_trail` rising-trail thread.
+  Grid/arm design deferred to when Stage 1 greenlights it. (RESEARCH_LOG Q67.)
 - [ ] **Granular day-level dispersion within good vs bad months.** How much does picking the wrong
   DAY inside a known-good month cost — quantifies residual day-luck after regime is controlled.
   Cheap on the existing `entry_timing_daily.parquet` × regime label. Deferred per user.

@@ -40,6 +40,7 @@ import pandas as pd
 
 from src.backtest import strategy_registry as reg
 from src.backtest.macro_sizer import spy_above_200d
+from src.backtest.earnings_calendar import load_earnings_calendar
 from src.backtest.population_runner import Job, run_arm
 from scripts.run_strategy_confirm import _load_scores, DB_PATH, MODEL
 from scripts.run_strategy_wfo import sharpe_from_returns
@@ -90,16 +91,22 @@ def build_cells(grid: str, cache_start: str, cache_end: str,
     return cells
 
 
-def _cell_job(d: reg.StrategyDef, cell_id: str, start: str, end: str) -> Job:
+def _cell_job(d: reg.StrategyDef, cell_id: str, start: str, end: str,
+              earnings_cal: Dict[str, Any] | None = None) -> Job:
     """One (start,end) cell -> a population Job. Scores lazy-loaded IN the worker
     via a picklable partial (windowed to the cell) so parallel workers stay light.
 
     Any arm carrying a `spy_deploy_gate` sentinel (empty dict in the registry) gets
     the window-dependent SPY-200d gate injected here as a {date->bool} dict — small,
-    picklable. Covers champion_spygate and champion_trail_spygate."""
+    picklable. Covers champion_spygate and champion_trail_spygate.
+
+    An `earnings_calendar` sentinel (None) is filled with the shared calendar loaded
+    once in run_sweep — window-independent, so we don't reload 1.8k parquets per cell."""
     kwargs = dict(d.strategy_kwargs)
     if "spy_deploy_gate" in kwargs:
         kwargs["spy_deploy_gate"] = spy_above_200d(start, end, str(DB_PATH))
+    if "earnings_blackout_days" in kwargs and kwargs.get("earnings_calendar") is None:
+        kwargs["earnings_calendar"] = earnings_cal
     return Job(
         id=cell_id, description=f"{d.name} {start}..{end}", signal=d.signal,
         model="/".join(MODEL[d.signal]), strategy_kwargs=kwargs,
@@ -144,8 +151,13 @@ def run_sweep(strategy: str, grid: str, initial_cash: float, workers: int,
     logger.info("START-TIME SWEEP %s (%s) grid=%s: %d cells, workers=%d",
                 d.name, d.fingerprint, grid, len(cells), workers)
 
+    # Earnings overlay arms need the {ticker->dates} calendar; load it ONCE (window-
+    # independent) and share across cells. Skipped entirely for non-earnings arms.
+    earnings_cal = (load_earnings_calendar()
+                    if "earnings_blackout_days" in d.strategy_kwargs else None)
+
     rows: List[Dict[str, Any]] = []
-    jobs = [(cid, s, e, _cell_job(d, cid, s, e)) for cid, s, e in cells]
+    jobs = [(cid, s, e, _cell_job(d, cid, s, e, earnings_cal)) for cid, s, e in cells]
 
     if workers <= 1:
         for cid, s, e, job in jobs:

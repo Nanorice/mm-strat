@@ -758,15 +758,63 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     captures most of "bull-trade/chop-standaside" → realistic upside = confirm gate is regime-
     conditional + formalize a chop tier, NOT a 2nd alpha engine. `plans/2026-07-13_regime_tiering_and_system_usage.md`.
 
+### Thread M cont. (2026-07-14, session 02) — §1.2b re-cut + §1.2 close
+
+65. **§1.2b — does a higher score gate pay in the BULL (SPY>200d) regime, where Q47's POOLED sweep
+    found it hurts?** → **NO — market-regime does NOT tier the gate (hunch dead in this axis).**
+    Re-cut the 2664 ungated `champion_trail` trades tagged by SPY-200d-at-entry (1766 bull / 898 chop),
+    swept the gate 0.15→0.30 on the BULL subset only (`scripts/regime_gate_recut.py`, DIAGNOSTIC —
+    per-trade distribution, no cone). Bull median FALLS monotonically with the gate (−5.46 @0.15 →
+    −6.17 → −6.35 → −8.00 @0.30), = the pooled Q47 result, NO bull/chop interaction; %losing flat ~69%
+    across gates; higher gate only buys the tail-vs-median fork (0.30: mean +0.92/p90 +28 but median
+    −8, 25% kept) = the variance-knob signature *within* bull. Chop ref (not swept): chop@0.15 mean
+    −1.11 vs bull@0.15 +0.05 → the 200d gate's value is removing the negative-mean chop cohort, which
+    IS the regime lever. **→ NO-GO on a bull-only gate cone** (no separation to confirm = cone-fitting
+    to run one). Q47's 0.15 stays champion in bull too. **⚠️ SCOPE (user): this kills the MARKET-regime
+    gate hypothesis ONLY — see Q69.** `plans/2026-07-13_regime_tiering_and_system_usage.md` §1.2 header.
+    [[project_prob_elite_gate_variance_knob]]
+67. **§1.1 DD circuit breaker — does a book-level 6% DD brake lift the cone floor?** → **NO — REJECTED,
+    it LOWERS the floor (governor's fate, worse).** 90-cell paired cone vs champion: Sharpe median
+    −0.04 vs +0.76, floor −2.82 vs −1.93 (WORSE), %neg 50% vs 28%; buys only drawdown (worst maxDD
+    −44%→−25%). Trip-timing: 92% of 179 trips fire on gate-OPEN bull days (NOT the double-count trap —
+    genuinely additive to the SPY gate) but clustered in the STRONGEST bull years (2020:15, 2013:13) →
+    it halts on routine bull pullbacks and misses the recovery that carries the tail. A 6% book DD is
+    inside the normal noise of a 55%-stop-out strategy; halting on it forfeits winners. **THRESHOLD
+    SWEEP 6/10/15/20/30% PROVES mechanism-not-threshold:** median Sharpe rises monotone with the trip
+    (−0.04→0.35→0.49→0.71→0.75) but NEVER exceeds champion (0.757 — asymptotes to do-nothing), while the
+    floor is WORSE at EVERY level (−2.82 to −3.41, all < champion −1.93) — no trip lifts the floor. A
+    strict Pareto-loss across the whole range. `verdicts/2026-07-14_overlay_floor_lift_cones.md`.
+    [[project_capital_deployment]]
+68. **Earnings-blackout (N=5 full-exit) — does force-exiting before prints lift the floor?** → **NO —
+    REJECTED, worse than the breaker (costs return AND drawdown).** 90-cell cone: Sharpe median 0.49 vs
+    0.76, floor −1.97 vs −1.93, %neg 36% vs 28%; maxDD uniformly WORSE. Mechanism (quantified):
+    force-exits 630 trades = 23.6% of the book, 77% of them WINNERS at +17.4% mean vs champion trend
+    winners +21.7% → clips the tail ~4pp below its run. The avoided gap-loss (−0.33% agg,
+    [[project_backtest_stop_gap_fill]]) is tiny vs the tail forfeited. 4th "don't clip the tail" confirm.
+    Lighter variants (frac/return-gate) inherit the mechanism directionally → not worth a cone unless
+    reframed to "trim only over-extended winners". `verdicts/2026-07-14_overlay_floor_lift_cones.md`.
+    **→ Both Thread M floor-lift overlays REJECTED; champion unchanged. SPY-200d gate remains the only
+    distribution-shifting lever.**
+69. **?OPEN (deferred, user 2026-07-14) — do MODEL-SKILL-regime periods exist where a higher gate
+    pays?** §1.2b conditioned on MARKET regime (SPY>200d). A different, untested axis: periods defined
+    by the *model's own tail-capture skill* (when the score is genuinely separating winners), NOT by
+    market trend. §1.2b says nothing about it (wrong conditioning variable). Hard part = a LEAK-FREE
+    live-safe proxy for "the model is scoring well now" to condition on. User: a real topic, explore
+    later, not this session. Related curiosity chart (also deferred): day-1 score vs trend-break-exit
+    return scatter on the 2664 cone trades (`exit_reason=='trend'`) — reverse-engineered/overfit, for
+    intuition only, never a selection claim. Substrate already on disk (cone `trades.parquet`).
+
 ## Open meta-questions (carried)
 - ✅ **Regime-EXPRESSION question CLOSED (Q63, DONE 2026-07-14):** 15-candidate manual — nothing beats
   SPY-200d (Block A all <0.55 AUC vs 0.65 wall; §7 cone leads worse standalone / OR-washes). 5th
   falsification; SPY-200d is the whole regime axis. `verdicts/2026-07-14_regime_indicator_manual.md`,
   [[project_regime_indicator_manual_null]].
-- ⏭️ **§1.2b — per-regime gate sweep = NEXT ACTIONABLE (Q64, assessed 2026-07-14):** cheap re-cut of
-  the ungated `champion_trail` cone's `trades.parquet` (2664 trades) — tag by SPY-200d-at-entry, sweep
-  gate 0.15→0.30 on the bull subset. Diagnostic → promote to bull-only CONE if the split shows a
-  regime interaction Q47's pooled median hid. Then §1.2a (per-regime cone).
+- ✅ **§1.2b — per-regime gate sweep DONE (Q65, 2026-07-14): NO-GO, market-regime hypothesis dead.**
+  Bull-subset median falls monotonically with the gate (= pooled Q47, no interaction); no cone worth
+  running. Killed the MARKET-regime gate axis ONLY. `scripts/regime_gate_recut.py`.
+- ?OPEN **§1.2 model-skill-regime gate hypothesis (Q66, deferred):** untested axis — periods of high
+  model tail-capture skill (NOT market trend) where a higher gate may pay. Needs a leak-free
+  skill-state proxy. + deferred curiosity: day-1 score vs trend-exit return scatter (overfit, intuition).
 - 📋 **Thread M ideas (remaining, NOT implemented) — implementation separate.**
   🔨 IMMEDIATE: (a) earnings-proximity + (b) DD-breaker cone floor-lift runs (both WIRED, un-run);
   (c) 1-day entry-delay on the equity FAN.

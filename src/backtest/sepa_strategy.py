@@ -29,6 +29,7 @@ import pandas as pd
 
 from .score_lookup import ScoreLookup
 from .position_tracker import PositionTracker
+from .earnings_calendar import next_earnings_within
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class SignalRejection:
     date: datetime
     ticker: str
     score: float
-    reason: str  # 'cooldown', 'already_holding', 'no_slots', 'daily_cap', 'low_liquidity', 'low_price', 'no_data'
+    reason: str  # 'cooldown', 'earnings_blackout', 'already_holding', 'no_slots', 'daily_cap', 'low_liquidity', 'low_price', 'no_data'
 
 
 class SEPAHybridV1(bt.Strategy):
@@ -171,6 +172,35 @@ class SEPAHybridV1(bt.Strategy):
         # regime sizing. None = no gate (default). A missing date defaults to open.
         ('spy_deploy_gate', None),
 
+        # Portfolio-level drawdown circuit breaker (Elder, *Trading for a Living*;
+        # §1.1). Book-level brake distinct from the per-name stop and the SPY entry
+        # gate: when the BOOK's peak-to-trough drawdown reaches dd_breaker_pct, stop
+        # opening NEW positions (open positions & exits run unchanged — same brake
+        # point as the SPY gate) until a release condition clears. All flexible:
+        #   - dd_breaker_pct: trip level, e.g. 0.06 (6%). 0/None => breaker off.
+        #   - dd_breaker_release_pct: recover to within this much of the peak to
+        #     re-arm, e.g. 0.02 => equity back within 2% of the high-water mark.
+        #   - dd_breaker_require_spy_uptrend: also require SPY>200d to release
+        #     (needs spy_deploy_gate set). Combine the book cool-off with the market
+        #     brake per the doc's open question. Default False (book-recovery alone).
+        ('dd_breaker_pct', 0.0),
+        ('dd_breaker_release_pct', 0.02),
+        ('dd_breaker_require_spy_uptrend', False),
+
+        # Earnings-proximity overlay (Minervini: never hold a binary gap you can't
+        # stop out of). {ticker -> sorted np.array[datetime64[D]]} calendar, injected
+        # per-window like spy_deploy_gate. earnings_blackout_days=0 => whole overlay
+        # off (default). When set:
+        #   - block NEW entries within N days before a scheduled earnings date;
+        #   - N days out, trim held positions by earnings_exit_frac (1.0=full exit,
+        #     0.5=half, 0.33=third), but ONLY if return-so-far >= earnings_exit_min_ret
+        #     (protect gains, let underwater names ride to their own stop). min_ret=None
+        #     => always trim regardless of P&L.
+        ('earnings_calendar', None),
+        ('earnings_blackout_days', 0),
+        ('earnings_exit_frac', 1.0),
+        ('earnings_exit_min_ret', None),
+
         # Progressive fills (Minervini scale-in) — the vectorized winner (M2 cone).
         # Enter a starter fraction of the target size, add the remainder once price
         # first clears +add_trigger_pct above entry. Path-dependent: losers that
@@ -217,6 +247,13 @@ class SEPAHybridV1(bt.Strategy):
         self._first_qualified: Dict[str, datetime] = {}
         # entry prob_elite per held ticker, for the X2 score-drop exit.
         self._entry_prob_elite: Dict[str, float] = {}
+        # tickers already partially trimmed for an upcoming earnings print (frac<1).
+        self._earnings_trimmed: set = set()
+
+        # DD circuit breaker state: running equity high-water mark + latch. Once
+        # tripped, stays tripped until equity recovers within release_pct of peak.
+        self._equity_peak: float = 0.0
+        self._dd_breaker_tripped: bool = False
 
         logger.info(f"SEPA Strategy initialized with {len(self.stock_feeds)} stock feeds")
 
@@ -365,6 +402,10 @@ class SEPAHybridV1(bt.Strategy):
         if self.p.score_drop_thresh is not None or self.p.score_exit_floor is not None:
             self._check_score_drop_exits(current_date)
 
+        # === CHECK EARNINGS-PROXIMITY EXITS (trim before the print, optional) ===
+        if self.p.earnings_blackout_days > 0 and self.p.earnings_calendar:
+            self._check_earnings_exits(current_date)
+
         # === WARMUP CHECK ===
         # Skip entries during initial warmup bars (exits still run above).
         self._bars_seen += 1
@@ -380,6 +421,10 @@ class SEPAHybridV1(bt.Strategy):
         cash = self.broker.getcash()
         position_value = portfolio_value - cash
         position_count = self.position_tracker.get_open_count()
+
+        # DD circuit breaker: update high-water mark + latch state each bar (uses
+        # today's mark, known before entries run below in next()).
+        self._update_dd_breaker(portfolio_value, current_date)
 
         self.daily_snapshots.append(DailySnapshot(
             date=current_date,
@@ -639,6 +684,74 @@ class SEPAHybridV1(bt.Strategy):
                     logger.info(f"Score-drop exit {ticker}: prob {prob_now:.3f} "
                                 f"(entry {entry_prob}, floor {self.p.score_exit_floor})")
 
+    def _check_earnings_exits(self, current_date: datetime):
+        """Trim held positions N days before a scheduled earnings print (Minervini
+        gap rule). frac=1.0 => full exit (sets exit_pending); frac<1 => partial trim,
+        fired at most once per position via _earnings_trimmed. Gated on return-so-far:
+        only trim winners (>= earnings_exit_min_ret); underwater names ride to their
+        own stop. Runs in the exit block, before entries — same bar as the print - N."""
+        n = self.p.earnings_blackout_days
+        frac = self.p.earnings_exit_frac
+        min_ret = self.p.earnings_exit_min_ret
+        # Forget positions no longer held so a fresh re-entry can trim again.
+        self._earnings_trimmed &= set(self.position_tracker.positions.keys())
+
+        for ticker, pos in list(self.position_tracker.positions.items()):
+            if pos.exit_pending or pos.remaining_shares <= 0:
+                continue
+            if frac < 1.0 and ticker in self._earnings_trimmed:
+                continue  # already trimmed this position for its upcoming print
+            if not next_earnings_within(self.p.earnings_calendar, ticker, current_date, n):
+                continue
+
+            data = self.stock_feeds.get(ticker)
+            if data is None:
+                continue
+
+            if min_ret is not None:
+                ret = (data.close[0] - pos.entry_price) / pos.entry_price
+                if ret < min_ret:
+                    continue  # not enough gain to protect — let it ride to its stop
+
+            sell_size = pos.remaining_shares if frac >= 1.0 else int(pos.remaining_shares * frac)
+            if sell_size <= 0:
+                continue
+            order = self.sell(data=data, size=sell_size)
+            self.pending_orders[order.ref] = {'reason': 'earnings', 'ticker': ticker}
+            if sell_size >= pos.remaining_shares:
+                pos.exit_pending = True  # full close — block other orders on this name
+            else:
+                self._earnings_trimmed.add(ticker)
+            logger.info(f"Earnings trim {ticker}: sold {sell_size}/{pos.remaining_shares} "
+                        f"(<= {n}d to print, frac={frac})")
+
+    def _update_dd_breaker(self, portfolio_value: float, current_date: datetime):
+        """Update the book-level DD circuit-breaker latch (§1.1). Peak = running
+        equity high-water mark; trip when peak-to-trough DD >= dd_breaker_pct;
+        release when equity recovers within dd_breaker_release_pct of peak (and,
+        if required, SPY>200d). No-op when dd_breaker_pct is 0/None."""
+        if not self.p.dd_breaker_pct:
+            return
+        if portfolio_value > self._equity_peak:
+            self._equity_peak = portfolio_value
+        if self._equity_peak <= 0:
+            return
+        dd = 1.0 - portfolio_value / self._equity_peak
+        if not self._dd_breaker_tripped:
+            if dd >= self.p.dd_breaker_pct:
+                self._dd_breaker_tripped = True
+                logger.info(f"DD breaker TRIPPED {current_date}: book DD {dd:.1%} "
+                            f">= {self.p.dd_breaker_pct:.1%} — new entries halted")
+        else:
+            recovered = dd <= self.p.dd_breaker_release_pct
+            spy_ok = (not self.p.dd_breaker_require_spy_uptrend
+                      or self.p.spy_deploy_gate is None
+                      or self.p.spy_deploy_gate.get(current_date, True))
+            if recovered and spy_ok:
+                self._dd_breaker_tripped = False
+                logger.info(f"DD breaker RELEASED {current_date}: book DD {dd:.1%} "
+                            f"<= {self.p.dd_breaker_release_pct:.1%} — entries re-armed")
+
     def _process_entries(self, regime: int, current_date: datetime):
         """Process new entry signals with rejection tracking."""
         # Check position limits
@@ -649,6 +762,11 @@ class SEPAHybridV1(bt.Strategy):
         # SPY-200d deploy gate: shut => no new entries this bar (existing no_slots
         # path below logs the rejects). Exits already ran; open positions untouched.
         if self.p.spy_deploy_gate is not None and not self.p.spy_deploy_gate.get(current_date, True):
+            available_slots = 0
+
+        # DD circuit breaker: book bled past the trip level => halt NEW entries
+        # until it releases (same brake point as the SPY gate; exits untouched).
+        if self._dd_breaker_tripped:
             available_slots = 0
 
         # Get candidates sorted by trailing percentile (Top N Competition)
@@ -676,6 +794,15 @@ class SEPAHybridV1(bt.Strategy):
             if self.position_tracker.is_in_cooldown(ticker, current_date, self.p.cooldown_days):
                 self.signal_rejections.append(SignalRejection(
                     date=current_date, ticker=ticker, score=score, reason='cooldown'
+                ))
+                continue
+
+            # Earnings blackout: don't open a new position into an imminent print.
+            if self.p.earnings_blackout_days > 0 and self.p.earnings_calendar and \
+                    next_earnings_within(self.p.earnings_calendar, ticker, current_date,
+                                         self.p.earnings_blackout_days):
+                self.signal_rejections.append(SignalRejection(
+                    date=current_date, ticker=ticker, score=score, reason='earnings_blackout'
                 ))
                 continue
 

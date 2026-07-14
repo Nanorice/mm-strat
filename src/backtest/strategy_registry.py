@@ -307,6 +307,56 @@ for _gate in (0.20, 0.25, 0.30):
         status="candidate",
     ))
 
+# Earnings-proximity overlay (2026-07-13, Thread M §3 IMMEDIATE). Champion trail +
+# SPY-200d gate + block entry / force-exit within 5 calendar days of a scheduled
+# earnings print (Minervini: never hold a binary gap you can't stop out of; the 15%
+# stop understates gap loss). Calendar {ticker->dates} is window-independent →
+# injected once in run_starttime_sweep (earnings_calendar sentinel = None). Headline
+# arm force-exits full (frac=1.0); the frac/min_ret knobs exist for trim variants.
+_register(StrategyDef(
+    name="champion_trail_spygate_earn5",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()), "spy_deploy_gate": {},
+                     "earnings_calendar": None, "earnings_blackout_days": 5,
+                     "earnings_exit_frac": 1.0},
+    description="Earnings-proximity overlay: champion_trail_spygate + block entry / "
+                "force-exit within 5 days of a scheduled earnings print. Falsifiable "
+                "on the start-time cone vs champion_trail_spygate (floor-lift test).",
+    status="candidate",
+))
+
+# Portfolio-level DD circuit breaker (2026-07-13, Thread M §1.1; Elder, *Trading
+# for a Living*). Champion trail + SPY-200d gate + book-level brake: when the book's
+# peak-to-trough DD hits 6%, halt NEW entries until equity recovers within 2% of the
+# high-water mark (open positions & exits untouched). Distinct from the per-name stop
+# (caps one trade) and the SPY gate (caps by market trend) — this halts the SEQUENCE
+# of failing entries the gate lets through in chop (§0.3). Falsifiable on the cone:
+# does it lift the FLOOR without killing the median (the recurring variance test)?
+_register(StrategyDef(
+    name="champion_trail_spygate_ddbrake6",
+    signal="binary_gated",
+    strategy_kwargs={**_trail_only(_champion_kwargs()), "spy_deploy_gate": {},
+                     "dd_breaker_pct": 0.06, "dd_breaker_release_pct": 0.02},
+    description="DD circuit breaker: champion_trail_spygate + book-level brake — halt "
+                "new entries when book DD hits 6%, re-arm within 2% of peak (Elder). "
+                "Floor-lift test on the start-time cone vs champion_trail_spygate.",
+    status="candidate",
+))
+
+# Trip-threshold sweep (10/15/20/30%): looser brakes fire only on deeper bleeds.
+# Maps the full threshold curve to settle threshold-vs-mechanism for the 6%
+# rejection (RESEARCH_LOG Q67). All differ from ddbrake6 only by dd_breaker_pct.
+for _pct in (0.10, 0.15, 0.20, 0.30):
+    _register(StrategyDef(
+        name=f"champion_trail_spygate_ddbrake{int(_pct*100)}",
+        signal="binary_gated",
+        strategy_kwargs={**_trail_only(_champion_kwargs()), "spy_deploy_gate": {},
+                         "dd_breaker_pct": _pct, "dd_breaker_release_pct": 0.02},
+        description=f"DD circuit breaker, {int(_pct*100)}% trip variant of "
+                    "champion_trail_spygate_ddbrake6 — threshold-vs-mechanism sweep.",
+        status="candidate",
+    ))
+
 _register(StrategyDef(
     name="champion_trail_spygate_n10",
     signal="binary_gated",
@@ -445,4 +495,19 @@ if __name__ == "__main__":
     _strip_gate = lambda kw: {k: v for k, v in kw.items() if k != "min_prob_elite"}
     assert _strip_gate(fourc.strategy_kwargs) == _strip_gate(cts.strategy_kwargs), \
         "4cls arm differs from champion beyond the gate"
+    # Earnings arm = champion_trail_spygate + the earnings overlay ONLY.
+    earn = get("champion_trail_spygate_earn5")
+    assert earn.strategy_kwargs["earnings_blackout_days"] == 5, earn
+    assert earn.strategy_kwargs.get("earnings_calendar") is None, "calendar must be a run-time sentinel"
+    _strip_earn = lambda kw: {k: v for k, v in kw.items()
+                              if k not in ("earnings_calendar", "earnings_blackout_days", "earnings_exit_frac")}
+    assert _strip_earn(earn.strategy_kwargs) == cts.strategy_kwargs, \
+        "earn5 arm differs from champion_trail_spygate beyond the earnings overlay"
+    # DD-breaker arm = champion_trail_spygate + the book-level brake ONLY.
+    ddb = get("champion_trail_spygate_ddbrake6")
+    assert ddb.strategy_kwargs["dd_breaker_pct"] == 0.06, ddb
+    _strip_ddb = lambda kw: {k: v for k, v in kw.items()
+                             if k not in ("dd_breaker_pct", "dd_breaker_release_pct")}
+    assert _strip_ddb(ddb.strategy_kwargs) == cts.strategy_kwargs, \
+        "ddbrake6 arm differs from champion_trail_spygate beyond the DD breaker"
     print(f"OK — {len(STRATEGIES)} strategies. champion = {champ.fingerprint}")
