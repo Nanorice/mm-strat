@@ -199,7 +199,7 @@ the per-day entry gate.
 > **model's own tail-capture skill**, not by market trend — where raising the score gate DOES give
 > better return.* Model-skill-regime ≠ market-regime; §1.2b conditioned on the wrong axis to speak to
 > it. That hypothesis is **untouched and stays OPEN** (deferred, not this session — see RESEARCH_LOG
-> Q66). The settled part: *market-regime does not tier the gate.*
+> Q69). The settled part: *market-regime does not tier the gate.*
 >
 > **📋 ASSESSMENT 2026-07-14 (regime-expression now LOCKED → §1.2 unblocked).** The regime-indicator
 > program is closed (SPY-200d is the whole axis; §0.5.3 + the 15-candidate manual, 5 falsifications).
@@ -380,7 +380,7 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   Re-cut 2664 champion_trail trades by SPY-200d-at-entry, swept gate 0.15→0.30 on the bull subset
   (`scripts/regime_gate_recut.py`). Bull-only median falls monotonically with the gate (−5.46→−8.00),
   = pooled Q47, no bull/chop interaction. NO-GO on a bull-only cone. **Scope: killed MARKET-regime
-  gate-tiering only; model-skill-regime stays open → Q66.** See §1.2 header + RESEARCH_LOG Q65.
+  gate-tiering only; model-skill-regime stays open → Q69.** See §1.2 header + RESEARCH_LOG Q65.
 - [x] **§1.1 — portfolio-level DD circuit breaker.** ✅ IMPLEMENTED 2026-07-13 (see IMMEDIATE
   above); cone floor-lift test is the next run.
 - [ ] **§1.2a — regime-tiered fan/cone.** Run the equity-fan / cone analysis PER regime (coarse:
@@ -389,7 +389,7 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   selection alpha). Only if §1.2 shows tiering has legs.
 
 ### ⏸️ DEFERRED (after the above)
-- [ ] **Q66 — model-skill-regime gate hypothesis (the axis §1.2b did NOT test).** §1.2b killed only
+- [ ] **Q69 — model-skill-regime gate hypothesis (the axis §1.2b did NOT test).** §1.2b killed only
   the MARKET-regime (SPY>200d) version. OPEN: do periods defined by the *model's own tail-capture
   skill* exist where a higher gate pays? Would need a live-safe proxy for "the model is scoring well
   right now" (NOT SPY-trend) to condition on — the hard part is a leak-free skill-state label. User
@@ -397,8 +397,8 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   
   from another angle, we've been assuming regime is the variable that correlates how the model perform, but maybe the key periods have other meanings (liquid market, risk on market etc. not just difference between bull/bear). We are also assuming the model is good, but need to put a question mark as well. 
   
-  (RESEARCH_LOG Q66.)
-- [x] **Q65-curiosity chart — day-1 score vs trend-break-exit return scatter (OVERFIT, for intuition).**
+  (RESEARCH_LOG Q69.)
+- [x] **Q66 — curiosity chart: day-1 score vs trend-break-exit return scatter (OVERFIT, for intuition).**
   ✅ DONE 2026-07-14 → `scripts/q65_score_vs_trendexit_scatter.py` +
   `verdicts/2026-07-14_q65_score_vs_trendexit.png`. Filtered the 2664 `champion_trail` cone trades to
   the 1009 `exit_reason=='trend'` exits; scatter of `pnl_percent` vs day-1 `entry_score` and
@@ -420,13 +420,13 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   ([[project_scoring_vs_selection_unclipped]], [[project_tail_magnitude_objective]]). ⚠️ IN-SAMPLE
   (cache = training set) so rank reads optimistic. Net: fix the exit → the score grades the TAIL,
   consistently. §A of `cells/sprint_summary_eda_cells.md` carries both reads as pasteable cells.
-- [ ] **Q67 — does an exit MONETIZE the score's tail? (the C1→C3 test the Q65 gap raises).**
+- [ ] **Q70 — does an exit MONETIZE the score's tail? (the C1→C3 test the Q66 gap raises).**
   ⏸️ DEFERRED — run when the backtest queue is clear (user: other backtests running; will greenlight).
-  **The gap that motivates it:** Q65 shows the score ranks the fat right TAIL of forward outcomes
+  **The gap that motivates it:** Q66 shows the score ranks the fat right TAIL of forward outcomes
   (home-run rate 0.2%→14.2% low→high decile, ρ_tail +0.19) — a **C1 label-ranking** win
   ([[project_sepa_three_currencies]]). But the champion cone is a start-date lottery (median Sharpe
   ~0.47, 33% neg cells, [[project_champion_starttime_dependent]]) — a **C3 exit-aware-P&L** near-null.
-  The gap is NOT a contradiction; it's five known effects stacked: (1) Q65 is IN-SAMPLE (cache =
+  The gap is NOT a contradiction; it's five known effects stacked: (1) Q66 is IN-SAMPLE (cache =
   training set) so the tail reads optimistic; (2) ranking the tail ≠ CAPTURING it — the 15% stop +
   trailing exit truncate the exact label-tail the score concentrates
   ([[project_prob_elite_gate_variance_knob]]); (3) per-trade independence ≠ portfolio path (slot
@@ -453,13 +453,13 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   help in-sample, not that the score chose WHERE to spend slack).
   **Kill/keep:** if the score-conditional arm does NOT widen the top−bottom spread vs incumbent, the
   tail is un-monetizable under stops (= the RS de-gate outcome, [[project_sepa_three_currencies]]) →
-  bank the C1 null, Q65 stays a curiosity, DONE in the notebook at zero backtest cost.
+  bank the C1 null, Q66 stays a curiosity, DONE in the notebook at zero backtest cost.
 
   **Stage 2 — backtest confirm (ONLY if Stage 1 passes; ONLY when the BT queue clears).** Promote the
   ONE winning arm to the start-date cone / WFO for the portfolio-path C3 confirm (where every prior C1
   winner has died — RS, minervini+progfills). ⚠️ Stage 1 is still IN-SAMPLE, so a pass is a
   **go-look-OOS** signal, NOT a promotion. Feeds the live `champion_trail` rising-trail thread.
-  Grid/arm design deferred to when Stage 1 greenlights it. (RESEARCH_LOG Q67.)
+  Grid/arm design deferred to when Stage 1 greenlights it. (RESEARCH_LOG Q70.)
 - [ ] **Granular day-level dispersion within good vs bad months.** How much does picking the wrong
   DAY inside a known-good month cost — quantifies residual day-luck after regime is controlled.
   Cheap on the existing `entry_timing_daily.parquet` × regime label. Deferred per user.

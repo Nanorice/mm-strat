@@ -773,6 +773,18 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     to run one). Q47's 0.15 stays champion in bull too. **⚠️ SCOPE (user): this kills the MARKET-regime
     gate hypothesis ONLY — see Q69.** `plans/2026-07-13_regime_tiering_and_system_usage.md` §1.2 header.
     [[project_prob_elite_gate_variance_knob]]
+66. **Curiosity chart (user, overfit-for-intuition) — are the best trend-runners actually higher-scored
+    on day 1?** → **WEAK-POSITIVE monotone lift; the EXIT decides the lens.** (a) Cone-trade scatter
+    (`q65_score_vs_trendexit_scatter.py`): 1009 `exit_reason=='trend'` trades, Spearman ρ **+0.18**,
+    top-score-decile median trend-exit +8.1% vs bottom +1.5% — best runners ARE higher-scored, weakly,
+    huge overlap. (b) Fresh-scored `d2_training_cache` (38,556 trades, prod 4-class,
+    `q65_cache_score_vs_return.py`) under the NATIVE-SEPA one-stop exit: the MEDIAN lens is misleading
+    (ρ −0.09, stop caps the typical trade) but the TAIL lens is the signal — home-run rate P(ret>30%)
+    **0.2%→14.2%** low→high decile (ρ_tail +0.19, monotone). Same median-wrong-lens lesson as the
+    tail-magnitude work. ⚠️ IN-SAMPLE (cache=training set) → optimistic. OVERFIT by construction,
+    intuition only, NOT a selection claim. `verdicts/2026-07-14_q65_*.png`,
+    `cells/sprint_summary_eda_cells.md §A`. [[project_scoring_vs_selection_unclipped]],
+    [[project_tail_magnitude_objective]]
 67. **§1.1 DD circuit breaker — does a book-level 6% DD brake lift the cone floor?** → **NO — REJECTED,
     it LOWERS the floor (governor's fate, worse).** 90-cell paired cone vs champion: Sharpe median
     −0.04 vs +0.76, floor −2.82 vs −1.93 (WORSE), %neg 50% vs 28%; buys only drawdown (worst maxDD
@@ -799,10 +811,23 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     pays?** §1.2b conditioned on MARKET regime (SPY>200d). A different, untested axis: periods defined
     by the *model's own tail-capture skill* (when the score is genuinely separating winners), NOT by
     market trend. §1.2b says nothing about it (wrong conditioning variable). Hard part = a LEAK-FREE
-    live-safe proxy for "the model is scoring well now" to condition on. User: a real topic, explore
-    later, not this session. Related curiosity chart (also deferred): day-1 score vs trend-break-exit
-    return scatter on the 2664 cone trades (`exit_reason=='trend'`) — reverse-engineered/overfit, for
-    intuition only, never a selection claim. Substrate already on disk (cone `trades.parquet`).
+    live-safe proxy for "the model is scoring well now" to condition on. **User reframe (2026-07-14):
+    don't assume the axis is bull/bear at all** — the periods that matter may be liquidity / risk-on-off
+    / other, not trend; AND don't assume the model is good — put a question mark on that too. User: a
+    real topic, explore later, not this session. (Curiosity chart = Q66, DONE.)
+70. **?OPEN (deferred, user 2026-07-14) — does an EXIT MONETIZE the score's tail (C1→C3)?** The gap Q66
+    raises: the score ranks the fat right tail (home-run 0.2%→14.2% low→high decile, ρ_tail +0.19 — a C1
+    label-ranking win) but the champion cone is a start-date near-null (median Sharpe ~0.47 — a C3
+    exit-aware null). Not a contradiction: Q66 is in-sample; ranking ≠ capturing (stop+trail truncate
+    the label-tail); per-trade ≠ portfolio-path. **Two-stage, notebook-first (user):** Stage 1 = a
+    single-trade path-REPLAY proxy in `sprint_summary_eda` cells (pull `price_data` bars per trade,
+    re-sim a coarse exit set + a score-conditional "loose-for-top-decile-only" arm, gap-fill stub, group
+    by day-1 `prob_elite` decile); read = does the top−bottom-decile REALIZED spread WIDEN as the exit
+    loosens, and does loose-for-top-only BEAT loose-for-everyone? Kill = if not, tail un-monetizable
+    under stops (RS-de-gate outcome) → C1 null banked. Stage 2 = backtest cone confirm ONLY if Stage 1
+    passes AND the BT queue clears (still in-sample → go-look-OOS, not a promotion). Feeds the live
+    `champion_trail` rising-trail thread. `plans/2026-07-13_regime_tiering_and_system_usage.md` §3.
+    [[project_sepa_three_currencies]], [[project_prob_elite_gate_variance_knob]]
 
 ## Open meta-questions (carried)
 - ✅ **Regime-EXPRESSION question CLOSED (Q63, DONE 2026-07-14):** 15-candidate manual — nothing beats
