@@ -76,12 +76,12 @@ def test_use_case_verdict_reject_when_required_section_fails():
         "G": _make_section("G", scored=True, min_score=3),
     }
     detail = use_case_verdicts_with_reasons(sections)
-    # hit_rate_ranker requires D_binary; D_binary=0 ⇒ REJECT
-    assert detail["hit_rate_ranker_equal_size"]["verdict"] == "REJECT"
-    # selection_ranker requires both halves; one is 0 ⇒ REJECT
-    assert detail["selection_ranker_size_by_p"]["verdict"] == "REJECT"
-    # threshold_gate only needs A/C/E/G — all pass
-    assert detail["threshold_gate"]["verdict"] == "PASS"
+    # hit_rate_ranker requires D_binary; D_binary=0 ⇒ LIMITATION
+    assert detail["hit_rate_ranker_equal_size"]["verdict"] == "LIMITATION"
+    # selection_ranker requires both halves; one is 0 ⇒ LIMITATION
+    assert detail["selection_ranker_size_by_p"]["verdict"] == "LIMITATION"
+    # threshold_gate only needs A/E/G — all pass ⇒ OK
+    assert detail["threshold_gate"]["verdict"] == "OK"
 
 
 def test_use_case_verdict_pending_when_section_not_implemented():
@@ -131,7 +131,7 @@ def test_aggregate_band_with_full_strong_card():
         "G": _make_section("G", scored=True, min_score=3),
     }
     agg = aggregate_score(sections)
-    # 7 scored dims × 3 each = 21 max; perfect ⇒ STRONG band
-    assert agg["max"] == 21
-    assert agg["total"] == 21
-    assert agg["band"] == "STRONG"
+    # 100-point weighted projection; every subscore = 3/3 ⇒ full 100.
+    assert agg["max"] == 100
+    assert agg["total"] == 100.0
+    assert agg["band"] == "100.0 / 100"
