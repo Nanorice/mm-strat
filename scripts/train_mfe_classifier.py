@@ -929,6 +929,14 @@ def _run_walk_forward_backtest_block(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     from src.backtest.runner import SEPABacktestRunner
+    from src.backtest.strategy_registry import STRATEGIES
+    from src.backtest.macro_sizer import spy_above_200d
+
+    # The promotion gate must judge the model in the CONFIG it deploys in —
+    # champion_trail_spygate (trail exit + SPY-200d deploy gate), NOT the runner's
+    # bare defaults. spy_deploy_gate is a per-window {date->bool} sentinel, filled
+    # per fold (same pattern as run_strategy_confirm._run_arm).
+    champion_kwargs = dict(STRATEGIES["champion_trail_spygate"].strategy_kwargs)
 
     def backtest_fn(scores_df: pd.DataFrame, fold_dir: Path) -> dict:
         # Date range = the span of this fold's scores.
@@ -938,6 +946,9 @@ def _run_walk_forward_backtest_block(
                     "trades_df": pd.DataFrame(), "equity_df": pd.DataFrame()}
         start = pd.to_datetime(scores_df["date"]).min().strftime("%Y-%m-%d")
         end = pd.to_datetime(scores_df["date"]).max().strftime("%Y-%m-%d")
+
+        kwargs = dict(champion_kwargs)
+        kwargs["spy_deploy_gate"] = spy_above_200d(start, end, str(db_path))
 
         runner = SEPABacktestRunner(
             start_date=start,
@@ -949,7 +960,7 @@ def _run_walk_forward_backtest_block(
             model_path=None,
             model_version_id=None,
         )
-        runner.setup(scores_df=scores_df)
+        runner.setup(scores_df=scores_df, strategy_kwargs=kwargs)
         metrics = runner.run()
         equity = runner.get_equity_curve_dataframe()
         trades = runner.get_trade_dataframe()

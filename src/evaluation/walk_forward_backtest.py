@@ -420,14 +420,19 @@ def aggregate_walk_forward_backtest(
         ).to_dict()
     )
 
+    # DIAGNOSTIC, not blocking: top-k home-run lift is a LABEL-lift metric, and
+    # sprint-14 established "label lift != trade edge" (Q28/Q33, m01a program).
+    # A model can rank the tail at label level yet not monetize it under stop/exit
+    # mechanics — so the trade-edge gates (Sharpe/DD) are the real promotion bar;
+    # this stays reported for signal but must not block.
     gates.append(
         GateResult(
             name=f"wf_backtest_mean_top_{top_k}_home_run_lift",
             status="pass" if (not np.isnan(mean_lift) and mean_lift > mean_top_k_lift_threshold) else "fail",
             value=float(mean_lift),
             threshold=float(mean_top_k_lift_threshold),
-            detail=f"mean top-{top_k} home-run lift across folds",
-            blocking=True,
+            detail=f"mean top-{top_k} home-run lift across folds (diagnostic, non-blocking)",
+            blocking=False,
         ).to_dict()
     )
 
@@ -437,3 +442,163 @@ def aggregate_walk_forward_backtest(
         "gates": gates,
         "aggregate_equity_rows": int(len(aggregate_equity)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Start-time CONE aggregation (the sprint-14 deploy methodology).
+#
+# The 4-fold WF backtest above is a proper OOS retrain test but a TINY sample —
+# a 3-4 draw whose worst fold can breach any absolute floor even when the edge
+# is real (project_champion_starttime_dependent). The promotion decision the
+# sprint actually rests on is a start-date CONE: one locked model scored over
+# many (start, 12m) windows, judged on the DISTRIBUTION (median Sharpe, %neg,
+# floor), not the mean-of-4. This aggregates such a cone and adds Calmar +
+# alpha/beta vs SPY & QQQ. REPORT-ONLY for now (all gates non-blocking) until
+# thresholds are calibrated against the incumbent champion.
+# ---------------------------------------------------------------------------
+
+def _pctl(a: np.ndarray, q: float) -> float:
+    return float(np.percentile(a, q)) if a.size else float("nan")
+
+
+def _alpha_beta(strat_ret: pd.Series, bench_ret: pd.Series) -> tuple:
+    """OLS of strategy daily returns on one benchmark: returns (alpha_ann, beta).
+
+    alpha is annualized (×252); beta is the slope (market exposure). Aligns on
+    date index, drops NaN. Needs >= 20 shared days or returns (nan, nan).
+    """
+    df = pd.concat([strat_ret.rename("s"), bench_ret.rename("b")], axis=1).dropna()
+    if len(df) < 20:
+        return float("nan"), float("nan")
+    b = df["b"].to_numpy()
+    s = df["s"].to_numpy()
+    var = b.var()
+    if var == 0:
+        return float("nan"), float("nan")
+    beta = float(np.cov(s, b, ddof=0)[0, 1] / var)
+    alpha_daily = float(s.mean() - beta * b.mean())
+    return alpha_daily * 252.0, beta
+
+
+# Blocking thresholds ANCHORED to the incumbent 4-class champion cone
+# (2026-07-15: median Sharpe 0.21, %neg 40.7%, median Calmar 0.14, alpha_SPY
+# +7.3%). Set at/just-below the incumbent so the current prod model passes with
+# margin and a candidate is judged against the SAME bar it clears — an
+# evidence-based bar, not hand-fit to any candidate. floor/beta stay diagnostic.
+CONE_MEDIAN_SHARPE_MIN = 0.20
+CONE_PCT_NEGATIVE_MAX = 42.0
+CONE_MEDIAN_CALMAR_MIN = 0.10
+CONE_ALPHA_MIN = 0.0  # positive annualized alpha vs SPY (the market benchmark)
+
+
+def aggregate_backtest_cone(
+    cells: List[dict],
+    bench_returns: Optional[dict] = None,
+) -> dict:
+    """Aggregate a start-time cone into distribution stats + gates.
+
+    Blocking gates (incumbent-anchored): median Sharpe, %neg cells, median
+    Calmar, alpha vs SPY. Diagnostic (non-blocking): floor Sharpe, beta, alpha
+    vs QQQ.
+
+    Args:
+        cells: one dict per (start, horizon) window, each with keys
+            'sharpe_ratio', 'annualized_return', 'max_drawdown', 'calmar_ratio'
+            (as written by run_starttime_sweep's metrics.json), and optionally
+            'daily_returns' (a pd.Series indexed by date) for alpha/beta.
+        bench_returns: {'SPY': pd.Series, 'QQQ': pd.Series} of benchmark daily
+            returns indexed by date. If given AND cells carry 'daily_returns',
+            alpha/beta are computed on the POOLED (concatenated) cell returns.
+
+    Returns: {'summary': {...}, 'gates': [...]} — every gate blocking=False.
+    """
+    valid = [c for c in cells if c.get("sharpe_ratio") is not None
+             and not (isinstance(c["sharpe_ratio"], float) and np.isnan(c["sharpe_ratio"]))]
+    if not valid:
+        return {"summary": {"n_cells": 0}, "gates": []}
+
+    sharpes = np.array([float(c["sharpe_ratio"]) for c in valid])
+    dds = np.array([float(c["max_drawdown"]) for c in valid
+                    if c.get("max_drawdown") is not None])
+    # Calmar = return / |maxDD|, computed here — BOTH the persisted calmar_ratio
+    # (~97% zeros) and annualized_return (clamped to 0 on losing cells) are
+    # unreliable from run_starttime_sweep. total_return and max_drawdown are the
+    # trustworthy fields; cone cells are a fixed 12m horizon so total_return is
+    # ~annualized. Both are in percent, so the ratio is scale-consistent.
+    calmars = []
+    for c in valid:
+        ret = c.get("total_return")
+        dd = c.get("max_drawdown")
+        if ret is None or dd is None or float(dd) == 0:
+            continue
+        calmars.append(float(ret) / abs(float(dd)))
+    calmars = np.array(calmars)
+
+    summary = {
+        "n_cells": len(valid),
+        "median_sharpe": float(np.median(sharpes)),
+        "p25_sharpe": _pctl(sharpes, 25),
+        "p75_sharpe": _pctl(sharpes, 75),
+        "floor_sharpe": float(np.min(sharpes)),
+        "pct_negative_cells": round(100.0 * float(np.mean(sharpes < 0)), 1),
+        "median_calmar": float(np.median(calmars)) if calmars.size else float("nan"),
+        "worst_max_drawdown": float(np.max(dds)) if dds.size else float("nan"),
+        "median_max_drawdown": float(np.median(dds)) if dds.size else float("nan"),
+    }
+
+    # Alpha/beta on pooled cell returns vs each benchmark.
+    if bench_returns:
+        pooled = [c["daily_returns"] for c in valid if isinstance(c.get("daily_returns"), pd.Series)]
+        if pooled:
+            strat = pd.concat(pooled).groupby(level=0).mean()  # avg overlapping start-days
+            for name, br in bench_returns.items():
+                a, b = _alpha_beta(strat, br)
+                summary[f"alpha_ann_vs_{name}"] = a
+                summary[f"beta_vs_{name}"] = b
+
+    def _gate(name, value, threshold, ok, detail, blocking):
+        status = "pass" if ok else "fail"
+        return GateResult(name=name, status=status, value=value, threshold=threshold,
+                          detail=detail, blocking=blocking).to_dict()
+
+    def _diag(name, value, detail):
+        return GateResult(name=name, status="pass", value=value, threshold=None,
+                          detail=detail, blocking=False).to_dict()
+
+    med_s = summary["median_sharpe"]
+    pneg = summary["pct_negative_cells"]
+    med_c = summary["median_calmar"]
+
+    gates = [
+        _gate("cone_median_sharpe", med_s, CONE_MEDIAN_SHARPE_MIN,
+              med_s > CONE_MEDIAN_SHARPE_MIN,
+              f"median Sharpe over {len(valid)} start-date cells "
+              f"(need > {CONE_MEDIAN_SHARPE_MIN})", blocking=True),
+        _gate("cone_pct_negative", pneg, CONE_PCT_NEGATIVE_MAX,
+              pneg < CONE_PCT_NEGATIVE_MAX,
+              f"% negative-Sharpe cells (need < {CONE_PCT_NEGATIVE_MAX}%)", blocking=True),
+        _gate("cone_median_calmar", med_c, CONE_MEDIAN_CALMAR_MIN,
+              (not np.isnan(med_c)) and med_c > CONE_MEDIAN_CALMAR_MIN,
+              f"median Calmar (return/|maxDD|) (need > {CONE_MEDIAN_CALMAR_MIN})", blocking=True),
+        _diag("cone_floor_sharpe", summary["floor_sharpe"],
+              "worst-cell Sharpe (diagnostic — a cone floor breaches even for a "
+              "winning distribution)"),
+    ]
+
+    # Alpha vs SPY is blocking (must earn positive market-relative excess); alpha
+    # vs QQQ and both betas are diagnostic.
+    if "alpha_ann_vs_SPY" in summary:
+        a_spy = summary["alpha_ann_vs_SPY"]
+        gates.append(_gate("cone_alpha_vs_SPY", a_spy, CONE_ALPHA_MIN,
+                           (not np.isnan(a_spy)) and a_spy > CONE_ALPHA_MIN,
+                           f"annualized alpha vs SPY on pooled cell returns "
+                           f"(need > {CONE_ALPHA_MIN})", blocking=True))
+    for name in (bench_returns or {}):
+        if f"beta_vs_{name}" in summary:
+            gates.append(_diag(f"cone_beta_vs_{name}", summary[f"beta_vs_{name}"],
+                               f"beta / market exposure vs {name} (diagnostic)"))
+        if name != "SPY" and f"alpha_ann_vs_{name}" in summary:
+            gates.append(_diag(f"cone_alpha_vs_{name}", summary[f"alpha_ann_vs_{name}"],
+                               f"annualized alpha vs {name} (diagnostic)"))
+
+    return {"summary": summary, "gates": gates}

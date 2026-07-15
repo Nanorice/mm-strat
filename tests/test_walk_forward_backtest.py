@@ -12,6 +12,7 @@ import pytest
 from src.evaluation.walk_forward import FoldResult, FoldSpec
 from src.evaluation.walk_forward_backtest import (
     FoldBacktestResult,
+    aggregate_backtest_cone,
     aggregate_walk_forward_backtest,
     default_signals_to_scores,
     run_walk_forward_backtest,
@@ -271,7 +272,13 @@ def test_aggregate_fails_lift_when_too_low():
 def test_aggregate_records_blocking_gates():
     bts = [_make_bt_result(i, sharpe=1.0, max_dd=12.0, lift=8.0) for i in range(3)]
     out = aggregate_walk_forward_backtest(bts)
-    assert all(g["blocking"] is True for g in out["gates"])
+    gates = {g["name"]: g for g in out["gates"]}
+    # Trade-edge gates block; the label-lift gate is diagnostic-only (label lift
+    # != trade edge, sprint-14 Q28/Q33).
+    assert gates["wf_backtest_mean_sharpe"]["blocking"] is True
+    assert gates["wf_backtest_worst_sharpe"]["blocking"] is True
+    assert gates["wf_backtest_worst_max_drawdown"]["blocking"] is True
+    assert gates["wf_backtest_mean_top_3_home_run_lift"]["blocking"] is False
 
 
 def test_aggregate_handles_nan_sharpe_gracefully():
@@ -292,3 +299,71 @@ def test_aggregate_proportional_positive_folds_required():
     out = aggregate_walk_forward_backtest(bts, worst_sharpe_threshold=-0.3)
     gates = {g["name"]: g for g in out["gates"]}
     assert gates["wf_backtest_worst_sharpe"]["status"] == "pass"
+
+
+# ----------------------------- aggregate_backtest_cone -----------------------------
+
+def _cone_cell(sharpe, dd=15.0, total_return=20.0):
+    return {"sharpe_ratio": sharpe, "max_drawdown": dd, "total_return": total_return}
+
+
+def test_cone_empty_returns_zero_cells():
+    out = aggregate_backtest_cone([])
+    assert out["summary"]["n_cells"] == 0
+    assert out["gates"] == []
+
+
+def test_cone_distribution_stats():
+    cells = [_cone_cell(s) for s in [-0.5, 0.2, 0.6, 0.8, 1.5]]
+    out = aggregate_backtest_cone(cells)
+    s = out["summary"]
+    assert s["n_cells"] == 5
+    assert s["median_sharpe"] == pytest.approx(0.6)
+    assert s["floor_sharpe"] == pytest.approx(-0.5)
+    assert s["pct_negative_cells"] == pytest.approx(20.0)  # 1 of 5 negative
+    # Calmar = total_return / |maxDD| = 20 / 15 for the default cell.
+    assert s["median_calmar"] == pytest.approx(20.0 / 15.0)
+
+
+def test_cone_gates_blocking_split_and_pass():
+    # A strong cone (median 0.7, 0% neg, calmar 20/15=1.33) passes all blocking gates.
+    out = aggregate_backtest_cone([_cone_cell(s) for s in [0.3, 0.7, 1.1]])
+    gates = {g["name"]: g for g in out["gates"]}
+    assert gates["cone_median_sharpe"]["blocking"] is True
+    assert gates["cone_pct_negative"]["blocking"] is True
+    assert gates["cone_median_calmar"]["blocking"] is True
+    assert gates["cone_floor_sharpe"]["blocking"] is False  # diagnostic
+    assert all(gates[n]["status"] == "pass"
+               for n in ("cone_median_sharpe", "cone_pct_negative", "cone_median_calmar"))
+
+
+def test_cone_median_sharpe_gate_fails_below_threshold():
+    # Median Sharpe 0.05 < 0.20 threshold → the blocking gate fails.
+    out = aggregate_backtest_cone([_cone_cell(s) for s in [-0.2, 0.05, 0.1]])
+    g = {x["name"]: x for x in out["gates"]}["cone_median_sharpe"]
+    assert g["status"] == "fail" and g["blocking"] is True
+
+
+def test_cone_alpha_vs_spy_is_blocking():
+    idx = pd.date_range("2024-01-01", periods=60, freq="B")
+    rng = np.random.default_rng(1)
+    bench = pd.Series(rng.normal(0.0005, 0.01, 60), index=idx)
+    strat = 1.0 * bench + 0.001
+    cells = [{**_cone_cell(0.8), "daily_returns": strat}]
+    out = aggregate_backtest_cone(cells, bench_returns={"SPY": bench, "QQQ": bench})
+    gates = {g["name"]: g for g in out["gates"]}
+    assert gates["cone_alpha_vs_SPY"]["blocking"] is True
+    assert gates["cone_alpha_vs_QQQ"]["blocking"] is False  # QQQ diagnostic
+    assert gates["cone_beta_vs_SPY"]["blocking"] is False
+
+
+def test_cone_alpha_beta_from_pooled_returns():
+    # Strategy = 1.5x the benchmark + constant daily alpha → beta≈1.5, alpha>0.
+    idx = pd.date_range("2024-01-01", periods=60, freq="B")
+    rng = np.random.default_rng(0)
+    bench = pd.Series(rng.normal(0.0005, 0.01, 60), index=idx)
+    strat = 1.5 * bench + 0.001  # +0.1%/day alpha
+    cells = [{**_cone_cell(0.8), "daily_returns": strat}]
+    out = aggregate_backtest_cone(cells, bench_returns={"SPY": bench})
+    assert out["summary"]["beta_vs_SPY"] == pytest.approx(1.5, abs=0.05)
+    assert out["summary"]["alpha_ann_vs_SPY"] > 0
