@@ -586,6 +586,22 @@ def load_weather_gauge(history_days: int = 250) -> pd.DataFrame:
         con.close()
 
 
+@st.cache_data(ttl=300)
+def load_sector_breadth() -> pd.DataFrame:
+    """Macro-page S2 heatmap snapshot — sector + subsector rows for the latest day.
+
+    Reads `sector_breadth` (materialized nightly by sector_breadth_engine): one row
+    per sector (grain='sector') and per subsector (grain='subsector', with a parent
+    `sector`). Carries today's return quantiles (KDE shape), up/down breadth,
+    trend/breakout participation + names added today/5d. Page filters by grain.
+    """
+    con = _connect()
+    try:
+        return con.execute("SELECT * FROM sector_breadth").fetchdf()
+    finally:
+        con.close()
+
+
 # ── F2: watchlist activity / exit tracking ────────────────────────────────────
 #
 # `screener_watchlist` is the materialized trade log (every ACTIVE + EXITED

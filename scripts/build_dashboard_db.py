@@ -87,6 +87,7 @@ MANIFEST: list[tuple[str, str, dict]] = [
     ("t2_regime_scores",     "full", {}),
     ("t2_risk_scores",       "full", {}),
     ("weather_gauge",        "full", {}),   # one row/day deploy-posture state (250d history strip)
+    ("sector_breadth",       "full", {}),   # latest-day sector/subsector heatmap snapshot (Macro page S2)
     ("screener_membership",  "full", {}),   # ticker add/remove effective-date history
     ("screener_watchlist",   "full", {}),   # every ACTIVE + EXITED trade (removals via exit_date/status)
     ("sepa_watchlist",       "full", {}),

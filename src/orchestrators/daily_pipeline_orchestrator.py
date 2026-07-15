@@ -382,6 +382,18 @@ class DailyPipelineOrchestrator:
             critical_success = False
             return False
 
+        # Phase 7.46: Sector-breadth heatmap snapshot (best-effort). Materialize
+        # before the slim DB build (7.5) so sector_breadth ships in it.
+        phase_success, phase_stats = self._execute_phase(
+            "sector_breadth",
+            lambda: self._run_phase_7_46_sector_breadth(),
+            target_date,
+        )
+        run_stats['phase_7_46'] = phase_stats
+        if not phase_success and self._is_critical("sector_breadth"):
+            critical_success = False
+            return False
+
         # Phase 7.5: Slim dashboard DB rebuild (best-effort; a slow rebuild must
         # never block the daily pipeline). Snapshots the freshly-refreshed cache
         # + latest features into data/dashboard.duckdb for cross-device sync.
@@ -1446,6 +1458,16 @@ class DailyPipelineOrchestrator:
         """
         from src.weather_engine import WeatherEngine
         n = WeatherEngine(db_path=self.db_path).refresh(end=target_date)
+        return {'rows_processed': n}
+
+    def _run_phase_7_46_sector_breadth(self) -> Dict:
+        """Phase 7.46: Materialize the sector_breadth heatmap snapshot (Macro page S2).
+
+        Latest-day aggregate of t2_screener_features ⋈ company_profiles. Runs before
+        the dashboard build so the snapshot ships in the slim DB. Best-effort.
+        """
+        from src.sector_breadth_engine import SectorBreadthEngine
+        n = SectorBreadthEngine(db_path=self.db_path).refresh()
         return {'rows_processed': n}
 
     def _run_phase_7_5_dashboard_db(self) -> Dict:
