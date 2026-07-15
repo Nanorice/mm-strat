@@ -843,6 +843,42 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     mechanism). `plans/2026-07-13_regime_tiering_and_system_usage.md` §3.
     [[project_sepa_three_currencies]], [[project_prob_elite_gate_variance_knob]], [[project_vec_engine_optimistic]]
 
+## Thread N — ship binary to prod (Tier-1 deploy, 2026-07-15)
+
+> Not research — turning banked verdicts into the live product. The Q58 trail-cone already
+> confirmed binary beats 4-class; this session executed the promotion + fixed the gate that
+> stood in the way. Steering: "ship what's proven."
+
+71. **Promote binary — but `set_prod` refuses on 4 failing blocking gates. Real objection or stale?**
+    → **STALE, and the gate itself was BIASED — so REBUILT, not forced.** The 4 fails
+    (`calibration_ece` + 3 `wf_backtest_*`) were computed 2026-05-24 on a config the sprint
+    invalidated: bare-defaults exit (not champion_trail_spygate), pre-SEPA-gate-fix population, +
+    a label-lift gate the sprint retired ("label lift ≠ trade edge"). **Diagnosis (side-by-side,
+    published artifact):** the 4-fold WF-backtest gate is a 3-sample DRAW — it AGREES with the Q58
+    cone cell-for-cell where they overlap (2023-07 gate −0.15/cone −0.06; 2024-07 +0.56/+0.81) but
+    fails on absolute floors the WINNING cone also breaches (cone floor −1.73, worst DD 44.4%); its
+    killer fold (2025-07→2026-07) has NO cone equivalent (runs past the cache) and fold-4 is a
+    degenerate 1-day window. It's the single-Sharpe error the sprint spent weeks replacing with a
+    cone ([[project_champion_starttime_dependent]]). **REBUILD (report-only → then incumbent-anchored
+    blocking):** `aggregate_backtest_cone()` in `walk_forward_backtest.py` — distribution gates
+    (median/%neg/floor Sharpe) + **Calmar** (computed from total_return/|maxDD|; the persisted
+    `calmar_ratio` AND `annualized_return` are BROKEN, ~97% zeros / clamped-to-0 on losers) +
+    **alpha/beta vs SPY & QQQ** (OLS on pooled cell returns, user-requested). Driver
+    `scripts/run_cone_gate.py` aggregates existing `run_starttime_sweep` artifacts (no re-run).
+    Thresholds anchored to the incumbent 4-class so it passes with margin (median Sharpe>0.20,
+    %neg<42%, Calmar>0.10, α_SPY>0). **RESULT — both PASS; binary DOMINATES:** binary median Sharpe
+    **0.59** / %neg **30.3%** / Calmar **0.77** / **α_SPY +15.6%** vs 4-class 0.21 / 40.7% / 0.14 /
+    +7.3% — **binary carries ~2× the annualized alpha** at β≈0.58. **Dependency (user Q):** the model
+    card is DECOUPLED (label-level metrics, own loader, advisory-only) — NO card metric/test changes
+    needed (verified in code + the 7 `tests/model_card/` files). **Promotion executed:** binary
+    results.json stale gates → cone gates, raw `calibration_ece` demoted non-blocking (operative gate
+    = post-isotonic ECE, passes); `set_prod` succeeded **NO force**; 4-class ARCHIVED;
+    `daily_predictions` backfilled (120,824 binary rows); dashboard DB rebuilt; `v_d3_shortlist` serves
+    binary `prob_elite` **0 NULL** end-to-end. mcap fork (Q57) resolved → **keep small-cap tilt**
+    (tail-odds), shortlist already tilts small so no code change. Also shipped the gap-down stop-fill
+    fix ([[project_backtest_stop_gap_fill]], commit 557a1cf). Commits 557a1cf + 04dc42e.
+    [[project_binary_promoted_cone_gate]], [[project_4class_vs_binary]], [[project_weather_gauge_shortlist]]
+
 ## Open meta-questions (carried)
 - ✅ **Regime-EXPRESSION question CLOSED (Q63, DONE 2026-07-14):** 15-candidate manual — nothing beats
   SPY-200d (Block A all <0.55 AUC vs 0.65 wall; §7 cone leads worse standalone / OR-washes). 5th
@@ -860,11 +896,13 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
   🔍 NEXT: §1.2a regime-tiered fan/cone, m02 breakout-PROBABILITY reframe (event-prob not fwd-return,
   watchlist-ripeness not alpha). ⏸️ DEFERRED: granular day-dispersion within good/bad months.
   `plans/2026-07-13_regime_tiering_and_system_usage.md`.
-- ⏭️ **Binary promotion (Thread L/M, user go/no-go):** trail cone confirms binary wins → if
-  promoting: `set_prod(binary)` + `backfill_daily_predictions` + rebuild dashboard DB; threshold
-  by per-day RANK not absolute floor. NOT auto-promoted.
-- ⏭️ **mcap objective fork (Q57, OPEN):** shortlist as tail-odds (keep small-cap tilt) vs
-  median/Sharpe (drop/invert `smallcap_pctl`). One-liner either way; user decision.
+- ✅ **Binary promotion (Q71, DONE 2026-07-15):** PROMOTED — `m01_binary` is prod, 4-class archived.
+  The blocking gate was stale + biased so it was REBUILT as a start-date cone (not forced). daily_predictions
+  backfilled, dashboard rebuilt, shortlist serves binary 0-NULL. Model card decoupled → no card changes.
+  `[[project_binary_promoted_cone_gate]]`. ⚠️ ops box `sh019` still has old prod in ITS DB — nightly
+  scheduler there won't score binary until synced/re-promoted (not done this session).
+- ✅ **mcap objective fork (Q57, DONE 2026-07-15):** user chose **tail-odds → KEEP small-cap tilt**;
+  shortlist already tilts small so no code change. `[[project_r1b_step2_subsumed]]`
 - ✅ **B5 stress sub-axis stabilization (Q50, DONE 2026-07-13):** EMA10-smooth the composite before
   the expanding-80th cut → chatter gone (65→19 toggles, 0 blips), leak-free (as-of identity test),
   `stress_z` promoted from provisional. Follow-on OPEN: loosen `stress_high` from top-quintile now
