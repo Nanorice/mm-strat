@@ -1,71 +1,106 @@
 # Dashboard Module Passport
 
+> Rewritten 2026-07-16. The prior version described a pre-DuckDB SQLite
+> `buy_list` app (`src/dashboard_reports.py`, `M03RegimeCalculator`,
+> `config.POSITION_SIZE_PCT`) that no longer exists. This reflects the current
+> Streamlit multi-page app on the slim DuckDB + R2 sync.
+
 ## 1. Overview
-* **Responsibility:** The TradeOps Dashboard is the primary user interface for the quantitative trading system. It visualizes scanner results, manages the "buy list," displays historical analytics, and renders detailed performance reports for ML models (M01, M02, M03). It serves as the "Control Center" for daily trading operations.
-* **Key Dependencies:** 
-    * **Internal:** `src.database`, `src.data_engine`, `src.pipeline` (regime calc), `src.features`, `src.ml_scorer`.
-    * **External:** `streamlit` (UI framework), `plotly` (charts), `pandas`.
+The **Quantamental Dashboard** is a read-only Streamlit app — the daily control
+surface for the system. It never scores live and never writes market data: it
+renders what the nightly pipeline already materialized (`daily_predictions`,
+`weather_gauge`, `v_d3_*` deployment views, watchlists). The one write path is
+the decision log (`update_decision_taken` → `daily_predictions.decision_taken`),
+a small paper-trade annotation.
 
-## 2. File Structure
+Two run contexts, same code:
+- **Local** — reads the full `data/market_data.duckdb` (or a slim DB via
+  `DASHBOARD_DB_PATH`), localhost-only, no auth.
+- **Streamlit Cloud** — reads a slim `dashboard.duckdb` pulled from Cloudflare
+  R2; viewer allowlist by Google email; R2 creds + `DASHBOARD_DB_PATH` set as
+  Streamlit secrets.
 
-| File | Purpose |
-|------|---------|
-| `dashboard.py` | **Entry Point**. Orchestrates the application, defines the sidebar navigation, and implements core trading pages (Signal Review, Manual Override, History). |
-| `src/dashboard_reports.py` | **Report Renderer**. Contains logic to render static ML performance reports (D1, M01, M02, Backtest) by loading pre-generated JSON/CSV files. |
+## 2. Structure
 
-## 3. Data Schemas
+| File | Role |
+|------|------|
+| `scripts/dashboard.py` | **Entry point + "Today" page.** `streamlit run scripts/dashboard.py`. Registers pages via `st.navigation`; `page_today()` renders the whole landing page (weather gauge → macro → shortlist → VIP → watchlist → activity → pre-breakout → decision log → rank bump → cohort returns → sector heat → analytics). |
+| `scripts/dashboard_utils.py` | **Data + infra layer.** All `load_*` loaders (each `@st.cache_data`), the DB path resolution, `_connect(read_only=True)`, and the R2 sync (`_ensure_local_db`, `_maybe_refresh_from_r2`, `_ensure_asset_dirs`). Pages stay render-only; every DB read routes through here. |
+| `scripts/pages/1_Dataset_EDA.py` | Embeds the latest `docs/reports/pretrain_audit_*.html`. |
+| `scripts/pages/3_Model_Lab.py` | Model-registry browser; embeds the model card HTML (+ PNG fallback). Read-only — promotion stays a CLI action (`ModelRegistry().set_prod`). |
+| `scripts/pages/4_Backtest_Studio.py` | Browses current-pipeline backtest runs (only `manifest_version: v1`). |
+| `scripts/pages/5_Pipeline_Health.py` | Ops view: run heatmap, data freshness, universe trend, audit history, R2 asset-pull diagnostics. |
+| `scripts/build_dashboard_db.py` | **Slim-DB builder.** CTAS a thin slice of the 67 GB full DB into `data/dashboard.duckdb` (~800 MB). Run nightly; output uploaded to R2. |
 
-### Database Tables (Implied Usage)
-The dashboard interacts heavily with the SQLite `buy_list` and `buy_list_activity` tables.
+## 3. Data dependency
 
-| Table | Key Columns Used | Purpose |
-|-------|------------------|---------|
-| `buy_list` | `ticker`, `signal_date`, `final_score`, `final_score_rank`, `m01_expected_return`, `m02_survival`, `m02_loser_proba` | Active signals displayed in "Signal Review". |
-| `buy_list_activity` | `action_date`, `ticker`, `action` (ADDED/REMOVED/TRADED), `reason`, `entry_price` | Source for "History & Analytics" timeline. |
+### 3.1 The slim-DB contract (single source of layout truth)
+`build_dashboard_db.py` ATTACHes the full DB read-only and CTAS-copies each
+`MANIFEST` entry into a fresh `dashboard.duckdb`. Modes:
 
-### Configuration Files (JSON)
-Reports in `dashboard_reports.py` expect specific JSON structures in the `models/` directory.
+| Mode | What it keeps | Used for |
+|------|---------------|----------|
+| `full` | whole table | small tables: watchlists, `daily_predictions`, `weather_gauge`, `models`, macro, registry |
+| `window` | last `--window-days` (default 252) of `MAX(date)` | big feature tables `t2_screener_features`, `t3_sepa_features`, `price_data` |
+| `window_plus_active` | window **+** all rows for currently-ACTIVE tickers | available (not currently used) for deep per-ticker history |
+| `materialize_view` | `SELECT *` snapshot of a view into a table | `v_d3_deployment`, `v_d3_prebreakout`, `v_d3_shortlist`, `v_d3_vip` |
 
-| File Pattern | Key Fields | Used By |
-|--------------|------------|---------|
-| `*_config.json` | `validation_metrics` (array), `feature_columns` (list), `model_type` | M01/M02 Reports |
-| `d1_analysis.json` | `total_trades`, `median_mfe`, `median_mae`, `crash_rate`, `mae_mfe_scatter` | D1 Analysis Page |
-| `d3_summary.json` | `tp_rate`, `sl_rate`, `time_rate` | M02 Report (Triple Barrier) |
+**Hard invariant (build fails otherwise):** every `MANIFEST` object must exist
+as a table in the slim DB. The remote DB is a byte-copy of this file, so this
+one assert is what guarantees *remote layout == local layout* — a table read
+by any loader that isn't in the manifest works locally but throws on the
+remote. **Adding a loader that reads a new table/view ⇒ add it to `MANIFEST`.**
+(cf. memory `project_dashboard_remote_parity`.)
 
-## 4. Implementation Rules
+### 3.2 Loader → source map (what "Today" reads)
 
-### Position Sizing Logic
-* **Formula:** `shares = int((config.INITIAL_CAPITAL * config.POSITION_SIZE_PCT) / entry_price)`
-* **Constraint:** Uses fixed fractional capital sizing based on `config.POSITION_SIZE_PCT`. The comment mentions "8% max loss per position," implying that if the stop loss is hit, the loss should not exceed ~8% of the *position value* (depending on `STOP_LOSS_PCT`), or possibly 8% of *account equity* if configured aggressively. (Code reference: `dashboard.py` L818)
+| Loader (`dashboard_utils`) | Reads | Feeds |
+|---|---|---|
+| `load_weather_gauge` | `weather_gauge` | deploy-posture headline + history strip |
+| `load_macro_pillars` | `macro_data` | 6-pillar percentiles + trends |
+| `load_shortlist` | `v_d3_shortlist` | daily tail-edge shortlist |
+| `load_vip_watchlist` | `v_d3_vip` | manually-curated names + status |
+| `load_scored_watchlist` / `load_watchlist` | `screener_watchlist` ⋈ `daily_predictions` | active/exited trades table |
+| `load_scored_pre_breakout` | `v_d3_prebreakout` ⋈ `daily_predictions` | pre-breakout watch |
+| `load_recent_exits` / `load_activity_feed` | `screener_watchlist`, `screener_membership` | exits + universe add/remove feed |
+| `load_daily_predictions_today` / `load_past_decisions` / `update_decision_taken` | `daily_predictions` | decision log (**only write path**) |
+| `load_rank_cohorts` / `load_rank_history` / `load_cohort_return_panel` | `daily_predictions` (+ `price_data` for returns) | rank-bump + cohort-return charts |
+| `load_sector_heat` | `t2_screener_features` / deployment view | sector setup counts |
+| `load_prod_model_version_id` | `models` | resolves prod model (binary → `prob_class_1`, 4-class → `prob_class_3`) |
 
-### Manual Override Math
-* **Target Price:** automatically calculated as `entry_price * (1 + config.PROFIT_TARGET_R * config.STOP_LOSS_PCT)`.
-* **Stop Price default:** `entry_price * (1 - config.STOP_LOSS_PCT)`.
-* **ML Probability:** Manual entries are assigned `ml_probability = 1.0`.
+### 3.3 R2 sync (cloud only)
+- Nightly: `build_dashboard_db.py` → upload `dashboard.duckdb` to `latest/` on R2.
+- App boot pulls it; `_connect()` re-checks the R2 **ETag** (content hash, not
+  size — size matched spuriously) at most every 120s and re-pulls atomically
+  (temp + rename) when it changed. The 300s query cache then surfaces new data
+  within ~5 min without a container reboot.
+- Disk-file asset dirs (`model_cards`, `audit_reports`, `docs/reports`,
+  `models`) pull separately via `_ensure_asset_dirs`, best-effort, 23h-gated;
+  failures degrade to "not available", never block the app.
 
-### M03 Regime Gating
-* **Logic:** The dashboard checks `M03RegimeCalculator.should_gate_signal()`.
-* **Visuals:**
-    * **RED (Block)**: `allow_longs=False` → "⛔ Long Signals BLOCKED"
-    * **ORANGE (Caution)**: `reduced_sizing=True` → "⚠️ Reduced Position Size"
-    * **GREEN (Go)**: Otherwise → "✅ Full Risk On"
+## 4. Design rules
+- **Read-only everywhere.** `_connect()` defaults `read_only=True`; the app
+  never scores live (all scores are pre-materialized in `daily_predictions`).
+  Only the decision log writes. (cf. `feedback_readonly_connections`.)
+- **Configurable DB path.** `DASHBOARD_DB_PATH` (absolute or repo-relative)
+  points the same code at full-local or slim-remote; unset ⇒ full local DB.
+- **Caching:** loaders use `@st.cache_data` (query cache); the R2 recheck
+  throttle is a module global that survives Streamlit reruns.
+- **Filters in `st.form`** on the heavy tables (watchlist, rank bump, cohort
+  returns) so the whole-page rerun fires on *Apply*, not per keystroke.
+- **Honest labels in the UI, not just docs:** captions state the caveats the
+  research earned — shortlist is *tail-odds, the median inverts*; SPY-200d is
+  the brake; `stress_z` is provisional; scores are P(Home Run), materialized
+  nightly, blank when a session predates the scored window.
+- **Prod-model agnostic:** the score column is resolved from the registered
+  prod model id (`_rank_metric_for`), so binary vs 4-class doesn't fork the UI.
 
-### Performance caching
-*   **Data Loading:** `load_model_config`, `load_latest_report`, etc. use `@st.cache_data(ttl=60)` to prevent disk I/O on every interaction, refreshing every 60 seconds.
-*   **Resource Objects:** Database and DataRepository are cached with `@st.cache_resource` to maintain persistent connections.
-
-## 5. Public Interface
-
-### Entry Point
-*   **`dashboard.py`**: Run via `streamlit run dashboard.py`. The `main()` function is the application router.
-
-### Report Renderers (`src/dashboard_reports.py`)
-These functions are called by the main router to display specific analysis pages.
-
-| Function | Page Name | Description |
-|----------|-----------|-------------|
-| `render_d1_analysis()` | D1 Analysis | Displays "Trade Physics" (MAE/MFE, E-Ratio) from `d1_analysis.json`. |
-| `render_m01_report()` | M01 Report | Visualizes regression performance (Edge, RMSE, Deciles) for M01. |
-| `render_m02_report()` | M02 Report | Visualizes classification performance (AUC, Triple Barrier) for M02. |
-| `render_dual_model()` | Dual-Model | Comparative view of M01 and M02 metrics side-by-side. |
-| `render_backtest()` | Backtest | *Placeholder* for future backtest results. |
+## 5. Run
+```bash
+# local (full DB)
+streamlit run scripts/dashboard.py
+# local against the slim DB
+DASHBOARD_DB_PATH=data/dashboard.duckdb streamlit run scripts/dashboard.py
+# rebuild the slim DB (nightly; then upload to R2)
+python scripts/build_dashboard_db.py --window-days 252
+```
