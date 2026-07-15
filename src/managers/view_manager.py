@@ -389,7 +389,9 @@ class ViewManager:
             )
             SELECT
                 e.* EXCLUDE (
-                    natr_pct_chg, atr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
+                    -- NB atr_pct_chg is NOT excluded: it is a raw model feature (fs_m01_prototype),
+                    -- has no _delta twin, and must pass through to match v_d3_lifecycle + the scorer.
+                    natr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
                     price_vs_sma_50_pct_chg, price_vs_sma_150_pct_chg, price_vs_sma_200_pct_chg,
                     rs_pct_chg, rs_ma_pct_chg, dry_up_volume_pct_chg,
                     high_52w_pct_chg, low_52w_pct_chg, lowest_low_20d_pct_chg, highest_high_20d_pct_chg,
@@ -735,7 +737,8 @@ class ViewManager:
             base AS (
                 SELECT
                     f.* EXCLUDE (
-                        natr_pct_chg, atr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
+                        -- NB atr_pct_chg NOT excluded — raw model feature, no _delta twin (see v_d1).
+                        natr_pct_chg, vcp_ratio_pct_chg, consolidation_width_pct_chg,
                         price_vs_sma_50_pct_chg, price_vs_sma_150_pct_chg, price_vs_sma_200_pct_chg,
                         rs_pct_chg, rs_ma_pct_chg, dry_up_volume_pct_chg,
                         high_52w_pct_chg, low_52w_pct_chg, lowest_low_20d_pct_chg, highest_high_20d_pct_chg,

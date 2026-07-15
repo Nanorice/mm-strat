@@ -56,6 +56,7 @@ table.grid th { background: #f0f0f0; }
 .banner { padding: 12px 16px; border-radius: 6px; margin: 12px 0; font-weight: 600; }
 .banner.void { background: #c62828; color: white; }
 .banner.ok { background: #e8f5e9; color: #1b5e20; }
+.banner.currency { background: #fff3e0; color: #6a4a00; font-weight: 500; }
 .verdict-grid { display: grid; grid-template-columns: max-content max-content 1fr; gap: 4px 12px; }
 </style>
 """
@@ -363,9 +364,21 @@ def render(card, html_path: Path) -> None:
         "<div class='banner ok'>Section A passed; downstream metrics are reportable.</div>"
     )
 
+    # Standing caveat: every card metric is label-level (C1). Sprint 14's master lesson is
+    # that a strong label score does NOT imply trade P&L (label-lift != trade-edge); the trade
+    # verdict is the strategy start-date cone, evaluated separately in the promotion gate.
+    currency_banner = (
+        "<div class='banner currency'>All metrics on this card are <b>label-level (currency C1: "
+        "does the score rank the forward outcome)</b> and strategy-independent by design. A strong "
+        "label score does <b>not</b> imply trade P&amp;L — label-lift &ne; trade-edge. The trade "
+        "verdict (currency C3) is the strategy <b>start-date cone</b>, evaluated in the promotion "
+        "gate, not here. See docs/architecture/model_development_methodology.md.</div>"
+    )
+
     body = (
         f"<h1>Model Card — {html.escape(card.model_id)}</h1>"
         f"{_header_html(card)}"
+        f"{currency_banner}"
         f"{void_banner}"
         f"{_verdict_html(card)}"
         f"{_benchmarks_html(card)}"
