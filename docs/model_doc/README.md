@@ -6,7 +6,7 @@ in `docs/modules/`; these docs link out to it, they don't duplicate it.
 
 | Doc | Model | Status | One-liner |
 | :--- | :--- | :--- | :--- |
-| [m01.md](m01.md) | M01 — SEPA Candidate Ranker | SHIPPED | Ranks already-surfaced SEPA candidates by forward MFE (selection). |
+| [m01.md](m01.md) | M01 — SEPA Candidate Ranker | SHIPPED | GATES already-surfaced SEPA candidates by P(MFE>30%) (selection). Champion `m01_binary` (binary, promoted 2026-07-15; 4-class archived). |
 | [m02.md](m02.md) | M02 — Ignition Classifier | PROTOTYPE | Ranks the universe by proximity to next breakout (early warning). |
 | [regime_model.md](regime_model.md) | M03 — Macro Regime Gauge | SHIPPED | 0–100 weather gauge; coincident state descriptor, not a predictor. |
 

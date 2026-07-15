@@ -1,49 +1,74 @@
 # Generalised Model Development Methodology
 
-> Last updated: 2026-05-19. Source-of-truth for how every M-series model variant is built, validated, and promoted in this repo. Referenced by [docs/plans/m01_modeling_strategy_plan_2026_05_18.md](plans/m01_modeling_strategy_plan_2026_05_18.md).
+> Last updated: 2026-07-15 (Sprint 14 rewrite). Source-of-truth for how every M-series model
+> variant is built, validated, and promoted in this repo. The 8-gate skeleton is unchanged; G6
+> was rewritten and the **three currencies of proof** were added as the organizing spine after
+> Sprint 14 proved that passing G0–G5 says nothing about whether the strategy makes money.
 
 ---
 
 ## Why this document exists
 
-The notebook-driven workflow that produced `m01_prototype` and the `m01_rank` EDA leaks
-small structural mistakes — overlapping forecast horizons, uncalibrated probability
-thresholds, single train/test splits, missing held-out gates — that look fine in the
-notebook and break in the backtest. This document codifies an **8-gate pipeline** that
-every new model variant (`m01_rank`, `m01_breakout`, M01-Hold, future regime variants)
-must pass through in order, with hard pass/fail criteria fixed **before** training.
+The notebook-driven workflow that produced `m01_prototype` leaks small structural mistakes —
+overlapping horizons, uncalibrated thresholds, single train/test splits, missing held-out gates —
+that look fine in the notebook and break in the backtest. This document codifies an **8-gate
+pipeline** every new model variant must pass in order, with hard pass/fail criteria fixed
+**before** training.
 
-The two non-negotiable invariants the gates enforce:
+### The three currencies of proof (read this first)
 
-1. **The held-out cutoff is sacred.** A single date (proposed: `2024-01-01`, lives in
-   `config.py`) separates training/CV/calibration from final promotion evidence.
-   Training, CV folds, calibration fits, threshold tuning — all live strictly before
-   the cutoff. The G7 promotion eval lives strictly after it and is touched **once**.
+Sprint 14 spent weeks discovering that a result can be a *win* in one currency and a *null* in
+another — and that these are **not interchangeable**. Every claim must name which currency it is in:
 
-2. **Calibration vs. ranking is a fork, decided at G0.** If the strategy gates on
-   absolute probability (`prob > 0.60`), G4 calibration is a hard blocker. If it
-   gates on cross-sectional rank (top-K daily), G4 is optional but G6 must prove
-   rank-stability. Mixing the two — `scale_pos_weight`'d probabilities used as if
-   calibrated — is the most common silent failure.
+- **C1 — label-ranking.** Does the score rank the forward-outcome tail (`tail_mag`, `home_run`,
+  `mfe`) beyond the incumbent bar? Lives at **G2–G3**. Cheap, in-sample-ish, a *hypothesis*.
+- **C2 — OOS-ranking.** Does the model beat the incumbent bar **walk-forward, out-of-sample**?
+  Lives at **G3**. A model that ties the incumbent rule here is not worth registering.
+- **C3 — exit-aware P&L.** Does the selection make money on the **BackTrader start-date cone**,
+  after real stops, slot contention, and capital sharing? Lives at **G6–G7**. The only currency
+  that pays.
+
+**The master lesson (label-lift ≠ trade-edge, confirmed ~5× in Sprint 14):** a C1/C2 win does NOT
+imply C3. The stop + trailing exit truncate the exact tail the score concentrates; slot contention
+correlates entries the label treats as independent. RS-tail, minervini+prog-fills, and
+hi-score-wide-stop all won C1 and died at C3. **Treat every pre-G6 result as a hypothesis. A model
+is only "good" when it clears the C3 cone.** The full trap ledger the gates defend against lives in
+memory `project_standing_epistemics` — check it before reading any result as a win.
+
+### Two structural invariants the gates enforce
+
+1. **The held-out cutoff is sacred.** A single date (`2024-01-01`, in `config.py`) separates
+   training/CV/calibration from final promotion evidence. The G7 eval lives strictly after it and
+   is touched **once**.
+
+2. **Calibration vs. ranking is a fork, decided at G0.** Absolute-probability gating (`prob > 0.60`)
+   makes G4 a hard blocker; cross-sectional rank gating (top-K daily) makes G4 optional but demands
+   rank-stability at G4/G6. Mixing them — `scale_pos_weight`'d probabilities used as if calibrated —
+   is the most common silent failure. (The shipped `m01_binary` gates on rank/percentile, not an
+   absolute floor — its `prob_elite` is discrete ~447 levels, so an absolute threshold is a cliff.)
 
 ---
 
 ## The 8 Gates
 
-| Gate | Question | Artifact | Hard pass criterion |
+| Gate | Currency | Question | Hard pass criterion |
 |---|---|---|---|
-| **G0 Hypothesis** | What edge, what target, what horizon, *why* | 1-paragraph spec + target sensitivity table | Target positive-rate 5–15%; rationale references a known SEPA mechanism; calibration-vs-ranking fork chosen |
-| **G1 Data lineage** | Right source, right grain, no leakage | Lineage note + `run_quality_gate(...)` PASS | Zero P0 quality findings; leakage scan clean; warmup-clipped |
-| **G2 Signal** | Do features predict the target *before* modelling | IC / MI / redundancy tables | ≥5 features with stable \|IC\| > 0.05; collinear clusters pruned |
-| **G3 Fit** | Does a disciplined model learn it | Walk-forward, ≥4 expanding folds | ROC-AUC stable & > 0.70 in **every** fold including drawdown regimes |
-| **G4 Calibration** | Do scores mean what the strategy assumes | Reliability curve, ECE pre/post | ECE < 0.05 if probability-gated; OR strategy switched to rank-based gating |
-| **G5 Attribution** | Are the drivers economically sane | Gain vs SHAP agreement | Top drivers agree across methods AND match G2 IC; no leakage proxy in top-10 |
-| **G6 Strategy** | Does it make money net of frictions | Non-overlapping vectorised backtest with costs | Beats prod on the same window; positive net of costs; robust to ±params |
-| **G7 Promotion** | Strictly better than prod on untouched data | Held-out eval vs prod | Wins on the pre-registered held-out window; `ModelRegistry.set_prod()` gate enforced |
+| **G0 Hypothesis** | — | What edge, target, horizon, *why* | Positive-rate 5–15%; references a known SEPA mechanism; calibration-vs-ranking fork chosen |
+| **G1 Data lineage** | — | Right source, right grain, no leakage | Zero P0 quality findings; `LeakageGuard` clean; warmup-clipped |
+| **G2 Signal** | **C1** | Do features rank the target beyond the incumbent bar | ≥5 features stable \|IC\| > 0.05; **beats the one-column RS bar at matched depth** |
+| **G3 Fit** | **C1→C2** | Does a disciplined model beat the bar *out-of-sample* | ROC-AUC/lift > bar in **every** fold incl. drawdown regimes; **holds 2019+**, not just pre-2019 |
+| **G4 Calibration** | — | Do scores mean what the strategy assumes | ECE < 0.05 if probability-gated; OR rank-stability proven if rank-gated |
+| **G5 Attribution** | — | Are the drivers economically sane | Top-5 gain∩SHAP ≥3; all match G2 IC; no outcome proxy in top-15 |
+| **G6 Strategy** | **C3** | Does it make money on the **BackTrader start-date cone** | Cone *distribution* beats incumbent (median/floor/%neg), not a single Sharpe; **confirmed on BackTrader, not vec** |
+| **G7 Promotion** | **C3** | Strictly better than prod on untouched data | Wins the pre-registered held-out **cone**; `set_prod()` gate enforced |
 
-You do not advance on a failed gate. You do not rewrite the gate to make a failing model
-pass. If a gate fails, the model goes back to the gate that produced the broken
-assumption — usually G0 (wrong target) or G4 (uncalibrated scores).
+You do not advance on a failed gate. You do not rewrite a gate to make a failing model pass —
+**unless the gate itself is stale or biased** (Sprint 14 Q71: a failing 4-fold gate was a 3-sample
+draw that *agreed* with the winning cone where they overlapped; the honest move was to rebuild it to
+the cone methodology, anchored to the incumbent, not force past it). Before crediting a failing gate,
+check whether it agrees with your better evidence where they overlap. If a gate fails legitimately,
+the model goes back to the gate that produced the broken assumption — usually G0 (wrong target) or
+G6 (the label tail didn't survive the exits).
 
 ---
 
@@ -62,9 +87,14 @@ positive rate and the top-5 IC. Pick the cell where positive rate is in 5–15% 
 top-5 IC is stable across adjacent cells. Targets with positive rates < 3% or > 25%
 are rejected at G0.
 
-**Why this gate exists**: the m01_proto 4-class problem fails here in retrospect —
-forcing XGBoost to separate 12% from 28% MFE has no economic rationale, and the
-binary `m01_rank` collapse outperforms it. The hypothesis would have surfaced this.
+**Why this gate exists**: the m01_proto 4-class problem failed here in retrospect — forcing XGBoost
+to separate 12% from 28% MFE has no economic rationale, and the **binary collapse outperformed it**
+(confirmed on the Sprint 14 cone: binary median Sharpe 0.59 / α_SPY +15.6% vs 4-class 0.21 / +7.3%;
+`m01_binary` is now prod). The hypothesis gate would have surfaced this. **Corollary Sprint 14
+learned the hard way — a classifier QUANTIZES the tail:** a 4-class or binary head bins +35% and
++400% into the same "elite" bucket, so the score ranks *P(elite)*, never *expected magnitude*. If
+the edge you care about is tail-magnitude, state at G0 that the target must be continuous
+(`max(MFE−30%, 0)` or a quantile head) — a classifier structurally cannot express it.
 
 ---
 
@@ -118,9 +148,22 @@ corr, redundant = compute_redundancy(df_train, feature_cols, threshold=0.80)
   underlying quantity (check via the redundant-pair list)
 - No feature in the top-20 IC list is a target proxy (sanity check)
 - For each \|r\| > 0.95 pair, decide which to drop *now* — keep the higher-MI member
+- **For a SELECTION model: the candidate features must beat the one-column RS bar** (top-decile
+  `tail_mag` lift, ~3.5×) at matched depth. Sprint 14 (Thread H/I) collapsed every proposed
+  selection axis — Minervini step-2 fundamentals, group-leadership, VCP/tightness — into RS: they
+  were RS-clones (ρ 0.57–0.80) or subsumed. If a feature only ranks *because it correlates with RS*,
+  it is not a second axis. The one residual axis that survived was **size (cap rank)**, RS-incremental.
 
-**Why this gate exists**: a model that learns nothing at G3 usually had nothing to
-learn at G2. Cheap to run, decisive to interpret.
+**Two conditioning traps that make G2 lie** (Sprint 14 `project_standing_epistemics`):
+
+- **Don't condition a cause inside its mediator.** Testing a fundamental "beyond RS" while RS already
+  encodes it makes a real ramp read null (R1) or subsumed (R1b) depending on the conditioning. Decide
+  what mediates what *before* the matched-depth test.
+- **Median lens is wrong for a tail target.** On an upside-only MFE label the median is flat/inverted
+  while the tail ranks monotonically — read `home_run_rate` / `tail_mag`, not the decile median.
+
+**Why this gate exists**: a model that learns nothing at G3 usually had nothing to learn at G2.
+Cheap to run, decisive to interpret.
 
 ---
 
@@ -158,13 +201,17 @@ def expanding_walk_forward(df, feature_cols, target, folds):
     return pd.DataFrame(out)
 ```
 
-**Hard pass**: ROC-AUC > 0.70 in **every fold**, including any fold that covers a
-known drawdown regime (2022 is the obvious one). A model with mean AUC 0.80 across
-folds but one fold at 0.55 has not passed this gate — that 0.55 fold is the
-operational truth.
+**Hard pass**: ROC-AUC (or tail-lift, for a magnitude target) > the incumbent bar in **every fold**,
+including drawdown-regime folds. A model with mean AUC 0.80 but one fold at 0.55 has not passed —
+that 0.55 fold is the operational truth. **The bar for a selection model is the one-column RS rule,
+not 0.5 no-skill** — Sprint 14's ML tail-ranker beat RS 6/7 folds pre-2019 but LOST 13/16 folds
+2019+, and the anchored folds GROW, so that is era-fragility, not data scarcity: **it must hold 2019+
+or it doesn't ship**. A wash against the incumbent bar means the selection signal = the rule; don't
+tune to scrape +0.1 (that's forcing the ML past a gate it failed).
 
-**Why this gate exists**: SEPA is regime-sensitive. A model that only works in bull
-quarters is not deployable.
+**Why this gate exists**: SEPA is regime-sensitive, and "beats no-skill" is the wrong bar when a
+one-column rule already ranks the tail 3.5×. A model that only beats the rule in the calm early era
+is not deployable.
 
 ---
 
@@ -228,105 +275,66 @@ specific region of feature space. Forces you to investigate before promoting.
 
 ---
 
-## G6 — Strategy (portfolio backtest with capital-sharing)
+## G6 — Strategy (the C3 gate: does it survive real exits?)
 
-**Deliverable**: a backtest that models the strategy as a fixed-slot portfolio
-(K equal-weighted positions held in parallel for `hold_days` each), with
-transaction costs, and reports a Sharpe computed from the daily portfolio NAV —
-not from the trade-return series.
+This is where Sprint 14 killed almost everything. **G0–G5 tell you the score ranks the label
+(C1/C2). G6 tells you whether that survives real stops, slot contention, and capital sharing (C3) —
+and the answer was repeatedly NO.** RS-tail selection, minervini+prog-fills, and a hi-score wide
+stop each passed the earlier gates and died here, because the 15% stop and trailing exit truncate
+the exact tail the score concentrates, and slot contention correlates entries the label treats as
+independent. **A pre-G6 win is a hypothesis; G6 is the verdict.**
 
-### Two traps to avoid
+**Deliverable**: a BackTrader **start-date cone** — the strategy run as a fixed-slot portfolio
+across many rolling start dates, reported as a *distribution* of per-cell Sharpe, not one number.
+Use the existing infra: `scripts/run_starttime_sweep.py --grid rolling` produces the 90-cell cone;
+`scripts/run_cone_gate.py` aggregates it (median/floor/%neg Sharpe + Calmar + α/β vs SPY & QQQ).
 
-Both are easy to write, both inflate the number to nonsense:
+### The three non-negotiables Sprint 14 established
 
-1. **Compounding overlapping trades.** `(1 + trade_ret).prod() - 1` across N
-   concurrent trades treats them as if they were sequential single-position
-   trades of one portfolio. With ~500 trades at avg 15% you get ~10¹⁴, which is
-   a math artefact, not a return. Concurrent trades **share capital**; they do
-   not multiply each other.
-2. **Sharpe of the trade-return series.** Each trade is a 20-day outcome, not a
-   one-day P&L event. Computing `mean(trade_rets) / std(trade_rets) * sqrt(252)`
-   inflates Sharpe by `sqrt(20)` against the natural denominator.
+1. **A single Sharpe is a lottery, not a result — use the cone.** Folds swing >2 Sharpe on
+   start-date alone. The old G6 "nav_sharpe > 1.0" was exactly the single-point error the whole
+   sprint spent weeks replacing. Judge the **distribution**: does the median beat the incumbent, is
+   the floor lifted, is %neg-cells lower? (`project_champion_starttime_dependent`.)
 
-### The right model
+2. **Confirm on BackTrader, NOT the vectorized engine.** The vec engine is ~3× optimistic in bear
+   folds (same config: vec median Sharpe 1.51/%neg 10% vs BackTrader 0.35/%neg 45%) — it has no
+   cash-blocking and books stop-outs at the stop level even on a gap-down open below it. **Vec cones
+   are within-engine RANKING only; the promotion number is BackTrader.** (`project_vec_engine_optimistic`.)
 
-K slots. Each slot fills with the highest-ranked eligible candidate when free.
-A trade locks its slot for `hold_days`. Daily portfolio return is the
-**average** of currently-open slot returns (slots holding cash contribute 0).
-Sharpe is computed from this daily NAV series.
+3. **Judge the distribution, not the paired win-rate.** A distribution-shifting lever (the SPY-200d
+   gate) can win only 36% of *paired* cells yet dominate the cone — because it's inert in bull windows
+   (ties) and all its value lands on the few bear windows. A paired-count read buries it.
 
-When the data is trade-level (only the *total* hold-period return is known,
-not the daily path), spread each trade's total return uniformly across its
-hold window as a constant daily compounded equivalent: `(1+r)^(1/hold_days)-1`.
-This path-smoothing approximation loses intra-trade drawdown shape but
-correctly handles capital-sharing across overlapping trades.
+### Two arithmetic traps that inflate any backtest to nonsense (still valid)
 
-```python
-def portfolio_backtest(scored, hold_days=20, prob_enter=0.60,
-                       consec=3, top_k=3, cost_bps=10):
-    """K-slot portfolio backtest with proper capital sharing.
-    scored: date, ticker, prob, fwd_return (realised hold-period total return).
-    Returns (trade_ledger, summary_dict, daily_nav_series)."""
-    scored = scored.sort_values(["ticker", "date"]).copy()
-    enter = (scored["prob"] >= prob_enter)
-    scored["streak"] = enter.groupby(scored["ticker"]).transform(
-        lambda s: s.groupby((~s).cumsum()).cumsum())
-    eligible = scored[scored["streak"] >= consec]
-
-    trades, open_until = [], {}
-    for d, day in eligible.groupby("date"):
-        for _, r in day.sort_values("prob", ascending=False).iterrows():
-            if sum(v >= r.date for v in open_until.values()) >= top_k: break
-            if open_until.get(r.ticker, pd.Timestamp.min) >= r.date: continue
-            ret = r.fwd_return - 2 * cost_bps / 1e4
-            trades.append({"date": r.date, "ticker": r.ticker, "ret": ret})
-            open_until[r.ticker] = r.date + pd.Timedelta(days=hold_days)
-    led = pd.DataFrame(trades)
-    if led.empty: return led, {"n_trades": 0}, None
-
-    per_day = (1 + led["ret"]).pow(1.0 / hold_days) - 1.0
-    legs = pd.concat([
-        pd.Series(per_day.iloc[i],
-                  index=pd.bdate_range(led["date"].iloc[i], periods=hold_days))
-        for i in range(len(led))
-    ], axis=1).sort_index()
-    daily_port_ret = legs.sum(axis=1).fillna(0) / top_k        # cash on empty slots
-    nav = (1 + daily_port_ret).cumprod()
-    return led, {
-        "n_trades": int(len(led)),
-        "avg_trade_ret": float(led["ret"].mean()),
-        "win_rate": float((led["ret"] > 0).mean()),
-        "ann_per_slot": float((1 + led["ret"].mean()) ** (252 / hold_days) - 1),
-        "total_ret_nav": float(nav.iloc[-1] - 1),
-        "nav_sharpe": float(daily_port_ret.mean() / daily_port_ret.std() * np.sqrt(252))
-            if daily_port_ret.std() > 0 else 0.0,
-    }, nav
-```
+1. **Compounding overlapping trades.** `(1 + trade_ret).prod() - 1` across N concurrent trades
+   treats capital-sharing positions as sequential — ~500 trades at 15% gives ~10¹⁴, a math artefact.
+   Concurrent trades share capital; they do not multiply each other. (The original notebook shipped
+   `5.98e+14` total return this way — G6 exists to make that impossible.)
+2. **Sharpe of the trade-return series.** Each trade is a ~20-day outcome, not a one-day P&L event;
+   `mean(trade_rets)/std(trade_rets)*sqrt(252)` inflates Sharpe by ~`sqrt(20)`. Compute Sharpe from
+   the daily portfolio NAV.
 
 ### Hard pass
 
-- `avg_trade_ret` > 0 net of `cost_bps = 10` (round-trip)
-- `nav_sharpe` (from the daily portfolio NAV, NOT the trade series) > 1.0
-- Beats prod on the same window — run prod through
-  `UniverseScorer.score_from_duckdb` on identical rows, apply the same
-  entry/exit logic, compare `total_ret_nav` and `nav_sharpe`
-- Robust to ±20% on `prob_enter`, `consec`, and `top_k` — a single isolated
-  winning cell is overfit, a cluster of passing cells is signal
+- The BackTrader cone **distribution** beats the incumbent: median Sharpe higher, floor no worse,
+  %neg-cells no higher — across the full rolling grid, not a hand-picked window.
+- Robust to ±params (score gate, top_k, hold) — a cluster of passing cells is signal, one isolated
+  winning cell is overfit. Do NOT sweep a knob and report its best cell (cone-fitting).
+- Beats prod scored on identical rows via `UniverseScorer` / `score_from_t3` — the canonical path.
 
 ### Sanity flags
 
-- **`total_ret_nav` > 100x over a 1-year window**: methodology bug. A 6-Sharpe
-  daily strategy compounds aggressively but does not return 10⁴ in 250 days.
-- **`nav_sharpe` > 5**: investigate. Real edges in equity strategies cluster
-  around 1.0–2.5 Sharpe. Anything higher is usually insufficient sample,
-  remaining overlap leakage, or a cost model that's too generous.
-- **`avg_trade_ret` arithmetic-vs-geometric gap > 2×**: heavy positive tail
-  driving the mean — re-run with median-trade-return as the headline.
+- **Cone median Sharpe > 2.5, or any per-cell > 5**: investigate — real equity edges cluster ~0.5–1.5
+  on BackTrader. Usually vec-optimism leaking in, insufficient sample, or a too-generous cost model.
+- **A knob "lifts the mean" but not the floor/%neg**: it's a variance knob, not alpha (every book-level
+  brake tested — governor, DD-breaker, earnings-blackout — was this). Bank as risk-control, not edge.
+- **The lift is all upper-tail while p05/p10 are unchanged**: the overlay is trimming UPSIDE (the
+  governor did this at basket level) — bad trade for a tail strategy.
 
-**Why this gate exists**: the original notebook's `(1 + led.ret).prod() - 1`
-reported `5.98e+14` total return on 496 trades averaging 15% — a number that
-"looks impressive" but is structurally meaningless. G6 exists specifically to
-make this class of error impossible to ship.
+**Why this gate exists**: the earlier gates measure label ranking; only G6 measures money. Sprint 14's
+entire kill list (RS-tail, minervini, hi-score, and every overlay) passed G2–G5 and failed here. The
+gap between "the score ranks the tail" and "the strategy captures it" is the whole game.
 
 ---
 
@@ -348,35 +356,40 @@ reg.set_prod("m01_rank_v1_<timestamp>")
 **Hard pass**:
 
 - Held-out ROC-AUC ≥ G3 mean fold AUC − 0.05 (no catastrophic out-of-sample drop)
-- Held-out backtest avg trade return ≥ G6 in-sample avg − 30% (allow some decay,
-  not collapse)
-- Strictly beats prod on the held-out window across **all** of: AUC, top-K
-  precision, backtest avg return, Sharpe
+- Held-out **cone distribution** beats prod: median Sharpe higher, floor no worse, %neg no higher —
+  the same cone standard as G6, run once on the untouched window.
+- The promotion gate is the incumbent-anchored cone gate in `walk_forward_backtest.py`
+  (`aggregate_backtest_cone`: median/%neg/floor Sharpe + Calmar + α/β vs SPY & QQQ), enforced by
+  `set_prod()`. If that gate itself is stale (computed on an invalidated config), **rebuild it to the
+  cone methodology anchored to the incumbent — do not force past it** (Sprint 14 Q71).
 
-**Why this gate exists**: every previous model in this repo was evaluated on data
-it had seen during early stopping or threshold tuning. G7 enforces the discipline
-that the promotion number is the *first time* the model meets the held-out window.
+**Why this gate exists**: every early model in this repo was evaluated on data it had seen during
+early stopping or threshold tuning. G7 enforces that the promotion number is the *first time* the
+model meets the held-out window — as a cone, not a point.
 
 ---
 
 ## Reusing this across models
 
-The same gates apply to every variant. Only **G0** changes per model — target, horizon,
-threshold, and the calibration-vs-ranking fork. Everything from G1 onward is
-mechanical.
+The same gates apply to every variant. Only **G0** changes per model — target, horizon, threshold,
+and the calibration-vs-ranking fork. Everything from G1 onward is mechanical. The currency map is
+constant: **G2–G3 = C1/C2 (does it rank the label OOS beyond the incumbent bar); G6–G7 = C3 (does it
+survive the exits on the cone).** A model that wins C1/C2 but not C3 is a *watchlist axis*, not a
+strategy — that is exactly where the 63-day RS-tail ranker landed in Sprint 14 (banked as label-level
+ordering, not registered as a model).
 
-For `m01_breakout`, the G0 target is `breakout_within_next_3d` derived from
-`sepa_watchlist` entry events against dense `t3` history. The base rate is rarer
-than home runs (~1–2%), which pushes G4 toward Branch B (rank-based) by default.
-
-For M01-Hold (position-degradation classifier), the G0 target is
-`sl_hit_within_K_days` on active positions. Same 8 gates.
+For a `breakout_within_next_3d` "ripeness" classifier, the G0 target is a ~1–2% base rate → G4 goes
+Branch B (rank-based). Note its explicit guardrail: even a perfect breakout-predictor is *upstream* of
+a selection stage proven not to convert to trade edge, so it is a **watchlist-enrichment** idea, not a
+selection-alpha claim — scope it C1, do not expect it to clear C3.
 
 ---
 
 ## See also
 
-- [docs/plans/m01_modeling_strategy_plan_2026_05_18.md](plans/m01_modeling_strategy_plan_2026_05_18.md) — what models the 8 gates apply to
-- [docs/plans/eda_analytics_pipeline_plan_2026_05_17.md](plans/eda_analytics_pipeline_plan_2026_05_17.md) — Phase 1 primitives this methodology depends on
-- [docs/comprehensive_methodology.md §7–§8](comprehensive_methodology.md) — system context: model registry, evaluation suite, leakage guard
-- [src/evaluation/](../src/evaluation/) — the importable building blocks (every snippet above)
+- **memory `project_standing_epistemics`** — the ~12 recurring traps these gates defend against;
+  check before reading any result as a win.
+- **memory `project_sepa_three_currencies`** — the C1/C2/C3 vocabulary and why m01a-null ≠ m01-null.
+- **memory `project_vec_engine_optimistic`** — why G6 confirms on BackTrader, not vec.
+- [docs/architecture/comprehensive_methodology.md §7–§9](comprehensive_methodology.md) — system context: model registry, evaluation suite, backtester.
+- [src/evaluation/](../src/evaluation/) — the importable building blocks (LeakageGuard, quality gate, signal); `scripts/run_starttime_sweep.py` + `run_cone_gate.py` for the G6/G7 cone.

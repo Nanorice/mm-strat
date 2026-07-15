@@ -383,8 +383,15 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   gate-tiering only; model-skill-regime stays open → Q69.** See §1.2 header + RESEARCH_LOG Q65.
 - [x] **§1.1 — portfolio-level DD circuit breaker.** ✅ IMPLEMENTED 2026-07-13 (see IMMEDIATE
   above); cone floor-lift test is the next run.
-- [ ] **§1.2a — regime-tiered fan/cone.** Run the equity-fan / cone analysis PER regime (coarse:
-  200d up/down) instead of one blended cone. Formalizes tiered usage.
+- [x] **§1.2a — regime-tiered fan/cone. ✅ DONE 2026-07-15 → the tier IS the SPY-200d gate.**
+  Re-cut the 90-cell ungated `champion_trail` cone by SPY-200d (no new backtest,
+  `scripts/regime_tiered_cone.py`, `cells/regime_tiered_cone_cells.md`). Cut A (start-tag):
+  bull-start median Sharpe 0.37 (n=73) vs chop-start 0.15 (n=17), return +8.4% vs +1.9% — chop-start
+  muted not disastrous (12m window recovers on 200d reclaim). Cut B (honest day-attribution):
+  chop-DAYS carry a **−2.0 annualized Sharpe** (−24.7 bps/day) vs bull-days +1.15 (+15.0 bps/day) —
+  all the loss lives on days deployed below 200d. No standalone chop edge to tier into; combined with
+  §1.2b (bull doesn't want a different config), both tier levers collapse onto the shipped champion =
+  deploy in bull / stand aside in chop. RESEARCH_LOG Q72.
 - [ ] **§1.3 — m02 breakout-probability classifier** (reframed as watchlist ripeness, not
   selection alpha). Only if §1.2 shows tiering has legs.
 
@@ -495,7 +502,26 @@ Distilled from Thread L + this thread. This is the operating manual as evidence 
   inconclusive: short window + too many interacting factors). Engine already supports E2;
   `basket_paths` can take a delay. Isolates: does waiting one day to confirm the breakout hold
   change the distribution?
-  
+
+### 🔧 INFRA / TOOLING (found 2026-07-15 during the model-card build; carry to next session)
+- [ ] **Section G of the model card HANGS in multiprocessing (this env).** Building `m01_binary`'s
+  card, Section G (edge-existence: permutation-null + block-bootstrap, `section_g_edge.py`) spins
+  indefinitely — a child worker burned **1600s+ CPU** at the default 500×500, and even **20×20 burned
+  50s+** (should be ~5s) → it's a STRUCTURAL multiprocessing hang, not iteration count. Sections A–F
+  build fine; only G. **Repro:** `build_model_card.py --model m01_binary/v1` reaches "Running Section G"
+  then never returns. **Next session:** diagnose the G worker pool (likely a Windows spawn/pickle or a
+  nested-pool deadlock); add a hard timeout + fallback-to-serial, or a `--skip-section-g` flag. The
+  card is buildable meanwhile by stubbing `run_section_g` (A–F are the real label metrics).
+  `src/evaluation/model_card/sections/section_g_edge.py`.
+- [ ] **Card-build environment gremlin: an IDE watcher auto-spawns a SYSTEM-python
+  (`C:\Python312`) copy of any script run**, which races the `.venv` copy and deadlocks on the DB
+  lock (one sits at CPU=0). Suspect a VS Code run-on-save / code-runner / debugpy auto-attach.
+  Not a code bug — an env config. Disable it (or run the builder inline, not via the script path)
+  before the next card build. cf [[feedback_readonly_connections]].
+- [ ] **Make the card builder's advisory DB write-back optional / read-only-safe** (it stores the
+  card path on the `models` table — a needless write that forces a write-lock on an otherwise
+  read-only build). Add `--no-writeback` or wrap in try/except. cf [[feedback_readonly_connections]].
+
 ---
 
 ## Cross-refs

@@ -879,7 +879,29 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
     fix ([[project_backtest_stop_gap_fill]], commit 557a1cf). Commits 557a1cf + 04dc42e.
     [[project_binary_promoted_cone_gate]], [[project_4class_vs_binary]], [[project_weather_gauge_shortlist]]
 
+72. **§1.2a — does splitting the start-date cone by regime reveal two strategies to tier between?**
+    → **NO — the tier IS the SPY-200d gate (2026-07-15).** Re-cut the 90-cell **ungated**
+    `champion_trail` cone by SPY-200d (no new backtest — reads persisted metrics/equity;
+    `scripts/regime_tiered_cone.py`, `cells/regime_tiered_cone_cells.md`). **Cut A (start-tag,
+    coarse):** bull-start median Sharpe **0.37** (n=73) vs chop-start **0.15** (n=17), return +8.4%
+    vs +1.9% — chop-start MUTED not disastrous (a 12m chop-started window recovers when SPY reclaims
+    200d mid-cell → the coarse cut washes the regime out). **Cut B (sub-period day-attribution, the
+    honest read):** assign each book-DAY's return to that day's SPY-200d state → chop-days
+    **−2.0 annualized Sharpe** (−24.7 bps/day) vs bull-days **+1.15** (+15.0 bps/day); same down-day
+    RATE (~45%), chop just loses BIGGER. All the strategy's loss lives on days deployed below 200d =
+    the days the live gate stands aside. **There is no standalone chop edge to tier INTO;** combined
+    with §1.2b/Q65 (the bull regime doesn't want a higher gate either), BOTH tier levers
+    (which-config-in-bull, trade-or-not-in-chop) collapse onto the shipped champion → **deploy in
+    bull, stand aside in chop = the gate we already run.** No promotion, no per-regime cone re-run
+    (no separation to confirm = would be cone-fitting). Closes the sprint's opening regime question.
+    `cells/regime_tiered_cone_cells.md`, `verdicts/2026-07-15_regime_tiered_cone.png`.
+    [[project_regime_indicator_manual_null]], [[project_capital_deployment]], [[project_prob_elite_gate_variance_knob]]
+
 ## Open meta-questions (carried)
+- ✅ **§1.2a regime-tiered cone DONE (Q72, 2026-07-15): the tier IS the SPY-200d gate.** Chop-days
+  carry a −2.0 Sharpe (pure drag, no standalone edge); bull carries the edge but wants no different
+  config (§1.2b). Tiered usage = deploy in bull / stand aside in chop = the shipped gate. No promotion.
+  `cells/regime_tiered_cone_cells.md`.
 - ✅ **Regime-EXPRESSION question CLOSED (Q63, DONE 2026-07-14):** 15-candidate manual — nothing beats
   SPY-200d (Block A all <0.55 AUC vs 0.65 wall; §7 cone leads worse standalone / OR-washes). 5th
   falsification; SPY-200d is the whole regime axis. `verdicts/2026-07-14_regime_indicator_manual.md`,
