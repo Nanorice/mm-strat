@@ -34,6 +34,11 @@ Two run contexts, same code:
 
 ## 3. Data dependency
 
+> Audited table-by-table row counts + the full list of full-only objects
+> (read by nothing) live in
+> [docs/architecture/local_vs_remote_db.md](../architecture/local_vs_remote_db.md) —
+> the parity ledger. This section is the how-it-works narrative.
+
 ### 3.1 The slim-DB contract (single source of layout truth)
 `build_dashboard_db.py` ATTACHes the full DB read-only and CTAS-copies each
 `MANIFEST` entry into a fresh `dashboard.duckdb`. Modes:
