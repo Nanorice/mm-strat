@@ -6,12 +6,18 @@ written to a markdown artifact for the user to apply, never to the .ipynb.
 Reads the tool-call JSON on stdin; emits a PreToolUse deny decision for any
 path ending in .ipynb. Fails closed: on any parse error it denies rather than
 silently allowing the edit through.
+
+Escape hatch: set ALLOW_IPYNB_EDIT=1 in the environment to permit direct edits
+for that session (user-approved override).
 """
 import json
+import os
 import sys
 
 
 def main() -> None:
+    if os.getenv("ALLOW_IPYNB_EDIT") == "1":
+        return  # user-approved override — allow the edit through
     raw = sys.stdin.read()
     try:
         data = json.loads(raw)

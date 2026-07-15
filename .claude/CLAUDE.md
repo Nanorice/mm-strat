@@ -73,7 +73,8 @@ You are a Senior Engineer, not a text generator.
 - `adj_close`/`adj_factor`/`vwap` are 100% NULL — compute returns from `close`.
 
 ## Notebooks
-- **Never edit `.ipynb` directly.** Write intended cell changes to a markdown artifact (e.g. `docs/session_logs/.../<topic>_cells.md`); the user applies them.
+- **Never edit `.ipynb` directly** (default). Write intended cell changes to a markdown artifact (e.g. `docs/session_logs/.../<topic>_cells.md`); the user applies them. A PreToolUse hook (`block_ipynb_edit.py`) enforces this.
+- **Escape hatch (user-approved):** set `ALLOW_IPYNB_EDIT=1` in the environment to permit direct `.ipynb` edits for that session. Only use with explicit user approval; still smoke-test cell logic before writing.
 
 ## Long Runs
 - Before any long run, CHECK WITH THE USER to run a small smoke-test batch first. Require progress logging (`flush=True`) + checkpoint/resume.
