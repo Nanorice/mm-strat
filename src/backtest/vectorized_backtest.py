@@ -405,10 +405,13 @@ class VectorizedSEPABacktest:
             subset=['ticker', 'entry_date'], keep='first'
         )
 
-        # Exit price: stop_level for stop-outs (assume fill at stop), else close
+        # Exit price: stop-outs fill at the stop, but a gap-down OPEN below the
+        # stop fills at the open (worse) — book min(stop_level, open), not the
+        # stop unconditionally (was understating the gap tail: 7% of stops gap,
+        # real loss to -39.8% vs booked -15%).
         first_exits['exit_price'] = np.where(
             first_exits['exit_candidate'] == 'stop_loss',
-            first_exits['stop_level'],
+            np.minimum(first_exits['stop_level'], first_exits['open']),
             first_exits['close'],
         )
 
@@ -781,10 +784,39 @@ def _progressive_fills_selfcheck() -> None:
           f"loser {los_prog:.3f} > flat {los_flat:.3f} (starved)")
 
 
+def _gap_fill_selfcheck() -> None:
+    """A stop-out that GAPS DOWN through the stop must fill at the open, not the
+    stop level. Entry 100, stop -15% = 85; the exit bar opens at 80 (below 85)
+    → real fill 80, pnl -20%, NOT the booked -15%.
+    """
+    dates = pd.date_range('2024-01-02', periods=3, freq='B')
+    px = pd.DataFrame({
+        'ticker': 'T', 'date': dates,
+        'open':  [100, 100, 80],   # bar 3 gaps down through the stop
+        'high':  [100, 101, 82],
+        'low':   [99,  99,  78],
+        'close': [100, 100, 79], 'sma': 0.0,
+    })
+    entries = pd.DataFrame({
+        'ticker': ['T'], 'entry_date': [dates[0]],
+        'prob_elite_at_entry': [0.9], 'calibrated_score': [0.5],
+    })
+    vbt = VectorizedSEPABacktest(
+        start_date='2024-01-01', end_date='2024-02-01',
+        exit_policy='sma', stop_loss_pct=0.15, max_hold_days=100,
+    )
+    t = vbt._simulate_exits(entries, px).iloc[0]
+    assert t['exit_reason'] == 'stop_loss', t['exit_reason']
+    assert abs(t['exit_price'] - 80.0) < 1e-9, f"gap fill should be open=80, got {t['exit_price']}"
+    assert t['pnl_pct'] < -0.15, f"gap loss must exceed the -15% stop, got {t['pnl_pct']:.1%}"
+    print(f"[OK] gap-fill self-check: exit={t['exit_price']:.0f}, pnl={t['pnl_pct']:.1%} (< -15% stop)")
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s')
     _minervini_selfcheck()
     _progressive_fills_selfcheck()
+    _gap_fill_selfcheck()
     vbt = VectorizedSEPABacktest(
         start_date='2024-01-01',
         end_date='2024-06-30',
