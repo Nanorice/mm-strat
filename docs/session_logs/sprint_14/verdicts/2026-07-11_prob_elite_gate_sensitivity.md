@@ -23,6 +23,13 @@ scale ≈ **raw p_pos 0.48 = the model's coin-flip line**. It was set as a "coin
 never reconciled against the EDA's deliberate 0.6-raw gate. On famine days the day's *best*
 breakout can itself be low-score, so the 0.15 floor lets the book enter "the best of a bad lot".
 
+**Verified raw→cal mapping** (`iso.transform`, `models/m01_binary/v1/calibrator.joblib`, 2026-07-12):
+cal 0.15 ⇔ raw **0.482** (coin-flip line ✅); raw **0.60 ⇔ cal 0.19**; cal 0.20 (`g20`) ⇔ raw 0.64;
+cal 0.25 (`g25`) ⇔ raw 0.67; cal 0.30 (`g30`) ⇔ raw 0.80. **The EDA's 0.6-raw gate ≈ cal 0.19, best
+proxied by `g20`** (marginally *stricter*), NOT g25 — an earlier note's "0.6 raw ≈ g25 / 0.20+ cal"
+was off. Doesn't move the verdict: raw 0.6 lands between champion and g20, both bracketing arms lose
+median Sharpe → interpolation-safe, the EDA gate cannot rescue the median.
+
 **The concrete stake (measured on the current champion book, 2,072 pooled trades):** raising the
 floor removes REAL entries — `(prob_elite < gate)`: **415 (20%) blocked at 0.20**, 532 (26%) at
 0.25, 1,580 (76%) at 0.30. The 0.15–0.20 gap zone is the worst cohort (mean −0.42, 17.8% of book).

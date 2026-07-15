@@ -25,7 +25,8 @@ The EDA's 0.6 raw gate was chosen deliberately — it sits above the raw-scale m
 
 ## The Invalidation Case
 
-On **famine days** — days with sparse breakout supply where even the best available candidate has low model confidence — the backtest still enters the top-ranked name as long as its calibrated `prob_elite ≥ 0.15`. The EDA gate (0.6 raw ≈ approximately 0.20+ calibrated) would have stood aside.
+On **famine days** — days with sparse breakout supply where even the best available candidate has low model confidence — the backtest still enters the top-ranked name as long as its calibrated `prob_elite ≥ 0.15`. The EDA gate (0.6 raw ≈ **calibrated 0.19**, per `iso.transform(0.60)` — best proxied by the
+`g20` arm at cal 0.20, which is marginally *stricter* than the EDA gate) would have stood aside.
 
 This is the "best of a bad lot" problem: the strategy fills a slot with a low-quality signal simply because no slot-blocking mechanism (regime gate, cooldown) is active.
 
