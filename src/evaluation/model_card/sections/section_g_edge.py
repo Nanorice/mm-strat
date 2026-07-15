@@ -77,50 +77,48 @@ def _safe_auc(y: np.ndarray, p: np.ndarray) -> float:
 def _per_day_binary_ic(pool: pd.DataFrame) -> float:
     """Mean across dates of within-date Spearman IC of pred_proba vs label_binary.
 
-    Mirrors `_per_day_ic` in section_d_ranker but returns just the mean.
+    Spearman = Pearson on within-day ranks. Vectorized (grouped rank + grouped
+    moment sums) rather than a per-day `groupby.apply`, which is ~30x slower and
+    made Section G's 500-permutation loop run for tens of minutes.
     """
-    def _ic(g: pd.DataFrame) -> float:
-        if len(g) < 2:
-            return np.nan
-        x = g["pred_proba"].to_numpy(dtype=float)
-        y = g["label_binary"].to_numpy(dtype=float)
-        m = ~(np.isnan(x) | np.isnan(y))
-        if m.sum() < 2:
-            return np.nan
-        if np.unique(x[m]).size < 2 or np.unique(y[m]).size < 2:
-            return np.nan
-        return pd.Series(x[m]).corr(pd.Series(y[m]), method="spearman")
-
-    daily = pool.groupby("date", sort=False).apply(_ic, include_groups=False)
-    daily = pd.to_numeric(daily, errors="coerce").dropna()
-    if daily.empty:
+    g = pool[["date", "pred_proba", "label_binary"]].dropna()
+    if g.empty:
         return float("nan")
-    return float(daily.mean())
+    x = g.groupby("date", sort=False)["pred_proba"].rank()
+    y = g.groupby("date", sort=False)["label_binary"].rank()
+    d = pd.DataFrame({"date": g["date"].to_numpy(), "x": x.to_numpy(), "y": y.to_numpy()})
+    grp = d.groupby("date", sort=False)
+    cx = d["x"] - grp["x"].transform("mean")
+    cy = d["y"] - grp["y"].transform("mean")
+    d = d.assign(cxy=cx * cy, cx2=cx * cx, cy2=cy * cy)
+    agg = d.groupby("date", sort=False).agg(
+        num=("cxy", "sum"), dx=("cx2", "sum"), dy=("cy2", "sum"), n=("x", "size"),
+    )
+    denom = np.sqrt(agg["dx"] * agg["dy"]).replace(0, np.nan)
+    ic = (agg["num"] / denom)[agg["n"] >= 2].dropna()
+    return float(ic.mean()) if len(ic) else float("nan")
 
 
 def _per_day_top_k_lift(pool: pd.DataFrame, k: int = TOP_K) -> float:
     """Mean across dates of (top-K mean label_binary) / (pool mean label_binary).
 
-    Mirrors `_top_k_lift` in section_d_ranker on the binary target.
+    Vectorized: `rank(method="first", ascending=False) <= k` reproduces
+    `nlargest(k, pred_proba)`'s tie-breaking (first-in-order) without a per-day
+    `groupby.apply`.
     """
-    def _lift(g: pd.DataFrame) -> float:
-        g = g.dropna(subset=["pred_proba", "label_binary"])
-        if len(g) == 0:
-            return np.nan
-        pool_mean = g["label_binary"].mean()
-        if not pool_mean or pool_mean == 0 or np.isnan(pool_mean):
-            return np.nan
-        top = g.nlargest(k, "pred_proba")
-        top_mean = top["label_binary"].mean()
-        if np.isnan(top_mean):
-            return np.nan
-        return float(top_mean / pool_mean)
-
-    per_day = pool.groupby("date", sort=False).apply(_lift, include_groups=False)
-    per_day = pd.to_numeric(per_day, errors="coerce").dropna()
-    if per_day.empty:
+    g = pool[["date", "pred_proba", "label_binary"]].dropna()
+    if g.empty:
         return float("nan")
-    return float(per_day.mean())
+    pool_mean = g.groupby("date", sort=False)["label_binary"].transform("mean")
+    rnk = g.groupby("date", sort=False)["pred_proba"].rank(method="first", ascending=False)
+    g = g.assign(pm=pool_mean.to_numpy(), rnk=rnk.to_numpy())
+    g = g[g["pm"] > 0]
+    if g.empty:
+        return float("nan")
+    top_mean = g[g["rnk"] <= k].groupby("date", sort=False)["label_binary"].mean()
+    pm = g.groupby("date", sort=False)["pm"].first()
+    lift = (top_mean / pm).dropna()
+    return float(lift.mean()) if len(lift) else float("nan")
 
 
 def _shuffled_pool_global(pool: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
