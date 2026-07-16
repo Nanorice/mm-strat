@@ -85,6 +85,7 @@ class ViewManager:
             self._create_v_d3_lifecycle,  # after watchlist table — it joins it
             self._create_v_d3_shortlist,  # after lifecycle — it builds on it
             self._create_v_d3_vip,        # after lifecycle — it LEFT-joins cohort
+            self._create_v_d3_screening,  # standalone: t2 population ⋈ preds ⋈ fundamentals
         ]
         # NOTE: t3_training_cache (v_t3_training materialization) is NOT in this list.
         # Its ASOF joins cost ~215s and its inputs (fundamentals/shares) change weekly at
@@ -1115,6 +1116,98 @@ class ViewManager:
             ORDER BY liquidity_ok DESC, shortlist_score DESC
         """)
         print(f"   [OK] v_d3_shortlist: ranked/tagged active-breakout shortlist (tail edge)")
+
+    # ------------------------------------------------------------------
+    # VIEW 7d2: v_d3_screening — the "what to look at" screening surface
+    # ------------------------------------------------------------------
+
+    def _create_v_d3_screening(self, con: duckdb.DuckDBPyConnection) -> None:
+        """One screening surface: today's trend_ok∨breakout_ok universe with the
+        prod model's P(Home Run), precomputed fundamentals, and a derived P/E.
+
+        Pure JOIN of already-materialized parts (no new compute), latest day only:
+            t2_screener_features (population + price + RS + stage flags)
+              ⋈ daily_predictions (prod-model P(HR), COALESCE class_3→class_1)
+              ⋈ fundamental_features (margins/growth, as-of latest filing, deduped)
+              ⋈ company_profiles (name / market_cap / shares_outstanding)
+
+        This is the population the dashboard's four candidate tables (Shortlist,
+        Pre-Breakout, VIP, Screener) all slice — one filterable/rankable view.
+        Display artifact (NOT model-fed), so COLUMN_CASE_MAP casing does not apply;
+        RS_* referenced quoted verbatim. P(HR) is NULL for names outside the scored
+        cohorts (honest — a real "fell out of scoring", not a stale value).
+
+        Model-swap free: score joins the `status_flag='prod'` model, like the
+        shortlist. P/E derived px/eps_diluted (— when unprofitable), mirroring
+        v_d3_prebreakout's ratio block.
+        """
+        con.execute("""
+            CREATE OR REPLACE VIEW v_d3_screening AS
+            WITH prod AS (
+                SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1
+            ),
+            preds AS (
+                SELECT ticker, prediction_date,
+                       COALESCE(prob_class_3, prob_class_1) AS prob_home_run,
+                       rank_within_day
+                FROM daily_predictions
+                WHERE model_version_id = (SELECT version_id FROM prod)
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, prediction_date
+                    ORDER BY rank_within_day
+                ) = 1
+            ),
+            ff_dedup AS (
+                SELECT ticker, filing_date, fiscal_period,
+                       eps_diluted, revenue_growth_yoy, eps_growth_yoy,
+                       gross_margin, net_margin, operating_margin, fcf_margin,
+                       free_cash_flow, roe, debt_to_equity
+                FROM fundamental_features
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY ticker, filing_date
+                    ORDER BY fiscal_period DESC NULLS LAST
+                ) = 1
+            ),
+            pop AS (
+                -- today's screening universe (trend_ok ∨ breakout_ok), latest day.
+                SELECT ticker, date, close, trend_ok, breakout_ok,
+                       "RS_Universe_Rank" AS rs_universe_rank,
+                       "RS_Sector_Rank"   AS rs_sector_rank
+                FROM t2_screener_features
+                WHERE date = (SELECT MAX(date) FROM t2_screener_features)
+                  AND (trend_ok OR breakout_ok)
+            )
+            SELECT
+                pop.ticker, pop.date,
+                cp.name AS company_name, cp.sector, cp.industry,
+                cp.market_cap, cp.shares_outstanding,
+                pop.close, pop.trend_ok, pop.breakout_ok,
+                pop.rs_universe_rank, pop.rs_sector_rank,
+                -- stage: triggered if breaking out, else setup.
+                CASE WHEN pop.breakout_ok THEN 'triggered' ELSE 'setup' END AS stage,
+                p.prob_home_run,
+                p.prediction_date AS rating_date,
+                ff.gross_margin, ff.net_margin, ff.operating_margin, ff.fcf_margin,
+                ff.free_cash_flow,
+                (ff.free_cash_flow > 0) AS fcf_positive,
+                ff.revenue_growth_yoy, ff.eps_growth_yoy, ff.roe, ff.debt_to_equity,
+                ff.filing_date AS fundamental_filing_date,
+                -- P/E: px / trailing diluted EPS; NULL (→ "—") when unprofitable.
+                CASE WHEN ff.eps_diluted > 0.01
+                    THEN pop.close / ff.eps_diluted END AS pe_ratio
+            FROM pop
+            LEFT JOIN company_profiles cp ON cp.ticker = pop.ticker
+            LEFT JOIN preds p
+                ON p.ticker = pop.ticker AND p.prediction_date = pop.date
+            LEFT JOIN ff_dedup ff
+                ON ff.ticker = pop.ticker
+                AND ff.filing_date = (
+                    SELECT MAX(filing_date) FROM ff_dedup
+                    WHERE ticker = pop.ticker AND filing_date <= pop.date
+                )
+            ORDER BY p.prob_home_run DESC NULLS LAST, pop.rs_universe_rank DESC
+        """)
+        print("   [OK] v_d3_screening: trend_ok/breakout_ok universe + P(HR) + fundamentals")
 
     # ------------------------------------------------------------------
     # VIEW 7e: v_d3_vip — manually-curated VIP watchlist monitor

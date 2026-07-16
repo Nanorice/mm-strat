@@ -46,8 +46,8 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 ### Tier 1 — Decision pages
 | Page | Status | Doc | Data gap | Notes |
 |---|---|---|---|---|
-| **Macro** | 🟢 | `macro_page.md` + `macro_page_mock.html` | **S3 big** (~54/66 indicators missing; C1 FRED / C2 scrape / C3 defer). S2 done. S1 needs F&G (Cloudflare-gated). | **S2 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app; `sector_breadth_engine.py` + Phase 7.46 + MANIFEST). S1/S3 remain. F&G via `curl_cffi` |
-| **Screening** | 🟡 | `screening_page.md` | **near-zero** (only P/E derivation) | most data-complete; build early. Population = trend_ok∨breakout_ok (618) |
+| **Macro** | 🟢 | `macro_page.md` + `macro_page_mock.html` | **S3 only** (~54/66 indicators; C1 FRED / C2 scrape / C3 defer). S1+S2 done. | **S1+S2 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. **S3 remains.** |
+| **Screening** | ✅ | `screening_page.md` | **near-zero** (P/E derived) | **SHIPPED** (`scripts/pages/3_Screening.py` on shadow app; `v_d3_screening` view + MANIFEST + `load_screening`). Population = trend_ok∨breakout_ok (619); stage/fundamental filters in `st.form`; P(HR) rank + aggressive small-cap strip. No point-return column (honest cone). |
 | **Portfolio** | ⬜ | — | **high** (no live `positions`/`nav_history` tables) | not drafted |
 | **Track Record** | ⬜ | — | **medium** (needs `forecasts` ledger; Brier/cone scoring already exists) | not drafted; highest-leverage new table |
 | **Supply-chain** | 🟡 | `supply_chain_page.md` | **highest** (nodes yes, **zero edges**) | long-term; Tier-0 correlation mock → Tier-1 EDGAR 10-K extraction (new engine) vs Tier-2 buy |
@@ -84,6 +84,38 @@ in alongside whichever data thread lands them.
 
 ## Build log
 
+- **2026-07-16 — Macro S1 (regime headline) shipped** + **Fear&Greed ingest landed**.
+  - `src/macro_engine.py` — `fetch_fear_greed()`: CNN dataviz endpoint via
+    `curl_cffi` `impersonate="chrome"` (clears the Cloudflare TLS 418; plain
+    urllib reproduces the 418). Dispatched in `update_series` + added to the
+    `update_macro_cache` non-FRED loop → **nightly Phase 1.4 picks it up with no
+    orchestrator change**; `macro_data` is already MANIFEST-`full` → remote parity free.
+    ⚠️ ~1yr history only (253 rows) — CNN serves no deep archive; display gauge, not a
+    backtest input.
+  - `scripts/pages/2_Macro.py` — `_render_s1`: F&G dial (SVG arc, CNN banding) +
+    6 macro-pillar percentile tiles w/ LONG/SHORT/NEUTRAL bias chips + deploy
+    headline (posture · SPY>200d · supply regime · stress_z · M03 score).
+  - `scripts/dashboard_utils.py` — `load_fear_greed()` + `fear_greed_label()`.
+  - **Doc correction**: the plan credited `t2_regime_scores` for the "6 pillars" —
+    wrong table. Pillars = `load_macro_pillars` (VIX/Credit/Term/Rates/Liquidity/
+    CAPE); `t2_regime_scores` = M03's *three* pillars, now feeding the deploy
+    headline. Fixed in `macro_page.md`.
+  - Verified: F&G scrape 200 (score 46.9 neutral, 253 pts); gauge geometry across
+    0/25/50/75/100; all 6 tiles resolve w/ percentiles; slim DB ships F&G (253
+    rows); shadow app `/Macro` + `/Screening` boot 200 no errors.
+- **2026-07-16 — Screening page shipped** on the shadow app.
+  - `src/managers/view_manager.py` — `_create_v_d3_screening`: latest-day
+    `trend_ok∨breakout_ok` universe ⋈ prod `daily_predictions` (P(HR), COALESCE
+    class_3→class_1) ⋈ `fundamental_features` (margins/growth, deduped as-of
+    filing) ⋈ `company_profiles`; derived P/E (`close/eps_diluted`, NULL when
+    unprofitable). Display view, lowercase (not model-fed).
+  - `scripts/pages/3_Screening.py` — theta-styled header strip + `st.form`
+    stage/fundamental/sector/cap filters + `st.column_config` P(HR)-ranked table
+    + aggressive small-cap strip. No point-return column (honest cone).
+  - Wiring: `v_d3_screening` → `build_dashboard_db` MANIFEST (`materialize_view`);
+    loader `load_screening()`; mounted in `dashboard_uplift.py` nav.
+  - Verified: view 619 rows / 558 scored / 408 P/E; slim-DB build + MANIFEST
+    invariant ✓; shadow app + `/Screening` route boot 200 no errors.
 - **2026-07-16 — Macro S2 (sector/subsector heatmap) shipped** on the shadow app.
   - `src/sector_breadth_engine.py` — nightly `sector_breadth` snapshot (return
     histogram + breadth + participation + added today/5d, per sector & subsector).

@@ -50,12 +50,26 @@ Rather than tile one factor six times, we **shift the section's purpose**:
   supply share (bottom-up participation). This is the "should I deploy at all"
   glance and stays load-bearing — it's the research's own answer.
 
-**Data gap**
-- **Have now:** 6 pillars (`t2_regime_scores`), SPY>200d + supply
-  (`weather_gauge`), VIX + HY OAS (`macro_data`) for the percentile context.
-- **Missing:** **Fear&Greed** — not in DB. CNN scrape (daily). Single new
-  `macro_data` symbol; small ingest task. Until it lands, render the pillars +
-  deploy headline alone (no placeholder tile theater).
+**Data gap** — ✅ CLOSED 2026-07-16 (S1 SHIPPED).
+- **Have now:** the 6 macro pillars come from `load_macro_pillars()` —
+  VIX / Credit / Term Spread / Rates / Liquidity / CAPE, each with a percentile
+  (`macro_data`). ⚠️ **Doc correction:** an earlier draft of this line credited
+  `t2_regime_scores` for the "6 pillars" — wrong. `t2_regime_scores` holds M03's
+  **three** pillars (trend/liq/risk) + `m03_score`; that feeds the *deploy
+  headline*, not the pillar tiles. The live Today page's "6-Pillar Macro
+  Environment" has always read `load_macro_pillars`.
+- **Fear&Greed — LANDED.** `curl_cffi` `impersonate="chrome"` clears the
+  Cloudflare 418 (confirmed: plain urllib → 418, curl_cffi → 200).
+  `macro_engine.fetch_fear_greed()` → `macro_data` symbol `FEAR_GREED`; wired
+  into the existing `update_macro_cache()` loop, so the nightly Phase 1.4 picks
+  it up with **no orchestrator change**. `macro_data` is already MANIFEST-`full`
+  → remote parity free.
+  - ⚠️ **~1yr history only** (253 rows). CNN serves no deep archive, so this
+    series can NOT backfill to 2003 like the FRED ones. Display gauge only —
+    never feed a backtest expecting depth.
+  - `INSERT OR IGNORE` on the `(date,symbol)` PK means the first write of a day
+    wins (F&G drifts intraday). Correct for a nightly EOD snapshot; note it if a
+    future consumer needs intraday freshness.
 - **Explicitly dropped:** NAAIM, MOVE, AAII as Section-1 tiles — they re-express
   the same risk-appetite factor; if wanted at all they live in Section 3.
 

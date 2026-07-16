@@ -76,6 +76,9 @@ MANIFEST: list[tuple[str, str, dict]] = [
     # VIP watchlist monitor (manually-curated names; latest status per name).
     # Materialized flat → no runtime join to vip_watchlist on the remote.
     ("v_d3_vip",             "materialize_view",   {"view": "v_d3_vip"}),
+    # Screening surface (Macro/Screening uplift): latest-day trend_ok∨breakout_ok
+    # universe + P(HR) + fundamentals + derived P/E. One filterable table.
+    ("v_d3_screening",       "materialize_view",   {"view": "v_d3_screening"}),
     # ── Small tables copied whole ────────────────────────────────────────────
     ("company_profiles",     "full", {}),
     ("d2_training_cache",    "full", {}),

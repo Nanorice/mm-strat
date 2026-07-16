@@ -551,6 +551,24 @@ def load_shortlist() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def load_screening() -> pd.DataFrame:
+    """Screening surface — today's trend_ok/breakout_ok universe, ranked by P(HR).
+
+    Reads `v_d3_screening` (materialized nightly): the whole screening population
+    (stage = setup/triggered) with the prod model's P(Home Run), precomputed
+    margins/growth, and a derived P/E ("—" when unprofitable). One filterable
+    table that supersedes the scattered Shortlist / Pre-Breakout / VIP candidate
+    tables on the old Today page. P(HR) is NULL for names outside the scored
+    cohorts — an honest gap, not a stale value. Sorted P(HR) desc by the view.
+    """
+    con = _connect()
+    try:
+        return con.execute("SELECT * FROM v_d3_screening").fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_vip_watchlist() -> pd.DataFrame:
     """Manually-curated VIP watchlist with each name's latest live status.
 
@@ -584,6 +602,43 @@ def load_weather_gauge(history_days: int = 250) -> pd.DataFrame:
         ).fetchdf().iloc[::-1].reset_index(drop=True)
     finally:
         con.close()
+
+
+@st.cache_data(ttl=3600)
+def load_fear_greed(history_days: int = 250) -> pd.DataFrame:
+    """CNN Fear & Greed (0-100 risk-appetite composite), newest last.
+
+    Ingested nightly into `macro_data` as symbol 'FEAR_GREED' by macro_engine
+    (`fetch_fear_greed`, curl_cffi chrome-impersonation to clear the Cloudflare
+    TLS gate). CNN serves only ~1yr of daily history — there is no deep archive,
+    so this series starts ~250 rows and does not backfill to 2003 like the FRED
+    series. Empty frame if the scrape has never run.
+    """
+    con = _connect()
+    try:
+        return con.execute("""
+            SELECT date, close AS score
+            FROM macro_data
+            WHERE symbol = 'FEAR_GREED'
+            ORDER BY date DESC LIMIT ?
+        """, [int(history_days)]).fetchdf().iloc[::-1].reset_index(drop=True)
+    finally:
+        con.close()
+
+
+def fear_greed_label(score: float) -> str:
+    """CNN's own 0-100 banding."""
+    if pd.isna(score):
+        return "—"
+    if score < 25:
+        return "Extreme Fear"
+    if score < 45:
+        return "Fear"
+    if score <= 55:
+        return "Neutral"
+    if score <= 75:
+        return "Greed"
+    return "Extreme Greed"
 
 
 @st.cache_data(ttl=300)

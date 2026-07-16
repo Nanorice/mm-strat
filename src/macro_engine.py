@@ -213,6 +213,45 @@ class MacroEngine:
         df.to_parquet(cache_path)
         logger.debug(f"Saved {len(df)} rows to {cache_path}")
 
+    FEAR_GREED_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/"
+
+    def fetch_fear_greed(self, start_date: str = '2003-01-01') -> pd.DataFrame:
+        """Fetch the CNN Fear & Greed index (0-100 risk-appetite composite).
+
+        Cloudflare bot-gates this endpoint on TLS fingerprint — plain requests/
+        urllib get HTTP 418 regardless of User-Agent. curl_cffi's chrome
+        impersonation presents a real browser TLS fingerprint and clears it.
+
+        CNN serves ~1 year of daily history (no deep archive), so unlike the FRED
+        series this one cannot be backfilled to 2003 — `start_date` just trims
+        what's returned. Single 'FEAR_GREED' column, date-indexed, so it flows
+        through update_series / write_to_macro_data like any other series.
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+
+            r = cffi_requests.get(self.FEAR_GREED_URL, impersonate="chrome", timeout=30)
+            r.raise_for_status()
+            hist = r.json()['fear_and_greed_historical']['data']
+        except Exception as e:
+            logger.error(f"Fear & Greed fetch failed: {e}")
+            return pd.DataFrame()
+
+        if not hist:
+            logger.warning("Fear & Greed: empty history payload")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(hist)
+        # x = epoch ms (UTC), y = score. Normalize to naive dates to match the
+        # other macro series (macro_data.date is a DATE).
+        df['observation_date'] = pd.to_datetime(df['x'], unit='ms').dt.normalize()
+        df = (df[['observation_date', 'y']]
+              .rename(columns={'y': 'FEAR_GREED'})
+              .set_index('observation_date')
+              .sort_index())
+        df = df[~df.index.duplicated(keep='last')]
+        return df[df.index >= pd.Timestamp(start_date)]
+
     def update_series(self, series_id: str, force: bool = False) -> pd.DataFrame:
         """
         Update a single series (FRED or VIX) with incremental fetching.
@@ -238,6 +277,8 @@ class MacroEngine:
             new_data = self.fetch_vix(start_date)
         elif series_id == 'CAPE':
             new_data = self.fetch_cape(start_date)
+        elif series_id == 'FEAR_GREED':
+            new_data = self.fetch_fear_greed(start_date)
         else:
             new_data = self.fetch_fred_series(series_id, start_date)
 
@@ -276,8 +317,9 @@ class MacroEngine:
             if write_db and not df.empty:
                 self.write_to_macro_data(series_id, df)
 
-        # Update non-FRED series (VIX from FRED VIXCLS, CAPE from Yale XLS)
-        for series_id in ('VIX', 'CAPE'):
+        # Update non-FRED series (VIX from FRED VIXCLS, CAPE from Yale XLS,
+        # FEAR_GREED from the CNN dataviz endpoint via curl_cffi)
+        for series_id in ('VIX', 'CAPE', 'FEAR_GREED'):
             logger.info(f"Updating {series_id}...")
             df = self.update_series(series_id, force=force)
             results[series_id] = len(df)
