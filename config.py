@@ -106,17 +106,133 @@ EDGAR_SUBMISSIONS_URL = 'https://data.sec.gov/submissions/CIK{cik:010d}.json'
 # FRED Series for Net Liquidity calculation
 # Net Liquidity = (WALCL/1000) - WTREGEN - RRPONTSYD
 # Note: WALCL is in Millions, others are in Billions
+#
+# `group` tags the Macro S3 indicator board (dashboard display only); series with
+# no group are model/derivation inputs. Adding an ID here is all that's needed:
+# macro_engine.update_macro_cache() iterates this dict, and macro_data is
+# MANIFEST-`full` so remote parity follows.
+#
+# ⚠️ REVISED SERIES (revised=True): FRED restates these after first print, but
+# write_to_macro_data uses INSERT OR IGNORE on (date, symbol) -> first write wins
+# and later revisions are silently DROPPED. Harmless for the S3 display board
+# (level/delta/sparkline); these are DISPLAY-ONLY and must not feed a model
+# expecting point-in-time accuracy. Switch to INSERT OR REPLACE (cf cape_engine)
+# if a consumer ever needs true revisions.
 FRED_SERIES = {
+    # --- Core: net liquidity / rates / credit (model inputs, pre-existing) ---
     'WALCL': {'name': 'Fed Total Assets', 'freq': 'W', 'unit': 'millions'},
     'WTREGEN': {'name': 'Treasury General Account', 'freq': 'W', 'unit': 'billions'},
     'RRPONTSYD': {'name': 'Reverse Repo (Overnight)', 'freq': 'D', 'unit': 'billions'},
-    'BAMLH0A0HYM2': {'name': 'HY Credit Spread (OAS)', 'freq': 'D', 'unit': 'percent'},
-    'DGS10': {'name': '10Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
-    'DGS2': {'name': '2Y Treasury Yield', 'freq': 'D', 'unit': 'percent'},
-    'DFII10': {'name': '10Y Real Yield (TIPS)', 'freq': 'D', 'unit': 'percent'},
-    'WBAA': {'name': "Moody's Baa Corporate Yield", 'freq': 'W', 'unit': 'percent'},
-    'CPIAUCSL': {'name': 'CPI (All Urban, SA)', 'freq': 'M', 'unit': 'index'},  # deflator for CAPE_OURS
+    'BAMLH0A0HYM2': {'name': 'HY Credit Spread (OAS)', 'freq': 'D', 'unit': 'percent', 'group': 'liquidity_credit'},
+    'DGS10': {'name': '10Y Treasury Yield', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+    'DGS2': {'name': '2Y Treasury Yield', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+    'DFII10': {'name': '10Y Real Yield (TIPS)', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+    'WBAA': {'name': "Moody's Baa Corporate Yield", 'freq': 'W', 'unit': 'percent', 'group': 'liquidity_credit'},
+    'CPIAUCSL': {'name': 'CPI (All Urban, SA)', 'freq': 'M', 'unit': 'index', 'group': 'inflation', 'revised': True},  # deflator for CAPE_OURS
+
+    # --- S3 group 1: Growth ---
+    'GDPNOW': {'name': 'GDPNow (Atlanta Fed)', 'freq': 'Q', 'unit': 'percent', 'group': 'growth', 'revised': True},
+    'ICSA': {'name': 'Initial Jobless Claims', 'freq': 'W', 'unit': 'count', 'group': 'growth', 'revised': True},
+    'CCSA': {'name': 'Continuing Claims', 'freq': 'W', 'unit': 'count', 'group': 'growth', 'revised': True},
+    'PAYEMS': {'name': 'Nonfarm Payrolls', 'freq': 'M', 'unit': 'thousands', 'group': 'growth', 'revised': True},
+    'UNRATE': {'name': 'Unemployment Rate', 'freq': 'M', 'unit': 'percent', 'group': 'growth', 'revised': True},
+    'U6RATE': {'name': 'U-6 Underemployment', 'freq': 'M', 'unit': 'percent', 'group': 'growth', 'revised': True},
+    'INDPRO': {'name': 'Industrial Production', 'freq': 'M', 'unit': 'index', 'group': 'growth', 'revised': True},
+    'RSAFS': {'name': 'Retail Sales', 'freq': 'M', 'unit': 'millions', 'group': 'growth', 'revised': True},
+    'UMCSENT': {'name': 'Michigan Consumer Sentiment', 'freq': 'M', 'unit': 'index', 'group': 'growth', 'revised': True},
+
+    # --- S3 group 2: Inflation ---
+    'CPILFESL': {'name': 'Core CPI', 'freq': 'M', 'unit': 'index', 'group': 'inflation', 'revised': True},
+    'PCEPI': {'name': 'PCE Price Index', 'freq': 'M', 'unit': 'index', 'group': 'inflation', 'revised': True},
+    'PCEPILFE': {'name': 'Core PCE', 'freq': 'M', 'unit': 'index', 'group': 'inflation', 'revised': True},
+    'PPIACO': {'name': 'PPI (All Commodities)', 'freq': 'M', 'unit': 'index', 'group': 'inflation', 'revised': True},
+    'T5YIE': {'name': '5Y Breakeven Inflation', 'freq': 'D', 'unit': 'percent', 'group': 'inflation'},
+    'T10YIE': {'name': '10Y Breakeven Inflation', 'freq': 'D', 'unit': 'percent', 'group': 'inflation'},
+    'T5YIFR': {'name': '5y5y Forward Inflation', 'freq': 'D', 'unit': 'percent', 'group': 'inflation'},
+
+    # --- S3 group 3: Fed policy ---
+    'FEDFUNDS': {'name': 'Fed Funds Rate (eff.)', 'freq': 'M', 'unit': 'percent', 'group': 'fed_policy'},
+    'IORB': {'name': 'Interest on Reserve Balances', 'freq': 'D', 'unit': 'percent', 'group': 'fed_policy'},  # 2021-07+ only
+    'WRESBAL': {'name': 'Reserve Balances', 'freq': 'W', 'unit': 'billions', 'group': 'fed_policy'},
+    'M2SL': {'name': 'M2 Money Stock', 'freq': 'M', 'unit': 'billions', 'group': 'fed_policy', 'revised': True},
+
+    # --- S3 group 4: Rates & curve ---
+    'DGS3MO': {'name': '3M Treasury Yield', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+    'DGS30': {'name': '30Y Treasury Yield', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+    'T10Y2Y': {'name': '2s10s Spread', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+    'T10Y3M': {'name': '3M-10Y Spread', 'freq': 'D', 'unit': 'percent', 'group': 'rates_curve'},
+
+    # --- S3 group 5: Liquidity & credit ---
+    'BAMLC0A0CM': {'name': 'IG Credit Spread (OAS)', 'freq': 'D', 'unit': 'percent', 'group': 'liquidity_credit'},  # 2023-07+ only from this endpoint
+    'SOFR': {'name': 'SOFR', 'freq': 'D', 'unit': 'percent', 'group': 'liquidity_credit'},  # 2018-04+ only
+    'BUSLOANS': {'name': 'C&I Loans', 'freq': 'M', 'unit': 'billions', 'group': 'liquidity_credit', 'revised': True},
+
+    # --- S3 group 6: Risk regime ---
+    'DTWEXBGS': {'name': 'USD Broad Index', 'freq': 'D', 'unit': 'index', 'group': 'risk_regime'},  # 2006-01+ only
+    'DEXJPUS': {'name': 'USD/JPY', 'freq': 'D', 'unit': 'rate', 'group': 'risk_regime'},
+
+    # --- S3 group 8: Geopolitics ---
+    # WTI also comes from Yahoo (CL=F) below — that one is fresher (T+0 vs FRED's
+    # T+2) and is what the board shows; this stays as the FRED cross-check.
+    'DCOILWTICO': {'name': 'WTI Crude (FRED)', 'freq': 'D', 'unit': 'usd'},
+
+    # --- S3 group 9: Cyclical sectors ---
+    'HOUST': {'name': 'Housing Starts', 'freq': 'M', 'unit': 'thousands', 'group': 'cyclicals', 'revised': True},
+    'HSN1F': {'name': 'New Home Sales', 'freq': 'M', 'unit': 'thousands', 'group': 'cyclicals', 'revised': True},
+    'SPCS20RSA': {'name': 'Case-Shiller 20-City', 'freq': 'M', 'unit': 'index', 'group': 'cyclicals', 'revised': True},
+    'TOTALSA': {'name': 'Vehicle Sales (SAAR)', 'freq': 'M', 'unit': 'millions', 'group': 'cyclicals', 'revised': True},
+    'DRCCLACBS': {'name': 'CC Delinquency Rate', 'freq': 'Q', 'unit': 'percent', 'group': 'cyclicals', 'revised': True},
+    'EXHOSLUSM495S': {'name': 'Existing Home Sales', 'freq': 'M', 'unit': 'count', 'group': 'cyclicals', 'revised': True},  # ID re-based: ~13 rows only
 }
+
+# Commodity futures via Yahoo (yfinance), written to macro_data like the FRED set.
+# Yahoo beat FRED on every one of these (smoke-tested 2026-07-16): all daily and deep
+# to 2003, including cocoa — which has no clean FRED series and no US ETF. Yahoo's
+# CL=F is also fresher than FRED's DCOILWTICO (T+0 vs T+2), so it owns the WTI row.
+# Continuous front-month contracts: roll gaps are real but irrelevant for a level
+# board. Display-only, same posture as the rest of S3.
+# NB uranium has no futures contract — URA is an ETF (2010+), hence the shallower start.
+YAHOO_SERIES = {
+    'GC=F': {'name': 'Gold', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'SI=F': {'name': 'Silver', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'PL=F': {'name': 'Platinum', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'PA=F': {'name': 'Palladium', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'HG=F': {'name': 'Copper', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'CL=F': {'name': 'WTI Crude', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'BZ=F': {'name': 'Brent Crude', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},  # 2007+
+    'NG=F': {'name': 'Natural Gas', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'ZS=F': {'name': 'Soybeans', 'freq': 'D', 'unit': 'cents', 'group': 'geopolitics'},
+    'ZW=F': {'name': 'Wheat', 'freq': 'D', 'unit': 'cents', 'group': 'geopolitics'},
+    'ZC=F': {'name': 'Corn', 'freq': 'D', 'unit': 'cents', 'group': 'geopolitics'},
+    'CC=F': {'name': 'Cocoa', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},
+    'KC=F': {'name': 'Coffee', 'freq': 'D', 'unit': 'cents', 'group': 'geopolitics'},
+    'SB=F': {'name': 'Sugar', 'freq': 'D', 'unit': 'cents', 'group': 'geopolitics'},
+    'CT=F': {'name': 'Cotton', 'freq': 'D', 'unit': 'cents', 'group': 'geopolitics'},
+    'URA':  {'name': 'Uranium (URA ETF)', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},  # 2010+, ETF not futures
+}
+
+# S3 anomaly banner: |z| of the latest CHANGE, per series, over its FULL history
+# (see load_macro_indicators). Change-z not level-z — a slow series parks at level
+# ±2σ for years, so a level banner would never switch off; change-z answers "did
+# this MOVE", which is the actual news.
+#
+# Thresholds are 1.5/2.5, NOT the 0.5/1.0 first proposed: measured against the last
+# 120 days of real data, 0.5σ fires on a median of **14 of 56 rows every day** and
+# 1.0σ on 6 — a banner lit every day is wallpaper, not an alert. That isn't tuning,
+# it's arithmetic: |z|>=1 covers ~32% of a normal distribution, so ~18 of 56 rows
+# fire on an ordinary day. At 1.5/2.5 the median day is quiet (2 amber, 0 red) while
+# a genuinely odd day still spikes to 14 amber / 5 red. Dial DOWN only if you want
+# a permanently-on board.
+S3_SIGMA_WARN = 1.5   # amber — median 2 rows/day
+S3_SIGMA_ALERT = 2.5  # red   — median 0 rows/day, spikes on real events
+
+# Which unit families get a PCT-change z vs an ABSOLUTE-change z.
+# Absolute change is NOT stationary for a trending price: gold's full-history sigma
+# is $22.69 but it traded at $350 in 2003 and $4,000 today, so a routine 1% day
+# scores ~1.8 sigma. Pct-change is scale-free and IS stationary (gold: sigma 1.146%
+# full vs 1.154% since 2021). But pct EXPLODES for a series that crosses zero — the
+# 2s10s spread scores a 22.6% sigma — so spreads/percent-rates keep absolute change.
+S3_PCT_UNITS = {'usd', 'cents', 'index', 'millions', 'billions', 'thousands', 'count', 'rate'}
 
 # ==============================================================================
 # BENCHMARK / ETF / INDEX UNIVERSE

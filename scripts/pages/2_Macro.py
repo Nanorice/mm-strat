@@ -1,6 +1,10 @@
-"""Macro — Market Regime & Macro. Section 2 (sector/subsector heatmap) is live;
-Sections 1 (regime headline) and 3 (indicator board) are ingestion-gated and land
-later (see docs/session_logs/sprint_14/plans/dashboard_uplift/macro_page.md).
+"""Macro — Market Regime & Macro. All three sections are live (see
+docs/session_logs/sprint_14/plans/dashboard_uplift/macro_page.md).
+
+S1 = regime headline (F&G dial + 6 macro-pillar percentile tiles + deploy headline).
+S3 = indicator board over `config.FRED_SERIES` entries carrying a `group` tag —
+coverage is incomplete BY DESIGN (~42 of ~66; C2 scrapes + C3 live feeds pending),
+so a configured-but-empty series greys out and the page never gates on completeness.
 
 S2 renders the `sector_breadth` nightly snapshot (sector_breadth_engine): per
 sector, today's return distribution (KDE from stored quantiles) + up/down breadth
@@ -25,14 +29,29 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from dashboard_utils import (
     fear_greed_label,
     load_fear_greed,
+    load_macro_indicators,
     load_macro_pillars,
     load_regime,
     load_sector_breadth,
     load_weather_gauge,
 )
+import config
 from src.sector_breadth_engine import HIST_LO, HIST_HI, HIST_BINS
 
 MIN_NAMES = 5  # below this a KDE is a dot → collapse into "Other" (plan §S2 constraint 1)
+
+
+def _html(markup: str) -> None:
+    """Emit raw HTML through st.markdown.
+
+    Streamlit runs the string through a markdown parser first, which treats any
+    line indented >=4 spaces as a CODE BLOCK — so indented markup renders as
+    literal text instead of HTML. Interpolated f-string fragments carry their
+    source indentation, so strip leading whitespace from every line before it
+    reaches the parser.
+    """
+    flat = "\n".join(line.lstrip() for line in markup.splitlines())
+    st.markdown(flat, unsafe_allow_html=True)
 
 # S1 pillar tiles. (label, value_col, pctile_col, fmt, high_is). `high_is` tags
 # what a HIGH percentile means for risk appetite — the tile's regime-bias chip.
@@ -47,6 +66,20 @@ S1_PILLARS = [
     ("Rates",       "Rates",       "Rates_pct",       "{:.2f}",   "risk-off"),
     ("Liquidity",   "Liquidity",   "Liquidity_pct",   "{:,.0f}",  "risk-on"),
     ("CAPE",        "CAPE",        "CAPE_pct",        "{:.1f}",   "risk-off"),
+]
+
+# S3 board group order + display titles. Keys match `group` in config.FRED_SERIES;
+# a group with no ingested series is skipped. Groups 7 (flows/positioning) and 10
+# (calendar) have no C1 source — they land with the C2 scrapes / C3 feeds.
+S3_GROUPS = [
+    ("growth",           "1 · Growth"),
+    ("inflation",        "2 · Inflation"),
+    ("fed_policy",       "3 · Fed policy"),
+    ("rates_curve",      "4 · Rates & curve"),
+    ("liquidity_credit", "5 · Liquidity & credit"),
+    ("risk_regime",      "6 · Risk regime"),
+    ("geopolitics",      "8 · Geopolitics"),
+    ("cyclicals",        "9 · Cyclical sectors"),
 ]
 
 
@@ -148,7 +181,7 @@ def _render_s1(pillars, weather, regime, fg) -> None:
           </div>
         </div>"""
 
-    st.markdown(f"""
+    _html(f"""
     <style>
       .s1{{font-family:"Source Serif 4",Georgia,serif;color:#1c1a17}}
       .s1 .card{{background:#fffefb;border:1px solid #e8e3d6;border-radius:6px;padding:12px}}
@@ -186,7 +219,242 @@ def _render_s1(pillars, weather, regime, fg) -> None:
       <div class="grid">{fg_html}{tiles}</div>
       {dep}
     </div>
-    """, unsafe_allow_html=True)
+    """)
+
+
+def _fmt(v: float) -> str:
+    """Board number formatting. The board spans ~4 orders of magnitude (SOFR 4.3 →
+    payrolls 160,000), so a fixed precision either wastes width on the big ones or
+    flattens the small ones: scale the decimals to the value."""
+    if pd.isna(v):
+        return "—"
+    a = abs(v)
+    if a >= 1000:
+        return f"{v:,.0f}"
+    if a >= 100:
+        return f"{v:,.1f}"
+    return f"{v:,.2f}"
+
+
+SPARK_DAYS = 180  # observation window; passed to the loader so the footer can't drift from it
+
+
+def _sparkline(vals: list[float], w: int = 90, h: int = 24) -> str:
+    """Inline SVG LEVEL sparkline (line + area), oldest→newest, scaled to the window.
+
+    A line is the right mark for a level series — it shows the path, which bars only
+    approximate. It's wider (90px) than the earlier attempt (64px) and lightly
+    downsampled so points stay resolvable rather than collapsing to sub-pixel noise:
+    that, not the mark type, was what made the first version unreadable.
+
+    The "is today unusual?" question a per-row histogram would answer is handled by
+    the z column instead — a histogram needs ~50+ points to have a shape, and 22 of
+    the board's series are monthly/quarterly (6 points in this window), so half the
+    board would render a shape the data can't support.
+    """
+    if not vals:
+        return f'<svg class="spk" width="{w}" height="{h}"></svg>'
+    if len(vals) == 1:
+        return (f'<svg class="spk" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+                f'<circle cx="{w/2}" cy="{h/2}" r="1.6" fill="#8a8272"/></svg>')
+
+    # cap at ~1 point per 1.5px: beyond that the line is drawing detail the eye
+    # cannot resolve (the original 180-in-64px = 0.4px/point failure).
+    cap = int(w / 1.5)
+    if len(vals) > cap:
+        step = len(vals) / cap
+        pts = [vals[min(int(i * step), len(vals) - 1)] for i in range(cap)]
+    else:
+        pts = list(vals)
+
+    lo, hi = min(pts), max(pts)
+    rng = hi - lo
+    dx = w / (len(pts) - 1)
+    # flat series (rng==0) -> mid-line rather than a div-by-zero.
+    ys = [(h - 2) - ((v - lo) / rng if rng else 0.5) * (h - 4) for v in pts]
+    line = " ".join(f"{i * dx:.1f},{y:.1f}" for i, y in enumerate(ys))
+    up = pts[-1] >= pts[0]
+    col = "#2f6b3d" if up else "#a32f2f"
+    area = f"0,{h} {line} {w},{h}"
+    return (f'<svg class="spk" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+            f'<polygon points="{area}" fill="{col}" opacity=".08"/>'
+            f'<polyline points="{line}" fill="none" stroke="{col}" stroke-width="1.3"/>'
+            f'<circle cx="{w:.1f}" cy="{ys[-1]:.1f}" r="1.8" fill="{col}"/></svg>')
+
+
+def _render_s3(ind) -> None:
+    """S3 indicator board: the macro groups, one row per series.
+
+    Coverage is INCOMPLETE BY DESIGN (plan §S3): ~42 of ~66 land from FRED (C1).
+    The C2 scrapes (AAII/NAAIM/COT) and C3 live feeds (futures/MOVE/VVIX/SKEW/term
+    premium) are pending — a configured-but-empty series greys out rather than
+    vanishing, and the page never gates on completeness.
+
+    `Δ` is vs the previous OBSERVATION (so w/w for weekly, m/m for monthly), not a
+    fixed calendar lag. A `rev` chip marks FRED-revised series, which our
+    INSERT-OR-IGNORE ingest captures at FIRST PRINT ONLY — display-only, see
+    config.FRED_SERIES.
+    """
+    if ind is None or ind.empty:
+        st.info("No macro indicators configured.")
+        return
+
+    as_of = max((d for d in ind["date"] if pd.notna(d)), default=None)
+    as_of = str(as_of)[:10] if as_of is not None else "—"
+
+    # Anomaly banner — the day's |z| outliers, worst first. Thresholds live in config
+    # (1.5/2.5, measured: 0.5/1.0 would fire on a median 14 of 56 rows EVERY day).
+    az = ind["z"].abs()
+    hot = ind[az >= config.S3_SIGMA_WARN].reindex(
+        az[az >= config.S3_SIGMA_WARN].sort_values(ascending=False).index)
+    banner = ""
+    if not hot.empty:
+        n_red = int((az >= config.S3_SIGMA_ALERT).sum())
+        bcls = "alert" if n_red else "warn"
+        chips = "".join(
+            f'<span class="bchip {"red" if abs(r["z"]) >= config.S3_SIGMA_ALERT else "amber"}">'
+            f'{r["name"]}<b class="mono">{r["z"]:+.1f}σ</b></span>'
+            for _, r in hot.iterrows())
+        headline = (f"{n_red} indicator{'s' if n_red != 1 else ''} beyond "
+                    f"{config.S3_SIGMA_ALERT}σ" if n_red
+                    else f"{len(hot)} indicator{'s' if len(hot) != 1 else ''} beyond "
+                         f"{config.S3_SIGMA_WARN}σ")
+        banner = f"""
+        <div class="card bnr {bcls}">
+          <div class="bhd"><b>{headline}</b>
+            <span class="bsub">unusual move vs each series' own history</span></div>
+          <div class="bchips">{chips}</div>
+        </div>"""
+
+    groups = ""
+    for gid, title in S3_GROUPS:
+        sub = ind[ind["group"] == gid]
+        if sub.empty:
+            continue
+        live = int(sub["value"].notna().sum())
+        rows = ""
+        for _, r in sub.iterrows():
+            have = pd.notna(r["value"])
+            rev = '<span class="chip rev" title="FRED-revised; captured at first print">rev</span>' if r["revised"] else ""
+            namecell = (f'<td class="iname"><span class="inm">{r["name"]}</span>'
+                        f'<span class="imeta mono">{r["symbol"]}{rev}</span></td>')
+            if not have:
+                rows += f'<tr class="off">{namecell}<td class="miss mono" colspan="5">not ingested</td></tr>'
+                continue
+            chg = r["chg_pct"]
+            ccls = "neu" if pd.isna(chg) else ("pos" if chg >= 0 else "neg")
+            ctxt = "—" if pd.isna(chg) else f"{chg:+.2f}%"
+            z = r["z"]
+            if pd.isna(z):
+                ztxt, zcls = "—", "neu"
+            else:
+                ztxt = f"{z:+.1f}σ"
+                zcls = ("zred" if abs(z) >= config.S3_SIGMA_ALERT
+                        else "zamber" if abs(z) >= config.S3_SIGMA_WARN else "neu")
+            spark = r["spark"] or []
+            rng_txt = f"{_fmt(min(spark))}–{_fmt(max(spark))}" if spark else "—"
+            rows += f"""
+            <tr>
+              {namecell}
+              <td class="iprior mono">{_fmt(r['prior'])}</td>
+              <td class="ival mono">{_fmt(r['value'])}</td>
+              <td class="ichg mono {ccls}">{ctxt}</td>
+              <td class="iz mono {zcls}">{ztxt}</td>
+              <td class="ispk">{_sparkline(spark)}</td>
+              <td class="irange mono">{rng_txt}</td>
+            </tr>"""
+        groups += f"""
+        <div class="card gcard">
+          <div class="gtitle"><b>{title}</b>
+            <span class="gcount mono">{live}/{len(sub)} indicators</span></div>
+          <table class="itab">
+            <tr class="ihdr">
+              <th>Indicator</th><th>Prior</th><th>Now</th><th>Δ%</th><th>Z</th>
+              <th>History</th><th>Range</th>
+            </tr>{rows}
+          </table>
+        </div>"""
+
+    _html(f"""
+    <style>
+      .s3{{font-family:"Source Serif 4",Georgia,serif;color:#1c1a17}}
+      .s3 .card{{background:#fffefb;border:1px solid #e8e3d6;border-radius:6px;padding:12px}}
+      .s3 .mono{{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}}
+      .s3 .sectitle{{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.18em;
+        text-transform:uppercase;color:#8a8272;border-bottom:1px solid #e8e3d6;
+        padding-bottom:8px;margin:2px 0 12px}}
+      /* One group per row, full width. The old auto-fit grid packed 2-3 groups into
+         380px columns, which is what made the board feel squeezed — six numeric
+         columns need room to breathe more than the page needs density. */
+      .s3 .ggrid{{display:flex;flex-direction:column;gap:14px}}
+      .s3 .gcard{{padding:0;overflow:hidden}}
+      .s3 .gtitle{{font-family:"JetBrains Mono",monospace;font-size:12px;letter-spacing:.1em;
+        text-transform:uppercase;color:#1c1a17;padding:13px 16px;display:flex;
+        justify-content:space-between;align-items:center;background:#faf8f2;
+        border-bottom:1px solid #e8e3d6}}
+      .s3 .gtitle b{{font-weight:600}}
+      .s3 .gcount{{color:#8a8272;font-size:10px;letter-spacing:.06em}}
+      .s3 .itab{{width:100%;border-collapse:collapse;table-layout:fixed}}
+      .s3 .itab tr{{border-top:1px solid #f2ede0}}
+      .s3 .itab tr.ihdr{{border-top:none}}
+      .s3 .itab tr.off{{opacity:.42}}
+      .s3 .itab th{{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.12em;
+        text-transform:uppercase;color:#8a8272;font-weight:400;text-align:right;
+        padding:9px 16px 8px}}
+      .s3 .itab th:first-child{{text-align:left}}
+      /* 13px vertical padding: the airy row the mock has and the 4px version lacked. */
+      .s3 .itab td{{padding:13px 16px;vertical-align:middle;text-align:right}}
+      /* name column: label on top, symbol + rev chip on a second line beneath it. */
+      .s3 .iname{{text-align:left;width:24%}}
+      .s3 .inm{{display:block;font-size:14px;color:#1c1a17;line-height:1.25}}
+      .s3 .imeta{{display:block;font-size:9px;color:#8a8272;letter-spacing:.05em;
+        margin-top:3px}}
+      .s3 .iprior{{font-size:13px;color:#6f6858;width:13%;white-space:nowrap}}
+      .s3 .ival{{font-size:15px;font-weight:600;color:#1c1a17;width:13%;white-space:nowrap}}
+      .s3 .ichg{{font-size:12px;width:10%;white-space:nowrap}}
+      .s3 .iz{{font-size:12px;width:8%;white-space:nowrap;color:#8a8272}}
+      .s3 .ispk{{width:13%;white-space:nowrap}}
+      .s3 .spk{{vertical-align:middle}}
+      /* range: same size as prior — it was 10px and read as a footnote. */
+      .s3 .irange{{font-size:12px;color:#6f6858;width:19%;white-space:nowrap}}
+      .s3 .miss{{font-size:12px;color:#a89f8b;font-style:italic;text-align:right}}
+      .s3 .chip{{font-family:"JetBrains Mono",monospace;font-size:8px;padding:1px 3px;
+        border-radius:2px;border:1px solid #e8e3d6;color:#8a8272;margin-left:5px}}
+      .s3 .zred{{color:#b23b3b;font-weight:600}}
+      .s3 .zamber{{color:#b9862e;font-weight:600}}
+      /* anomaly banner */
+      .s3 .bnr{{margin-bottom:14px;border-left:3px solid #b9862e}}
+      .s3 .bnr.alert{{border-left-color:#b23b3b}}
+      .s3 .bhd{{display:flex;align-items:baseline;gap:10px;margin-bottom:9px}}
+      .s3 .bhd b{{font-size:14px}}
+      .s3 .bnr.alert .bhd b{{color:#b23b3b}}
+      .s3 .bnr.warn .bhd b{{color:#b9862e}}
+      .s3 .bsub{{font-size:11px;color:#8a8272}}
+      .s3 .bchips{{display:flex;flex-wrap:wrap;gap:6px}}
+      .s3 .bchip{{font-size:11px;padding:3px 8px;border-radius:3px;border:1px solid #e8e3d6;
+        background:#faf8f2;display:inline-flex;gap:6px;align-items:baseline}}
+      .s3 .bchip b{{font-size:10px}}
+      .s3 .bchip.red{{border-color:#b23b3b55;color:#b23b3b}}
+      .s3 .bchip.amber{{border-color:#b9862e55;color:#8a6a24}}
+      .s3 .pos{{color:#3f7d4e}}
+      .s3 .neg{{color:#b23b3b}}
+      .s3 .neu{{color:#8a8272}}
+      .s3 .foot{{font-size:10px;color:#8a8272;margin-top:10px;font-family:"JetBrains Mono",monospace}}
+    </style>
+    <div class="s3">
+      <div class="sectitle">3 · Indicator board
+        <span style="text-transform:none;letter-spacing:0;color:#8a8272"> — as of {as_of}</span></div>
+      {banner}
+      <div class="ggrid">{groups}</div>
+      <div class="foot">Δ + Prior vs previous observation (w/w weekly, m/m monthly) ·
+        <b>Z</b> = that change vs the series' own full-history change distribution
+        (pct-change for prices, absolute for spreads); amber ≥{config.S3_SIGMA_WARN}σ,
+        red ≥{config.S3_SIGMA_ALERT}σ · History &amp; Range = last <b>{SPARK_DAYS}</b>
+        observations · <span class="chip rev">rev</span> = FRED-revised, captured at
+        first print · <b>display-only</b> (all-time stats = look-ahead; never a model
+        input) · flows/positioning + live futures feeds pending</div>
+    </div>
+    """)
 
 
 def _sector_payload(df) -> tuple[list[dict], str]:
@@ -338,8 +606,7 @@ render();
 
 
 st.markdown("### Market Regime & Macro")
-st.caption("Where to deploy, and whether to deploy at all. "
-           "S3 indicator board lands as the FRED C1 series are ingested.")
+st.caption("Where to deploy, and whether to deploy at all.")
 
 _render_s1(load_macro_pillars(), load_weather_gauge(), load_regime(), load_fear_greed())
 
@@ -350,3 +617,5 @@ if df is None or df.empty:
             "SectorBreadthEngine().refresh()\"` (or the nightly pipeline Phase 7.46).")
 else:
     _render(df)
+
+_render_s3(load_macro_indicators(SPARK_DAYS))

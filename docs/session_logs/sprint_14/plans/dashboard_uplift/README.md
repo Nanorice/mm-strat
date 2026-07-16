@@ -46,7 +46,7 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 ### Tier 1 — Decision pages
 | Page | Status | Doc | Data gap | Notes |
 |---|---|---|---|---|
-| **Macro** | 🟢 | `macro_page.md` + `macro_page_mock.html` | **S3 only** (~54/66 indicators; C1 FRED / C2 scrape / C3 defer). S1+S2 done. | **S1+S2 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. **S3 remains.** |
+| **Macro** | ✅ | `macro_page.md` + `macro_page_mock.html` | **C2 scrapes + C3 feeds** (42/66 live; C1 FRED done) | **S1+S2+S3 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. S3 = indicator board over the 42 grouped `FRED_SERIES` (8 of 10 groups; flows/calendar await C2/C3). |
 | **Screening** | ✅ | `screening_page.md` | **near-zero** (P/E derived) | **SHIPPED** (`scripts/pages/3_Screening.py` on shadow app; `v_d3_screening` view + MANIFEST + `load_screening`). Population = trend_ok∨breakout_ok (619); stage/fundamental filters in `st.form`; P(HR) rank + aggressive small-cap strip. No point-return column (honest cone). |
 | **Portfolio** | ⬜ | — | **high** (no live `positions`/`nav_history` tables) | not drafted |
 | **Track Record** | ⬜ | — | **medium** (needs `forecasts` ledger; Brier/cone scoring already exists) | not drafted; highest-leverage new table |
@@ -84,6 +84,117 @@ in alongside whichever data thread lands them.
 
 ## Build log
 
+- **2026-07-16 — Macro S3 round 3**: commodities + anomaly banner + typography.
+  - **Commodities via YAHOO (`config.YAHOO_SERIES`, 16 syms)** — Geopolitics 1 → 16
+    rows. Yahoo beat FRED on **every** one (smoke-tested first): all daily + deep to
+    2003, including **cocoa**, which FRED has no clean series for and which has no US
+    ETF. Yahoo's `CL=F` is fresher than FRED's `DCOILWTICO` (T+0 vs T+2) so it owns
+    the WTI row; the FRED one stays as an ungrouped cross-check. New
+    `macro_engine.fetch_yahoo_series` + dispatch (per-symbol try → one dead ticker
+    can't fail the nightly macro phase). Uranium = URA ETF (2010+), no futures exist.
+    `macro_data` 119,593 → **209,970 rows / 65 symbols**; slim rebuilt, parity
+    verified **against the slim file directly** (57/57 board series present).
+  - **Anomaly banner + Z column** — |z| of the latest CHANGE vs each series' own
+    full-history change distribution.
+  - 🛑 **The proposed 0.5σ/1.0σ thresholds were REJECTED on measurement.** Over the
+    last 120 days: **0.5σ fires on a median 14 of 56 rows EVERY day, 1.0σ on 6**. A
+    banner lit daily is wallpaper. This is arithmetic, not tuning — |z|≥1 covers ~32%
+    of a normal distribution, so ~18 of 56 rows fire on an ordinary day. Shipped
+    **1.5σ amber / 2.5σ red**: median day = 2 amber / 0 red, a real event still
+    spikes to 14/5. Guarded by a test so it can't be quietly lowered.
+  - 🐛 **Two statistical flaws found and fixed before shipping:**
+    1. **Absolute change isn't stationary for a trending price.** Gold's full-history
+       σ is $22.69, but it traded ~$350 in 2003 and ~$4,000 now — a routine 1% day
+       scored ~1.8σ. Pct-change is scale-free and measurably stationary (gold σ
+       1.146% full vs 1.154% since 2021). First cut fired **21 red / 31 amber of 56**.
+    2. **But pct-change EXPLODES for a series crossing zero** — T10Y2Y scored a
+       **22.6% σ**. So the unit is chosen per series: pct for prices/levels,
+       absolute for spreads/rates (`config.S3_PCT_UNITS`, keyed off the existing
+       `unit` field — no new flag). Post-fix: **1 red / 6 amber**.
+    3. `latest_v` comes from the same SQL that builds mu/sd, so the change can never
+       be measured in a different unit than the moments it's compared against.
+  - ⚠️ Full-history moments = all-time = **look-ahead**. Board is display-only; the z
+    must never reach a model. Stated in the loader docstring + the page footer.
+  - **Typography** (user: "too pale... range col too small"): body/value text →
+    `#1c1a17`, secondary → `#6f6858` (was `#c3bba6`, which was near-invisible); Range
+    10px → 12px, matching Prior. Indicator name now left-aligned with the symbol +
+    `rev` chip on a **second line** beneath it.
+  - **History mark: bars → LINE + area** (user: prefers a spline for the level). The
+    original failure was never the mark type but the resolution — 180 points in 64px
+    = 0.4px/point. Now 90px wide, capped at ~1pt/1.5px. **Per-row histograms of daily
+    %Δ were NOT built**: a histogram needs ~50+ points for a shape, but 22 of the 42
+    FRED series are monthly/quarterly (6 points in a 180d window) — half the board
+    would render noise. The z column answers the same "is today unusual?" question in
+    one number. Suite **332 passed**.
+- **2026-07-16 — Macro S3 board redesign** (user review: "too squeezed, the line chart
+  is not very informative"). Compared against `macro_page_mock.html`:
+  - **Layout**: `.ggrid` was `auto-fit minmax(380px)` → packed 2–3 groups per row; now
+    **one group per row, full width** (`flex column`). Row padding 4px → **14px**.
+    Group headers get a filled bar + `live/total indicators` count, like the mock.
+  - **History: polyline → BARS** (`_sparkbars`, 24 buckets, downsampled by mean). At
+    64×22px a 180-point line gives each point ~0.4px — sub-pixel noise, which is why
+    it read as uninformative. Bars are quantized to what the eye can resolve; last
+    bar = today at full opacity, the rest recede.
+  - **Context columns added**: `Prior` + `Range` (window min–max) + `Np` point count,
+    matching the mock's Prior/Now/Δ/History/Range shape. `_fmt` scales precision to
+    magnitude (the board spans SOFR 4.3 → payrolls 158,984).
+  - ⚠️ **The screenshot under review was the MOCK, not the built board** — its Risk
+    Regime shows "10/10 indicators" but **8 of those 10 rows are `null` in the mock's
+    own data** (VVIX/SKEW/DXY/Gold/USD-JPY/BTC/futures are C3 = paid/real-time,
+    deferred). The real board shows the 2 that exist. Density in the mock is partly
+    fabricated; **not** reproduced.
+  - 🐛 **Correction to the entry below**: the earlier "remote parity holds ✓" check was
+    **WRONG** — it read the MAIN db through the loader (`_connect()` fell back), so it
+    reported 49 symbols/119,593 rows that were main's, not the slim DB's. The slim DB
+    at that moment had only **12 symbols, no PAYEMS**. The tell was an identical row
+    count between a full DB and a windowed slim one. Re-verified by opening
+    `dashboard.duckdb` **directly**: now genuinely 49 symbols/119,593 rows, all 42 S3
+    series present, loader confirmed reading `dashboard`. **Lesson: verify parity
+    against the slim file itself, never through a loader that can silently fall back.**
+  - `tests/test_macro_s3_board.py`: +downsampling test (180 pts → 24 bars), +`_fmt`
+    magnitude test. Suite **326 passed**.
+- **2026-07-16 — Macro S3 (indicator board) shipped** — the C1 FRED backlog landed.
+  - `config.py` — `FRED_SERIES` extended 9 → **45** entries (36 new C1 IDs, all
+    smoke-tested against the live FRED API before commit: **36/36 fetch clean**).
+    Each S3 entry carries a `group` tag (drives the board) + `revised` flag.
+    **Ingest was free exactly as predicted**: `update_macro_cache` iterates the
+    dict and `macro_data` is MANIFEST-`full` → **zero** orchestrator/MANIFEST edits;
+    nightly + remote parity followed with no wiring.
+  - `macro_data`: 13 → **49 symbols / 119,593 rows**. Slim-DB rebuild verified all
+    42 grouped series reach `dashboard.duckdb` (remote parity holds).
+  - `scripts/dashboard_utils.py` — `load_macro_indicators()`: one SQL pass →
+    latest/prior/Δ%/sparkline/n_obs per series, driven off the config metadata (no
+    hardcoded ID list in the page). Δ is vs previous **observation** (w/w weekly,
+    m/m monthly), not a fixed calendar lag.
+  - `scripts/pages/2_Macro.py` — `_render_s3` + `_sparkline` (inline SVG) +
+    `S3_GROUPS`; 8 of 10 groups render (42 rows). Groups 7 (flows) + 10 (calendar)
+    have no C1 source → land with C2/C3. Configured-but-empty greys out; page never
+    gates on completeness.
+  - `tests/test_macro_s3_board.py` (NEW) — sparkline degenerate inputs (flat series
+    div-by-zero, <2 points), config↔board group parity (a series can't ingest but
+    silently never render), revised-flag coverage.
+  - ⚠️ **Revision caveat (accepted, documented)**: 22 series are FRED-revised but
+    `write_to_macro_data` is `INSERT OR IGNORE` → **first print wins, revisions
+    dropped**. Fine for a display board; these are **display-only** and must not
+    feed a model wanting point-in-time accuracy. Upgrade path = `INSERT OR REPLACE`
+    (cf `cape_engine`) if a consumer ever needs it.
+  - **Two series are shallower than the plan assumed** (caught by the smoke test):
+    `BAMLC0A0CM` (IG OAS) returns only **785 rows from 2023-07** — not the deep
+    2003+ series its HY sibling `BAMLH0A0HYM2` is (6,148 rows); it would fail M03's
+    10yr-z bar like the sprint-13 `MOVE` rejection. `EXHOSLUSM495S` (existing home
+    sales) is re-based/discontinued → **13 rows**. Both render as stubby
+    sparklines; display-only, fine for the board.
+  - 🐛 **Pre-existing bug fixed** (`dashboard_utils._ensure_local_db`): `Path.rename`
+    raises `FileExistsError` on Windows when the target exists (POSIX rename
+    overwrites) → **`os.replace`**. Was blocking pytest collection of
+    `test_cohort_return_panel.py`. Present in committed `HEAD` (93497c9), not from
+    this session. Suite: **315 passed** (7 known-broken modules still excluded).
+  - ⚠️ **Deeper flaw left OPEN (needs the user's call)**: `_on_cloud()` infers "am I
+    the cloud app?" from **R2 creds**, but the dev box's `.env` and the ops box both
+    carry them → any dotenv-loading `import dashboard_utils` starts a ~751 MB R2
+    download. A correct fix needs a positive cloud marker verifiable **on** Streamlit
+    Cloud; guessing it here would silently stop the remote pull (stale DB — worse
+    than the bug). Documented in the docstring, not patched blind.
 - **2026-07-16 — Macro S1 (regime headline) shipped** + **Fear&Greed ingest landed**.
   - `src/macro_engine.py` — `fetch_fear_greed()`: CNN dataviz endpoint via
     `curl_cffi` `impersonate="chrome"` (clears the Cloudflare TLS 418; plain

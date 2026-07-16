@@ -252,6 +252,25 @@ class MacroEngine:
         df = df[~df.index.duplicated(keep='last')]
         return df[df.index >= pd.Timestamp(start_date)]
 
+    def fetch_yahoo_series(self, symbol: str, start_date: str = '2003-01-01') -> pd.DataFrame:
+        """Fetch a Yahoo symbol (commodity futures) as a single close column.
+
+        Yahoo beat FRED on every commodity we checked — all daily and deep to 2003,
+        including cocoa, which FRED doesn't carry cleanly. Continuous front-month
+        contracts (roll gaps are real; irrelevant for a level board).
+
+        auto_adjust=False: these are futures/ETF closes, not split-adjusted equities;
+        we want the printed close. Returns an empty frame on a bad symbol rather than
+        raising, so one dead ticker can't fail the nightly macro phase.
+        """
+        df = yf.Ticker(symbol).history(start=start_date, auto_adjust=False)
+        if df.empty:
+            logger.warning(f"Yahoo: empty history for {symbol}")
+            return pd.DataFrame()
+        out = pd.DataFrame({symbol: df['Close']})
+        out.index = pd.to_datetime(out.index).tz_localize(None).normalize()
+        return out[~out.index.duplicated(keep='last')].sort_index()
+
     def update_series(self, series_id: str, force: bool = False) -> pd.DataFrame:
         """
         Update a single series (FRED or VIX) with incremental fetching.
@@ -279,6 +298,8 @@ class MacroEngine:
             new_data = self.fetch_cape(start_date)
         elif series_id == 'FEAR_GREED':
             new_data = self.fetch_fear_greed(start_date)
+        elif series_id in config.YAHOO_SERIES:
+            new_data = self.fetch_yahoo_series(series_id, start_date)
         else:
             new_data = self.fetch_fred_series(series_id, start_date)
 
@@ -316,6 +337,19 @@ class MacroEngine:
             results[series_id] = len(df)
             if write_db and not df.empty:
                 self.write_to_macro_data(series_id, df)
+
+        # Commodity futures via Yahoo (config.YAHOO_SERIES). Isolated per-symbol so a
+        # single dead ticker can't fail the whole nightly macro phase.
+        for series_id in config.YAHOO_SERIES.keys():
+            logger.info(f"Updating {series_id} (Yahoo)...")
+            try:
+                df = self.update_series(series_id, force=force)
+                results[series_id] = len(df)
+                if write_db and not df.empty:
+                    self.write_to_macro_data(series_id, df)
+            except Exception as e:
+                logger.error(f"Yahoo series {series_id} failed: {e}")
+                results[series_id] = 0
 
         # Update non-FRED series (VIX from FRED VIXCLS, CAPE from Yale XLS,
         # FEAR_GREED from the CNN dataviz endpoint via curl_cffi)

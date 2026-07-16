@@ -42,7 +42,17 @@ else:
 
 
 def _on_cloud() -> bool:
-    """True when R2 creds are present (Streamlit Cloud); False on local runs."""
+    """True when R2 creds are present (Streamlit Cloud); False on local runs.
+
+    ⚠️ KNOWN FLAW (2026-07-16, not yet fixed — needs the user's call): this infers
+    "am I the cloud app?" from R2 creds, but the ops box (sh019) holds the same
+    creds for the nightly sync and the dev box's .env carries them too. So any
+    dotenv-loading process that imports dashboard_utils (pytest, scripts) starts a
+    ~751 MB R2 download. Creds mean "can reach R2", not "am the cloud app". A real
+    fix needs a positive cloud marker whose value can be verified ON Streamlit
+    Cloud — guessing it here would silently stop the remote pull (stale DB, worse
+    than this). Locally, `_db_env` (DASHBOARD_DB_PATH) usually short-circuits it.
+    """
     return bool(os.environ.get("R2_ACCOUNT_ID") and os.environ.get("R2_ACCESS_KEY"))
 
 
@@ -99,7 +109,10 @@ def _ensure_local_db() -> None:
     tmp = target.with_suffix(".tmp")
     try:
         client.download_file(bucket, "latest/dashboard.duckdb", str(tmp))
-        tmp.rename(target)
+        # os.replace, not Path.rename: on Windows rename() raises FileExistsError
+        # when the target exists (POSIX rename overwrites silently). os.replace is
+        # atomic-overwrite on both platforms.
+        os.replace(tmp, target)
         marker.write_text(r2_etag)
     except Exception:
         if tmp.exists():
@@ -639,6 +652,125 @@ def fear_greed_label(score: float) -> str:
     if score <= 75:
         return "Greed"
     return "Extreme Greed"
+
+
+@st.cache_data(ttl=300)
+def load_macro_indicators(spark_days: int = 180) -> pd.DataFrame:
+    """Macro-page S3 indicator board — one row per `config.FRED_SERIES` /
+    `config.YAHOO_SERIES` entry that carries a `group` tag, newest observation first.
+
+    Columns: symbol, name, group, freq, unit, revised, date, value, prior, chg_pct,
+    z, spark (list[float], oldest→newest), n_obs. A configured series with no rows in
+    `macro_data` still returns a row (value NaN) so the board can grey it out rather
+    than hide it — coverage is incomplete by design (C2 scrapes + C3 feeds pending).
+
+    `prior` is the previous OBSERVATION, not a fixed calendar lag — so chg_pct means
+    week-over-week for a weekly series and month-over-month for a monthly one.
+
+    `z` = (latest change − mean change) / std change, over the series' **full**
+    history (not the spark window — 180 obs is only 6 points for a monthly series).
+    NaN when sigma is 0 or fewer than 30 changes exist. Change-z, not level-z: slow
+    series sit at level ±2σ for years, so a level banner would never switch off.
+    ⚠️ Full-history moments are an all-time stat = LOOK-AHEAD. Display-only; never
+    feed z (or anything on this board) to a model.
+
+    ⚠️ `revised=True` series (payrolls, CPI, PCE, GDPNow, …) are DISPLAY-ONLY: FRED
+    restates them, but macro_engine writes INSERT OR IGNORE so the first print wins
+    and revisions are dropped. Do not feed these to a model expecting point-in-time
+    accuracy. See config.FRED_SERIES.
+    """
+    import config
+
+    meta = {s: m for s, m in {**config.FRED_SERIES, **config.YAHOO_SERIES}.items()
+            if m.get("group")}
+    if not meta:
+        return pd.DataFrame()
+
+    syms = list(meta)
+    ph = ",".join("?" * len(syms))
+    con = _connect()
+    try:
+        obs = con.execute(f"""
+            WITH ranked AS (
+                SELECT symbol, date, close,
+                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+                FROM macro_data
+                WHERE symbol IN ({ph}) AND close IS NOT NULL
+            )
+            SELECT symbol, date, close FROM ranked WHERE rn <= ?
+            ORDER BY symbol, date
+        """, syms + [int(spark_days)]).fetchdf()
+
+        # Change-z stats over FULL history (not the spark window — 180 obs is only 6
+        # points for a monthly series). Computed in SQL so we never pull 200k rows
+        # into pandas just for two moments.
+        #
+        # The change is measured in PCT for level-like units and ABSOLUTE for
+        # spreads/rates (config.S3_PCT_UNITS) — absolute change isn't stationary for
+        # a trending price, pct-change explodes for a series crossing zero. See the
+        # config note for the measured evidence.
+        pct_syms = [s for s, m in meta.items() if m.get("unit") in config.S3_PCT_UNITS]
+        pct_list = ",".join("?" * len(pct_syms)) if pct_syms else "NULL"
+        stats = con.execute(f"""
+            WITH d AS (
+                SELECT symbol, date, close,
+                       LAG(close) OVER (PARTITION BY symbol ORDER BY date) AS prev
+                FROM macro_data
+                WHERE symbol IN ({ph}) AND close IS NOT NULL
+            ), e AS (
+                SELECT symbol, date,
+                       CASE WHEN symbol IN ({pct_list})
+                            THEN (close - prev) / ABS(prev) * 100
+                            ELSE close - prev END AS v
+                FROM d
+                WHERE prev IS NOT NULL
+                  AND NOT (symbol IN ({pct_list}) AND prev = 0)
+            )
+            SELECT symbol,
+                   AVG(v) AS mu, STDDEV_SAMP(v) AS sd, COUNT(v) AS n,
+                   -- the latest change, in the same unit the moments were built from
+                   (ARRAY_AGG(v ORDER BY date DESC))[1] AS latest_v
+            FROM e GROUP BY symbol
+        """, syms + pct_syms + pct_syms).fetchdf().set_index("symbol")
+    finally:
+        con.close()
+
+    rows = []
+    for sym, m in meta.items():
+        g = obs[obs["symbol"] == sym]
+        latest = g.iloc[-1] if not g.empty else None
+        prior = g.iloc[-2]["close"] if len(g) >= 2 else float("nan")
+        value = float(latest["close"]) if latest is not None else float("nan")
+
+        # z of the latest CHANGE vs the series' own full-history change distribution.
+        # `latest_v` comes from the same SQL that built mu/sd, so it is guaranteed to
+        # be in the same unit (pct vs absolute) as the moments — recomputing it here
+        # would silently mix units for the pct series.
+        z = float("nan")
+        if sym in stats.index:
+            mu, sd, n, latest_v = stats.loc[sym, ["mu", "sd", "n", "latest_v"]]
+            # sd==0 (a series that never moves) or n<30 (too few points for a stable
+            # sigma) -> no z rather than a fabricated one.
+            if pd.notna(sd) and sd > 0 and n >= 30 and pd.notna(latest_v):
+                z = (latest_v - mu) / sd
+
+        rows.append({
+            "symbol": sym,
+            "name": m.get("name", sym),
+            "group": m["group"],
+            "freq": m.get("freq", ""),
+            "unit": m.get("unit", ""),
+            "revised": bool(m.get("revised", False)),
+            "date": latest["date"] if latest is not None else None,
+            "value": value,
+            "prior": prior,
+            # guard div-by-zero: spreads legitimately cross zero (T10Y2Y inverted 2022-23)
+            "chg_pct": (value - prior) / abs(prior) * 100 if prior and pd.notna(prior) and prior != 0 else float("nan"),
+            "z": z,
+            "spark": g["close"].astype(float).tolist(),
+            "n_obs": len(g),
+        })
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=300)

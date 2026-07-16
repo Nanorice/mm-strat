@@ -140,9 +140,22 @@ decisions above, not data sourcing.
 prior / now / Δ% / sparkline / range. This is a **macro-ingestion backlog**, not a
 dashboard task.
 
-**Coverage today: ~12 of ~66.** Present: HY OAS, CPI, 10Y real, 10Y, 2Y (→ can
-derive 2s10s), RRP, VIX, Fed BS (WALCL), TGA (WTREGEN), Baa, CAPE. Everything else
-is missing.
+**Coverage: 42 of ~66 — SHIPPED 2026-07-16** (was ~12). The **C1 FRED tier is
+done**: `config.FRED_SERIES` now carries 45 entries, 42 of them `group`-tagged and
+rendering on the board across 8 of the 10 groups. Remaining gaps are **C2**
+(AAII/NAAIM/COT scrapes → group 7 Flows) and **C3** (futures/MOVE/VVIX/SKEW/term
+premium/FOMC calendar → group 10 + the deferred rows), exactly as tiered below.
+
+⚠️ Two C1 IDs came back **shallower than this doc assumed** (caught by the
+pre-commit smoke test, 36/36 fetched): `BAMLC0A0CM` (IG OAS) has only **785 rows
+from 2023-07** — it is NOT a deep 2003+ series like its HY sibling
+`BAMLH0A0HYM2` (6,148 rows) and would fail M03's 10yr-z bar; `EXHOSLUSM495S`
+(existing home sales) is re-based → **13 rows**. Both display fine, neither is
+model-grade.
+
+⚠️ **22 of the 42 are FRED-REVISED** series captured at **first print only**
+(`write_to_macro_data` is `INSERT OR IGNORE`). Display-only — see
+`config.FRED_SERIES` for the flag and the `INSERT OR REPLACE` upgrade path.
 
 **Triage into 3 ingestion tiers** (build the board incrementally; grey out
 missing rows, don't gate the page on all 66):
