@@ -657,7 +657,8 @@ def fear_greed_label(score: float) -> str:
 @st.cache_data(ttl=300)
 def load_macro_indicators(spark_days: int = 180) -> pd.DataFrame:
     """Macro-page S3 indicator board — one row per `config.FRED_SERIES` /
-    `config.YAHOO_SERIES` entry that carries a `group` tag, newest observation first.
+    `config.YAHOO_SERIES` / `config.SENTIMENT_SERIES` entry that carries a `group`
+    tag, newest observation first.
 
     Columns: symbol, name, group, freq, unit, revised, date, value, prior, chg_pct,
     z, spark (list[float], oldest→newest), n_obs. A configured series with no rows in
@@ -681,7 +682,8 @@ def load_macro_indicators(spark_days: int = 180) -> pd.DataFrame:
     """
     import config
 
-    meta = {s: m for s, m in {**config.FRED_SERIES, **config.YAHOO_SERIES}.items()
+    meta = {s: m for s, m in {**config.FRED_SERIES, **config.YAHOO_SERIES,
+                              **config.SENTIMENT_SERIES}.items()
             if m.get("group")}
     if not meta:
         return pd.DataFrame()

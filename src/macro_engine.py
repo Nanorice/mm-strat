@@ -3,6 +3,8 @@ Macro Engine - DuckDB Macro Data Fetcher
 Fetches and writes macroeconomic data (SPY, QQQ, VIX) to t1_macro table.
 """
 
+import io
+import re
 import pandas as pd
 import numpy as np
 import requests
@@ -252,6 +254,107 @@ class MacroEngine:
         df = df[~df.index.duplicated(keep='last')]
         return df[df.index >= pd.Timestamp(start_date)]
 
+    AAII_URL = "https://www.aaii.com/files/surveys/sentiment.xls"
+    NAAIM_PAGE_URL = "https://naaim.org/programs/naaim-exposure-index/"
+    # One survey sheet -> 3 symbols; drives both the update_series dispatch and the
+    # nightly loop. Must stay in sync with config.SENTIMENT_SERIES (a test pins it).
+    AAII_SERIES = ('AAII_BULL', 'AAII_BEAR', 'AAII_SPREAD')
+
+    def fetch_aaii_sentiment(self, start_date: str = '2003-01-01') -> pd.DataFrame:
+        """AAII weekly retail sentiment survey -> AAII_BULL / AAII_BEAR / AAII_SPREAD.
+
+        Real .xls (magic D0CF), weekly since 1987. The sheet has 3 junk rows above
+        the header and trailing commentary below the data, so rather than pinning
+        header=3 (which silently shifts if AAII adds a banner row) we keep only rows
+        whose first cell parses as a date — self-correcting against layout drift.
+
+        Values are FRACTIONS (0.36 = 36% bullish); stored as percent to match how the
+        board formats every other 'percent' unit. SPREAD = bull - bear, the way the
+        survey is actually read (the contrarian signal is the spread, not either leg).
+        """
+        cached = getattr(self, '_aaii_cache', None)
+        if cached is not None:
+            return cached[cached.index >= pd.Timestamp(start_date)]
+
+        try:
+            from curl_cffi import requests as cffi_requests
+
+            r = cffi_requests.get(self.AAII_URL, impersonate="chrome", timeout=60)
+            r.raise_for_status()
+            # AAII sits behind Imperva bot defense, which answers a tripped request
+            # with HTTP 200 + a "Pardon Our Interruption" HTML interstitial. Status
+            # and length both look fine; only the payload gives it away, and feeding
+            # it to read_excel raises a misleading "format cannot be determined".
+            # OLE2 (.xls) starts D0CF11E0; a zip-based .xlsx starts PK.
+            if not r.content.startswith((b'\xd0\xcf\x11\xe0', b'PK')):
+                logger.error(
+                    f"AAII: not an Excel payload ({len(r.content)}B, "
+                    f"starts {r.content[:4]!r}) — bot-block interstitial, not data")
+                return pd.DataFrame()
+            raw = pd.read_excel(io.BytesIO(r.content), sheet_name=0, header=None)
+        except Exception as e:
+            logger.error(f"AAII fetch failed: {e}")
+            return pd.DataFrame()
+
+        dates = pd.to_datetime(raw.iloc[:, 0], errors='coerce', format='mixed')
+        df = raw[dates.notna()].copy()
+        if df.empty:
+            logger.warning("AAII: no date-like rows found (layout changed?)")
+            return pd.DataFrame()
+
+        out = pd.DataFrame(index=dates[dates.notna()].values)
+        for col, name in ((1, 'AAII_BULL'), (3, 'AAII_BEAR')):
+            out[name] = pd.to_numeric(df.iloc[:, col], errors='coerce').values * 100
+        out['AAII_SPREAD'] = out['AAII_BULL'] - out['AAII_BEAR']
+        out = out.dropna(how='all').sort_index()
+        out = out[~out.index.duplicated(keep='last')]
+        out.index.name = 'observation_date'
+        self._aaii_cache = out  # only successful parses are cached
+        return out[out.index >= pd.Timestamp(start_date)]
+
+    def fetch_naaim_exposure(self, start_date: str = '2003-01-01') -> pd.DataFrame:
+        """NAAIM Exposure Index (active-manager equity exposure) -> NAAIM.
+
+        The export filename is DATE-STAMPED (USE_Data-since-Inception_2026-07-15.xlsx)
+        and rolls weekly, so the link is scraped off the page rather than hardcoded —
+        a pinned URL would 404 within a week, and NAAIM's 404 serves 175KB of HTML
+        that a status/size check would happily mistake for data.
+
+        Weekly since 2006 (no deeper history exists). Range is roughly -200..+200
+        (managers may be net short or levered long).
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+
+            page = cffi_requests.get(self.NAAIM_PAGE_URL, impersonate="chrome", timeout=40)
+            page.raise_for_status()
+            links = re.findall(r'href="([^"]+USE[^"]*\.xlsx?)"', page.text, re.I)
+            if not links:
+                logger.error("NAAIM: no export link found on page (layout changed?)")
+                return pd.DataFrame()
+            r = cffi_requests.get(links[0], impersonate="chrome", timeout=60)
+            r.raise_for_status()
+            if not r.content.startswith((b'\xd0\xcf\x11\xe0', b'PK')):
+                logger.error(
+                    f"NAAIM: not an Excel payload ({len(r.content)}B, "
+                    f"starts {r.content[:4]!r}) — 404 page or bot block, not data")
+                return pd.DataFrame()
+            raw = pd.read_excel(io.BytesIO(r.content))
+        except Exception as e:
+            logger.error(f"NAAIM fetch failed: {e}")
+            return pd.DataFrame()
+
+        if 'Date' not in raw.columns or 'Mean/Average' not in raw.columns:
+            logger.error(f"NAAIM: unexpected columns {list(raw.columns)[:6]}")
+            return pd.DataFrame()
+
+        out = pd.DataFrame({'NAAIM': pd.to_numeric(raw['Mean/Average'], errors='coerce').values},
+                           index=pd.to_datetime(raw['Date'], errors='coerce'))
+        out = out[out.index.notna()].dropna().sort_index()
+        out = out[~out.index.duplicated(keep='last')]
+        out.index.name = 'observation_date'
+        return out[out.index >= pd.Timestamp(start_date)]
+
     def fetch_yahoo_series(self, symbol: str, start_date: str = '2003-01-01') -> pd.DataFrame:
         """Fetch a Yahoo symbol (commodity futures) as a single close column.
 
@@ -298,6 +401,14 @@ class MacroEngine:
             new_data = self.fetch_cape(start_date)
         elif series_id == 'FEAR_GREED':
             new_data = self.fetch_fear_greed(start_date)
+        elif series_id == 'NAAIM':
+            new_data = self.fetch_naaim_exposure(start_date)
+        elif series_id in self.AAII_SERIES:
+            # One fetch yields all 3 AAII columns; write_to_macro_data takes one
+            # symbol per call, so slice to this series' column (passing the whole
+            # frame would silently write column 0 under every symbol name).
+            aaii = self.fetch_aaii_sentiment(start_date)
+            new_data = aaii[[series_id]] if series_id in aaii.columns else pd.DataFrame()
         elif series_id in config.YAHOO_SERIES:
             new_data = self.fetch_yahoo_series(series_id, start_date)
         else:
@@ -349,6 +460,20 @@ class MacroEngine:
                     self.write_to_macro_data(series_id, df)
             except Exception as e:
                 logger.error(f"Yahoo series {series_id} failed: {e}")
+                results[series_id] = 0
+
+        # Sentiment/positioning scrapes (S3 group 7). Isolated per-symbol like the
+        # Yahoo loop: these parse third-party spreadsheets whose layout can change
+        # without notice, and a broken scrape must not fail the nightly macro phase.
+        for series_id in ('NAAIM',) + self.AAII_SERIES:
+            logger.info(f"Updating {series_id} (scrape)...")
+            try:
+                df = self.update_series(series_id, force=force)
+                results[series_id] = len(df)
+                if write_db and not df.empty:
+                    self.write_to_macro_data(series_id, df)
+            except Exception as e:
+                logger.error(f"Sentiment series {series_id} failed: {e}")
                 results[series_id] = 0
 
         # Update non-FRED series (VIX from FRED VIXCLS, CAPE from Yale XLS,

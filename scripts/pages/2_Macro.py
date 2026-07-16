@@ -68,9 +68,9 @@ S1_PILLARS = [
     ("CAPE",        "CAPE",        "CAPE_pct",        "{:.1f}",   "risk-off"),
 ]
 
-# S3 board group order + display titles. Keys match `group` in config.FRED_SERIES;
-# a group with no ingested series is skipped. Groups 7 (flows/positioning) and 10
-# (calendar) have no C1 source — they land with the C2 scrapes / C3 feeds.
+# S3 board group order + display titles. Keys match `group` in config.FRED_SERIES /
+# YAHOO_SERIES / SENTIMENT_SERIES; a group with no ingested series is skipped.
+# Group 10 (calendar) has no source yet — it lands with the C3 feeds.
 S3_GROUPS = [
     ("growth",           "1 · Growth"),
     ("inflation",        "2 · Inflation"),
@@ -78,6 +78,7 @@ S3_GROUPS = [
     ("rates_curve",      "4 · Rates & curve"),
     ("liquidity_credit", "5 · Liquidity & credit"),
     ("risk_regime",      "6 · Risk regime"),
+    ("flows",            "7 · Flows & positioning"),
     ("geopolitics",      "8 · Geopolitics"),
     ("cyclicals",        "9 · Cyclical sectors"),
 ]

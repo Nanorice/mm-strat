@@ -572,26 +572,55 @@ def check_macro_integrity(con: duckdb.DuckDBPyConnection) -> None:
 # ---------------------------------------------------------------------------
 # Section 5b: Macro Data (macro_data — long FRED/Yale series) Integrity
 # ---------------------------------------------------------------------------
-# Per-symbol max staleness (calendar days). Daily series should be fresh within a
-# week; weekly FRED releases and monthly CAPE legitimately lag further.
+# Staleness tolerance (calendar days) per release frequency, derived from each series'
+# `freq` in config rather than a per-symbol list. The old hardcoded dict covered 12
+# symbols while macro_data had grown to 66 — the 54 series added by the S3 board had NO
+# freshness check at all, so a dead feed would have gone unnoticed indefinitely. Same
+# fix as the board itself: drive off config metadata, and a new series is audited the
+# moment it's configured.
+#
+# MEASURED, not guessed (2026-07-16, worst staleness on a HEALTHY feed over 2y):
+# D=6 (DEXJPUS/DTWEXBGS skip US holidays), W=12 (CCSA), M=106 (SPCS20RSA — Case-Shiller
+# is a 2-month-lagged 3-month average), Q=196 (DRCCLACBS). The gap between OBSERVATIONS
+# is much smaller (M=31d), but these series are DATED AT PERIOD START and published
+# weeks later, so tolerance must cover period lag + publication lag. Tuning these down
+# to the observation gap would warn daily on healthy feeds — the same wallpaper failure
+# the S3 banner thresholds already taught us. Values below = observed worst + headroom.
+MACRO_FRESHNESS_BY_FREQ: dict[str, int] = {
+    "D": 10,   # observed 6; covers a long weekend + a late/holiday print
+    "W": 18,   # observed 12; covers one missed weekly release
+    "M": 125,  # observed 106 (Case-Shiller's 2mo lag); covers one missed month
+    "Q": 230,  # observed 196 (CC delinquencies); covers one missed quarter
+}
+
+# Symbols NOT in the config dicts (fetched by bespoke paths), or whose tolerance can't
+# come from `freq`. Anything here overrides the freq-derived default.
 MACRO_DATA_EXPECTED: dict[str, int] = {
-    "VIX": 5,            # daily (FRED VIXCLS)
-    "DGS10": 5,          # daily
-    "DGS2": 5,           # daily
-    "DFII10": 5,         # daily (10Y real yield)
-    "BAMLH0A0HYM2": 5,   # daily (HY OAS)
-    "RRPONTSYD": 5,      # daily (overnight RRP)
-    "WALCL": 12,         # weekly (Fed balance sheet, Wed release)
-    "WTREGEN": 12,       # weekly (TGA)
-    "WBAA": 12,          # weekly (Baa yield)
-    "CPIAUCSL": 70,      # monthly (CPI, ~1mo release lag; deflator for CAPE_OURS)
+    "VIX": 10,           # daily (FRED VIXCLS) — not in FRED_SERIES, fetched by name
     "CAPE_OURS": 40,     # monthly self-computed valuation pillar — recomputes nightly,
-                         #   trails only the latest month-start. This is the LIVE pillar.
+                         #   trails only the latest month-start (so it does NOT need the
+                         #   125d publication-lag allowance a real monthly print does).
     "CAPE": 800,         # Yale Shiller ie_data.xls — DORMANT (froze 2024-09), kept only as
                          #   a cross-check vs CAPE_OURS. Not fetchable fresh; see sprint_13
                          #   cape_fred_proxy_findings.md. 800d tolerance = don't alarm on a
                          #   source we've deliberately superseded.
+    "FEAR_GREED": 10,    # daily CNN scrape; ~1yr history only, display gauge
+    # Shallow/discontinued FRED IDs — real but not fresh; don't alarm nightly.
+    "EXHOSLUSM495S": 9999,  # re-based ID, ~13 rows, effectively dead
 }
+
+
+def _macro_configured() -> dict[str, dict]:
+    """Every series configured for macro_data, merged across the source dicts.
+
+    Imported lazily so a config without the newer dicts (older checkout) still runs.
+    """
+    import config as _cfg
+
+    merged: dict[str, dict] = {}
+    for name in ("FRED_SERIES", "YAHOO_SERIES", "SENTIMENT_SERIES"):
+        merged.update(getattr(_cfg, name, {}))
+    return merged
 
 
 def check_macro_data_integrity(con: duckdb.DuckDBPyConnection) -> None:
@@ -616,16 +645,33 @@ def check_macro_data_integrity(con: duckdb.DuckDBPyConnection) -> None:
         ).fetchall()
     }
 
-    for sym, max_stale in MACRO_DATA_EXPECTED.items():
+    # Every configured series is audited, tolerance from its `freq`. A series that is
+    # configured but never lands is a FAIL: it means the nightly fetch is silently
+    # failing (the S3 board would just grey the row out and say nothing).
+    expected = {
+        sym: MACRO_DATA_EXPECTED.get(sym, MACRO_FRESHNESS_BY_FREQ.get(meta.get("freq"), 5))
+        for sym, meta in _macro_configured().items()
+    }
+    expected.update(MACRO_DATA_EXPECTED)  # bespoke symbols not in any config dict
+
+    for sym in sorted(expected):
+        max_stale = expected[sym]
         if sym not in present:
             _check("macro_data", f"symbol_{sym}", "FAIL", "MISSING",
-                   f"Expected series '{sym}' absent from macro_data (dashboard pillar will be blank)")
+                   f"Configured series '{sym}' absent from macro_data (fetch failing silently)")
             continue
         n, mx = present[sym]
         days_since = (today - mx).days if mx else 9999
         status = "OK" if days_since <= max_stale else "WARNING"
         _check("macro_data", f"symbol_{sym}", status, str(mx),
                f"{n} rows, {days_since}d stale (tolerance {max_stale}d)")
+
+    # A series ingesting into macro_data that no config dict knows about — it will never
+    # render on the S3 board and nothing owns its freshness.
+    orphans = sorted(set(present) - set(expected))
+    _check("macro_data", "unconfigured_symbols", "WARNING" if orphans else "OK", len(orphans),
+           f"symbols in macro_data with no config entry: {', '.join(orphans)}" if orphans
+           else "every ingested symbol is configured")
 
     # The dashboard reads `close`; `value` is unused. Guard against a regression
     # where a writer populates `value` instead, which silently blanks the gauge.

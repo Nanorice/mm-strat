@@ -96,9 +96,86 @@ def test_s3_groups_match_config():
     ns = _extract("S3_GROUPS = [", "\ndef _fg_gauge(")
     rendered = {g for g, _ in ns["S3_GROUPS"]}
     configured = {m["group"]
-                  for m in {**config.FRED_SERIES, **config.YAHOO_SERIES}.values()
+                  for m in {**config.FRED_SERIES, **config.YAHOO_SERIES,
+                            **config.SENTIMENT_SERIES}.values()
                   if m.get("group")}
     assert configured - rendered == set(), f"ingested but never rendered: {configured - rendered}"
+
+
+def test_sentiment_series_are_grouped_and_absolute_z():
+    """Group 7. Survey readings cross/sit near zero (AAII_SPREAD), so they must take
+    the ABSOLUTE-change z — a pct z would explode exactly like T10Y2Y's did."""
+    assert config.SENTIMENT_SERIES, "group 7 block missing"
+    for sid, m in config.SENTIMENT_SERIES.items():
+        assert m.get("group") == "flows", f"{sid} would never render"
+        assert m["unit"] not in config.S3_PCT_UNITS, f"{sid}: needs absolute-change z"
+        # Surveys are a point-in-time count: nothing to restate, so no revised flag.
+        assert not m.get("revised"), f"{sid}: a survey print is never revised"
+
+
+def test_sentiment_dispatch_covers_every_configured_symbol():
+    """update_series dispatches NAAIM by name and AAII off AAII_SERIES; a symbol in
+    config with no dispatch arm would fall through to fetch_fred_series and 404."""
+    from src.macro_engine import MacroEngine
+
+    dispatched = {"NAAIM", *MacroEngine.AAII_SERIES}
+    assert set(config.SENTIMENT_SERIES) == dispatched, "config/dispatch drift"
+
+
+def test_aaii_rejects_bot_block_interstitial():
+    """AAII sits behind Imperva, which answers a tripped request with HTTP 200 + an
+    HTML 'Pardon Our Interruption' page. Status and length look fine — only the magic
+    bytes give it away. Hit live 2026-07-16; read_excel's error ('format cannot be
+    determined') hid the real cause, so the guard must reject it BEFORE parsing."""
+    from unittest.mock import patch
+
+    from src.macro_engine import MacroEngine
+
+    class FakeResp:
+        content = b"<!DOCTYPE html><html><head><title>Pardon Our Interruption</title>"
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+    e = MacroEngine.__new__(MacroEngine)  # no DB/network in ctor
+    with patch("curl_cffi.requests.get", return_value=FakeResp()), \
+            patch("pandas.read_excel") as read_excel:
+        out = e.fetch_aaii_sentiment()
+
+    assert out.empty, "HTML interstitial must not parse as data"
+    # The point of the guard: reject on the magic bytes, BEFORE parsing. Without it
+    # read_excel still raises and the broad except still returns empty — so asserting
+    # only `.empty` passes even with the guard deleted (verified by mutation).
+    read_excel.assert_not_called()
+
+
+def test_every_configured_series_is_freshness_audited():
+    """The audit's per-symbol dict covered 12 symbols while macro_data held 66 — the 54
+    S3 series had NO freshness check, so a dead feed was invisible. Tolerance now comes
+    from `freq`, which means every config entry MUST carry a freq the audit knows."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from audit_t1_data_quality import MACRO_DATA_EXPECTED, MACRO_FRESHNESS_BY_FREQ
+
+    configured = {**config.FRED_SERIES, **config.YAHOO_SERIES, **config.SENTIMENT_SERIES}
+    for sid, m in configured.items():
+        if sid in MACRO_DATA_EXPECTED:
+            continue
+        assert m.get("freq") in MACRO_FRESHNESS_BY_FREQ, \
+            f"{sid}: freq={m.get('freq')!r} has no staleness tolerance -> unaudited"
+
+
+def test_freshness_tolerances_clear_measured_publication_lag():
+    """Measured 2026-07-16 on healthy feeds: worst staleness D=6, W=12, M=106
+    (Case-Shiller lags ~2mo), Q=196. A monthly series is DATED AT PERIOD START and
+    printed weeks later, so a tolerance set to the 31d observation gap warns every day
+    on a healthy feed — the S3-banner wallpaper failure again. Don't tighten without
+    re-measuring."""
+    from audit_t1_data_quality import MACRO_FRESHNESS_BY_FREQ as T
+
+    for freq, observed in (("D", 6), ("W", 12), ("M", 106), ("Q", 196)):
+        assert T[freq] > observed, \
+            f"{freq}: tolerance {T[freq]}d <= measured healthy staleness {observed}d -> warns daily"
 
 
 def test_revised_series_are_flagged():

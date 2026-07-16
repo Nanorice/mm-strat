@@ -211,6 +211,24 @@ YAHOO_SERIES = {
     'URA':  {'name': 'Uranium (URA ETF)', 'freq': 'D', 'unit': 'usd', 'group': 'geopolitics'},  # 2010+, ETF not futures
 }
 
+# S3 group 7 (Flows & Positioning) — weekly sentiment surveys, scraped (C2 tier).
+# Not FRED: AAII publishes an .xls, NAAIM a date-stamped .xlsx whose URL rolls weekly
+# and is scraped off the page (see macro_engine.fetch_naaim_exposure).
+#
+# 'percent' unit -> ABSOLUTE-change z (see S3_PCT_UNITS): these are bounded survey
+# readings that legitimately cross zero (AAII_SPREAD) or sit near it, so a pct-change
+# z would explode exactly like T10Y2Y did.
+#
+# Display-only like the rest of S3. Both are weekly (Thu print) and NOT revised —
+# a survey is a point-in-time count, so first-write-wins costs nothing here.
+# COT positioning (the third C2 source) is deferred: one 87-column zip per year.
+SENTIMENT_SERIES = {
+    'AAII_BULL':   {'name': 'AAII Bullish', 'freq': 'W', 'unit': 'percent', 'group': 'flows'},
+    'AAII_BEAR':   {'name': 'AAII Bearish', 'freq': 'W', 'unit': 'percent', 'group': 'flows'},
+    'AAII_SPREAD': {'name': 'AAII Bull-Bear Spread', 'freq': 'W', 'unit': 'percent', 'group': 'flows'},
+    'NAAIM':       {'name': 'NAAIM Exposure Index', 'freq': 'W', 'unit': 'percent', 'group': 'flows'},
+}
+
 # S3 anomaly banner: |z| of the latest CHANGE, per series, over its FULL history
 # (see load_macro_indicators). Change-z not level-z — a slow series parks at level
 # ±2σ for years, so a level banner would never switch off; change-z answers "did
