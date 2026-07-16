@@ -46,7 +46,7 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 ### Tier 1 — Decision pages
 | Page | Status | Doc | Data gap | Notes |
 |---|---|---|---|---|
-| **Macro** | ✅ | `macro_page.md` + `macro_page_mock.html` | **C2 scrapes + C3 feeds** (42/66 live; C1 FRED done) | **S1+S2+S3 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. S3 = indicator board over the 42 grouped `FRED_SERIES` (8 of 10 groups; flows/calendar await C2/C3). |
+| **Macro** | ✅ | `macro_page.md` + `macro_page_mock.html` | **COT + C3 feeds** (58/61 live; C1 FRED + AAII/NAAIM done) | **S1+S2+S3 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. S3 = indicator board, **9 of 10 groups** (group 7 filled by the C2 sentiment scrapes; only 10/calendar awaits C3). |
 | **Screening** | ✅ | `screening_page.md` | **near-zero** (P/E derived) | **SHIPPED** (`scripts/pages/3_Screening.py` on shadow app; `v_d3_screening` view + MANIFEST + `load_screening`). Population = trend_ok∨breakout_ok (619); stage/fundamental filters in `st.form`; P(HR) rank + aggressive small-cap strip. No point-return column (honest cone). |
 | **Portfolio** | ⬜ | — | **high** (no live `positions`/`nav_history` tables) | not drafted |
 | **Track Record** | ⬜ | — | **medium** (needs `forecasts` ledger; Brier/cone scoring already exists) | not drafted; highest-leverage new table |
@@ -84,6 +84,70 @@ in alongside whichever data thread lands them.
 
 ## Build log
 
+- **2026-07-16 — S3 group 7 (Flows & Positioning): AAII + NAAIM ingest.** The last
+  group with no source; board now **9 of 10 groups**. Scope confirmed with the user:
+  AAII+NAAIM only, **COT deferred** (87-col file, one zip PER YEAR ≈ 20 fetches to
+  backfill, plus a market-selection + net-position derivation — triples the work for a
+  third sentiment read).
+  - `config.SENTIMENT_SERIES` (NEW dict, 4 symbols) + `macro_engine.fetch_aaii_sentiment`
+    / `fetch_naaim_exposure` + dispatch + an **isolated** nightly loop (per-symbol try,
+    like the Yahoo loop — these parse third-party spreadsheets whose layout can change).
+    Ingest free as predicted: `macro_data` is MANIFEST-`full` → **zero orchestrator/
+    MANIFEST edits**.
+  - **NAAIM: 1,045 weekly rows, 2006→2026-07-15, live in main + slim.** ✓
+  - ⚠️ **AAII: fetcher verified against live data (1,228 rows, 2003+, bull+bear ≤100,
+    spread ≡ bull−bear) but NOT yet ingested** — the IP tripped **Imperva bot defense**
+    mid-session. Configured-but-empty → the 3 rows grey out; the nightly picks them up
+    when the block ages out. No retry loop added (hammering hardens the block).
+  - 🐛 **The exact trap this thread keeps hitting: AAII's block returns HTTP 200 with
+    6KB of HTML** ("Pardon Our Interruption"). Status *and* a plausible length both look
+    fine; `read_excel` then raises a **misleading** "format cannot be determined" that
+    hides the cause. Guard = **magic bytes** (`D0CF11E0` .xls / `PK` .xlsx) *before*
+    parsing, applied to NAAIM too (same exposure — its 404 serves 175KB of HTML).
+    Reinforces **smoke-test the payload, not the status code**.
+  - **NAAIM's export URL is date-stamped** (`USE_Data-since-Inception_2026-07-15.xlsx`)
+    and rolls weekly → scraped off the page, never hardcoded (a pinned URL 404s within
+    a week *into HTML that looks alive*).
+  - **AAII sheet parsed by date-detection, not `header=3`** — a pinned header row
+    silently shifts if AAII adds a banner. 3 junk rows above, commentary below.
+  - `write_to_macro_data` takes **one symbol per call** (`value_col = df.columns[0]`),
+    so the 3-column AAII frame is sliced per symbol at dispatch — passing it whole would
+    have silently written `AAII_BULL`'s values under all three names.
+  - Unit: `percent` → **absolute-change z** (AAII_SPREAD crosses zero; a pct z would
+    explode like T10Y2Y's 22.6% σ). Not `revised` — a survey print is a point-in-time
+    count, so INSERT-OR-IGNORE costs nothing. Display-only like the rest of S3.
+  - ✅ Verified: parity checked by opening `dashboard.duckdb` **directly** (66/66
+    symbols, no loader) after rebuilding **post-ingest**; NAAIM z=0.98 (quiet, correctly
+    under the 1.5σ amber); `/` + `/Macro` 200 clean. **335 passed** (was 332; +3 new).
+  - 🧪 The bot-block test was **mutation-checked**: the first version passed even with
+    the guard deleted (read_excel raises → broad `except` → empty either way), so
+    `.empty` proved nothing. Now asserts `read_excel` is **never called**; verified it
+    fails with the guard removed and passes with it.
+- **2026-07-16 — Data-quality audit: macro_data freshness 12 → 66 symbols.**
+  Prompted by "update the DQ check with the new feeds"; the real finding was bigger than
+  the two new feeds. `tools/audit_t1_data_quality.py` held a hardcoded
+  `MACRO_DATA_EXPECTED` of **12 symbols while macro_data had grown to 66** — every one of
+  the **54 series added by the S3 board over sessions 01–03 had NO freshness check**. A
+  dead FRED/Yahoo feed would have gone unnoticed indefinitely (the board greys the row
+  out and says nothing).
+  - Fix = the same one the board already uses: **derive tolerance from each series'
+    `freq`** (`MACRO_FRESHNESS_BY_FREQ`), so a newly-configured series is audited the
+    moment it's added. `MACRO_DATA_EXPECTED` shrinks to genuine exceptions (VIX/CAPE/
+    CAPE_OURS/FEAR_GREED + the dead `EXHOSLUSM495S`). New check: **unconfigured_symbols**
+    (ingesting but in no config dict → never renders, nothing owns its freshness).
+  - 📏 **Tolerances MEASURED, not guessed.** First cut (D5/W12/M70/Q190) fired **11
+    false warnings** on healthy feeds. Cause: the inter-OBSERVATION gap is small (M=31d)
+    but these series are **dated at PERIOD START and published weeks later**, so
+    staleness must cover period + publication lag. Measured worst-case on a healthy feed
+    over 2y: **D=6** (DEXJPUS/DTWEXBGS skip US holidays), **W=12** (CCSA), **M=106**
+    (SPCS20RSA — Case-Shiller is a 2mo-lagged 3mo average), **Q=196** (DRCCLACBS).
+    Shipped D10/W18/M125/Q230 = observed worst + headroom → **68 OK, 0 false warnings**.
+    Same wallpaper lesson as the S3 banner: an alert that fires on a healthy day is noise.
+    Test-guarded against re-tightening.
+  - ✅ Result: macro_data section 12 → **72 checks**; the only FAILs are the **3 AAII
+    rows** — i.e. the audit immediately caught the one thing genuinely broken. Other
+    sections' 3 FAIL / 7 WARNING are pre-existing (price_data/t1_macro), untouched.
+    Suite **337 passed** (+5 new).
 - **2026-07-16 — Macro S3 round 3**: commodities + anomaly banner + typography.
   - **Commodities via YAHOO (`config.YAHOO_SERIES`, 16 syms)** — Geopolitics 1 → 16
     rows. Yahoo beat FRED on **every** one (smoke-tested first): all daily + deep to
