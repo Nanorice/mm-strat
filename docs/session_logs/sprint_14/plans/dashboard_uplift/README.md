@@ -53,10 +53,20 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 | **Supply-chain** | 🟡 | `supply_chain_page.md` | **highest** (nodes yes, **zero edges**) | long-term; Tier-0 correlation mock → Tier-1 EDGAR 10-K extraction (new engine) vs Tier-2 buy |
 
 ### Tier 2 — Workshop pages (exist; grow, don't rebuild)
+
+> **Spine (user, 2026-07-17): `data → model/label → strategy`.** Pages split by **STAGE**;
+> the currency (C1 label / C2 OOS / C3 exit-P&L) is the claim-strength banner *within* a
+> page, not the split itself. Dataset EDA = data · Model Lab = model/label · Backtest
+> Studio = strategy. See `cone_and_studio_design.md`.
+> ⚠️ **All three are LIVE `dashboard.py` pages** — unlike Macro/Screening/Portfolio, a
+> revision here touches the working version. Uplift versions land as **new files** in the
+> shadow nav; the live ones stay untouched until switch-over.
+
 | Page | Status | Doc | Change |
 |---|---|---|---|
-| **Model Lab** | ✅ exists | — | absorb diagnostics cluster as "Live Monitoring" tab; link out to `docs/model_doc/`, don't duplicate. **Card ✅ adheres to methodology** (C1 banner shipped; only Section-G hang outstanding) |
-| **Backtest Studio** | 🟡 **revision planned** | `backtest_studio_page.md` | **⚠️ contradicts new methodology** — headlines the single Sharpe G6 retired, no cone, no C3 currency label, no engine tag. Revise: C3 banner + promote cone (=Gate tab) + engine column + demote single-Sharpe |
+| **Dataset EDA** | ✅ exists | `cone_and_studio_design.md` | **= the `data` stage.** Pretrain-audit report browser (120 lines). **No change planned** — it's input inspection, upstream of any currency claim. (The sprint EDA belongs on Model Lab, not here.) |
+| **Model Lab** | 🟡 **revision planned** | `cone_and_studio_design.md` | **= the `model/label` stage.** Absorb diagnostics as "Live Monitoring" tab + **the sprint-summary EDA** (funnel / label outcome / **LABEL cone** — the §5 buy-and-hold fan, NOT the backtest cone). Today it's a card browser with no population view. **Card ✅ adheres to methodology** (C1 banner shipped; Section-G hang outstanding) |
+| **Backtest Studio** | 🟡 **revision planned** | `backtest_studio_page.md` + `cone_and_studio_design.md` | **= the `strategy` stage. ⚠️ contradicts new methodology** — headlines the single Sharpe G6 retired, no cone, no C3 label, no engine tag. Revise: C3 banner → engine column → promote **strategy cone** (full distribution) → demote single-Sharpe. **+ cell-level zoom** (trades/rejections/exposure — the per-cell artifacts already carry all of it) |
 | **Pipeline Health** | ✅ exists | — | **DQ section shipped 2026-07-17** (`render_data_quality` — per-audit breakdown + failing checks + `new_fails` regressions) + the **audit-history zero-chart bug fixed**. Serving-layer audit now covers Phases 7.4/7.45/7.46/7.47. Still open: surface `deactivate_tickers.py` (memory TODO); a `comprehend_reports` row if that phase lands |
 
 ### Cross-cutting infra
@@ -462,5 +472,8 @@ in alongside whichever data thread lands them.
 - `screening_page.md` — Screening design.
 - `portfolio_risk_section.md` — Portfolio Risk section: shipped metrics, why no VaR, and the falsified-lever list that binds it.
 - `backtest_studio_page.md` — Backtest Studio revision (methodology adherence: cone + C3 currency).
+- `cone_and_studio_design.md` — **the TWO cones** (label §5 fan vs strategy `cone_gate`), the
+  `data → model/label → strategy` page spine, cell-level zoom, and the cache design
+  (Track A = bounded dashboard summary; Track B = re-runnability, infra-only).
 - `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers.
 - `research_layer_contract.md` — tradingagent → repo boundary.
