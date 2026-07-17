@@ -94,6 +94,9 @@ MANIFEST: list[tuple[str, str, dict]] = [
     ("screener_membership",  "full", {}),   # ticker add/remove effective-date history
     ("screener_watchlist",   "full", {}),   # every ACTIVE + EXITED trade (removals via exit_date/status)
     ("sepa_watchlist",       "full", {}),
+    ("trades",               "full", {}),   # hand-entered real fills (Portfolio page); append-only log
+    ("cash_flows",           "full", {}),   # external deposits/withdrawals — the cash leg of NAV
+    ("nav_history",          "full", {}),   # daily NAV mark (cash + positions) + net_flow for TWR
     ("earnings_calendar",    "full", {}),
     ("pipeline_runs",        "full", {}),   # 597 rows; 297 MB on disk is pure fragmentation, compacts to <1 MB
     ("pipeline_error_log",   "full", {}),

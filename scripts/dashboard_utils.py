@@ -582,6 +582,209 @@ def load_screening() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def load_portfolio() -> pd.DataFrame:
+    """Open positions derived from the hand-entered `trades` fill log.
+
+    `trades` is append-only (one row per fill); positions are DERIVED, never
+    stored — qty = SUM(+buy/-sell), avg_cost weighted over BUY fills only so a
+    partial sale doesn't distort the remaining lot's basis. Marked to the latest
+    `price_data.close`; an unpriced ticker marks NULL rather than dropping out.
+
+    Empty is the normal state until fills are entered via scripts/portfolio.py.
+
+    The derivation mirrors PortfolioManager.positions() rather than calling it:
+    the manager's ensure_schema() opens a WRITE connection, which would take an
+    exclusive lock against the dashboard's readers (and fail outright on the
+    read-only cloud container). `tests/test_portfolio_manager.py::
+    test_loader_matches_manager` pins the two to the same numbers.
+    """
+    con = _connect()
+    try:
+        return con.execute("""
+            WITH agg AS (
+                SELECT ticker,
+                       SUM(CASE WHEN side='BUY' THEN quantity ELSE -quantity END) AS qty,
+                       SUM(CASE WHEN side='BUY' THEN quantity*price + fees END)
+                         / NULLIF(SUM(CASE WHEN side='BUY' THEN quantity END), 0)  AS avg_cost,
+                       MIN(trade_date) AS first_entry,
+                       COUNT(*)        AS n_fills
+                FROM trades GROUP BY ticker
+            ),
+            px AS (
+                SELECT ticker, close, date AS price_date,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                FROM price_data
+                WHERE ticker IN (SELECT ticker FROM agg) AND close IS NOT NULL
+            ),
+            -- Latest PROD-model row per held ticker. The model scores only the
+            -- SEPA lifecycle universe (~751 of ~3,980 active names), so a held
+            -- name outside it gets NULL — an honest gap, not a stale score.
+            -- prob_class_1 is the binary model's P(fwd>30%); prob_class_3 is the
+            -- archived 4-class column and is NULL here (the known COALESCE trap).
+            scored AS (
+                SELECT ticker, cohort, prediction_date, rank_within_day,
+                       COALESCE(prob_class_3, prob_class_1) AS score_raw,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY prediction_date DESC) AS rn
+                FROM daily_predictions
+                WHERE model_version_id = (
+                        SELECT model_version_id FROM daily_predictions
+                        GROUP BY 1 ORDER BY MAX(prediction_date) DESC, MAX(ingested_at) DESC LIMIT 1)
+                  AND ticker IN (SELECT ticker FROM agg)
+            )
+            SELECT a.ticker, a.qty, a.avg_cost, p.close, p.price_date,
+                   a.qty * p.close                          AS market_value,
+                   (p.close - a.avg_cost) * a.qty           AS unrealized_pnl,
+                   (p.close / NULLIF(a.avg_cost,0) - 1)*100 AS pct_return,
+                   s.score_raw, s.cohort, s.rank_within_day, s.prediction_date AS score_date,
+                   c.sector, c.industry,
+                   a.first_entry, a.n_fills
+            FROM agg a
+            LEFT JOIN px p     ON p.ticker = a.ticker AND p.rn = 1
+            LEFT JOIN scored s ON s.ticker = a.ticker AND s.rn = 1
+            LEFT JOIN company_profiles c ON c.ticker = a.ticker
+            WHERE a.qty > 1e-9
+            ORDER BY market_value DESC NULLS LAST
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_nav_history() -> pd.DataFrame:
+    """Daily NAV marks from `nav_history`. NAV = cash + positions."""
+    con = _connect()
+    try:
+        return con.execute(
+            "SELECT date, nav, cash, positions_value, net_flow, n_open "
+            "FROM nav_history ORDER BY date"
+        ).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
+def load_cash() -> float:
+    """Cash balance DERIVED from cash_flows + fills (never a stored balance)."""
+    con = _connect()
+    try:
+        flows = con.execute("""
+            SELECT COALESCE(SUM(CASE WHEN kind='DEPOSIT' THEN amount ELSE -amount END), 0)
+            FROM cash_flows
+        """).fetchone()[0]
+        fills = con.execute("""
+            SELECT COALESCE(SUM(CASE WHEN side='BUY' THEN -(quantity*price) - fees
+                                     ELSE  (quantity*price) - fees END), 0)
+            FROM trades
+        """).fetchone()[0]
+    finally:
+        con.close()
+    return float(flows) + float(fills)
+
+
+@st.cache_data(ttl=300)
+def load_returns() -> pd.DataFrame:
+    """Daily TIME-WEIGHTED return series derived from nav_history.
+
+    r_t = (nav_t - net_flow_t) / nav_{t-1} - 1 — the day's external flow is
+    stripped, so a deposit is NOT a gain (a naive pct_change would book a 500k
+    contribution as a 500k profit). Mirrors PortfolioManager.returns(); pinned
+    by test_loader_returns_match_manager.
+    """
+    nav = load_nav_history()
+    if len(nav) < 2:
+        return pd.DataFrame(columns=["date", "ret", "cum_ret", "drawdown"])
+    nav = nav.sort_values("date").reset_index(drop=True)
+    prev = nav["nav"].shift(1)
+    nav["ret"] = (nav["nav"] - nav["net_flow"].fillna(0)) / prev - 1
+    nav = nav.iloc[1:].copy()
+    curve = (1 + nav["ret"]).cumprod()
+    nav["cum_ret"] = curve - 1
+    nav["drawdown"] = curve / curve.cummax().clip(lower=1.0) - 1
+    return nav[["date", "ret", "cum_ret", "drawdown"]]
+
+
+@st.cache_data(ttl=300)
+def load_portfolio_risk() -> pd.DataFrame:
+    """Per-position risk EXPOSURE facts for the held book. Descriptive, not signals.
+
+    Sourcing is deliberately split:
+      * ATR(14) / realized vol / 20d-50d support-resistance come from `price_data`,
+        so EVERY holding is covered — entries are discretionary, so a held name is
+        often outside the SEPA screen (t3 covers ~2.4k of ~4.0k active tickers).
+      * True 52-week high/low is READ from `t3_sepa_features` (precomputed, so it
+        survives the slim DB's ~172-bar window — a real 52w level cannot be
+        recomputed on the remote). NULL for non-screen names: an honest gap.
+
+    ATR is Wilder's true range averaged over 14 bars, computed here rather than
+    read from t3's `atr_20d` so the window is the same for every holding.
+
+    No VaR / expected shortfall on purpose: at ~4 concentrated same-sector names the
+    covariance term dominates, and a normal-ish VaR on a 172-bar window prints a
+    comfortable number right up to the regime that breaks it. It would mislead.
+    """
+    con = _connect()
+    try:
+        return con.execute("""
+            WITH held AS (
+                SELECT ticker,
+                       SUM(CASE WHEN side='BUY' THEN quantity ELSE -quantity END) AS qty
+                FROM trades GROUP BY ticker HAVING SUM(CASE WHEN side='BUY' THEN quantity ELSE -quantity END) > 1e-9
+            ),
+            bars AS (
+                SELECT p.ticker, p.date, p.high, p.low, p.close,
+                       LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date) AS prev_close,
+                       ROW_NUMBER() OVER (PARTITION BY p.ticker ORDER BY p.date DESC) AS rn
+                FROM price_data p
+                WHERE p.ticker IN (SELECT ticker FROM held) AND p.close IS NOT NULL
+            ),
+            tr AS (
+                -- True range; GREATEST/LEAST bound the OHLC dirt (rounding-epsilon
+                -- ordering violations are known in price_data).
+                SELECT ticker, date, close, rn,
+                       GREATEST(high, close) - LEAST(low, close)          AS hl,
+                       ABS(GREATEST(high, close) - COALESCE(prev_close, close)) AS hc,
+                       ABS(LEAST(low, close)  - COALESCE(prev_close, close))    AS lc,
+                       close / NULLIF(prev_close, 0) - 1                  AS ret
+                FROM bars
+            ),
+            agg AS (
+                SELECT ticker,
+                       AVG(CASE WHEN rn <= 14 THEN GREATEST(hl, hc, lc) END)        AS atr_14,
+                       STDDEV_SAMP(CASE WHEN rn <= 20 THEN ret END) * SQRT(252)*100 AS vol_20d,
+                       STDDEV_SAMP(CASE WHEN rn <= 60 THEN ret END) * SQRT(252)*100 AS vol_60d,
+                       MAX(CASE WHEN rn <= 20 THEN close END)                       AS res_20d,
+                       MIN(CASE WHEN rn <= 20 THEN close END)                       AS sup_20d,
+                       MAX(CASE WHEN rn <= 50 THEN close END)                       AS res_50d,
+                       MIN(CASE WHEN rn <= 50 THEN close END)                       AS sup_50d,
+                       MAX(CASE WHEN rn  = 1  THEN close END)                       AS last_close
+                FROM tr GROUP BY ticker
+            ),
+            wk52 AS (   -- precomputed; survives the slim window. NULL off-screen.
+                SELECT ticker, high_52w, low_52w,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                FROM t3_sepa_features WHERE ticker IN (SELECT ticker FROM held)
+            )
+            SELECT h.ticker, h.qty, a.last_close, a.atr_14,
+                   a.atr_14 / NULLIF(a.last_close,0) * 100 AS atr_pct,
+                   a.vol_20d, a.vol_60d,
+                   a.sup_20d, a.res_20d, a.sup_50d, a.res_50d,
+                   w.high_52w, w.low_52w,
+                   -- distances in ATR units: comparable across names, dollars are not
+                   (a.last_close - a.sup_50d) / NULLIF(a.atr_14,0) AS atr_to_sup_50d,
+                   (a.res_50d - a.last_close) / NULLIF(a.atr_14,0) AS atr_to_res_50d,
+                   h.qty * a.atr_14                                AS atr_move_value,
+                   c.beta
+            FROM held h
+            LEFT JOIN agg  a ON a.ticker = h.ticker
+            LEFT JOIN wk52 w ON w.ticker = h.ticker AND w.rn = 1
+            LEFT JOIN company_profiles c ON c.ticker = h.ticker
+            ORDER BY atr_move_value DESC NULLS LAST
+        """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_vip_watchlist() -> pd.DataFrame:
     """Manually-curated VIP watchlist with each name's latest live status.
 

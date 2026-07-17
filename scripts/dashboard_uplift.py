@@ -25,5 +25,6 @@ st.set_page_config(page_title="Dashboard Uplift", layout="wide")
 pg = st.navigation([
     st.Page(str(PAGES_DIR / "2_Macro.py"), title="Macro", icon="🌐"),
     st.Page(str(PAGES_DIR / "3_Screening.py"), title="Screening", icon="🔍"),
+    st.Page(str(PAGES_DIR / "4_Portfolio.py"), title="Portfolio", icon="💼"),
 ])
 pg.run()
