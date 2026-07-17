@@ -19,7 +19,7 @@ decisions → portfolio).
 
 | Tier | Pages | Audience | Style |
 |---|---|---|---|
-| **1 · Decision surface** (theta "Console") | Macro · Screening · Portfolio · Track Record · Supply-chain | daily decision-making | **new** cream/serif (`style.md`) |
+| **1 · Decision surface** (theta "Console") | Macro · Screening · Portfolio · ~~Track Record~~ (dropped) · Supply-chain | daily decision-making | **new** cream/serif (`style.md`) |
 | **2 · Workshop** (ours only) | Model Lab · Backtest Studio · Pipeline Health | operator/researcher | dense/mono — **do NOT theta-style** |
 
 Shared nav + header shell; divergent body density. theta exposes only Tier 1;
@@ -46,10 +46,10 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 ### Tier 1 — Decision pages
 | Page | Status | Doc | Data gap | Notes |
 |---|---|---|---|---|
-| **Macro** | ✅ | `macro_page.md` + `macro_page_mock.html` | **COT + C3 feeds** (58/61 live; C1 FRED + AAII/NAAIM done) | **S1+S2+S3 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. S3 = indicator board, **9 of 10 groups** (group 7 filled by the C2 sentiment scrapes; only 10/calendar awaits C3). |
+| **Macro** | ✅ | `macro_page.md` + `macro_page_mock.html` | **COT + C3 feeds** (61/61 live; C1 FRED + AAII/NAAIM ingested) | **S1+S2+S3 SHIPPED** (`scripts/pages/2_Macro.py` on shadow app). S1 = F&G dial (`curl_cffi` clears the CF 418 ✓) + 6 macro-pillar percentile tiles + deploy headline. S2 = `sector_breadth_engine.py` + Phase 7.46. S3 = indicator board, **9 of 10 groups** (group 7 filled by the C2 sentiment scrapes; only 10/calendar awaits C3). |
 | **Screening** | ✅ | `screening_page.md` | **near-zero** (P/E derived) | **SHIPPED** (`scripts/pages/3_Screening.py` on shadow app; `v_d3_screening` view + MANIFEST + `load_screening`). Population = trend_ok∨breakout_ok (619); stage/fundamental filters in `st.form`; P(HR) rank + aggressive small-cap strip. No point-return column (honest cone). |
-| **Portfolio** | ⬜ | — | **high** (no live `positions`/`nav_history` tables) | not drafted |
-| **Track Record** | ⬜ | — | **medium** (needs `forecasts` ledger; Brier/cone scoring already exists) | not drafted; highest-leverage new table |
+| **Portfolio** | ✅ | `portfolio_risk_section.md` | **closed** (`trades` + `cash_flows` + `nav_history`) | **SHIPPED incl. Risk section** (`scripts/pages/4_Portfolio.py` on shadow app). Append-only `trades` + `cash_flows` cash leg via `scripts/portfolio.py` CLI → derived positions/cash. **NAV = cash + positions; return TIME-WEIGHTED** (flows stripped per day → a deposit is not a gain) so YTD/drawdown are truthful. Score (raw) + cohort + %NLV + concentration + sector tilt. **Risk** = ATR/vol/S-R/52w/beta + 1-ATR-per-NAV, all from `price_data` so off-screen holdings are covered (entries are discretionary). Empty until fills are logged. ✅ `nav_history` **wired into the nightly** 2026-07-17 — **Phase 7.47** (`portfolio_nav`, WARN, between sector_breadth 7.46 and dashboard_db 7.5 so the row ships in the slim DB). |
+| **Track Record** | ❌ **DROPPED** | — | n/a | **Retired 2026-07-17 (user).** Overlaps Portfolio: reports are *study material*, entries/exits are **discretionary**, so the only thing actually "projected" is the entry/exit decision — which IS the `trades` log on Portfolio. Scoring the *report* would measure a thing that never bound the decision. The tradingagent structured-block contract it was blocked on wouldn't fix the overlap. ⚠️ The old "Brier/**cone** scoring already exists" claim was **wrong** — the cone is the *start-date* cone (strategy evaluation across 90 start dates); it has no role in scoring a forecast ledger. Two different things called "scoring". |
 | **Supply-chain** | 🟡 | `supply_chain_page.md` | **highest** (nodes yes, **zero edges**) | long-term; Tier-0 correlation mock → Tier-1 EDGAR 10-K extraction (new engine) vs Tier-2 buy |
 
 ### Tier 2 — Workshop pages (exist; grow, don't rebuild)
@@ -57,7 +57,7 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 |---|---|---|---|
 | **Model Lab** | ✅ exists | — | absorb diagnostics cluster as "Live Monitoring" tab; link out to `docs/model_doc/`, don't duplicate. **Card ✅ adheres to methodology** (C1 banner shipped; only Section-G hang outstanding) |
 | **Backtest Studio** | 🟡 **revision planned** | `backtest_studio_page.md` | **⚠️ contradicts new methodology** — headlines the single Sharpe G6 retired, no cone, no C3 currency label, no engine tag. Revise: C3 banner + promote cone (=Gate tab) + engine column + demote single-Sharpe |
-| **Pipeline Health** | ✅ exists | — | grow one freshness/failure row per new phase (esp. `comprehend_reports`); surface `deactivate_tickers.py` (memory TODO) |
+| **Pipeline Health** | ✅ exists | — | **DQ section shipped 2026-07-17** (`render_data_quality` — per-audit breakdown + failing checks + `new_fails` regressions) + the **audit-history zero-chart bug fixed**. Serving-layer audit now covers Phases 7.4/7.45/7.46/7.47. Still open: surface `deactivate_tickers.py` (memory TODO); a `comprehend_reports` row if that phase lands |
 
 ### Cross-cutting infra
 | Item | Status | Doc | Notes |
@@ -74,7 +74,7 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 1. **Screening** — most data-complete; retires 3 redundant Today tables immediately.
 2. **Macro** — S2 heatmap (data-complete) → S1 (F&G ingest) → S3 incremental (C1 FRED first).
 3. **Portfolio** — needs `positions`/`nav_history` tables first; unlocks the held-trades migration.
-4. **Track Record** — `forecasts` ledger + existing scoring; high leverage, low effort once agent emits convictions.
+4. ~~**Track Record**~~ — **DROPPED 2026-07-17** (overlaps Portfolio; see the tracker row).
 5. **Supply-chain** — long-term; Tier-0 mock now, edges as a separate research thread.
 
 Workshop-tier changes (Model Lab monitoring tab, Pipeline Health phase rows) slot
@@ -84,6 +84,153 @@ in alongside whichever data thread lands them.
 
 ## Build log
 
+- **2026-07-17 (session 06) — NAV nightly (Phase 7.47) · Track Record dropped · DQ section
+  + serving audit.** Three user decisions.
+  - **Phase 7.47 `portfolio_nav`** (WARN, order 7.47) — `snapshot_nav()` between
+    sector_breadth (7.46) and dashboard_db (7.5) so the row ships in the slim DB.
+    Modelled exactly on 7.46. `target_date` is a **str** in the orchestrator but
+    `snapshot_nav` takes a `date` → explicit `strptime`, no silent pass-through.
+    **Why it earns a slot despite writing 1 row/day**: a NAV series **cannot be honestly
+    backfilled** — TWR needs the day's `net_flow` recorded *on the day*, so a missed run
+    is a permanent hole. Driven for real on a temp DB: NAV 105,000 = cash 85k + positions
+    20k, net_flow 100k captured, idempotent on re-run (1 row after 2 runs).
+  - **Track Record DROPPED** (user). Overlaps Portfolio — reports are study material,
+    decisions are discretionary, so what gets "projected" is the entry/exit = `trades`.
+    ⚠️ Also killed a **false claim in this very doc**: "Brier/**cone** scoring already
+    exists" conflated the **start-date cone** (strategy evaluation) with forecast
+    scoring. Two unrelated things called "scoring"; the cone has no role on that page.
+  - 🐛 **The Pipeline Health "Audit History" chart has NEVER shown real data** — it read
+    `summary.pass_count`/`passed` etc.; the real keys are `summary.total.{OK,WARNING,
+    FAIL,INFO}`. Three fallback spellings + `.get(...,0)` on each → a total miss rendered
+    **three flat zero lines** instead of an error, hiding **6 real FAILs** across 23
+    reports. In committed HEAD, not from the uplift. **A green-looking panel is not
+    evidence the panel works.**
+  - **DQ section shipped** (`render_data_quality`): per-audit FAIL/WARN/OK breakdown,
+    today's failing checks by name+detail, and **`new_fails`** (regressions vs the
+    previous run). All three were **already written nightly by `run_all_audits.py` and
+    simply never read** — no new table, no new phase. Answering the user's "how do we
+    maintain the DQ data?": Phase 8 already writes `data/audit_reports/*.json` (23 on
+    disk, R2-synced).
+  - **`tools/audit_serving_tables.py` (NEW)** — the derived tables had **no audit at all**
+    (the T1 script audits T1; `sector_breadth`/`weather_gauge`/`daily_predictions`/
+    `nav_history` sat below that line, so a dead Phase 7.4/7.45/7.46 greys a panel and
+    says nothing). Registered in `run_all_audits.py` → **Serving Tables: 0 FAIL 0 WARN
+    6 OK** in the real nightly run.
+    - 📏 **Tolerances MEASURED not guessed** (the macro_data lesson): observed 2y
+      worst-case gap = weather_gauge **6d**, daily_predictions **13d** (a one-off
+      07-02→07-15), sector_breadth is a **1-date snapshot**. Shipped 10/20/5 = observed
+      + headroom → 0 false warnings on the live DB.
+    - Sanity checks beyond freshness: `sector_breadth` must hold **exactly 1 as_of_date**
+      (refresh replaces; >1 = the append bug), `weather_gauge` non-NULL posture (it drives
+      SPY>200d, the only surviving lever), `nav_history` **nav == cash + positions**
+      (cash is derived, so drift = broken invariant).
+    - 🐛 Caught by **driving the CLI, not by pytest**: `sector_breadth.as_of_date` is a
+      **TIMESTAMP** while the rest are DATE → `TypeError: date - datetime`. Fixed with a
+      `CAST(... AS DATE)` in the query. 3rd time this thread that running the real command
+      caught what tests didn't.
+    - 🧪 **All 4 checks mutation-verified**: on a deliberately broken DB all 4 fire; on the
+      healthy DB none do. The tolerance test varies staleness across the 20d boundary —
+      mutating the tolerance 20→60 **fails it** (an all-OK audit proves nothing until you
+      prove it can fail).
+  - ✅ Verified: page driven via `AppTest` → **0 exceptions**, "Data Quality" renders the
+    **real 6 FAIL / 25 WARN / 224 OK / 35 INFO**; audit history now 23 rows of real data
+    (0 all-zero rows, was 23). Suite **381 passed** + 7 new serving tests (baseline's 7
+    failures / 26 errors unchanged). Real book untouched: **0 rows** (all drives on temp
+    DBs, deleted).
+- **2026-07-17 — Portfolio Risk section shipped** (`_render_risk` +
+  `dashboard_utils.load_portfolio_risk`). Doc: `portfolio_risk_section.md`.
+  - **Two user decisions reshaped it.** (1) Entries/exits are **DISCRETIONARY** — the
+    champion is only there to set expectation (*"it is a lottery"*) → **no
+    divergence-from-champion panel**, and holdings routinely sit **outside the SEPA
+    screen**, so every metric resolves from `price_data` (all tickers) rather than
+    t2/t3 (~2,724 of 3,980 active). (2) The section is to **measure/monitor**, not act.
+  - **Shipped**: ATR(14)/ATR%, realized vol 20d/60d, 20d-50d support/resistance,
+    **distances in ATR UNITS** (dollars aren't comparable across names), **1-ATR move
+    as % of NAV** (`qty×ATR/NAV`), true 52w high/low, mv-weighted book beta,
+    top-3/sector share.
+  - 💡 **`1-ATR / NAV` is the payoff metric** — it converts per-name noise into book
+    impact. Live: **PSNL (7.9% ATR) contributes MORE book risk than a much larger
+    NVDA position**. Invisible on a positions table.
+  - 🛑 **NO VaR / expected shortfall — and NOT for infra reasons** (it's ~10 lines off
+    `price_data`). It would **mislead**: it needs a covariance matrix to mean anything
+    at book level, and with ~4 concentrated same-sector names the correlation term
+    dominates; a window-fitted VaR prints calm right up to the regime that breaks it.
+    Don't re-propose.
+  - ⚠️ **A true 52w level CANNOT be recomputed on the remote** — the slim DB windows
+    `price_data` to ~172 bars (~8mo). t3's `high_52w` is a **stored** value so it
+    survives the window: **READ it, never recompute**; "—" off-screen. Conversely ATR
+    is **computed in the loader, NOT read from t3's `atr_20d`**, so the window is
+    identical for every holding. ATR bounds the known OHLC dirt with GREATEST/LEAST.
+  - 🧪 **The ATR test was mutation-checked and the first version was WORTHLESS**: a
+    constant true range makes EVERY window average the same, so it passed with the
+    window mutated 14 → 5. Fixed by varying TR per bar (ATR(14)=7.5 vs 5-bar=3.0);
+    the mutation now fails it. **A metric test must vary the input along the axis it
+    claims to pin.** 2nd time this class hit this thread (cf the session-04 bot-block
+    test). ATR SQL also cross-checked against an independent pandas computation
+    (NVDA 7.1407 / KO 1.7146, exact).
+  - 🐛 **Bug fixes from the prior session's list**: (a) the CLI docstring still claimed
+    *"NAV carries NO cash leg"* — stale and false after the cash leg landed; (b) the
+    `nav_history` shape fix confirmed. ⚠️ **The first verification of (a) was a FALSE
+    PASS**: `grep -P` isn't supported in this locale, so it printed "none" without
+    running. Re-checked properly, then proved the real failure mode by running the CLI
+    under an actual **cp1252** console (prints clean).
+  - ✅ Verified: 31 portfolio tests (3 mutations checked), suite **381 passed** (7
+    pre-existing failures unchanged); page driven end-to-end with real market data
+    (PSNL/NVDA/KO incl. an off-screen holding). Real book untouched: 0 rows.
+- **2026-07-16 — Portfolio page shipped; cash leg added after a mock review.**
+  Built from a competitor screenshot the user shared. **The screenshot is a marketing
+  page** — it self-labels "CONCEPT PREVIEW — SAMPLE DATA" / "money sample" behind a
+  £15/30d paywall. Analysed panel-by-panel against our DB rather than copied (same
+  discipline as `macro_page_mock.html`, whose "10/10 indicators" were invented):
+  roughly ⅓ real for us, ⅓ needed a cash leg, ⅓ needs data that doesn't exist.
+  - **Built**: append-only `trades` fill log + `cash_flows` + derived positions/cash;
+    `scripts/portfolio.py` CLI (buy/sell/deposit/withdraw/positions/trades/nav);
+    Score (raw) + cohort + %NLV + Top-3 concentration + sector tilt + TWR curve.
+  - ✅ **Cash leg (user reversed the earlier positions-only call).** NAV = cash +
+    positions; **return is TIME-WEIGHTED** — `nav_history.net_flow` stores the day's
+    external flow so `returns()` strips it. Verified live: **a 500k deposit → ret
+    +0.0000%**, while the naive `pct_change` it replaces booked **+500%**; a real
+    mark-up on the next day still measured +1.82%. Both directions test-pinned and
+    mutation-verified.
+  - ⚠️ **The model scores only ~751 of ~3,980 active tickers** (SEPA lifecycle
+    universe) → a held name outside it renders **"—", never a stale score or a zero**
+    (a zero reads as "model hates it"). Score is **RAW** (a rank, not a probability),
+    same rule as Screening.
+  - **Rejected from the mock, deliberately**: cash/margin/theta/options (no data),
+    supply-chain concentration (**zero edges**), and the "Style review 5.8/10
+    Balanced" composite (**an invented number**).
+  - **Risk section = PLAN ONLY** (`portfolio_risk_section.md`), per the user —
+    *(superseded: **shipped 2026-07-17**, see the entry above)*. The plan's core
+    finding, which still binds it: **our research already falsified the obvious
+    levers** — DD circuit breaker (sweep 6–30% = mechanism not threshold), earnings
+    blackout, VIX de-risking all LOSE on the cone; only **SPY>200d** survived
+    BackTrader. So the section **describes, never acts**.
+  - 🐛 **pytest green ≠ the command works**: unit tests never touch stdout, so they
+    missed a CLI that **crashed on every successful trade** (✅ glyph vs Windows
+    cp1252 under a bare `python.exe`). The writes succeeded; only the print raised.
+    Driving the real CLI caught it → ASCII `[OK]`/`[ERR]`.
+  - 🐛 **`CREATE TABLE IF NOT EXISTS` silently skips an existing OLD-shape table** —
+    the cash columns were a no-op until the (verified empty) `nav_history` was dropped.
+  - ✅ Verified: 29 portfolio tests (2 mutations checked), suite **379 passed** (7
+    pre-existing failures unchanged); slim rebuilt + parity checked **directly**;
+    page driven end-to-end with **real scored tickers** (PSNL 0.855 / NVCT 0.818) and
+    a real unscored holding (KO → "—"). Real book untouched: 0 rows.
+- **2026-07-16 — AAII ingest LANDED; group 7 complete (4/4 rows live).** The Imperva
+  block aged out; fetch clean on the dev box. `macro_data` **214,699 rows / 69 symbols**;
+  slim rebuilt, parity verified **against `dashboard.duckdb` directly** (69/69, no loader).
+  DQ audit macro_data section: **71 OK / 0 FAIL** (was 68 OK / 3 FAIL — the 3 AAII rows).
+  Board renders all 4 flows rows, all |z|<1.5 (quiet, correct).
+  - 🐛 **`update_series()` does NOT write the DB — it only writes the pickle cache.**
+    The DB write lives in `update_macro_cache`, which calls `write_to_macro_data`
+    separately. The previous handover's "re-run `MacroEngine().update_series('AAII_BULL')`
+    to ingest" is **wrong**: it returns a populated 1,228-row frame and prints success
+    while inserting **zero rows**. Correct one-off ingest:
+    `df = e.update_series(sym); e.write_to_macro_data(sym, df)`.
+  - Verified the col-0 trap did NOT bite: the 3 symbols hold **distinct** means
+    (bull 37.51 / bear 33.57 / spread 3.95), spread ≡ bull−bear on **all 1,228 dates**
+    (max err 0.0), zero bull+bear>100 violations.
+  - Note: `macro_data.value` is **NULL for all 69 symbols** — the populated column is
+    `close`. Pre-existing and audit-guarded; don't "fix" it by reading `value`.
 - **2026-07-16 — S3 group 7 (Flows & Positioning): AAII + NAAIM ingest.** The last
   group with no source; board now **9 of 10 groups**. Scope confirmed with the user:
   AAII+NAAIM only, **COT deferred** (87-col file, one zip PER YEAR ≈ 20 fetches to
@@ -313,6 +460,7 @@ in alongside whichever data thread lands them.
 - `style.md` — visual system.
 - `macro_page.md` / `macro_page_mock.html` — Macro design + standalone mock.
 - `screening_page.md` — Screening design.
+- `portfolio_risk_section.md` — Portfolio Risk section: shipped metrics, why no VaR, and the falsified-lever list that binds it.
 - `backtest_studio_page.md` — Backtest Studio revision (methodology adherence: cone + C3 currency).
 - `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers.
 - `research_layer_contract.md` — tradingagent → repo boundary.

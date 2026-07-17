@@ -529,6 +529,7 @@ PIPELINE_FAILURE_MODES = {
     "scoring":             PipelineFailureMode.WARN,
     "weather":             PipelineFailureMode.WARN,   # advisory gauge; never halts the run
     "sector_breadth":      PipelineFailureMode.WARN,   # Macro-page heatmap snapshot; never halts
+    "portfolio_nav":       PipelineFailureMode.WARN,   # book NAV mark; never halts
     "dashboard_db":        PipelineFailureMode.WARN,
     "r2_sync":             PipelineFailureMode.WARN,
     "monitoring":          PipelineFailureMode.WARN,

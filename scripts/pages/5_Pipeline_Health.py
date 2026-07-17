@@ -494,15 +494,78 @@ def load_audit_history() -> pd.DataFrame:
             date = pd.to_datetime(stem, format="%Y%m%d").date()
         except ValueError:
             date = pd.to_datetime(f.stat().st_mtime, unit="s").date()
-        summary = d.get("summary") or d.get("Summary") or {}
+        # Shape written by tools/run_all_audits.py build_report():
+        # summary.total = {"FAIL": n, "WARNING": n, "OK": n, "INFO": n}
+        total = (d.get("summary") or {}).get("total") or {}
         rows.append({
             "date": date,
-            "pass": summary.get("pass_count") or summary.get("passed", 0),
-            "warn": summary.get("warn_count") or summary.get("warnings", 0),
-            "fail": summary.get("fail_count") or summary.get("failed", 0),
+            "pass": total.get("OK", 0),
+            "warn": total.get("WARNING", 0),
+            "fail": total.get("FAIL", 0),
+            "info": total.get("INFO", 0),
+            "overall": d.get("overall", ""),
             "file": f.name,
         })
     return pd.DataFrame(rows)
+
+
+def load_latest_audit() -> dict:
+    """Newest audit report, whole envelope (per_audit / results / new_fails)."""
+    if not AUDIT_DIR.exists():
+        return {}
+    files = sorted(AUDIT_DIR.glob("audit_report_*.json"))
+    for f in reversed(files):
+        try:
+            return json.loads(f.read_text(encoding="utf-8")) | {"_file": f.name}
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+def render_data_quality() -> None:
+    """Today's DQ detail: per-audit breakdown + the checks that actually failed.
+
+    Reads the same nightly JSON as the history chart — `per_audit`, `results` and
+    `new_fails` are written by run_all_audits.py and were previously unread.
+    """
+    st.subheader("Data Quality")
+    rep = load_latest_audit()
+    if not rep:
+        st.info("No audit reports in `data/audit_reports/` yet.")
+        return
+
+    overall = rep.get("overall", "")
+    total = (rep.get("summary") or {}).get("total") or {}
+    badge = {"FAIL": "🛑", "WARNING": "⚠️", "OK": "✅"}.get(overall, "")
+    st.caption(f"{badge} **{overall}** — from `{rep.get('_file','')}` (run {rep.get('run_at','')})")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("FAIL", total.get("FAIL", 0))
+    c2.metric("WARNING", total.get("WARNING", 0))
+    c3.metric("OK", total.get("OK", 0))
+    c4.metric("INFO", total.get("INFO", 0))
+
+    per_audit = (rep.get("summary") or {}).get("per_audit") or {}
+    if per_audit:
+        pa = pd.DataFrame(per_audit).T.reindex(columns=["FAIL", "WARNING", "OK", "INFO"]).fillna(0)
+        pa.index.name = "audit"
+        st.dataframe(pa.astype(int).reset_index(), use_container_width=True, hide_index=True)
+
+    # New fails = a regression vs the previous run. The signal worth paging on.
+    new_fails = rep.get("new_fails") or []
+    if new_fails:
+        st.error(f"🛑 {len(new_fails)} NEW failure(s) vs the previous run")
+        st.dataframe(pd.DataFrame(new_fails), use_container_width=True, hide_index=True)
+
+    results = rep.get("results") or []
+    bad = [r for r in results if r.get("status") in ("FAIL", "WARNING")]
+    if not bad:
+        st.success("No failing or warning checks.")
+        return
+    df = pd.DataFrame(bad)
+    keep = [c for c in ["status", "audit", "section", "check", "value", "detail"] if c in df.columns]
+    with st.expander(f"Failing / warning checks ({len(bad)})", expanded=bool(new_fails)):
+        st.dataframe(df[keep], use_container_width=True, hide_index=True)
 
 
 def render_audit_history() -> None:
@@ -614,6 +677,8 @@ st.markdown("---")
 render_fundamentals_audit()
 st.markdown("---")
 render_universe_trend(load_universe_trend(days=60))
+st.markdown("---")
+render_data_quality()
 st.markdown("---")
 render_audit_history()
 st.markdown("---")

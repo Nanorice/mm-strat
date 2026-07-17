@@ -394,6 +394,18 @@ class DailyPipelineOrchestrator:
             critical_success = False
             return False
 
+        # Phase 7.47: Portfolio NAV mark (best-effort). Must run AFTER the day's
+        # close is ingested and BEFORE the slim DB build (7.5) so the row ships.
+        phase_success, phase_stats = self._execute_phase(
+            "portfolio_nav",
+            lambda: self._run_phase_7_47_portfolio_nav(target_date),
+            target_date,
+        )
+        run_stats['phase_7_47'] = phase_stats
+        if not phase_success and self._is_critical("portfolio_nav"):
+            critical_success = False
+            return False
+
         # Phase 7.5: Slim dashboard DB rebuild (best-effort; a slow rebuild must
         # never block the daily pipeline). Snapshots the freshly-refreshed cache
         # + latest features into data/dashboard.duckdb for cross-device sync.
@@ -1469,6 +1481,23 @@ class DailyPipelineOrchestrator:
         from src.sector_breadth_engine import SectorBreadthEngine
         n = SectorBreadthEngine(db_path=self.db_path).refresh()
         return {'rows_processed': n}
+
+    def _run_phase_7_47_portfolio_nav(self, target_date: str) -> Dict:
+        """Phase 7.47: Mark the book to close — one nav_history row for target_date.
+
+        Runs after the close is ingested, before the dashboard build so the row
+        ships in the slim DB. Idempotent (delete+insert per date). Best-effort.
+        A NAV series cannot be honestly backfilled later: TWR needs the day's
+        net_flow recorded on the day, so a missed run is a permanent hole.
+        """
+        from datetime import datetime
+
+        from src.managers.portfolio_manager import PortfolioManager
+
+        as_of = datetime.strptime(target_date, '%Y-%m-%d').date()
+        pm = PortfolioManager(db_path=self.db_path)
+        nav = pm.snapshot_nav(as_of=as_of)
+        return {'rows_processed': 1, 'metadata': {'nav': nav}}
 
     def _run_phase_7_5_dashboard_db(self) -> Dict:
         """Phase 7.5: Rebuild the slim dashboard.duckdb from the full DB.

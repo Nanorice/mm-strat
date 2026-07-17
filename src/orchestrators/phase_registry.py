@@ -44,6 +44,7 @@ PHASES: list[Phase] = [
     Phase("scoring",             "Phase 7.4 - Scoring",       7.4),
     Phase("weather",             "Phase 7.45 - Weather Gauge", 7.45),
     Phase("sector_breadth",      "Phase 7.46 - Sector Breadth", 7.46),
+    Phase("portfolio_nav",       "Phase 7.47 - Portfolio NAV", 7.47),
     Phase("dashboard_db",        "Phase 7.5 - Dashboard DB",  7.5),
     Phase("r2_sync",             "Phase 7.6 - R2 Sync",       7.6),
     Phase("monitoring",          "Phase 8 - Monitoring",      8.0),
