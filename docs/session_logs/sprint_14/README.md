@@ -217,3 +217,19 @@ _(sprint-local isolated TODOs; cross-session facts go to memory, not here.)_
 
 - [ ] **Docs infra — fold RESEARCH_LOG maintenance into `handover` + `sprint-wrap-up` skills** (append
   the session's question→outcome lines at session/sprint close), plus a light manual "log this" trigger.
+
+**Infra naming + docs cleanup (opened 2026-07-17):**
+- [ ] **Execute the `sepa_watchlist` rename** — full plan in `plans/rename_sepa_watchlist_plan.md`
+  (table → `sepa_sessions`; phase-id path (a) recommended; settle `screener_watchlist`/`vip_watchlist`
+  in the same pass to avoid a second migration). Its own session — touches the T3 gate + a persisted key.
+- [ ] **Stale-test cleanup** — 4 test modules fail at COLLECTION on imports of deleted names, hiding real
+  signal in a full `pytest tests/` run: `test_metrics.py` (`src.evaluation.metrics` gone),
+  `test_rehydration.py` (`FeatureEngineer` gone from `src.features`), `test_feature_preprocessor.py`,
+  `test_m01_evaluator.py`. Same doc-rot the glossary session targets, but in `tests/`. Fix imports or
+  delete the dead modules; then a green `tests/` baseline actually means something.
+- [ ] **Schema reference file (HIGH LEVERAGE)** — a generated `docs/architecture/db_schema.md` (table →
+  columns+types, from `information_schema`), so future sessions stop hitting the DB to guess column names
+  (happened 4× in the 2026-07-17 session, got a column name wrong twice). Generate, don't hand-write.
+- [ ] **Rewrite `comprehensive_methodology.md` against current code** — stale: says "4-class M01" (binary
+  is PROD since 2026-07-15), "8 phases" (16 now). Master workflow doc; per-module docs are the zoom-in.
+  Do AFTER the renames land so it isn't written twice. `.mmd` files last, once prose is final.

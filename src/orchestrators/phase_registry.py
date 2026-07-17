@@ -33,22 +33,22 @@ class Phase:
 
 # (id, label, order) — failure_mode is resolved from config by stable id.
 PHASES: list[Phase] = [
-    Phase("ingestion",           "Phase 1 - Ingestion",       1.0),
-    Phase("screener_membership", "Phase 2 - Screener",        2.0),
-    Phase("t2_screener",         "Phase 3 - T2 Features",     3.0),
-    Phase("t2_regime",           "Phase 4 - T2 Regime",       4.0),
-    Phase("sepa_watchlist",      "Phase 4b - SEPA Watchlist", 4.5),
-    Phase("t3_features",         "Phase 5 - T3 Features",     5.0),
-    Phase("views",               "Phase 6 - Views",           6.0),
-    Phase("cache",               "Phase 7 - Training Cache",  7.0),
-    Phase("scoring",             "Phase 7.4 - Scoring",       7.4),
-    Phase("weather",             "Phase 7.45 - Weather Gauge", 7.45),
-    Phase("sector_breadth",      "Phase 7.46 - Sector Breadth", 7.46),
-    Phase("portfolio_nav",       "Phase 7.47 - Portfolio NAV", 7.47),
-    Phase("dashboard_db",        "Phase 7.5 - Dashboard DB",  7.5),
-    Phase("r2_sync",             "Phase 7.6 - R2 Sync",       7.6),
-    Phase("monitoring",          "Phase 8 - Monitoring",      8.0),
-    Phase("model_card",          "Phase 10 - Model Card",     10.0),
+    Phase("ingestion",           "Ingestion",         1.0),
+    Phase("screener_membership", "Screener",          2.0),
+    Phase("t2_screener",         "T2 Features",        3.0),
+    Phase("t2_regime",           "T2 Regime",          4.0),
+    Phase("sepa_watchlist",      "SEPA Watchlist",     4.5),
+    Phase("t3_features",         "T3 Features",        5.0),
+    Phase("views",               "Views",              6.0),
+    Phase("cache",               "Training Cache",     7.0),
+    Phase("scoring",             "Scoring",            7.4),
+    Phase("weather",             "Weather Gauge",      7.45),
+    Phase("sector_breadth",      "Sector Breadth",     7.46),
+    Phase("portfolio_nav",       "Portfolio NAV",      7.47),
+    Phase("dashboard_db",        "Dashboard DB",       7.5),
+    Phase("r2_sync",             "R2 Sync",            7.6),
+    Phase("monitoring",          "Monitoring",         8.0),
+    Phase("model_card",          "Model Card",         10.0),
 ]
 
 PHASE_BY_ID: dict[str, Phase] = {p.id: p for p in PHASES}

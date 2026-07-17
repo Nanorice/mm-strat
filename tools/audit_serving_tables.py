@@ -26,13 +26,15 @@ import duckdb
 
 sys.path.insert(0, ".")
 from config import DUCKDB_PATH
+from src.orchestrators.phase_registry import label_for
 
-# (table, date_col, stale_warn_days, phase) — stale_warn = observed worst gap + headroom.
+# (table, date_col, stale_warn_days, phase_id) — stale_warn = observed worst gap
+# + headroom. Label is resolved from the registry so it can't drift.
 SERVING_TABLES: list[tuple[str, str, int, str]] = [
-    ("daily_predictions", "prediction_date", 20, "Phase 7.4 - Scoring"),
-    ("weather_gauge",     "date",            10, "Phase 7.45 - Weather Gauge"),
-    ("sector_breadth",    "as_of_date",       5, "Phase 7.46 - Sector Breadth"),
-    ("nav_history",       "date",            10, "Phase 7.47 - Portfolio NAV"),
+    ("daily_predictions", "prediction_date", 20, "scoring"),
+    ("weather_gauge",     "date",            10, "weather"),
+    ("sector_breadth",    "as_of_date",       5, "sector_breadth"),
+    ("nav_history",       "date",            10, "portfolio_nav"),
 ]
 
 _results: list[dict[str, Any]] = []
@@ -45,7 +47,8 @@ def _check(section: str, name: str, status: str, value: Any, detail: str = "") -
 
 def check_freshness(con: duckdb.DuckDBPyConnection) -> None:
     """Staleness of each serving table vs its measured tolerance."""
-    for table, col, tol, phase in SERVING_TABLES:
+    for table, col, tol, phase_id in SERVING_TABLES:
+        phase = label_for(phase_id)
         try:
             # CAST: sector_breadth.as_of_date is a TIMESTAMP, the rest are DATE.
             n, mx = con.execute(

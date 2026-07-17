@@ -64,32 +64,46 @@ def test_orchestrator_phase_keys_match_registry():
         assert key in PHASE_BY_ID, f"orchestrator uses unregistered phase id {key!r}"
 
 
-def test_every_orchestrated_phase_has_a_critical_guard():
-    """Each _execute_phase call must be followed by the uniform
-    `_is_critical(<same id>)` guard, so failure_mode is the real control surface
-    (no call site silently ignores a HALT failure).
+def test_every_orchestrated_phase_has_an_abort_guard():
+    """Each non-terminal _execute_phase call must be followed by `if not
+    phase_success:`. `_execute_phase` returns success=False only when a HALT phase
+    failed (WARN/SKIP are absorbed as success there), so this guard is the real
+    HALT control surface — no call site silently ignores a critical failure.
     """
     import inspect
     from src.orchestrators import daily_pipeline_orchestrator as orch
 
     src = inspect.getsource(orch.DailyPipelineOrchestrator.run_pipeline)
+    # Count call sites vs abort guards; the terminal model_card has no guard
+    # (nothing runs after it). Everything else must guard.
     exec_ids = re.findall(r"_execute_phase\(\s*[\"']([^\"']+)[\"']", src)
-    guard_ids = set(re.findall(r"_is_critical\([\"']([^\"']+)[\"']\)", src))
-    # model_card is the final statement (nothing runs after it) — guard optional.
-    for pid in exec_ids:
-        if pid == "model_card":
-            continue
-        assert pid in guard_ids, f"{pid} has no _is_critical guard after _execute_phase"
+    # Two forms abort on a HALT failure: `if not phase_success:` (mainline) and
+    # `return phase_success` (the --phase-N-only shortcuts). Both propagate False.
+    n_guards = (len(re.findall(r"if not phase_success:", src))
+                + len(re.findall(r"return phase_success", src)))
+    non_terminal = [k for k in exec_ids if k != "model_card"]
+    assert n_guards >= len(non_terminal), (
+        f"{len(non_terminal)} non-terminal phases but only {n_guards} abort guards"
+    )
 
 
-def test_is_critical_matches_config():
-    """The orchestrator's _is_critical must agree with the config failure map."""
+def test_execute_phase_returns_false_only_on_halt():
+    """`_execute_phase` is the single HALT control surface: a failing phase
+    returns success=False iff config marks it HALT. WARN/SKIP are absorbed as
+    success so the run continues.
+    """
     from src.orchestrators.daily_pipeline_orchestrator import DailyPipelineOrchestrator
 
     orch = DailyPipelineOrchestrator(dry_run=True)
+
+    def boom():
+        raise RuntimeError("phase blew up")
+
     for phase in PHASES:
-        expected = PIPELINE_FAILURE_MODES[phase.id] == PipelineFailureMode.HALT
-        assert orch._is_critical(phase.id) == expected, phase.id
+        halt = PIPELINE_FAILURE_MODES[phase.id] == PipelineFailureMode.HALT
+        success, _ = orch._execute_phase(phase.id, boom, "2024-01-01",
+                                         skip_idempotency_check=True)
+        assert success == (not halt), f"{phase.id}: HALT={halt} but success={success}"
 
 
 def test_unknown_id_helpers_are_failsafe():

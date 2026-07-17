@@ -102,18 +102,11 @@ class _MemorySampler:
 
 
 class DailyPipelineOrchestrator:
-    """
-    Orchestrates the daily 8-phase pipeline.
+    """Orchestrates the daily pipeline.
 
-    Phase 1:  T1 Ingestion (PARALLEL) - price, fundamentals, shares, macro
-    Phase 2:  Screener Membership - evaluate_and_log to screener_membership event log
-    Phase 3:  T2 Screener Features - compute full universe features + XS alphas + ranks
-    Phase 4:  T2 Regime Scores - compute M03 regime scores
-    Phase 4b: SEPA Watchlist Update - open/close sessions in sepa_watchlist (T3 universe gate)
-    Phase 5:  T3 SEPA Features - compute per-ticker features + TS alphas for sepa_watchlist universe
-    Phase 6:  View Refresh - recreate all views
-    Phase 7:  Training Cache Refresh - materialize d2_training_cache
-    Phase 8:  Monitoring - log metrics, send alerts
+    The phase list, execution order, and display labels are owned by
+    `src/orchestrators/phase_registry.py` (single source of truth) — not
+    duplicated here, so this docstring can't drift out of sync with it.
     """
 
     def __init__(
@@ -167,7 +160,7 @@ class DailyPipelineOrchestrator:
 
     def run_pipeline(self, target_date: str = None, phase_1_only: bool = False, phase_2_only: bool = False, phase_3_only: bool = False, phase_4_only: bool = False, phase_5_only: bool = False, universe_refresh: bool = False) -> bool:
         """
-        Execute full 8-phase pipeline.
+        Execute the full daily pipeline (phases owned by phase_registry).
 
         Args:
             target_date: Date to process (None = yesterday's close)
@@ -244,22 +237,24 @@ class DailyPipelineOrchestrator:
                 target_date,
                 skip_idempotency_check=True
             )
-            run_stats['phase_1'] = phase_stats
-            # ingestion is a HALT phase: _execute_phase already returns False only
-            # when a HALT phase failed (price re-raises on HALT inside the lambda).
-            if not phase_success and self._is_critical("ingestion"):
+            run_stats['ingestion'] = phase_stats
+            # _execute_phase returns success=False only when a HALT phase failed
+            # (WARN/SKIP are absorbed as success there), so `not phase_success`
+            # already means "a critical phase died" — no failure-mode recheck needed.
+            if not phase_success:
                 critical_success = False
                 return False
 
-            # Phase 1.5: T1 Price Quality Gate (read + conditional same-run retry).
-            # Non-blocking by construction (never raises). Placed BEFORE the
-            # phase_1_only early-return so --phase-1-only runs the gate too.
-            stats_1_5 = self._run_phase_1_5_quality_gate(target_date, actual_trading_day)
-            run_stats['phase_1_5'] = stats_1_5
+            # Price Quality Gate (read + conditional same-run retry). Non-blocking
+            # by construction (never raises). Placed BEFORE the phase_1_only
+            # early-return so --phase-1-only runs the gate too.
+            run_stats['price_quality_gate'] = self._run_phase_1_5_quality_gate(
+                target_date, actual_trading_day
+            )
 
-            # Phase 1.6: fast plausibility gate (FAIL-level audit ceilings only).
-            # Non-halting; Phase 7.6 withholds the R2 publish while it's red.
-            run_stats['phase_1_6'] = self._run_phase_1_6_plausibility_gate()
+            # Plausibility gate (FAIL-level audit ceilings only). Non-halting;
+            # the R2 sync withholds the publish while it's red.
+            run_stats['plausibility_gate'] = self._run_phase_1_6_plausibility_gate()
 
             if phase_1_only:
                 return critical_success
@@ -270,8 +265,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_2_screener_membership(target_date),
             target_date
         )
-        run_stats['phase_2'] = phase_stats
-        if not phase_success and self._is_critical("screener_membership"):
+        run_stats['screener_membership'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -285,8 +280,8 @@ class DailyPipelineOrchestrator:
             target_date,
             skip_idempotency_check=True
         )
-        run_stats['phase_3'] = phase_stats
-        if not phase_success and self._is_critical("t2_screener"):
+        run_stats['t2_screener'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
         if phase_stats.get('rows_processed', 0) > 0:
@@ -298,8 +293,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_4_t2_regime(target_date),
             target_date
         )
-        run_stats['phase_4'] = phase_stats
-        if not phase_success and self._is_critical("t2_regime"):
+        run_stats['t2_regime'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -311,8 +306,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_4b_sepa_watchlist(actual_trading_day),
             target_date
         )
-        run_stats['phase_4b'] = phase_stats
-        if not phase_success and self._is_critical("sepa_watchlist"):
+        run_stats['sepa_watchlist'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -323,8 +318,8 @@ class DailyPipelineOrchestrator:
             target_date,
             skip_idempotency_check=True
         )
-        run_stats['phase_5'] = phase_stats
-        if not phase_success and self._is_critical("t3_features"):
+        run_stats['t3_features'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
         if phase_stats.get('rows_processed', 0) > 0:
@@ -336,10 +331,10 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_6_views(target_date),
             target_date
         )
-        run_stats['phase_6'] = phase_stats
+        run_stats['views'] = phase_stats
         if phase_success and phase_stats.get('rows_processed', 0) > 0:
             self.run_manager.record_write('screener_watchlist', phase_stats['rows_processed'], 'views')
-        if not phase_success and self._is_critical("views"):
+        if not phase_success:
             critical_success = False
             return False
 
@@ -349,10 +344,10 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_7_cache(target_date),
             target_date
         )
-        run_stats['phase_7'] = phase_stats
+        run_stats['cache'] = phase_stats
         if phase_success and phase_stats.get('rows_processed', 0) > 0:
             self.run_manager.record_write('d2_training_cache', phase_stats['rows_processed'], 'cache')
-        if not phase_success and self._is_critical("cache"):
+        if not phase_success:
             critical_success = False
             return False
 
@@ -365,8 +360,8 @@ class DailyPipelineOrchestrator:
             target_date,
             skip_idempotency_check=True,
         )
-        run_stats['phase_7_4'] = phase_stats
-        if not phase_success and self._is_critical("scoring"):
+        run_stats['scoring'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -377,8 +372,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_7_45_weather(target_date),
             target_date,
         )
-        run_stats['phase_7_45'] = phase_stats
-        if not phase_success and self._is_critical("weather"):
+        run_stats['weather'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -389,8 +384,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_7_46_sector_breadth(),
             target_date,
         )
-        run_stats['phase_7_46'] = phase_stats
-        if not phase_success and self._is_critical("sector_breadth"):
+        run_stats['sector_breadth'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -401,8 +396,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_7_47_portfolio_nav(target_date),
             target_date,
         )
-        run_stats['phase_7_47'] = phase_stats
-        if not phase_success and self._is_critical("portfolio_nav"):
+        run_stats['portfolio_nav'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -414,29 +409,29 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_7_5_dashboard_db(),
             target_date
         )
-        run_stats['phase_7_5'] = phase_stats
-        if not phase_success and self._is_critical("dashboard_db"):
+        run_stats['dashboard_db'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
-        # Phase 7.6: Upload slim DB to R2 (best-effort; skipped if R2 creds absent).
-        # Withheld while the Phase 1.6 plausibility gate is red — the remote dashboard
-        # stays on its last clean snapshot rather than publishing implausible data.
-        gate_failures = run_stats.get('phase_1_6', {}).get('failures')
+        # R2 Sync: upload slim DB (best-effort; skipped if R2 creds absent).
+        # Withheld while the plausibility gate is red — the remote dashboard stays
+        # on its last clean snapshot rather than publishing implausible data.
+        gate_failures = run_stats.get('plausibility_gate', {}).get('failures')
         if gate_failures:
             logger.warning(
-                f"[Phase 7.6] R2 publish withheld: Phase 1.6 plausibility gate failed "
+                f"[R2 Sync] Publish withheld: plausibility gate failed "
                 f"({gate_failures}). Remote dashboard stays on last clean snapshot."
             )
-            run_stats['phase_7_6'] = {'rows_processed': 0, 'skipped': 'plausibility_gate'}
+            run_stats['r2_sync'] = {'rows_processed': 0, 'skipped': 'plausibility_gate'}
         else:
             phase_success, phase_stats = self._execute_phase(
                 "r2_sync",
                 lambda: self._run_phase_7_6_r2_sync(),
                 target_date
             )
-            run_stats['phase_7_6'] = phase_stats
-            if not phase_success and self._is_critical("r2_sync"):
+            run_stats['r2_sync'] = phase_stats
+            if not phase_success:
                 critical_success = False
                 return False
 
@@ -446,8 +441,8 @@ class DailyPipelineOrchestrator:
             lambda: self._run_phase_8_monitoring(target_date, run_stats),
             target_date
         )
-        run_stats['phase_8'] = phase_stats
-        if not phase_success and self._is_critical("monitoring"):
+        run_stats['monitoring'] = phase_stats
+        if not phase_success:
             critical_success = False
             return False
 
@@ -465,7 +460,7 @@ class DailyPipelineOrchestrator:
             target_date,
             skip_idempotency_check=True,
         )
-        run_stats['phase_10'] = phase_stats
+        run_stats['model_card'] = phase_stats
 
         phases_run = len(run_stats)
         logger.info(
@@ -561,10 +556,6 @@ class DailyPipelineOrchestrator:
                 logger.info(f"[{label}] Optional, skipping")
                 return True, {'status': 'skipped', 'error': error_msg}
 
-    def _is_critical(self, phase_id: str) -> bool:
-        """True if a failure of this phase must abort the run (registry HALT)."""
-        return failure_mode_for(phase_id) == PipelineFailureMode.HALT
-
     # ========================================================================
     # HELPER METHODS (Data Freshness Checks)
     # ========================================================================
@@ -627,19 +618,19 @@ class DailyPipelineOrchestrator:
             conn.close()
 
         if last_success is None:
-            logger.info("[Phase 1] Earnings calendar: no prior successful refresh — triggering")
+            logger.info("[Ingestion] Earnings calendar: no prior successful refresh — triggering")
             return True
 
         age_days = (datetime.now() - last_success).days
         should = age_days >= EARNINGS_CALENDAR_REFRESH_DAYS
         if should:
             logger.info(
-                f"[Phase 1] Earnings calendar: last refresh {age_days}d ago "
+                f"[Ingestion] Earnings calendar: last refresh {age_days}d ago "
                 f"(>= {EARNINGS_CALENDAR_REFRESH_DAYS}d) — triggering"
             )
         else:
             logger.debug(
-                f"[Phase 1] Earnings calendar: last refresh {age_days}d ago "
+                f"[Ingestion] Earnings calendar: last refresh {age_days}d ago "
                 f"(< {EARNINGS_CALENDAR_REFRESH_DAYS}d) — skipping"
             )
         return should
@@ -653,10 +644,10 @@ class DailyPipelineOrchestrator:
         """
         try:
             new_tickers = self.universe_backfill.quarterly_refresh()
-            logger.info(f"[Phase 1] Universe refresh: {new_tickers} new tickers added")
+            logger.info(f"[Ingestion] Universe refresh: {new_tickers} new tickers added")
             run_stats['universe_refresh'] = {'status': 'success', 'new_tickers': new_tickers}
         except Exception as e:
-            logger.warning(f"[Phase 1] Universe refresh FAILED (non-critical): {e}")
+            logger.warning(f"[Ingestion] Universe refresh FAILED (non-critical): {e}")
             run_stats['universe_refresh'] = {'status': 'failed', 'error': str(e)}
 
     # ========================================================================
@@ -721,14 +712,14 @@ class DailyPipelineOrchestrator:
         warn_threshold = PIPELINE_ALERT_THRESHOLDS['t1_price_coverage_warn_pct']
 
         coverage_pct = self._compute_price_coverage(latest_trading_day)
-        logger.info(f"[Phase 1.5] Price coverage: {coverage_pct:.1f}%")
+        logger.info(f"[Price Quality Gate] Price coverage: {coverage_pct:.1f}%")
 
         if coverage_pct >= retry_threshold:
             return {'coverage_pct': coverage_pct, 'retry': False, 'status': 'ok'}
 
         missing = self._get_missing_price_tickers(latest_trading_day)
         logger.warning(
-            f"[Phase 1.5] Coverage {coverage_pct:.1f}% < {retry_threshold}% — "
+            f"[Price Quality Gate] Coverage {coverage_pct:.1f}% < {retry_threshold}% — "
             f"retrying {len(missing)} tickers"
         )
 
@@ -740,11 +731,11 @@ class DailyPipelineOrchestrator:
             )
 
         coverage_pct_after = self._compute_price_coverage(latest_trading_day)
-        logger.info(f"[Phase 1.5] Coverage after retry: {coverage_pct_after:.1f}%")
+        logger.info(f"[Price Quality Gate] Coverage after retry: {coverage_pct_after:.1f}%")
 
         if coverage_pct_after < warn_threshold:
             logger.warning(
-                f"[Phase 1.5] Coverage still {coverage_pct_after:.1f}% after retry — "
+                f"[Price Quality Gate] Coverage still {coverage_pct_after:.1f}% after retry — "
                 f"downstream features will use stale prices for {len(missing)} tickers"
             )
 
@@ -800,12 +791,12 @@ class DailyPipelineOrchestrator:
 
         if failures:
             logger.error(
-                f"[Phase 1.6] Plausibility gate FAILED: {failures} — R2 publish will be "
+                f"[Plausibility Gate] Plausibility gate FAILED: {failures} — R2 publish will be "
                 f"withheld. Run scripts/clean_dirty_shares_price.py and check engine "
                 f"clamp warnings in the Phase 1 log."
             )
         else:
-            logger.info("[Phase 1.6] Plausibility gate: all clean")
+            logger.info("[Plausibility Gate] Plausibility gate: all clean")
         return {'status': 'fail' if failures else 'ok', 'failures': failures}
 
     def _run_phase_1_t1_ingestion(self, target_date: str, latest_trading_day: str) -> Dict:
@@ -843,7 +834,7 @@ class DailyPipelineOrchestrator:
         # Pre-compute stale tickers
         stale_tickers = self.data_repo._get_stale_tickers(latest_trading_day)
 
-        logger.info(f"[Phase 1] T1 Ingestion | active={len(active_tickers)}, stale={len(stale_tickers)}")
+        logger.info(f"[Ingestion] T1 Ingestion | active={len(active_tickers)}, stale={len(stale_tickers)}")
 
         results = {}
 
@@ -861,7 +852,7 @@ class DailyPipelineOrchestrator:
                 failed = total - ok_count
                 failure_rate = failed / total if total > 0 else 0.0
                 results['price'] = {'success': True, 'ok': ok_count, 'failed': failed}
-                logger.info(f"[Phase 1] Price: {ok_count}/{total} OK, {failed} failed ({failure_rate:.1%})")
+                logger.info(f"[Ingestion] Price: {ok_count}/{total} OK, {failed} failed ({failure_rate:.1%})")
                 if ok_count > 0:
                     self.run_manager.record_write('price_data', ok_count, 'phase_1_t1_price')
                 if self._current_run_id and self.data_repo.last_errors:
@@ -870,16 +861,16 @@ class DailyPipelineOrchestrator:
                     )
                 if failure_rate > 0.5:
                     logger.warning(
-                        f"[Phase 1] High failure rate {failure_rate:.1%} "
+                        f"[Ingestion] High failure rate {failure_rate:.1%} "
                         f"({failed}/{total} tickers) — will retry next run"
                     )
             except Exception as e:
                 results['price'] = {'success': False, 'error': str(e)}
-                logger.error(f"[Phase 1] Price FAILED: {e}", exc_info=True)
+                logger.error(f"[Ingestion] Price FAILED: {e}", exc_info=True)
                 if PIPELINE_FAILURE_MODES.get("phase_1_t1_price") == PipelineFailureMode.HALT:
                     raise
         else:
-            logger.info("[Phase 1] Price: all fresh, skipped")
+            logger.info("[Ingestion] Price: all fresh, skipped")
             results['price'] = {'success': True, 'ok': 0, 'failed': 0}
 
         # Earnings Calendar (weekly) — equities only (ETFs/indices have no earnings).
@@ -894,13 +885,13 @@ class DailyPipelineOrchestrator:
             try:
                 rows = self.fund_engine.refresh_earnings_calendar(equity_tickers)
                 results['earnings_calendar'] = {'success': True, 'rows_written': rows}
-                logger.info(f"[Phase 1] Earnings calendar: {rows} rows refreshed")
+                logger.info(f"[Ingestion] Earnings calendar: {rows} rows refreshed")
                 self.run_manager.complete_phase(
                     ec_run_id, PipelineRunStatus.SUCCESS, rows_processed=rows
                 )
             except Exception as e:
                 results['earnings_calendar'] = {'success': False, 'error': str(e)}
-                logger.warning(f"[Phase 1] Earnings calendar FAILED (non-critical): {e}")
+                logger.warning(f"[Ingestion] Earnings calendar FAILED (non-critical): {e}")
                 self.run_manager.complete_phase(
                     ec_run_id, PipelineRunStatus.FAILED, error_message=str(e)
                 )
@@ -926,7 +917,7 @@ class DailyPipelineOrchestrator:
                     'null_filing_written': null_filing_written,
                 }
                 logger.info(
-                    f"[Phase 1] Fundamentals: {fund_ok}/{len(fund_results)} OK"
+                    f"[Ingestion] Fundamentals: {fund_ok}/{len(fund_results)} OK"
                     + (f" | DQ: {null_filing_written} wrote NULL filing_date "
                        f"(earnings fetch failed; EDGAR backfill will repair)"
                        if null_filing_written else "")
@@ -945,7 +936,7 @@ class DailyPipelineOrchestrator:
                 self._check_filing_date_quality(equity_tickers)
             except Exception as e:
                 results['fundamentals'] = {'success': False, 'error': str(e)}
-                logger.error(f"[Phase 1] Fundamentals FAILED: {e}", exc_info=True)
+                logger.error(f"[Ingestion] Fundamentals FAILED: {e}", exc_info=True)
 
         # cik_map refresh (weekly) — keeps ticker→CIK lookups current for the
         # EDGAR filing-date backfill below. Cheap (~1 HTTP call, ~10K rows).
@@ -954,7 +945,7 @@ class DailyPipelineOrchestrator:
                 results['cik_map_refresh'] = self._run_phase_1_cik_map_refresh(latest_trading_day)
             except Exception as e:
                 results['cik_map_refresh'] = {'success': False, 'error': str(e)}
-                logger.warning(f"[Phase 1] cik_map refresh FAILED (non-critical): {e}")
+                logger.warning(f"[Ingestion] cik_map refresh FAILED (non-critical): {e}")
 
         # Filing-date backfill — fills filing_date for rows where it is currently
         # NULL, using SEC EDGAR as the authoritative source. Runs AFTER fundamentals
@@ -965,7 +956,7 @@ class DailyPipelineOrchestrator:
                 results['filing_date_backfill'] = fb_result
             except Exception as e:
                 results['filing_date_backfill'] = {'success': False, 'error': str(e)}
-                logger.warning(f"[Phase 1] Filing-date backfill FAILED (non-critical): {e}")
+                logger.warning(f"[Ingestion] Filing-date backfill FAILED (non-critical): {e}")
 
         # Shares — equities only (ETFs report AUM, not shares outstanding)
         if equity_tickers:
@@ -974,12 +965,12 @@ class DailyPipelineOrchestrator:
                     tickers=equity_tickers, latest_trading_day=latest_trading_day, max_workers=8
                 )
                 results['shares'] = {'success': True, 'rows_written': result}
-                logger.info(f"[Phase 1] Shares: {result} rows")
+                logger.info(f"[Ingestion] Shares: {result} rows")
                 if result and result > 0:
                     self.run_manager.record_write('shares_outstanding', result, 'phase_1_t1_shares')
             except Exception as e:
                 results['shares'] = {'success': False, 'error': str(e)}
-                logger.error(f"[Phase 1] Shares FAILED: {e}", exc_info=True)
+                logger.error(f"[Ingestion] Shares FAILED: {e}", exc_info=True)
 
         # Macro — two writers, two tables:
         #   ingest_daily_macro()  -> t1_macro    (wide: SPY/QQQ/VIX OHLCV)
@@ -1012,14 +1003,14 @@ class DailyPipelineOrchestrator:
                 't1_macro_rows': t1_rows,
                 'macro_data_rows': md_rows,
             }
-            logger.info(f"[Phase 1] Macro: t1_macro +{t1_rows} rows, macro_data +{md_rows} rows")
+            logger.info(f"[Ingestion] Macro: t1_macro +{t1_rows} rows, macro_data +{md_rows} rows")
             if t1_rows and t1_rows > 0:
                 self.run_manager.record_write('t1_macro', t1_rows, 'phase_1_t1_macro')
             if md_rows and md_rows > 0:
                 self.run_manager.record_write('macro_data', md_rows, 'phase_1_t1_macro')
         except Exception as e:
             results['macro'] = {'success': False, 'error': str(e)}
-            logger.error(f"[Phase 1] Macro FAILED: {e}", exc_info=True)
+            logger.error(f"[Ingestion] Macro FAILED: {e}", exc_info=True)
 
         # CAPE_OURS: self-computed valuation pillar (Shiller's own data is dormant).
         # Monthly series computed over already-ingested price/fundamentals/shares; isolated
@@ -1028,12 +1019,12 @@ class DailyPipelineOrchestrator:
             from src.cape_engine import CapeEngine
             cape_rows = CapeEngine(self.db_path).update()
             results['cape_ours'] = {'success': True, 'rows': cape_rows}
-            logger.info(f"[Phase 1] CAPE_OURS: upserted {cape_rows} months")
+            logger.info(f"[Ingestion] CAPE_OURS: upserted {cape_rows} months")
             if cape_rows:
                 self.run_manager.record_write('macro_data', cape_rows, 'phase_1_cape_ours')
         except Exception as e:
             results['cape_ours'] = {'success': False, 'error': str(e)}
-            logger.error(f"[Phase 1] CAPE_OURS FAILED: {e}", exc_info=True)
+            logger.error(f"[Ingestion] CAPE_OURS FAILED: {e}", exc_info=True)
 
         return {
             'rows_processed': len(active_tickers),
@@ -1062,7 +1053,7 @@ class DailyPipelineOrchestrator:
             conn.close()
 
         if last_success is None:
-            logger.info("[Phase 1] cik_map: no prior successful refresh — triggering")
+            logger.info("[Ingestion] cik_map: no prior successful refresh — triggering")
             return True
 
         age_days = (datetime.now() - last_success).days
@@ -1077,7 +1068,7 @@ class DailyPipelineOrchestrator:
         )
         try:
             n = self.edgar_engine.refresh_cik_map()
-            logger.info(f"[Phase 1] cik_map: {n} rows after refresh")
+            logger.info(f"[Ingestion] cik_map: {n} rows after refresh")
             self.run_manager.complete_phase(
                 ck_run_id, PipelineRunStatus.SUCCESS, rows_processed=n
             )
@@ -1122,7 +1113,7 @@ class DailyPipelineOrchestrator:
             conn.close()
 
         if not candidates:
-            logger.debug("[Phase 1] Filing-date backfill: no eligible rows")
+            logger.debug("[Ingestion] Filing-date backfill: no eligible rows")
             return {'success': True, 'tickers': 0, 'rows_updated': 0}
 
         tickers = [c[0] for c in candidates]
@@ -1140,7 +1131,7 @@ class DailyPipelineOrchestrator:
             rows_updated = sum(results.values())
             tickers_touched = len(results)
             logger.info(
-                f"[Phase 1] Filing-date backfill (EDGAR): {rows_updated} rows updated "
+                f"[Ingestion] Filing-date backfill (EDGAR): {rows_updated} rows updated "
                 f"across {tickers_touched}/{len(tickers)} tickers "
                 f"(eligible: {total_missing} rows)"
             )
@@ -1165,7 +1156,7 @@ class DailyPipelineOrchestrator:
 
         result = self.screener_manager.evaluate_and_log(target_date)
         logger.info(
-            f"[Phase 2] Screener membership: active={result['active']}, "
+            f"[Screener] Screener membership: active={result['active']}, "
             f"entered={result['entered']}, exited={result['exited']}"
         )
 
@@ -1189,7 +1180,7 @@ class DailyPipelineOrchestrator:
             con.close()
 
         if max_date is None:
-            logger.warning("[Phase 3] t2_screener_features is empty — falling back to full compute from 2020-01-01")
+            logger.warning("[T2 Features] t2_screener_features is empty — falling back to full compute from 2020-01-01")
             rows = self.feature_pipeline.compute_t2_screener_features(start_date='2020-01-01')
             return {'rows_processed': rows}
 
@@ -1199,16 +1190,16 @@ class DailyPipelineOrchestrator:
             # Date is current, but check for coverage gaps (partial ingestion)
             coverage = self._t2_coverage_deficit(last_trading_day, con_factory=lambda: db.connect(self.db_path, read_only=True))
             if coverage > 0:
-                logger.warning(f"[Phase 3] Coverage gap: {coverage} tickers missing for {last_trading_day} — recomputing")
+                logger.warning(f"[T2 Features] Coverage gap: {coverage} tickers missing for {last_trading_day} — recomputing")
                 rows = self.feature_pipeline.compute_t2_screener_features(
                     start_date=last_trading_day,
                     end_date=last_trading_day
                 )
                 return {'rows_processed': rows}
-            logger.info(f"[Phase 3] t2_screener_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
+            logger.info(f"[T2 Features] t2_screener_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
             return {'rows_processed': 0}
 
-        logger.info(f"[Phase 3] Incremental T2 compute: {start_date} -> {last_trading_day} (gap from {max_date})")
+        logger.info(f"[T2 Features] Incremental T2 compute: {start_date} -> {last_trading_day} (gap from {max_date})")
         rows = self.feature_pipeline.compute_t2_screener_features(
             start_date=start_date,
             end_date=last_trading_day
@@ -1251,16 +1242,16 @@ class DailyPipelineOrchestrator:
         """
         try:
             m03_rows = self.regime_pipeline.update_incremental()
-            logger.info(f"[Phase 4] M03 regime: {m03_rows} new rows")
+            logger.info(f"[T2 Regime] M03 regime: {m03_rows} new rows")
         except Exception as e:
-            logger.warning(f"[Phase 4] M03 regime update FAILED (non-critical): {e}")
+            logger.warning(f"[T2 Regime] M03 regime update FAILED (non-critical): {e}")
             m03_rows = 0
 
         try:
             risk_rows = self.risk_calculator.update_incremental()
-            logger.info(f"[Phase 4] 5F Risk: {risk_rows} new rows")
+            logger.info(f"[T2 Regime] 5F Risk: {risk_rows} new rows")
         except Exception as e:
-            logger.warning(f"[Phase 4] 5F Risk update FAILED (non-critical): {e}")
+            logger.warning(f"[T2 Regime] 5F Risk update FAILED (non-critical): {e}")
             risk_rows = 0
 
         return {'rows_processed': m03_rows + risk_rows, 'm03_rows': m03_rows, 'risk_rows': risk_rows}
@@ -1293,7 +1284,7 @@ class DailyPipelineOrchestrator:
             con.close()
 
         if max_date is None:
-            logger.warning("[Phase 5] t3_sepa_features is empty — falling back to full compute from 2020-01-01")
+            logger.warning("[T3 Features] t3_sepa_features is empty — falling back to full compute from 2020-01-01")
             rows = self.feature_pipeline.compute_t3_features(start_date='2020-01-01')
             return {'rows_processed': rows}
 
@@ -1309,15 +1300,15 @@ class DailyPipelineOrchestrator:
             holed_dates = self._t3_holed_dates(last_trading_day)
             if holed_dates:
                 logger.warning(
-                    f"[Phase 5] Backfill: {len(holed_dates)} date(s) have t3 holes "
+                    f"[T3 Features] Backfill: {len(holed_dates)} date(s) have t3 holes "
                     f"({holed_dates[0]} .. {holed_dates[-1]}) — re-materializing full universe"
                 )
                 rows = self._recompute_t3_dates(holed_dates)
                 return {'rows_processed': rows}
-            logger.info(f"[Phase 5] t3_sepa_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
+            logger.info(f"[T3 Features] t3_sepa_features already up-to-date (last={max_date}, trading_day={last_trading_day})")
             return {'rows_processed': 0}
 
-        logger.info(f"[Phase 5] Incremental T3 compute: {start_date} -> {last_trading_day} (gap from {max_date})")
+        logger.info(f"[T3 Features] Incremental T3 compute: {start_date} -> {last_trading_day} (gap from {max_date})")
         rows = self.feature_pipeline.compute_t3_features(
             start_date=start_date,
             end_date=last_trading_day
@@ -1426,7 +1417,7 @@ class DailyPipelineOrchestrator:
         """Phase 6: Refresh all views."""
 
         view_count = self.view_manager.create_all()
-        logger.info(f"[Phase 6] Views refreshed: {view_count} views")
+        logger.info(f"[Views] Views refreshed: {view_count} views")
 
         return {'rows_processed': view_count}
 
@@ -1436,7 +1427,7 @@ class DailyPipelineOrchestrator:
         self.view_manager.refresh_cache(verbose=False)
         stats = self.view_manager.get_cache_stats()
         rows = stats.get('row_count', 0)
-        logger.info(f"[Phase 7] Training cache refreshed: {rows:,} rows")
+        logger.info(f"[Training Cache] Training cache refreshed: {rows:,} rows")
 
         return {'rows_processed': rows}
 
@@ -1451,14 +1442,14 @@ class DailyPipelineOrchestrator:
         try:
             n = self._log_prod_model_predictions(target_date)
         except Exception as e:
-            logger.warning(f"[Phase 7.4] Prediction logging skipped: {e}")
+            logger.warning(f"[Scoring] Prediction logging skipped: {e}")
         # Shadow pass (Module B): score the shadow model on the same breakout
         # candidates and materialize the ranking-divergence verdict. Fully
         # isolated — a shadow failure never affects prod scoring or the run.
         try:
             self._log_shadow_predictions_and_divergence(target_date)
         except Exception as e:
-            logger.warning(f"[Phase 7.4] Shadow comparison skipped: {e}")
+            logger.warning(f"[Scoring] Shadow comparison skipped: {e}")
         return {'rows_processed': n}
 
     def _run_phase_7_45_weather(self, target_date: str) -> Dict:
@@ -1513,7 +1504,7 @@ class DailyPipelineOrchestrator:
         project_root = Path(__file__).resolve().parent.parent.parent
         build_script = project_root / "scripts" / "build_dashboard_db.py"
         if not build_script.exists():
-            logger.warning(f"[Phase 7.5] Build script not found: {build_script}")
+            logger.warning(f"[Dashboard DB] Build script not found: {build_script}")
             return {'rows_processed': 0}
 
         proc = subprocess.run(
@@ -1523,14 +1514,14 @@ class DailyPipelineOrchestrator:
         )
         if proc.returncode != 0:
             logger.warning(
-                f"[Phase 7.5] dashboard DB rebuild failed (rc={proc.returncode}): "
+                f"[Dashboard DB] dashboard DB rebuild failed (rc={proc.returncode}): "
                 f"{proc.stderr.strip()[:500]}"
             )
             return {'rows_processed': 0}
 
         out_db = project_root / "data" / "dashboard.duckdb"
         size_mb = out_db.stat().st_size / 1024 ** 2 if out_db.exists() else 0
-        logger.info(f"[Phase 7.5] Slim dashboard DB rebuilt: {size_mb:,.0f} MB")
+        logger.info(f"[Dashboard DB] Slim dashboard DB rebuilt: {size_mb:,.0f} MB")
         return {'rows_processed': 1}
 
     def _run_phase_7_6_r2_sync(self) -> Dict:
@@ -1550,7 +1541,7 @@ class DailyPipelineOrchestrator:
         # local run — so warn loudly rather than skipping silently.
         if not os.environ.get("R2_ACCOUNT_ID"):
             logger.warning(
-                "[Phase 7.6] R2_ACCOUNT_ID not set; skipping upload. Remote "
+                "[R2 Sync] R2_ACCOUNT_ID not set; skipping upload. Remote "
                 "dashboard will go stale. Check .env at project root."
             )
             return {'rows_processed': 0}
@@ -1558,7 +1549,7 @@ class DailyPipelineOrchestrator:
         project_root = Path(__file__).resolve().parent.parent.parent
         sync_script = project_root / "scripts" / "sync_dashboard_db.py"
         if not sync_script.exists():
-            logger.warning(f"[Phase 7.6] Sync script not found: {sync_script}")
+            logger.warning(f"[R2 Sync] Sync script not found: {sync_script}")
             return {'rows_processed': 0}
 
         # 1200s ceiling: the ~764 MB slim DB is the only large upload (asset dirs
@@ -1571,12 +1562,12 @@ class DailyPipelineOrchestrator:
         )
         if proc.returncode != 0:
             logger.warning(
-                f"[Phase 7.6] R2 upload failed (rc={proc.returncode}): "
+                f"[R2 Sync] R2 upload failed (rc={proc.returncode}): "
                 f"{proc.stderr.strip()[:500]}"
             )
             return {'rows_processed': 0}
 
-        logger.info("[Phase 7.6] dashboard.duckdb uploaded to R2 (latest/)")
+        logger.info("[R2 Sync] dashboard.duckdb uploaded to R2 (latest/)")
         return {'rows_processed': 1}
 
     def _run_phase_10_model_card(self, target_date: str) -> Dict:
@@ -1600,7 +1591,7 @@ class DailyPipelineOrchestrator:
         registry = ModelRegistry(db_path=Path(self.db_path))
         prod_version = registry.get_prod_version()
         if not prod_version:
-            logger.info("[Phase 10] No prod model registered; skipping card build.")
+            logger.info("[Model Card] No prod model registered; skipping card build.")
             return {'rows_processed': 0, 'status': 'no_prod_model'}
 
         info = registry.get_drift_card_info(prod_version)
@@ -1613,7 +1604,7 @@ class DailyPipelineOrchestrator:
                     built_at = None
             if built_at is not None and (_dt.utcnow() - built_at) < _td(days=7):
                 logger.info(
-                    f"[Phase 10] Drift card for {prod_version} is fresh "
+                    f"[Model Card] Drift card for {prod_version} is fresh "
                     f"(built {built_at}); skipping rebuild."
                 )
                 return {'rows_processed': 0, 'status': 'fresh'}
@@ -1621,7 +1612,7 @@ class DailyPipelineOrchestrator:
         project_root = Path(__file__).resolve().parent.parent.parent
         build_script = project_root / "scripts" / "build_model_card.py"
         if not build_script.exists():
-            logger.warning(f"[Phase 10] Build script not found: {build_script}")
+            logger.warning(f"[Model Card] Build script not found: {build_script}")
             return {'rows_processed': 0, 'status': 'no_script'}
 
         # Resolve the clean '<name>/<version>' slug (maps to models/<name>/<version>/
@@ -1630,7 +1621,7 @@ class DailyPipelineOrchestrator:
         try:
             model_slug = registry.get_model_slug(prod_version)
         except ValueError as e:
-            logger.warning(f"[Phase 10] {e}")
+            logger.warning(f"[Model Card] {e}")
             return {'rows_processed': 0, 'status': 'no_model_slug'}
 
         # Trailing 1-year drift window. ~603K SEPA rows over 1y keeps Section G
@@ -1658,12 +1649,12 @@ class DailyPipelineOrchestrator:
                 cwd=str(project_root),
             )
         except subprocess.TimeoutExpired:
-            logger.warning("[Phase 10] Drift card build timed out after 1800s")
+            logger.warning("[Model Card] Drift card build timed out after 1800s")
             return {'rows_processed': 0, 'status': 'timeout'}
 
         if proc.returncode != 0:
             logger.warning(
-                f"[Phase 10] Drift card build failed (rc={proc.returncode}): "
+                f"[Model Card] Drift card build failed (rc={proc.returncode}): "
                 f"{proc.stderr.strip()[:500]}"
             )
             return {'rows_processed': 0, 'status': 'build_failed'}
@@ -1676,7 +1667,7 @@ class DailyPipelineOrchestrator:
             built_at=_dt.utcnow().isoformat(timespec="seconds") + "Z",
         )
         logger.info(
-            f"[Phase 10] Rebuilt drift card ({start_date}..{target_date}) "
+            f"[Model Card] Rebuilt drift card ({start_date}..{target_date}) "
             f"for {prod_version}"
         )
         return {'rows_processed': 1, 'status': 'rebuilt'}
@@ -1707,35 +1698,57 @@ class DailyPipelineOrchestrator:
         if coverage['alerts']:
             alerts.extend(coverage['alerts'])
 
+        # Alert 5: Missing NAV mark on an ACTIVE book. A NAV series can't be
+        # backfilled (TWR needs the day's net_flow recorded on the day — see
+        # _run_phase_7_47_portfolio_nav), so a silent miss is a permanent hole.
+        # Only fires when the book has activity: an empty book has no NAV to mark.
+        nav_con = db.connect(self.db_path, read_only=True)
+        try:
+            book_active = nav_con.execute(
+                "SELECT (SELECT COUNT(*) FROM trades) + (SELECT COUNT(*) FROM cash_flows)"
+            ).fetchone()[0]
+            if book_active:
+                has_row = nav_con.execute(
+                    "SELECT COUNT(*) FROM nav_history WHERE date = ?", [target_date]
+                ).fetchone()[0]
+                if not has_row:
+                    alerts.append(
+                        f"🛑 ALERT: no nav_history row for {target_date} on an active book. "
+                        f"NAV is not backfillable (TWR needs same-day net_flow) — "
+                        f"investigate the portfolio_nav phase for this date."
+                    )
+        finally:
+            nav_con.close()
+
         # Log alerts
         if alerts:
-            logger.warning("[Phase 8] ALERTS TRIGGERED:")
+            logger.warning("[Monitoring] ALERTS TRIGGERED:")
             for alert in alerts:
                 logger.warning(f"  {alert}")
         else:
-            logger.info("[Phase 8] No alerts - pipeline health OK")
+            logger.info("[Monitoring] No alerts - pipeline health OK")
 
         # Log health summary
-        logger.info(f"[Phase 8] Data freshness: {health['max_dates']}")
-        logger.info(f"[Phase 8] Breakout drought: {health['breakout_drought_days']} days")
+        logger.info(f"[Monitoring] Data freshness: {health['max_dates']}")
+        logger.info(f"[Monitoring] Breakout drought: {health['breakout_drought_days']} days")
 
-        # Prediction logging moved to Phase 7.4 (runs before the dashboard DB is
-        # built/uploaded so today's scores ride along; see _run_phase_7_4_scoring).
-        predictions_written = run_stats.get('phase_7_4', {}).get('rows_processed', 0)
+        # Prediction logging lives in the scoring phase (runs before the dashboard
+        # DB is built/uploaded so today's scores ride along; see _run_scoring).
+        predictions_written = run_stats.get('scoring', {}).get('rows_processed', 0)
 
         # Quarterly feature-drift report (best-effort; only fires on 1st of Jan/Apr/Jul/Oct).
         drift_report = None
         try:
             drift_report = self._maybe_run_quarterly_drift(target_date)
         except Exception as e:
-            logger.warning(f"[Phase 8] Quarterly drift report skipped: {e}")
+            logger.warning(f"[Monitoring] Quarterly drift report skipped: {e}")
 
         # Daily audit report (best-effort; populates Pipeline Health audit history).
         audit_report = None
         try:
             audit_report = self._run_daily_audits(target_date)
         except Exception as e:
-            logger.warning(f"[Phase 8] Daily audit run skipped: {e}")
+            logger.warning(f"[Monitoring] Daily audit run skipped: {e}")
 
         return {
             'rows_processed': predictions_written,
@@ -1760,20 +1773,20 @@ class DailyPipelineOrchestrator:
         repo_root = Path(__file__).parent.parent.parent
         audit_script = repo_root / "tools" / "run_all_audits.py"
         if not audit_script.exists():
-            logger.warning(f"[Phase 8] Audit script not found: {audit_script}")
+            logger.warning(f"[Monitoring] Audit script not found: {audit_script}")
             return None
 
         cmd = [sys.executable, str(audit_script), "--date", target_date, "--warn-only"]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         except subprocess.TimeoutExpired:
-            logger.warning("[Phase 8] Audit run timed out after 600s")
+            logger.warning("[Monitoring] Audit run timed out after 600s")
             return None
 
         # run_all_audits exits 0 (all OK) or 1 (any WARNING/FAIL); 2+ = crash.
         if proc.returncode not in (0, 1):
             err = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "unknown"
-            logger.warning(f"[Phase 8] Audit run crashed (rc={proc.returncode}): {err}")
+            logger.warning(f"[Monitoring] Audit run crashed (rc={proc.returncode}): {err}")
             return None
 
         # The script writes audit_report_YYYYMMDD.json keyed by UTC run date.
@@ -1781,18 +1794,18 @@ class DailyPipelineOrchestrator:
         date_str = _dt.utcnow().strftime("%Y%m%d")
         report_path = repo_root / "data" / "audit_reports" / f"audit_report_{date_str}.json"
         if not report_path.exists():
-            logger.warning(f"[Phase 8] Audit report not written at expected path: {report_path}")
+            logger.warning(f"[Monitoring] Audit report not written at expected path: {report_path}")
             return None
 
         try:
             report = json.loads(report_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
-            logger.warning(f"[Phase 8] Could not parse audit report: {e}")
+            logger.warning(f"[Monitoring] Could not parse audit report: {e}")
             return None
 
         summary = report.get("summary", {}).get("total", {})
         logger.info(
-            f"[Phase 8] Audit report saved ({report_path.name}): "
+            f"[Monitoring] Audit report saved ({report_path.name}): "
             f"FAIL={summary.get('FAIL', 0)} WARN={summary.get('WARNING', 0)} "
             f"OK={summary.get('OK', 0)} overall={report.get('overall')}"
         )
@@ -1803,7 +1816,7 @@ class DailyPipelineOrchestrator:
         if new_fails:
             for r in new_fails:
                 logger.error(
-                    f"[Phase 8] NEW audit FAIL: {r.get('audit')}/{r.get('section')}."
+                    f"[Monitoring] NEW audit FAIL: {r.get('audit')}/{r.get('section')}."
                     f"{r.get('check')} = {r.get('value')} — {r.get('detail', '')[:120]}"
                 )
 
@@ -1837,15 +1850,15 @@ class DailyPipelineOrchestrator:
         try:
             engine = ScoreEngine.from_prod(self.db_path)
         except (ValueError, FileNotFoundError) as e:
-            logger.warning(f"[Phase 7.4] Prod model not scorable: {e}")
+            logger.warning(f"[Scoring] Prod model not scorable: {e}")
             return 0
         if engine is None:
-            logger.info("[Phase 7.4] No prod model registered — skipping prediction log.")
+            logger.info("[Scoring] No prod model registered — skipping prediction log.")
             return 0
 
         population = self._fetch_lifecycle_candidates(target_date)
         if population.empty:
-            logger.info(f"[Phase 8] No lifecycle candidates on {target_date}.")
+            logger.info(f"[Monitoring] No lifecycle candidates on {target_date}.")
             return 0
 
         total = 0
@@ -1853,10 +1866,10 @@ class DailyPipelineOrchestrator:
         for cohort, candidates in population.groupby("cohort", sort=False):
             try:
                 n = engine.score_and_log(candidates, target_date, cohort, self.db_path)
-                logger.info(f"[Phase 7.4] Logged {n} '{cohort}' predictions on {target_date}")
+                logger.info(f"[Scoring] Logged {n} '{cohort}' predictions on {target_date}")
                 total += n
             except Exception as e:
-                logger.warning(f"[Phase 7.4] Scoring cohort '{cohort}' failed: {e}")
+                logger.warning(f"[Scoring] Scoring cohort '{cohort}' failed: {e}")
         return total
 
     def _log_shadow_predictions_and_divergence(self, target_date: str) -> int:
@@ -1881,33 +1894,33 @@ class DailyPipelineOrchestrator:
         try:
             engine = ScoreEngine.from_shadow(self.db_path)
         except (ValueError, FileNotFoundError) as e:
-            logger.warning(f"[Phase 7.4] Shadow model not scorable: {e}")
+            logger.warning(f"[Scoring] Shadow model not scorable: {e}")
             return 0
         if engine is None:
-            logger.info("[Phase 7.4] No shadow model designated — skipping shadow pass.")
+            logger.info("[Scoring] No shadow model designated — skipping shadow pass.")
             return 0
 
         cohort = "breakout"
         candidates = self._fetch_breakout_candidates(target_date)
         n = engine.score_and_log(candidates, target_date, cohort, self.db_path)
-        logger.info(f"[Phase 7.4] Logged {n} shadow '{cohort}' predictions on {target_date}")
+        logger.info(f"[Scoring] Logged {n} shadow '{cohort}' predictions on {target_date}")
 
         prod_id = ModelRegistry(db_path=self.db_path).get_prod_version()
         if not prod_id:
-            logger.info("[Phase 7.4] No prod model — skipping divergence verdict.")
+            logger.info("[Scoring] No prod model — skipping divergence verdict.")
             return n
 
         prod_day = load_cohort_scores(self.db_path, prod_id, cohort, target_date, target_date)
         shadow_day = load_cohort_scores(self.db_path, engine.version_id, cohort, target_date, target_date)
         day = compare_day(prod_day, shadow_day)
         if day is None:
-            logger.info("[Phase 7.4] No overlapping prod/shadow scores on %s — no verdict.", target_date)
+            logger.info("[Scoring] No overlapping prod/shadow scores on %s — no verdict.", target_date)
             return n
         write_day_divergence(
             self.db_path, target_date, prod_id, engine.version_id, cohort, day
         )
         logger.info(
-            "[Phase 7.4] Shadow divergence %s: spearman=%.3f jaccard@10=%.3f disagree=%d",
+            "[Scoring] Shadow divergence %s: spearman=%.3f jaccard@10=%.3f disagree=%d",
             target_date, day.spearman, day.jaccard_at_10, day.n_disagreements,
         )
         return n
@@ -1920,7 +1933,7 @@ class DailyPipelineOrchestrator:
                 "SELECT * FROM v_d3_deployment WHERE date = ?", [target_date]
             ).df()
         except duckdb.Error as e:
-            logger.warning(f"[Phase 7.4] Could not query v_d3_deployment: {e}")
+            logger.warning(f"[Scoring] Could not query v_d3_deployment: {e}")
             import pandas as pd
             return pd.DataFrame()
         finally:
@@ -1939,7 +1952,7 @@ class DailyPipelineOrchestrator:
                 "SELECT * FROM v_d3_lifecycle WHERE date = ?", [target_date]
             ).df()
         except duckdb.Error as e:
-            logger.warning(f"[Phase 7.4] Could not query v_d3_lifecycle: {e}")
+            logger.warning(f"[Scoring] Could not query v_d3_lifecycle: {e}")
             import pandas as pd
             return pd.DataFrame()
         finally:
@@ -1967,19 +1980,19 @@ class DailyPipelineOrchestrator:
         registry = ModelRegistry(db_path=self.db_path)
         prod_version_id = registry.get_prod_version()
         if not prod_version_id:
-            logger.info("[Phase 8] No prod model — skipping drift report.")
+            logger.info("[Monitoring] No prod model — skipping drift report.")
             return None
 
         try:
             artifacts_path = registry.get_artifacts_path(prod_version_id)
         except ValueError:
-            logger.warning(f"[Phase 8] Prod model {prod_version_id} has no artifacts_path; skipping drift.")
+            logger.warning(f"[Monitoring] Prod model {prod_version_id} has no artifacts_path; skipping drift.")
             return None
 
         snapshot_path = _Path(artifacts_path) / "reference_snapshot.json"
         if not snapshot_path.exists():
             logger.info(
-                f"[Phase 8] No reference_snapshot.json under {artifacts_path} "
+                f"[Monitoring] No reference_snapshot.json under {artifacts_path} "
                 f"— skipping drift (model pre-dates §2.2 wiring)."
             )
             return None
@@ -1999,14 +2012,14 @@ class DailyPipelineOrchestrator:
         out_path.write_text(_json.dumps(report, indent=2, default=str))
         gate = report["gates"][0]
         logger.info(
-            f"[Phase 8] Drift report {quarter}: {gate['status']} — "
+            f"[Monitoring] Drift report {quarter}: {gate['status']} — "
             f"{report['n_features_drifted']} drifted, "
             f"{report['n_features_warned']} warned, "
             f"{report['n_features_skipped']} skipped → {out_path}"
         )
         if report["drifted_features"]:
             sample = report["drifted_features"][:5]
-            logger.warning(f"[Phase 8] Drifted features (top {len(sample)}): {sample}")
+            logger.warning(f"[Monitoring] Drifted features (top {len(sample)}): {sample}")
         return report
 
     def _check_filing_date_quality(self, tickers: list) -> None:
@@ -2100,7 +2113,7 @@ class DailyPipelineOrchestrator:
         if not bogus.empty:
             sample = ", ".join(f"{r.ticker} ({r.gap_days}d)" for r in bogus.head(5).itertuples())
             logger.warning(
-                f"[Phase 1] DQ: {len(bogus)} legacy rows with filing_date < 8d after period_end. "
+                f"[Ingestion] DQ: {len(bogus)} legacy rows with filing_date < 8d after period_end. "
                 f"Sample: {sample}. Run scripts/backfill_filing_dates.py to clean."
             )
 
@@ -2113,7 +2126,7 @@ class DailyPipelineOrchestrator:
                 for r in sample_old.itertuples()
             )
             logger.warning(
-                f"[Phase 1] DQ: {len(stale)} equities with stale fundamentals "
+                f"[Ingestion] DQ: {len(stale)} equities with stale fundamentals "
                 f"(next quarter overdue: period_end>{EXPECTED_NEXT_FILING_LAG_DAYS}d ago; "
                 f"null_filing={null_count}). Sample: {sample_str or 'n/a'}"
             )
@@ -2185,7 +2198,7 @@ class DailyPipelineOrchestrator:
                     LIMIT 10
                 """).fetchdf()
                 sample = ", ".join(missing['ticker'].tolist())
-                logger.debug(f"[Phase 8] Missing tickers sample: {sample}")
+                logger.debug(f"[Monitoring] Missing tickers sample: {sample}")
                 details['sample_missing'] = missing['ticker'].tolist()
 
             # T3 coverage (only meaningful if t2 has breakouts)
@@ -2213,14 +2226,14 @@ class DailyPipelineOrchestrator:
                 )
 
         except Exception as e:
-            logger.error(f"[Phase 8] Coverage check failed: {e}", exc_info=True)
+            logger.error(f"[Monitoring] Coverage check failed: {e}", exc_info=True)
             alerts.append(f"Coverage check failed: {e}")
         finally:
             con.close()
 
         if not alerts:
             logger.info(
-                f"[Phase 8] Coverage: t2={details.get('t2_tickers', '?')}/{details.get('expected_tickers', '?')} tickers, "
+                f"[Monitoring] Coverage: t2={details.get('t2_tickers', '?')}/{details.get('expected_tickers', '?')} tickers, "
                 f"t3={details.get('t3_tickers', '?')}/{details.get('t2_breakouts', '?')} breakouts"
             )
 
