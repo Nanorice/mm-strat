@@ -27,6 +27,13 @@ Read the deep docs (below) for *why*; this is *where*.
 - **CLI entrypoints** → `scripts/` (e.g. `run_daily_pipeline.py`, `create_duckdb_views.py`, `refresh_training_cache.py`, `build_model_card.py`).
 
 ## Deep docs — read on demand (progressive disclosure)
+- **Terminology → `docs/architecture/glossary.md`** (SHORT, ~120 lines — read it whole).
+  The definition of record for ambiguous terms. **Check it before naming anything or
+  before reading a term you're not certain of**: several live names are ambiguous
+  (`cone` = label vs strategy), uninformative (`sepa_watchlist` = trade sessions), or
+  false (`prob_elite` is not always a probability; `trend_c8` computes C1+C2+C6).
+  If code and the glossary disagree, one is a bug — say which.
+
 These are large (~1k–1.5k lines each). Do NOT read whole; jump to the named section.
 - **Full methodology / replication** → `docs/architecture/comprehensive_methodology.md`
   (sections: Feature Engineering, Market Regime M03, SEPA Session Mgmt, ML Methodology, Backtesting, Ops).
