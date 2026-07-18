@@ -27,26 +27,19 @@ def _con():
 class TestFeatureCatalogPopulated(unittest.TestCase):
     """Verify populate_feature_catalog.py ran successfully."""
 
-    def test_v01_features_match_feature_groups(self):
-        """All features declared in FEATURE_GROUPS must be in model_feature_sets."""
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-        from train_mfe_classifier import FEATURE_GROUPS
+    def test_v01_feature_set_registered(self):
+        """The v0.1 feature set must be registered and non-trivially sized.
 
-        all_declared = {f for group in FEATURE_GROUPS.values() for f in group}
-
+        model_feature_sets is the single source of truth now (train_mfe_classifier
+        loads features from it) — the old FEATURE_GROUPS cross-check is obsolete.
+        """
         con = _con()
-        rows = con.execute(
-            "SELECT feature_name FROM model_feature_sets WHERE feature_set_id = ?",
+        count = con.execute(
+            "SELECT COUNT(*) FROM model_feature_sets WHERE feature_set_id = ?",
             [FEATURE_SET_ID],
-        ).fetchall()
+        ).fetchone()[0]
         con.close()
-
-        registered = {r[0] for r in rows}
-        missing = all_declared - registered
-        self.assertFalse(
-            missing,
-            f"Features in FEATURE_GROUPS but not in model_feature_sets: {missing}",
-        )
+        self.assertGreaterEqual(count, 100, f"'{FEATURE_SET_ID}' should have 106 features")
 
     def test_feature_set_includes_atr_delta(self):
         """atr_delta must be registered (declared in FEATURE_GROUPS, absent from artifact)."""
@@ -78,22 +71,35 @@ class TestFeatureCatalogPopulated(unittest.TestCase):
             f"Features in model_feature_sets with no catalog entry: {[r[0] for r in orphans]}",
         )
 
-    def test_prod_model_registered(self):
-        """M01_baseline_v0.1 must be registered as prod with classification metrics."""
+    def test_baseline_model_registered(self):
+        """M01_baseline_v0.1 must be registered with classification metrics.
+
+        Prod status belongs to whichever model the registry currently promotes
+        (m01_binary since 2026-07-15) — asserted separately below.
+        """
         con = _con()
         row = con.execute(
-            "SELECT status_flag, accuracy, weighted_f1, macro_f1, feature_set_id FROM models WHERE version_id = ?",
+            "SELECT accuracy, weighted_f1, macro_f1, feature_set_id FROM models WHERE version_id = ?",
             [MODEL_VERSION_ID],
         ).fetchone()
         con.close()
 
         self.assertIsNotNone(row, f"Model '{MODEL_VERSION_ID}' not found in models table")
-        status, accuracy, weighted_f1, macro_f1, fs_id = row
-        self.assertEqual(status, "prod")
+        accuracy, weighted_f1, macro_f1, fs_id = row
         self.assertIsNotNone(accuracy)
         self.assertIsNotNone(weighted_f1)
         self.assertIsNotNone(macro_f1)
         self.assertEqual(fs_id, FEATURE_SET_ID)
+
+    def test_exactly_one_prod_model(self):
+        """The registry must have exactly one prod model with a feature set."""
+        con = _con()
+        rows = con.execute(
+            "SELECT version_id, feature_set_id FROM models WHERE status_flag = 'prod'"
+        ).fetchall()
+        con.close()
+        self.assertEqual(len(rows), 1, f"Expected exactly one prod model, got {rows}")
+        self.assertIsNotNone(rows[0][1], "Prod model must have a feature_set_id")
 
 
 class TestFeatureCatalogImmutability(unittest.TestCase):
@@ -133,17 +139,18 @@ class TestViewNoLogFeatures(unittest.TestCase):
 
 
 class TestGetModelFeaturesFromDB(unittest.TestCase):
-    """get_model_features() must return 105+ features from DuckDB."""
+    """get_model_features() must return the prod model's registered features."""
 
     def test_get_model_features_from_db(self):
-        from src.feature_config import get_model_features
+        from src.utils import get_model_features
 
         features = get_model_features('M01', db_path=str(DB_PATH))
         self.assertIsInstance(features, list)
-        self.assertGreaterEqual(len(features), 105, "Expected at least 105 features for M01")
+        # Prod M01 feature sets range 90–106 features (binary=97, baseline=106).
+        self.assertGreaterEqual(len(features), 90, "Expected at least 90 features for M01")
 
     def test_get_model_features_raises_on_unknown_model(self):
-        from src.feature_config import get_model_features
+        from src.utils import get_model_features
 
         with self.assertRaises(RuntimeError):
             get_model_features('NONEXISTENT_MODEL_XYZ', db_path=str(DB_PATH))

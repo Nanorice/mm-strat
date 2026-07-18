@@ -963,3 +963,18 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
   session-09's "≈5,800" was an unmeasured estimate). Recovery is FORWARD-only (user rule: no
   slim→local copy, ever). July window + post-06-21 tables re-derive next session.
   `[[project_r2_pull_destroyed_main_db]]`
+
+75. **Does a restored snapshot only lose new data, or does it also undo prior fixes?** → BOTH — the
+    06-21 file resurrected the pre-07-10 price/shares dirt (78,265 bars); Phase-1.6 plausibility gate
+    caught it and withheld R2 publish as designed. Re-ran `clean_dirty_shares_price.py` before T2/T3.
+76. **Was the 4 feature-catalog test-failure hypothesis (session 10: "missing binary registration")
+    correct?** → NO — root cause was stale test assertions (hardcoded old prod model, imports of a
+    removed `FEATURE_GROUPS`/`src.feature_config` design superseded when training moved to reading
+    `model_feature_sets` from the DB). Fixed tests to current contract; binary promotion was a real,
+    separate, needed step. 11/11 pass.
+- ✅ **Ops: local recovery COMPLETE** (session 11) — full forward backfill 06-19→07-17 across every
+  table (raw, T2/regime/risk/T3, sepa_watchlist 39,088 sessions, 15 views, d2 cache 39,088 rows @76s,
+  cone_cells/weather_gauge/sector_breadth, portfolio schemas), `m01_binary_20260524_222020` promoted
+  to PROD via the real gate, `daily_predictions` backfilled (124,715 rows). Suite 406 passed. Dropped
+  (user-approved) `m02_prototype_targets` + `t3_training_cache` — closed research, one-command rebuild.
+  sh019 migration + backup story still open. `[[project_r2_pull_destroyed_main_db]]`
