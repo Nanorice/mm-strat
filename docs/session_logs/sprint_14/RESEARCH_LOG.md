@@ -944,3 +944,22 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
 - ✅ **m01a M4 (Q34, DONE 2026-07-10):** RS-selection LOSES the BackTrader cone (median 0.10 vs
   0.47) → kill criterion #3, **incumbent stays champion; m01a plan CLOSED** (M5 moot — SPY-gate
   already confirmed Q26). `verdicts/2026-07-10_m4_rs_tail_backtrader_cone.md`.
+
+## Thread O — DB restore + session-store unification (2026-07-18, session 10)
+
+72. **Do `sepa_watchlist` and `screener_watchlist` define the same sessions?** → YES modulo exactly two
+    axes: the 14-day cool-down (−2,955 sessions) and an `is_active` survivorship filter (−292).
+    No-cool-down sepa candidates match the screener population on (ticker, entry_date) EXACTLY, zero
+    residual — exit-day / NULL-SMA axes contribute nothing. → MERGED: `screener_watchlist` is now a
+    VIEW over `sepa_watchlist`; one derivation, one truth. `[[project_watchlist_merge]]`
+73. **What should cool-down be in the unified store?** → demoted write-time gate → read-time flag
+    (`is_retrigger` via LAG ≤ 14d): the only structural consumer (T3 gate) reads DISTINCT ticker, the
+    training grain never had the gate, and re-triggers are tail-relevant info. Statuses ACTIVE/EXITED.
+74. **Was the training population survivorship-biased?** → YES — floor of 292 sessions / 29 delisted
+    tickers (`is_active` filter in `v_d1_candidates`), now REMOVED; next d2 cache refresh adds them
+    (mostly failures — flag vs old model cards). ? OPEN: true survivorship sits mostly at INGEST
+    (universe built from ~2025 listings) — bigger question, unquantified.
+- ✅ **Ops: main DB restored** from a 2026-06-21 mid-run snapshot (real span **9,184 dates, 1990→**;
+  session-09's "≈5,800" was an unmeasured estimate). Recovery is FORWARD-only (user rule: no
+  slim→local copy, ever). July window + post-06-21 tables re-derive next session.
+  `[[project_r2_pull_destroyed_main_db]]`
