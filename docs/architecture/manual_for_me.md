@@ -1232,15 +1232,31 @@ The slim DB (`data/dashboard.duckdb`, 783 MB) is rebuilt nightly by orchestrator
 
 ### Page map (MVP — 2026-05-23)
 
-| # | Page | File | Purpose |
-|---|------|------|---------|
-| 1 | Today | `scripts/dashboard.py` (`page_today`) | Default landing — M03 + 5F regime cards, screener watchlist with M01 probabilities, pre-breakout cohort, sector heat, analytics |
-| — | Feature Time Series | `scripts/pages/1_Feature_Time_Series.py` | Pre-existing per-ticker chart page (kept; rename pending Page 2 build) |
-| 3 | Model Lab | `scripts/pages/3_Model_Lab.py` | Registry browser — read-only; embeds pretrain HTML, PNG plots, report MD, specs JSON, diff |
-| 4 | Backtest Studio | `scripts/pages/4_Backtest_Studio.py` | Browse v1 backtest runs — equity / DD / per-year / per-regime / trade table / 2-run compare |
-| 5 | Pipeline Health | `scripts/pages/5_Pipeline_Health.py` | Ops view — runs heatmap, freshness, universe trend, audit history, storage |
+> ⚠️ **Restructured 2026-07-18 (sprint-14 uplift switch-over).** The single "Today"
+> monolith is **gone**; the app is now a **two-tier `st.navigation` dict**. `page_today`
+> and its `render_*` helpers survive in `dashboard.py` as **unrouted dead code**, kept one
+> cycle for recovery, pending a deletion pass. Triage evidence:
+> `docs/session_logs/sprint_14/plans/dashboard_uplift/README.md`.
 
-Page 2 (Ticker Deep Dive) is specified in the plan §Page 2 but not yet built.
+**Tier 1 — "Decide"** (theta cream/serif decision surface):
+
+| Page | File | Purpose |
+|------|------|---------|
+| Macro | `scripts/pages/2_Macro.py` | **Default landing.** F&G dial + 6 macro-pillar tiles + deploy headline (S1) · sector/subsector breadth (S2) · 45-series indicator board (S3) |
+| Screening | `scripts/pages/3_Screening.py` | **sepa_active** (`v_d3_screening`, one filterable population, stage + fundamentals) **+ watchlist** (`v_d3_vip`, hand-curated via `vip_add.py`) |
+| Session activity | `scripts/pages/5_Session_Activity.py` | `screener_watchlist` read surface — open sessions · recently closed · activity feed · ticker history. 🛑 **sessions ≠ trades** |
+| Portfolio | `scripts/pages/4_Portfolio.py` | The **real** book (`trades` + `cash_flows` → derived positions/cash), TWR NAV, risk section |
+| Supply chain | `scripts/pages/6_Supply_Chain.py` | Sector co-movement map + sub-sector drill-down. 🛑 **co-movement, NOT dependency**; zero real edges |
+| Equity research | `scripts/pages/7_Equity_Research.py` | Single-name markdown reports (`research_reports.raw_md`) — **empty state; table not built yet** |
+
+**Tier 2 — "Workshop"** (dense/mono operator view):
+
+| Page | File | Purpose |
+|------|------|---------|
+| Dataset EDA | `scripts/pages/1_Dataset_EDA.py` | Pretrain-audit report browser — the `data` stage |
+| Model Lab | `scripts/pages/3_Model_Lab.py` | **C1** — registry browser + funnel/label-outcome EDA + **label cone** + live rank-bump monitoring |
+| Backtest Studio | `scripts/pages/4_Backtest_Studio.py` | **C3** — **strategy cone** above the run browser + per-cell zoom (exposure/P&L/trades/rejections) |
+| Pipeline Health | `scripts/pages/5_Pipeline_Health.py` | Ops — runs heatmap, freshness, universe trend, audit history, DQ section, storage |
 
 ### Page 1 — Today
 
@@ -1318,11 +1334,17 @@ Manifest schema (v1), written by `src/backtest/runner.py:_build_manifest`:
 
 | File | Purpose |
 |------|---------|
-| `scripts/dashboard.py` | Page 1 entrypoint + `st.navigation` wiring |
+| `scripts/dashboard.py` | App entrypoint + two-tier `st.navigation` wiring (+ unrouted `page_today` dead code, pending deletion) |
 | `scripts/dashboard_utils.py` | Shared loaders (`load_regime`, `load_risk_5f`, `load_watchlist`, `load_pre_breakout`, `load_sector_heat(window_days)`, `load_data_freshness`, `load_pipeline_runs_window`, `load_universe_trend`, `load_models_table`, `load_prod_model`), constants (`CLASS_LABELS`, `EXPOSURE_BANDS`, `PILLAR_FORMULAS`), helpers (`classify_regime`, `exposure_band_label`, `score_features_df`) |
-| `scripts/pages/3_Model_Lab.py` | Model registry browser |
-| `scripts/pages/4_Backtest_Studio.py` | v1-manifest backtest viewer |
+| `scripts/pages/2_Macro.py` | Macro (default landing) — S1 regime headline / S2 breadth / S3 indicator board |
+| `scripts/pages/3_Screening.py` | sepa_active + watchlist |
+| `scripts/pages/3_Model_Lab.py` | Model registry + label cone + live rank-bump monitoring |
+| `scripts/pages/4_Portfolio.py` | Real book — positions, TWR NAV, risk |
+| `scripts/pages/4_Backtest_Studio.py` | v1-manifest backtest viewer + strategy cone + per-cell zoom |
+| `scripts/pages/5_Session_Activity.py` | Screener session open/close history |
 | `scripts/pages/5_Pipeline_Health.py` | Ops dashboard |
+| `scripts/pages/6_Supply_Chain.py` | Sector co-movement map (zero real edges) |
+| `scripts/pages/7_Equity_Research.py` | Report read surface (empty state) |
 | `models/m01_prototype_2003_2026/v2/model.json` | Current prod XGBoost classifier (auto-discovered via `status_flag='prod'`) |
 | `docs/reports/pretrain_audit_*.html` | Pre-generated pretrain HTML reports — Model Lab iframes the newest |
 

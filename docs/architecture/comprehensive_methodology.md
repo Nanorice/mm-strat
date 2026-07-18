@@ -625,7 +625,7 @@ streamlit run scripts/dashboard.py   # full local DB
 DASHBOARD_DB_PATH=data/dashboard.duckdb streamlit run scripts/dashboard.py  # slim DB
 ```
 
-Multi-page Streamlit app. Pages: Today (`dashboard.py`), Dataset EDA (`pages/1_Dataset_EDA.py`), Model Lab (`pages/3_Model_Lab.py`), Backtest Studio (`pages/4_Backtest_Studio.py`), Pipeline Health (`pages/5_Pipeline_Health.py`).
+Multi-page Streamlit app, **two-tier nav since 2026-07-18** (the "Today" monolith was retired at the sprint-14 uplift switch-over). **Decide**: Macro (`pages/2_Macro.py`, default landing), Screening (`pages/3_Screening.py`), Session activity (`pages/5_Session_Activity.py`), Portfolio (`pages/4_Portfolio.py`), Supply chain (`pages/6_Supply_Chain.py`), Equity research (`pages/7_Equity_Research.py`). **Workshop**: Dataset EDA (`pages/1_Dataset_EDA.py`), Model Lab (`pages/3_Model_Lab.py`), Backtest Studio (`pages/4_Backtest_Studio.py`), Pipeline Health (`pages/5_Pipeline_Health.py`).
 
 **Slim dashboard DB** (`data/dashboard.duckdb`): 783 MB replica of the tables the dashboard actually reads (98.8% reduction from 67 GB). Built by `scripts/build_dashboard_db.py`; rebuilt nightly by orchestrator Phase 7.5. Set `DASHBOARD_DB_PATH=data/dashboard.duckdb` to use it. The main DB remains the source of truth for all pipeline writes.
 

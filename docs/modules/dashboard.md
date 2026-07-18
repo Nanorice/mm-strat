@@ -24,12 +24,28 @@ Two run contexts, same code:
 
 | File | Role |
 |------|------|
-| `scripts/dashboard.py` | **Entry point + "Today" page.** `streamlit run scripts/dashboard.py`. Registers pages via `st.navigation`; `page_today()` renders the whole landing page (weather gauge → macro → shortlist → VIP → watchlist → activity → pre-breakout → decision log → rank bump → cohort returns → sector heat → analytics). |
+> ⚠️ **Two-tier nav since 2026-07-18** (sprint-14 uplift switch-over). The "Today"
+> monolith was retired — its 13 sections were triaged (5 already migrated, 4 rehoused,
+> 4 dropped with evidence: `docs/session_logs/sprint_14/plans/dashboard_uplift/README.md`).
+> `page_today()` + its `render_*` helpers remain in `dashboard.py` as **unrouted dead
+> code**, kept one cycle, pending a deletion pass.
+
+| File | Role |
+|------|------|
+| `scripts/dashboard.py` | **Entry point.** `streamlit run scripts/dashboard.py`. Registers pages via a two-tier `st.navigation` dict (**Decide** / **Workshop**); Macro is the default landing. |
 | `scripts/dashboard_utils.py` | **Data + infra layer.** All `load_*` loaders (each `@st.cache_data`), the DB path resolution, `_connect(read_only=True)`, and the R2 sync (`_ensure_local_db`, `_maybe_refresh_from_r2`, `_ensure_asset_dirs`). Pages stay render-only; every DB read routes through here. |
+| **— Decide —** | |
+| `scripts/pages/2_Macro.py` | **Default landing.** S1 F&G dial + 6 macro-pillar tiles + deploy headline · S2 sector/subsector breadth · S3 45-series indicator board. |
+| `scripts/pages/3_Screening.py` | **sepa_active** (`v_d3_screening`) + **watchlist** (`v_d3_vip`). Score is RAW/uncalibrated — a rank, never odds. |
+| `scripts/pages/5_Session_Activity.py` | `screener_watchlist` read surface — open/closed sessions, activity feed, ticker history. 🛑 **sessions ≠ trades.** |
+| `scripts/pages/4_Portfolio.py` | The **real** book: `trades` + `cash_flows` → derived positions/cash, TWR NAV, risk (ATR-per-NAV). |
+| `scripts/pages/6_Supply_Chain.py` | Sector co-movement map + sub-sector drill-down. 🛑 **co-movement, NOT dependency**; zero real edges. |
+| `scripts/pages/7_Equity_Research.py` | `research_reports.raw_md` read surface — **empty state; the table does not exist yet.** |
+| **— Workshop —** | |
 | `scripts/pages/1_Dataset_EDA.py` | Embeds the latest `docs/reports/pretrain_audit_*.html`. |
-| `scripts/pages/3_Model_Lab.py` | Model-registry browser; embeds the model card HTML (+ PNG fallback). Read-only — promotion stays a CLI action (`ModelRegistry().set_prod`). |
-| `scripts/pages/4_Backtest_Studio.py` | Browses current-pipeline backtest runs (only `manifest_version: v1`). |
-| `scripts/pages/5_Pipeline_Health.py` | Ops view: run heatmap, data freshness, universe trend, audit history, R2 asset-pull diagnostics. |
+| `scripts/pages/3_Model_Lab.py` | **C1.** Registry browser + funnel/label-outcome EDA + **label cone** (`engine='basket_paths'`) + live rank-bump monitoring. Promotion stays a CLI action (`ModelRegistry().set_prod`). |
+| `scripts/pages/4_Backtest_Studio.py` | **C3.** **Strategy cone** (`engine='BackTrader'`) above the run browser + per-cell zoom. Only `manifest_version: v1` runs. |
+| `scripts/pages/5_Pipeline_Health.py` | Ops view: run heatmap, data freshness, universe trend, audit history, DQ section, R2 asset-pull diagnostics. |
 | `scripts/build_dashboard_db.py` | **Slim-DB builder.** CTAS a thin slice of the 67 GB full DB into `data/dashboard.duckdb` (~800 MB). Run nightly; output uploaded to R2. |
 
 ## 3. Data dependency

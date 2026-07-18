@@ -1,7 +1,7 @@
 """Quantamental Dashboard — entrypoint.
 
-Page 1 (Today, this file) is the default landing. Pages 3/4/5 live under
-scripts/pages/ and auto-mount via st.navigation.
+Two-tier navigation (Decide / Workshop) defined at the bottom of this file;
+pages live under scripts/pages/. Macro is the default landing.
 
 Auth model:
   Local: localhost-only (no --server.address 0.0.0.0), no auth needed.
@@ -9,6 +9,21 @@ Auth model:
   settings). R2_ACCOUNT_ID + R2_ACCESS_KEY + R2_SECRET_KEY + R2_BUCKET_NAME
   (+ optional R2_JURI_ENDPOINT_URL) + DASHBOARD_DB_PATH must be set as
   Streamlit secrets. Key names must match .env.example / dashboard_utils.py.
+
+🛑 **DATA FLOW IS ONE-WAY** (rule set 2026-07-18 after a tier-0 incident):
+
+    local main DB → build_dashboard_db → slim DB → R2 → remote viewer
+
+  Nothing ever flows R2 → local. Pulling from R2 requires an explicit
+  **`DASHBOARD_PULL_FROM_R2=1`** opt-in that ONLY the Streamlit Cloud
+  deployment sets — credentials alone grant nothing (the dev and ops boxes hold
+  them too, which is how a pull once overwrote the 67 GB main DB).
+
+  ⚠️ **Streamlit Cloud must set `DASHBOARD_PULL_FROM_R2=1` as a secret**, or the
+  remote serves whatever DB shipped with the repo and never refreshes.
+
+  ⚠️ **NEVER set `DASHBOARD_DB_PATH=data/market_data.duckdb`.** To read the full
+  local database, leave the variable UNSET — that is already the default.
 """
 
 from __future__ import annotations
@@ -1291,15 +1306,40 @@ st.set_page_config(page_title="Quantamental Dashboard", layout="wide")
 
 PAGES_DIR = Path(__file__).resolve().parent / "pages"
 
-pg = st.navigation([
-    st.Page(page_today, title="Today", icon="📋"),
-    st.Page(str(PAGES_DIR / "1_Dataset_EDA.py"),
-            title="Dataset EDA", icon="📈"),
-    st.Page(str(PAGES_DIR / "3_Model_Lab.py"),
-            title="Model Lab", icon="🧪"),
-    st.Page(str(PAGES_DIR / "4_Backtest_Studio.py"),
-            title="Backtest Studio", icon="📊"),
-    st.Page(str(PAGES_DIR / "5_Pipeline_Health.py"),
-            title="Pipeline Health", icon="🔧"),
-])
+# ── Two-tier navigation (sprint-14 uplift, switched over 2026-07-18) ──────────
+# Tier 1 "Decide" = theta cream/serif decision surface. Tier 2 "Workshop" =
+# dense/mono operator view, deliberately NOT theta-styled.
+#
+# The "Today" monolith is GONE. Its 13 sections were triaged at switch-over
+# (dashboard_uplift/README.md): 5 already migrated, 4 carried onto dedicated
+# pages, 4 dropped with evidence. No slim "Today" landing survived — once the
+# Decision Log and Past-Decision Perf were dropped (1 logged decision in 302,220
+# prediction rows; the `trades` CLI replaced them), the planned landing had
+# nothing left to render but a title. Macro is the landing instead: the deploy
+# posture is the first thing you want in the morning.
+#
+# `page_today` and its ~950 lines of render_* helpers are retained BELOW this
+# nav but no longer routed — dead code pending the follow-up deletion pass, kept
+# for one cycle so anything that turns out to be missed can be recovered from
+# HEAD rather than git history.
+pg = st.navigation({
+    "Decide": [
+        st.Page(str(PAGES_DIR / "2_Macro.py"), title="Macro", icon="🌐", default=True),
+        st.Page(str(PAGES_DIR / "3_Screening.py"), title="Screening", icon="🔍"),
+        st.Page(str(PAGES_DIR / "5_Session_Activity.py"),
+                title="Session activity", icon="🗓️"),
+        st.Page(str(PAGES_DIR / "4_Portfolio.py"), title="Portfolio", icon="💼"),
+        st.Page(str(PAGES_DIR / "6_Supply_Chain.py"), title="Supply chain", icon="🕸️"),
+        st.Page(str(PAGES_DIR / "7_Equity_Research.py"),
+                title="Equity research", icon="📄"),
+    ],
+    "Workshop": [
+        st.Page(str(PAGES_DIR / "1_Dataset_EDA.py"), title="Dataset EDA", icon="📈"),
+        st.Page(str(PAGES_DIR / "3_Model_Lab.py"), title="Model Lab", icon="🧪"),
+        st.Page(str(PAGES_DIR / "4_Backtest_Studio.py"),
+                title="Backtest Studio", icon="📊"),
+        st.Page(str(PAGES_DIR / "5_Pipeline_Health.py"),
+                title="Pipeline Health", icon="🔧"),
+    ],
+})
 pg.run()

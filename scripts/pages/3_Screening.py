@@ -250,12 +250,17 @@ st.caption(f"**{len(d)}** of {len(df)} names match")
 st.dataframe(_shape(d), column_config=_TABLE_COLS, use_container_width=True,
              hide_index=True, height=620)
 
-# ── VIP watchlist ────────────────────────────────────────────────────────────
-# A separate table, NOT a preset: VIP is a hand-curated population (added via
-# `scripts/vip_add.py`), not a slice of the screening universe. VIP names are
-# force-fed into T3, so a name can sit here while failing every screen — which is
+# ── watchlist ────────────────────────────────────────────────────────────────
+# A separate table, NOT a preset: the watchlist is a hand-curated population
+# (added via `scripts/vip_add.py`), not a slice of the screening universe. These
+# names are force-fed into T3 (`feature_pipeline.py` UNIONs `vip_watchlist` into
+# the candidate set), so a name can sit here while failing every screen — which is
 # the point (you watch it ripen). That's why it can't be a filter over
-# v_d3_screening: most VIP names aren't in that population at all.
+# v_d3_screening: most watchlist names aren't in that population at all.
+#
+# Naming (user, 2026-07-18): the table above is **sepa_active**, this one is the
+# **watchlist**. "VIP" is retired as a user-facing word; the underlying table is
+# still `vip_watchlist` and stays that way (a rename is a separate migration).
 
 _VIP_STATUS = {  # view's derived status → glyph (most-advanced state wins)
     "not_in_universe": "○ not in universe",
@@ -273,7 +278,11 @@ _VIP_COLS = {
     "prob_elite": st.column_config.NumberColumn(
         "Score (raw)", format="%.3f", width="small",
         help="Same raw, uncalibrated prod-model score as the table above — a rank, "
-             "not odds. Blank until the name has a scored t3 row."),
+             "not odds. BLANK for any name that has never opened a SEPA session: "
+             "the nightly scorer reads v_d3_lifecycle, which inner-joins "
+             "screener_watchlist, so a watchlist-only name lands in no cohort and "
+             "gets no daily_predictions row. Known gap, deferred — the blank is "
+             "honest, not stale."),
     "rs_universe_rank": st.column_config.NumberColumn("RS", format="%.2f", width="small"),
     "added_date": st.column_config.DateColumn("Added", width="small"),
     "source": st.column_config.TextColumn("Source", width="medium"),
@@ -281,10 +290,11 @@ _VIP_COLS = {
     "as_of_date": st.column_config.DateColumn("As of", width="small"),
 }
 
-st.markdown("#### VIP watchlist")
+st.markdown("#### Watchlist")
+st.caption("Hand-curated names, tracked whether or not they pass the screen above.")
 vip = load_vip_watchlist()
 if vip is None or vip.empty:
-    st.caption("No VIP names yet — add via `python scripts/vip_add.py add NVDA "
+    st.caption("No watchlist names yet — add via `python scripts/vip_add.py add NVDA "
                "--source \"semis report\" --comment \"AI capex, watching VCP\"`. "
                "Names take effect on the next nightly T3 run, forward from the add date.")
 else:

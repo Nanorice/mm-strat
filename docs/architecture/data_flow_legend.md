@@ -50,10 +50,18 @@ Maps each node in [`data_flow.mmd`](data_flow.mmd) to the Python module that pro
 
 ## Dashboard pages
 
-| Page | Script |
-|------|--------|
-| Page 1: Today | `scripts/dashboard.py` |
-| Page 2: Dataset EDA | `scripts/pages/1_Feature_Time_Series.py` |
-| Page 3: Model Lab | `scripts/pages/3_Model_Lab.py` |
-| Page 4: Backtest Studio | `scripts/pages/4_Backtest_Studio.py` |
-| Page 5: Pipeline Health | `scripts/pages/5_Pipeline_Health.py` |
+> Two-tier nav since 2026-07-18 (sprint-14 switch-over); the "Today" monolith is retired.
+
+| Tier | Page | Script |
+|------|------|--------|
+| Decide | Macro *(default landing)* | `scripts/pages/2_Macro.py` |
+| Decide | Screening | `scripts/pages/3_Screening.py` |
+| Decide | Session activity | `scripts/pages/5_Session_Activity.py` |
+| Decide | Portfolio | `scripts/pages/4_Portfolio.py` |
+| Decide | Supply chain | `scripts/pages/6_Supply_Chain.py` |
+| Decide | Equity research | `scripts/pages/7_Equity_Research.py` |
+| Workshop | Dataset EDA | `scripts/pages/1_Dataset_EDA.py` |
+| Workshop | Model Lab | `scripts/pages/3_Model_Lab.py` |
+| Workshop | Backtest Studio | `scripts/pages/4_Backtest_Studio.py` |
+| Workshop | Pipeline Health | `scripts/pages/5_Pipeline_Health.py` |
+| — | *entrypoint / nav wiring* | `scripts/dashboard.py` |

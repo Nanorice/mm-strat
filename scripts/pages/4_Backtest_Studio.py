@@ -1,7 +1,21 @@
-"""Backtest Studio — browse current-pipeline runs.
+"""Backtest Studio — browse current-pipeline runs, C3-framed.
+
+Promoted to the live nav 2026-07-18 (switch-over), replacing the previous run
+browser. Differences (per
+docs/session_logs/sprint_14/plans/dashboard_uplift/backtest_studio_page.md):
+  1. C3 (exit-P&L) currency banner — Studio numbers are trade-level, not label-level.
+  2. Engine column + vec-optimism caption on the run table.
+  4. Single-Sharpe demoted: the per-run headline leads with annualized return and
+     frames one run as a single start-time draw, not the edge.
+The strategy cone (§3) reads the cone_cells cache and renders the start-date
+distribution as the verdict, above the run browser. Selecting a cone cell drills
+into that cell's local-only trades / exposure / rejections (§3 per-cell zoom) —
+same detail as the run browser, one component entered two ways. Trades and
+rejections stay dev-box-local (not synced to slim); the zoom degrades to a metric
++ exposure view on a host without the sweep tree.
 
 Only renders runs whose manifest.json contains "manifest_version": "v1".
-Stale pre-v1 runs remain on disk but are silently hidden.
+Tier 2 (workshop) — dense/mono, deliberately NOT theta-styled.
 """
 
 from __future__ import annotations
@@ -18,6 +32,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))  # so `import dashboard_utils` resolves
 
 BACKTEST_DIR = ROOT / "data" / "backtest"
 
@@ -28,6 +43,11 @@ REGIME_LABELS = {
     4: "Bull",
     5: "Strong Bull",
 }
+
+# Legacy runs (pre engine-tag) are all BackTrader — only SEPABacktestRunner /
+# population_runner (also Cerebro) ever wrote data/backtest/. vec output never
+# lands here. Default keeps the column honest for runs written before the tag.
+DEFAULT_ENGINE = "BackTrader (assumed)"
 
 
 # ── Run discovery ────────────────────────────────────────────────────────────
@@ -53,13 +73,12 @@ def discover_runs() -> pd.DataFrame:
         summary = m.get("summary_metrics", {})
         model = m.get("model", {})
         params = m.get("params", {})
-        # Older v1 manifests don't include 'strategy'. Default to the only
-        # strategy class that has ever produced a v1 run (SEPAHybridV1).
         strategy = m.get("strategy") or "SEPAHybridV1 (assumed)"
         rows.append({
             "run_id": m.get("run_id", d.name),
             "dir": d.name,
             "created_at": m.get("created_at"),
+            "engine": m.get("engine") or DEFAULT_ENGINE,
             "strategy": strategy,
             "fingerprint": m.get("fingerprint"),
             "description": m.get("description"),
@@ -109,6 +128,259 @@ def load_run_artifacts(run_dir: str) -> dict:
     return out
 
 
+# ── C3 currency banner ───────────────────────────────────────────────────────
+
+def render_c3_banner() -> None:
+    st.warning(
+        "**Currency C3 · exit-P&L (trade-level).** Every number on this page is a "
+        "realized trade result, not a label claim. A single run is **one start-date "
+        "draw**, not the edge — the champion is start-time dependent, so the trade "
+        "verdict is the **start-date cone** (coming, once cached), never one Sharpe. "
+        "Label-level (C1) metrics live on the model card.",
+        icon="🟠",
+    )
+
+
+# ── Per-cell zoom (local-only artifacts) ─────────────────────────────────────
+
+SWEEP_ROOT = ROOT / "data" / "selection_sweep" / "starttime"
+
+
+@st.cache_data(ttl=60)
+def load_cell_artifacts(arm: str, grid: str, cell: str) -> dict:
+    """Load one cone cell's local parquets. NOT in the slim DB — trades/rejections
+    are a dev-box research activity (cone_and_studio_design.md §4). Returns {} keys
+    None on a host without the sweep tree (e.g. cloud), so the zoom degrades."""
+    d = SWEEP_ROOT / arm / grid / cell
+    out: dict = {"dir": d, "trades": None, "rejections": None, "equity": None}
+    for name, key in [("trades.parquet", "trades"),
+                      ("rejections.parquet", "rejections"),
+                      ("equity.parquet", "equity")]:
+        f = d / name
+        if f.exists():
+            try:
+                out[key] = pd.read_parquet(f)
+            except OSError:
+                pass
+    return out
+
+
+def _bear_spans(eq: pd.DataFrame) -> list[tuple]:
+    """Consecutive bear-regime bars (regime 1-2) collapsed to (start, end) date
+    spans, for vrect shading. Empty if the cell never went bear."""
+    is_bear = eq["regime"].isin([1, 2]).to_numpy()
+    spans, start = [], None
+    dates = eq["date"].to_numpy()
+    for i, b in enumerate(is_bear):
+        if b and start is None:
+            start = dates[i]
+        elif not b and start is not None:
+            spans.append((start, dates[i]))
+            start = None
+    if start is not None:
+        spans.append((start, dates[-1]))
+    return spans
+
+
+def render_exposure(equity: pd.DataFrame) -> None:
+    """Position count + cash over time — what the equity curve hides. A flat NAV
+    stretch is 'no positions', not a losing hold; this separates the two."""
+    if equity is None or equity.empty:
+        st.info("No equity artifact for this cell.")
+        return
+    eq = equity.copy()
+    eq["date"] = pd.to_datetime(eq["date"])
+
+    fig = go.Figure()
+    fig.add_scatter(x=eq["date"], y=eq["position_count"], mode="lines",
+                    line=dict(color="#1f77b4", width=1.5), name="positions",
+                    fill="tozeroy", fillcolor="rgba(31,119,180,0.15)")
+    # Shade bear-regime spans (regime 1-2) — is a flat exposure stretch a cash-out
+    # in a bear tape, or a dry spell in a bull one? The per-bar regime answers it.
+    if "regime" in eq.columns:
+        for lo, hi in _bear_spans(eq):
+            fig.add_vrect(x0=lo, x1=hi, fillcolor="rgba(198,40,40,0.10)",
+                          line_width=0, layer="below")
+    fig.update_layout(
+        title="Exposure — open positions over time (bear regime shaded)",
+        height=220, yaxis_title="# open", margin=dict(l=40, r=20, t=40, b=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Cash vs deployed capital — the same story in dollars.
+    fig_c = go.Figure()
+    fig_c.add_scatter(x=eq["date"], y=eq["cash"], mode="lines", name="cash",
+                      stackgroup="one", line=dict(width=0.5, color="#999"))
+    fig_c.add_scatter(x=eq["date"], y=eq["position_value"], mode="lines",
+                      name="deployed", stackgroup="one",
+                      line=dict(width=0.5, color="#2e7d32"))
+    fig_c.update_layout(
+        title="Cash vs deployed capital",
+        height=220, yaxis_title="$", margin=dict(l=40, r=20, t=40, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=1, xanchor="right"),
+    )
+    st.plotly_chart(fig_c, use_container_width=True)
+
+
+def render_pnl_distribution(trades: pd.DataFrame) -> None:
+    if trades is None or trades.empty or "pnl_percent" not in trades.columns:
+        return
+    pnl = trades["pnl_percent"].dropna()
+    fig = go.Figure()
+    fig.add_histogram(x=pnl, nbinsx=40, marker_color="#1f77b4")
+    fig.add_vline(x=0, line=dict(color="#999", width=1))
+    fig.add_vline(x=float(pnl.median()), line=dict(color="#2e7d32", dash="dash"),
+                  annotation_text=f"median {pnl.median():+.1f}%")
+    fig.update_layout(
+        title=f"Per-trade P&L — {len(pnl)} trades, "
+              f"{(pnl > 0).mean() * 100:.0f}% winners",
+        height=260, xaxis_title="P&L %", yaxis_title="# trades",
+        margin=dict(l=40, r=20, t=50, b=30),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_rejections(rejections: pd.DataFrame) -> None:
+    """Rejections are ~125k rows — summarize by reason, never dump raw. Slot-refill
+    is path-dependent (feedback_rerun_dont_postfilter): this shows WHY slots didn't
+    fill, not a counterfactual of what a different gate would have bought."""
+    if rejections is None or rejections.empty:
+        st.info("No rejections artifact for this cell.")
+        return
+    r = rejections.copy()
+    by_reason = (r.groupby("reason")
+                  .agg(count=("ticker", "size"),
+                       distinct_tickers=("ticker", "nunique"),
+                       median_score=("score", "median"))
+                  .reset_index()
+                  .sort_values("count", ascending=False))
+    styled = by_reason.style.format({
+        "count": "{:,.0f}", "distinct_tickers": "{:,.0f}", "median_score": "{:.1f}",
+    })
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.caption(f"{len(r):,} rejection rows across {r['ticker'].nunique():,} tickers "
+               f"and {r['date'].nunique():,} days. Grouped by reason — not the "
+               "counterfactual of a different gate (slot-refill is path-dependent).")
+
+
+def render_cell_zoom(cell_rows: pd.DataFrame) -> None:
+    """Drill into one cone cell's trades / exposure / rejections. Same detail as the
+    run browser, entered from the cone (design §3: one detail, two ways in)."""
+    st.markdown("**Zoom into a cell** — each is one start-date draw. Trades and "
+                "rejections are local-only (dev box), not synced to the remote.")
+
+    # Label carries the grid: an arm mixes rolling (start-date draws, fixed 12m),
+    # horizon (varying holding period), and matrix cells — a bare start date would
+    # conflate them. Sharpe suffixed so the picker previews the draw.
+    def _label(row) -> str:
+        sh = f" · Sharpe {row.sharpe:.2f}" if pd.notna(row.sharpe) else ""
+        return f"[{row.grid}] {row.start} · {row.cell}{sh}"
+    labels = {_label(row): (row.arm, row.grid, row.cell)
+              for row in cell_rows.itertuples()}
+    pick = st.selectbox("Cell (start date)", list(labels.keys()), key="btv2_cell_zoom")
+    arm, grid, cell = labels[pick]
+
+    art = load_cell_artifacts(arm, grid, cell)
+    if art["trades"] is None and art["equity"] is None:
+        st.info(f"No local artifacts for `{arm}/{grid}/{cell}` — the sweep tree "
+                "isn't on this host (trades/rejections stay dev-box-local).")
+        return
+
+    render_exposure(art["equity"])
+    render_pnl_distribution(art["trades"])
+    render_breakdowns(art["trades"])
+    render_trade_table(art["trades"], key_prefix="btv2_cell")
+    with st.expander("Rejections — why slots didn't fill"):
+        render_rejections(art["rejections"])
+
+
+# ── Strategy cone (the verdict, promoted above the run browser) ──────────────
+
+def render_cone() -> None:
+    """The start-date distribution for a chosen arm — the trade verdict.
+
+    One run is one draw; the cone is the whole sweep. Median/floor/%neg is the
+    promotion answer, NOT any single Sharpe. Reads cone_cells (build_cone_cache.py).
+    """
+    from dashboard_utils import load_cone_cells
+
+    st.subheader("Strategy Cone — start-date distribution (the verdict)")
+
+    try:
+        allc = load_cone_cells()
+    except Exception as e:  # table absent on this host (dev-box-only sweep source)
+        st.info(f"No `cone_cells` table — run `python scripts/build_cone_cache.py`. ({e})")
+        return
+    if allc.empty:
+        st.info("`cone_cells` is empty — run a sweep, then `build_cone_cache.py`.")
+        return
+
+    arms = sorted(allc["arm"].unique().tolist())
+    default = arms.index("champion") if "champion" in arms else 0
+    arm = st.selectbox("Strategy arm", arms, index=default, key="btv2_cone_arm")
+    c = allc[allc["arm"] == arm].sort_values("start")
+
+    if c.empty:
+        st.info("No cells for this arm.")
+        return
+
+    # The cone verdict: robust stats across start dates, not one draw.
+    sharpe = c["sharpe"].dropna()
+    med = float(sharpe.median())
+    floor = float(sharpe.min())
+    pct_neg = float((sharpe < 0).mean() * 100)
+    med_calmar = float((c["ann_return"] / c["max_drawdown"].abs()).replace(
+        [np.inf, -np.inf], np.nan).dropna().median()) if len(c) else float("nan")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Median Sharpe", f"{med:.2f}", help="Across all start dates — the cone verdict, not a single run.")
+    m2.metric("Floor (worst)", f"{floor:.2f}", help="Worst start-date Sharpe. The cone's downside, not an average.")
+    m3.metric("% Negative", f"{pct_neg:.0f}%", help="Share of start dates with a negative Sharpe.")
+    m4.metric("Median Calmar", f"{med_calmar:.2f}" if med_calmar == med_calmar else "—")
+    m5.metric("Cells (draws)", f"{len(c):,}")
+
+    scale = c["score_scale"].iloc[0]
+    st.caption(f"Engine: `{c['engine'].iloc[0]}` · score scale: `{scale}` · "
+               f"{len(c)} start-date draws. The **gate value's meaning depends on "
+               f"this scale** (raw ~0.55 vs calibrated ~0.12 median) — read it, don't assume.")
+
+    # Sharpe over start-date: the spaghetti the design doc asked for, as a scatter
+    # with the median/floor rules. Each point is a start-date draw.
+    cc = c.dropna(subset=["sharpe"]).copy()
+    cc["start_dt"] = pd.to_datetime(cc["start"])
+    fig = go.Figure()
+    fig.add_scatter(x=cc["start_dt"], y=cc["sharpe"], mode="markers",
+                    marker=dict(size=6, color="#1f77b4"), name="per start-date Sharpe")
+    fig.add_hline(y=med, line=dict(color="#2e7d32", dash="dash"),
+                  annotation_text=f"median {med:.2f}", annotation_position="right")
+    fig.add_hline(y=0, line=dict(color="#999", width=1))
+    fig.add_hline(y=floor, line=dict(color="#c62828", dash="dot"),
+                  annotation_text=f"floor {floor:.2f}", annotation_position="right")
+    fig.update_layout(
+        title=f"Sharpe by start date — {arm} (each point = one draw)",
+        height=340, xaxis_title="Start date", yaxis_title="Sharpe",
+        margin=dict(l=40, r=80, t=50, b=30), showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Distribution of the same Sharpes — the cone as a histogram.
+    fig_h = go.Figure()
+    fig_h.add_histogram(x=cc["sharpe"], nbinsx=30, marker_color="#1f77b4")
+    fig_h.add_vline(x=med, line=dict(color="#2e7d32", dash="dash"))
+    fig_h.add_vline(x=0, line=dict(color="#999", width=1))
+    fig_h.update_layout(
+        title="Sharpe distribution across start dates",
+        height=260, xaxis_title="Sharpe", yaxis_title="# start dates",
+        margin=dict(l=40, r=20, t=50, b=30),
+    )
+    st.plotly_chart(fig_h, use_container_width=True)
+
+    # Drill into any cell of this arm — same detail as the run browser, entered
+    # from the cone (design §3: one detail component, two ways in).
+    st.markdown("---")
+    render_cell_zoom(c)
+
+
 # ── Run list panel ───────────────────────────────────────────────────────────
 
 def render_run_list(runs: pd.DataFrame) -> Optional[str]:
@@ -119,23 +391,24 @@ def render_run_list(runs: pd.DataFrame) -> Optional[str]:
                    "Re-run a backtest with the current pipeline to populate.")
         return None
 
-    show = runs[["run_id", "strategy", "model_name", "model_version_id",
+    show = runs[["run_id", "engine", "strategy", "model_name", "model_version_id",
                  "start_date", "end_date",
-                 "total_return", "ann_return_pct", "sharpe_ratio", "max_drawdown",
-                 "total_trades", "win_rate", "created_at"]].copy()
+                 "total_return", "ann_return_pct", "max_drawdown",
+                 "total_trades", "win_rate", "sharpe_ratio", "created_at"]].copy()
     rename = {
-        "run_id": "Run", "strategy": "Strategy",
+        "run_id": "Run", "engine": "Engine", "strategy": "Strategy",
         "model_name": "Model", "model_version_id": "Version",
         "start_date": "Start", "end_date": "End",
         "total_return": "Total Ret %", "ann_return_pct": "Ann Ret %",
-        "sharpe_ratio": "Sharpe",
         "max_drawdown": "Max DD %", "total_trades": "Trades",
-        "win_rate": "Win %", "created_at": "Created",
+        "win_rate": "Win %",
+        "sharpe_ratio": "Sharpe (draw)",  # demoted: last column, flagged as a single draw
+        "created_at": "Created",
     }
     show = show.rename(columns=rename)
 
     styled = show.style
-    for c in ["Total Ret %", "Ann Ret %", "Sharpe", "Max DD %", "Win %"]:
+    for c in ["Total Ret %", "Ann Ret %", "Max DD %", "Win %", "Sharpe (draw)"]:
         if c in show.columns:
             styled = styled.format("{:.2f}", subset=[c], na_rep="—")
     if "Trades" in show.columns:
@@ -143,7 +416,16 @@ def render_run_list(runs: pd.DataFrame) -> Optional[str]:
 
     st.dataframe(styled, use_container_width=True, hide_index=True, height=200)
 
-    selected = st.selectbox("Select run", runs["run_id"].tolist(), key="bt_selected")
+    if (runs["engine"].astype(str).str.startswith("BackTrader")).all():
+        st.caption("All runs here are **BackTrader** (the promotion engine). "
+                   "Vectorized runs — median Sharpe ~1.51 vs BackTrader ~0.35 on the "
+                   "same config — are **ranking-only optimistic** and are not published "
+                   "to this Studio; promote on BackTrader only.")
+    else:
+        st.caption("⚠️ **Vectorized runs are ranking-only optimistic** (median Sharpe "
+                   "~1.51 vs BackTrader ~0.35 same config). Promote on BackTrader only.")
+
+    selected = st.selectbox("Select run", runs["run_id"].tolist(), key="btv2_selected")
     return selected
 
 
@@ -232,27 +514,29 @@ def render_breakdowns(trades: pd.DataFrame) -> None:
             st.info("No entry_regime column in trades.")
 
 
-def render_trade_table(trades: pd.DataFrame) -> None:
+def render_trade_table(trades: pd.DataFrame, key_prefix: str = "btv2") -> None:
+    # key_prefix disambiguates the filter widgets: this renders from both the run
+    # browser and the cell zoom on the same page, so fixed keys would collide.
     if trades is None or trades.empty:
         return
 
     st.markdown("**Trades**")
     t = trades.copy()
 
-    # Filters
     fc1, fc2, fc3 = st.columns(3)
     with fc1:
-        outcome = st.selectbox("Outcome", ["All", "Winners (>0)", "Losers (<=0)"], index=0)
+        outcome = st.selectbox("Outcome", ["All", "Winners (>0)", "Losers (<=0)"],
+                               index=0, key=f"{key_prefix}_outcome")
     with fc2:
         sectors = ["All"]
         if "sector" in t.columns:
             sectors += sorted(t["sector"].dropna().unique().tolist())
-        sector = st.selectbox("Sector", sectors, key="bt_sector")
+        sector = st.selectbox("Sector", sectors, key=f"{key_prefix}_sector")
     with fc3:
         exit_reasons = ["All"]
         if "exit_reason" in t.columns:
             exit_reasons += sorted(t["exit_reason"].dropna().unique().tolist())
-        reason = st.selectbox("Exit reason", exit_reasons, key="bt_reason")
+        reason = st.selectbox("Exit reason", exit_reasons, key=f"{key_prefix}_reason")
 
     if outcome == "Winners (>0)":
         t = t[t["pnl_percent"] > 0]
@@ -321,8 +605,8 @@ def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
         st.info("Only one v1 run available — nothing to compare against yet.")
         return
 
-    other = st.selectbox("Compare with", other_options, key="bt_compare")
-    align = st.radio("X axis", ["Absolute date", "Days from start"], horizontal=True, key="bt_align")
+    other = st.selectbox("Compare with", other_options, key="btv2_compare")
+    align = st.radio("X axis", ["Absolute date", "Days from start"], horizontal=True, key="btv2_align")
 
     rows = []
     for rid in [primary_run_id, other]:
@@ -357,10 +641,10 @@ def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Side-by-side summary
     side = runs[runs["run_id"].isin([primary_run_id, other])][
-        ["run_id", "model_name", "model_version_id",
-         "total_return", "sharpe_ratio", "max_drawdown", "total_trades", "win_rate"]
+        ["run_id", "engine", "model_name", "model_version_id",
+         "total_return", "ann_return_pct", "max_drawdown", "total_trades",
+         "win_rate", "sharpe_ratio"]
     ].set_index("run_id").T
     st.dataframe(side, use_container_width=True)
 
@@ -368,8 +652,14 @@ def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
 # ── Page entrypoint ──────────────────────────────────────────────────────────
 
 st.title("Backtest Studio")
+render_c3_banner()
 st.caption("Showing only runs with `manifest_version=v1`. Older runs in "
            "`data/backtest/` remain on disk but are hidden here.")
+
+# Section 1 (verdict-first): the cone is the trade verdict; the run browser below
+# drills into individual draws.
+render_cone()
+st.markdown("---")
 
 runs = discover_runs()
 selected = render_run_list(runs)
@@ -381,27 +671,33 @@ run_row = runs[runs["run_id"] == selected].iloc[0]
 art = load_run_artifacts(run_row["_path"])
 
 st.subheader(f"📊 {selected}")
+st.caption("⚠️ **One run = one start-date draw.** These per-run metrics describe a "
+           "single window, not the strategy's edge. The edge is the start-date cone.")
+
+# Headline leads with annualized return (window-fair), NOT Sharpe. Sharpe is
+# demoted to a flagged single-draw metric at the end of the row.
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Total Return", f"{run_row['total_return']:.2f}%" if pd.notna(run_row["total_return"]) else "—")
-c2.metric("Ann Return", f"{run_row['ann_return_pct']:.1f}%" if pd.notna(run_row.get("ann_return_pct")) else "—",
-          help="Annualized — the fair metric across different window lengths (a start-time sweep).")
-c3.metric("Sharpe", f"{run_row['sharpe_ratio']:.2f}" if pd.notna(run_row["sharpe_ratio"]) else "—")
-c4.metric("Max DD", f"{run_row['max_drawdown']:.2f}%" if pd.notna(run_row["max_drawdown"]) else "—")
-c5.metric("Trades", f"{int(run_row['total_trades']):,}" if pd.notna(run_row["total_trades"]) else "—")
+c1.metric("Ann Return", f"{run_row['ann_return_pct']:.1f}%" if pd.notna(run_row.get("ann_return_pct")) else "—",
+          help="Annualized — the window-fair metric across different-length runs.")
+c2.metric("Total Return", f"{run_row['total_return']:.2f}%" if pd.notna(run_row["total_return"]) else "—")
+c3.metric("Max DD", f"{run_row['max_drawdown']:.2f}%" if pd.notna(run_row["max_drawdown"]) else "—")
+c4.metric("Trades", f"{int(run_row['total_trades']):,}" if pd.notna(run_row["total_trades"]) else "—")
+c5.metric("Sharpe (draw)", f"{run_row['sharpe_ratio']:.2f}" if pd.notna(run_row["sharpe_ratio"]) else "—",
+          help="ONE start-date draw, not the verdict — the champion is start-time "
+               "dependent. Read the start-date cone, not this number.")
+
 fingerprint = run_row.get("fingerprint")
 tag = f" · `{fingerprint}`" if fingerprint else ""
-st.caption(f"Strategy: `{run_row['strategy']}`{tag} · "
+st.caption(f"Engine: `{run_row['engine']}` · Strategy: `{run_row['strategy']}`{tag} · "
            f"Model: `{run_row['model_version_id']}` · "
            f"Window: {run_row['start_date']} → {run_row['end_date']} · "
            f"Cash: ${run_row['initial_cash']:,.0f}")
 
-# Natural-language "what this strategy does" + a glossary decoding the fingerprint.
 if run_row.get("description"):
     st.info(run_row["description"])
 if fingerprint:
     render_fingerprint_glossary(fingerprint)
 
-# Cached 6-panel diagnostic (the notebook's r.plot()), if this run persisted one.
 plot_png = Path(run_row["_path"]) / "plot.png"
 if plot_png.exists():
     with st.expander("6-panel diagnostic (equity/regime · underwater · monthly · per-trade · by-regime · exits)", expanded=True):
