@@ -65,8 +65,8 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 | Page | Status | Doc | Change |
 |---|---|---|---|
 | **Dataset EDA** | ✅ exists | `cone_and_studio_design.md` | **= the `data` stage.** Pretrain-audit report browser (120 lines). **No change planned** — it's input inspection, upstream of any currency claim. (The sprint EDA belongs on Model Lab, not here.) |
-| **Model Lab** | 🟡 **revision planned** | `cone_and_studio_design.md` | **= the `model/label` stage.** Absorb diagnostics as "Live Monitoring" tab + **the sprint-summary EDA** (funnel / label outcome / **LABEL cone** — the §5 buy-and-hold fan, NOT the backtest cone). Today it's a card browser with no population view. **Card ✅ adheres to methodology** (C1 banner shipped; Section-G hang outstanding) |
-| **Backtest Studio** | 🟡 **revision planned** | `backtest_studio_page.md` + `cone_and_studio_design.md` | **= the `strategy` stage. ⚠️ contradicts new methodology** — headlines the single Sharpe G6 retired, no cone, no C3 label, no engine tag. Revise: C3 banner → engine column → promote **strategy cone** (full distribution) → demote single-Sharpe. **+ cell-level zoom** (trades/rejections/exposure — the per-cell artifacts already carry all of it) |
+| **Model Lab** | ✅ **v2 shipped (shadow)** | `cone_and_studio_design.md` | **= the `model/label` stage.** `scripts/pages/3_Model_Lab_v2.py`: **C1 banner** + **Funnel** tab + **Label-outcome** tab (both surface the sprint-summary EDA PNGs) + the **LABEL cone** rendered live from `cone_cells` (`engine='basket_paths'`), tail-first (home-run rate leads; median explicitly flagged misleading). Registry/card/plots/specs/diff carried over. ⚠️ Live `3_Model_Lab.py` untouched — awaits switch-over. Section-G hang still outstanding. |
+| **Backtest Studio** | ✅ **v2 shipped (shadow)** | `backtest_studio_page.md` + `cone_and_studio_design.md` | **= the `strategy` stage.** `scripts/pages/4_Backtest_Studio_v2.py`: **C3 banner** → **engine column** + vec-optimism caption → **strategy cone** promoted above the run browser (full start-date distribution from `cone_cells`) → single-Sharpe demoted to "Sharpe (draw)". **+ per-cell zoom**: select a cone cell → exposure (bear-regime shaded) · per-trade P&L · breakdowns · trade table · rejection summary, from the local per-cell parquets. ⚠️ Live `4_Backtest_Studio.py` untouched — awaits switch-over. |
 | **Pipeline Health** | ✅ exists | — | **DQ section shipped 2026-07-17** (`render_data_quality` — per-audit breakdown + failing checks + `new_fails` regressions) + the **audit-history zero-chart bug fixed**. Serving-layer audit now covers Phases 7.4/7.45/7.46/7.47. Still open: surface `deactivate_tickers.py` (memory TODO); a `comprehend_reports` row if that phase lands |
 
 ### Cross-cutting infra
@@ -76,6 +76,7 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 | **Research layer contract** | 🟡 | `research_layer_contract.md` | `research_reports` table = tradingagent boundary; `comprehend_reports` phase + `research_signals` deferred |
 | **Platform decision** | ⬜ open | — | Streamlit vs static-HTML-over-slim-DB. Decide *per page* by interaction density; validate with the mocks. Migrate page-by-page, no big-bang. Dense pages (Macro, Supply-chain) are the pressure cases. |
 | **Slim-DB `MANIFEST`** | — | — | **every** new table/view a loader reads MUST be added (remote-parity, `project_dashboard_remote_parity`) |
+| **`cone_cells` (both cones)** | ✅ | `cone_and_studio_design.md` | ONE table, TWO cones split by `engine` — never render them as one. `BackTrader` = strategy cone (C3, metric `sharpe`, `build_cone_cache.py`); `basket_paths` = label cone (C1, metric `total_return`, sharpe **NULL by design**, `build_label_cone_cache.py`). Both builders do an **engine-scoped upsert** so neither clobbers the other; `load_cone_cells(engine=…)` defaults to BackTrader. MANIFEST `full` → both engines reach the remote. Staleness checked per engine in `tools/audit_serving_tables.py` (strategy vs sweep-summary mtime, label vs score-cache mtime). |
 
 ---
 
@@ -94,6 +95,78 @@ in alongside whichever data thread lands them.
 
 ## Build log
 
+- **2026-07-17/18 (sessions 07–08) — Tier 2 SHIPPED: both cones, both v2 pages.**
+  Commits `7d2eb51` (feature), `60fbd7b` (schema doc + dead-test cleanup), `8862557`
+  (rename closure).
+  - **`cone_cells` = ONE table, TWO cones, split by `engine`.** The whole point of
+    `cone_and_studio_design.md` §0: a buy-and-hold-to-exit fan is **not** a backtest
+    result. They now co-exist without ever rendering as one object:
+    - **strategy cone** (`engine='BackTrader'`, `build_cone_cache.py`) — 2,460 cells /
+      22 arms, one per start-date draw. **Source = each arm/grid `summary.json`, NOT the
+      2,892 per-cell `metrics.json`**: the summary is the curated set (degenerate 1-day
+      cells filtered) and carries the **window-fair** `ann_return`/`sharpe`, while
+      per-cell metrics.json has `annualized_return=0` (a known BackTrader gap). Walking
+      summaries is both lazier and more correct. ✔️ `champion_gated` median Sharpe
+      **0.47 / 33% neg** reproduces the pinned reference cone exactly — a strong
+      correctness signal the walk is right.
+    - **label cone** (`engine='basket_paths'`, `build_label_cone_cache.py`) — 3,885
+      cells / 4 gate variants (regime-gate × score-gate), one per start-DAY basket.
+      `total_return` = fwd_return, `n_days` = exit_day, and **`sharpe`/`ann_*`/
+      `max_drawdown` are NULL BY DESIGN** — a buy-and-hold basket produces no Sharpe;
+      inventing one would be the exact category error the two-cone split exists to
+      prevent. Runs in ~30s (4 variants), so no checkpointing needed.
+  - 🛑 **The coupling that had to be fixed first**: the strategy builder did
+    `CREATE OR REPLACE TABLE cone_cells`, which would **silently wipe every label row**
+    the moment someone re-ran a sweep. Both builders now do an **engine-scoped upsert**
+    (delete-own-engine + insert). Verified in both directions — rebuilding the strategy
+    cone left all 3,885 label rows intact, and vice versa.
+  - ⚠️ **`load_cone_cells` gained an `engine` param defaulting to `BackTrader`** — the
+    Studio calls it with no args, so without a default the C3 page would have silently
+    started listing `label_*` arms in its picker. Verified the Studio arm picker
+    excludes them.
+  - **Backtest Studio v2** (`4_Backtest_Studio_v2.py`): C3 banner → engine column +
+    vec-optimism caption (vec median Sharpe ~1.51 vs BackTrader ~0.35 **on the same
+    config** — they sat in one table looking comparable) → **strategy cone promoted
+    above the run browser** → single-Sharpe demoted to "Sharpe (draw)". **+ per-cell
+    zoom**: exposure (open positions + cash/deployed, **bear-regime shaded** — a flat
+    NAV stretch is *no positions*, not a losing hold), per-trade P&L, breakdowns, trade
+    table, rejection summary (125k rows → grouped by reason, never dumped). All from
+    per-cell parquets that **already existed**; nothing computed, only surfaced.
+    Trades/rejections stay **local-only** (~37 MB) — the remote is a viewing surface,
+    not the research bench, so the zoom degrades gracefully off-host.
+  - **Model Lab v2** (`3_Model_Lab_v2.py`): C1 banner + **Funnel** + **Label-outcome**
+    tabs (surface the existing `data/model_output_eda/sprint_summary/*.png` — the EDA
+    was already rendered; porting matplotlib to live Plotly would have needed an
+    aggregate cache for an 8.9M-row input, for static conclusions) + the **live label
+    cone**. Framing is **tail-first**: home-run rate leads, median is rendered but
+    labelled *"misleading"* — a median-first chart here would contradict the sprint's
+    own conclusion.
+  - **Serving audit `check_cone_cache` is now engine-scoped.** The old shared
+    `MAX(built_at)` would let one fresh cone **mask the other's staleness**. Now:
+    strategy vs newest sweep-summary mtime, label vs score-cache mtime. Both
+    **mutation-verified** (simulated-newer source → WARNING; real state → OK).
+  - 📌 `cone_cells` was already MANIFEST `full`, so the label rows reached the slim DB
+    with **zero new wiring** — the shared-table choice paid for itself.
+  - ✅ Verified: both pages driven via `AppTest` → **0 exceptions**, including driving
+    the cell picker into a real 67-trade rolling cell and switching label-cone variants.
+    6/6 cone-builder tests pass (fingerprint identity, the 4-variant gate cross, and the
+    NULL-metric C1 contract). Full suite run: **391 passed**; the 7 failures / 26 errors
+    are **pre-existing and unrelated** (`test_feature_catalog`, `test_phase1_backfill`,
+    `test_feature_pipeline` — stale tests whose source modules drifted), confirmed by
+    checking that no changed file lives in those modules.
+  - 🐛 **Widget-key collision caught before it shipped**: `render_trade_table` renders
+    from **both** the run browser and the cell zoom on one page, and its filter
+    selectboxes used fixed keys → `DuplicateWidgetID`. Fixed with a `key_prefix` param.
+  - 🐛 **Cell labels carry the grid tag** (`[rolling]`/`[horizon]`/`[matrix]`): an arm
+    mixes fixed-12m start-date draws with varying-horizon cells, so a bare start date
+    conflated two different things in one picker.
+  - **`sepa_watchlist` display-rename → CLOSED, no action.** The plan assumed the
+    dashboard renders a "SEPA watchlist" label; a case-insensitive grep across
+    `dashboard.py`, `dashboard_uplift.py` and every page found **no such label**. The 9
+    user-visible "SEPA" strings are prose where SEPA correctly names the *methodology*;
+    the rest are class/table names §1 already decided to KEEP. The misnaming was always
+    the **table name**, a surface §1 deliberately doesn't touch — so the item had no
+    target. Evidence recorded in `rename_sepa_watchlist_plan.md` so it isn't re-derived.
 - **2026-07-17 (session 06) — NAV nightly (Phase 7.47) · Track Record dropped · DQ section
   + serving audit.** Three user decisions.
   - **Phase 7.47 `portfolio_nav`** (WARN, order 7.47) — `snapshot_nav()` between
@@ -475,5 +548,9 @@ in alongside whichever data thread lands them.
 - `cone_and_studio_design.md` — **the TWO cones** (label §5 fan vs strategy `cone_gate`), the
   `data → model/label → strategy` page spine, cell-level zoom, and the cache design
   (Track A = bounded dashboard summary; Track B = re-runnability, infra-only).
+  **Built 2026-07-17/18** — §5b Q1 resolved: the label cone **reuses the `cone_cells`
+  shape** with an `engine` tag, rather than rendering an unpersisted fan.
+- `rename_sepa_watchlist_plan.md` — display-rename plan; **CLOSED no-action 2026-07-18**
+  (the assumed user-facing label does not exist — see its "Scope" section).
 - `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers.
 - `research_layer_contract.md` — tradingagent → repo boundary.
