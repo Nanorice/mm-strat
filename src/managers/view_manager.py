@@ -60,7 +60,8 @@ class ViewManager:
         v_d2_hydrated          — D1 trades hydrated to SEPA exit
         v_d2_training          — D2 features + outcomes + log transforms
         v_d3_deployment        — Last 252 days of SEPA candidates for scoring
-        v_screener_dashboard   — SEPA screener tracker (entry date, return, company info)
+        screener_watchlist     — session display surface over sepa_watchlist
+                                 (entry date, return, company info)
     """
 
     def __init__(self, db_path: Optional[str] = None, feature_version: str = 'v3.1'):
@@ -80,9 +81,8 @@ class ViewManager:
             self._create_v_d2_training,
             self._create_v_d3_deployment,
             self._create_v_d3_prebreakout,
-            self._create_v_screener_dashboard,
-            self._refresh_screener_watchlist,
-            self._create_v_d3_lifecycle,  # after watchlist table — it joins it
+            self._create_screener_watchlist_view,
+            self._create_v_d3_lifecycle,  # after watchlist view — it joins it
             self._create_v_d3_shortlist,  # after lifecycle — it builds on it
             self._create_v_d3_vip,        # after lifecycle — it LEFT-joins cohort
             self._create_v_d3_screening,  # standalone: t2 population ⋈ preds ⋈ fundamentals
@@ -268,6 +268,9 @@ class ViewManager:
             --         C9 RS line excluded (entry filter only, not Minervini exit criteria).
             --         Entry still requires full trend_ok (C1-C9) + breakout_ok.
             WITH trend_c8_base AS (
+                -- 2026-07-18: the is_active=TRUE filter was REMOVED — it silently
+                -- excluded delisted tickers' sessions from the training population
+                -- (survivorship bias; +292 sessions / 29 tickers as of 06-21 data).
                 SELECT
                     t2.ticker,
                     t2.date,
@@ -280,8 +283,6 @@ class ViewManager:
                         FALSE
                     ) AS trend_c8
                 FROM t2_screener_features t2
-                INNER JOIN company_profiles c ON t2.ticker = c.ticker
-                WHERE c.is_active = TRUE
             ),
             -- Step 1: Detect session starts (C1+C2+C6 transitions from FALSE to TRUE)
             trend_sessions AS (
@@ -1314,94 +1315,43 @@ class ViewManager:
         print(f"   [OK] v_d3_vip: manually-curated VIP watchlist monitor")
 
     # ------------------------------------------------------------------
-    # VIEW 8: v_screener_dashboard — SEPA Screener Tracker
+    # VIEW 8: screener_watchlist — session display surface over sepa_watchlist
     # ------------------------------------------------------------------
 
-    def _create_v_screener_dashboard(self, con: duckdb.DuckDBPyConnection) -> None:
-        """SEPA screener dashboard: tracks which tickers passed screening,
-        when they first triggered, entry price, and return vs current price."""
+    def _create_screener_watchlist_view(self, con: duckdb.DuckDBPyConnection) -> None:
+        """Session display surface: sepa_watchlist enriched with company info,
+        entry/exit prices, and realized returns.
+
+        2026-07-18 merge: screener_watchlist used to be a SECOND, independent
+        session derivation (a CTE stack over t2, materialised nightly).
+        Reconciliation proved its population identical to the no-cool-down
+        sepa_watchlist candidates minus an is_active survivorship filter, so it
+        is now a thin VIEW over sepa_watchlist — one session derivation, one
+        truth. The name is kept so every consumer (dashboard loaders,
+        v_d3_lifecycle's wl CTE, the build_dashboard_db MANIFEST) works
+        unchanged; the slim-DB build materialises it into a real table.
+
+        Delisted tickers are KEPT (no is_active filter) — the old INNER JOIN
+        silently dropped their sessions (survivorship bias in the realized-return
+        display). A stale-price guard marks open sessions of tickers with no
+        prices within 7 days of the panel frontier EXITED instead of leaving
+        them ACTIVE forever.
+        """
+        # Migration (no-op once done): the pre-merge TABLE holds the name.
+        obj = con.execute("""
+            SELECT table_type FROM information_schema.tables
+            WHERE table_name = 'screener_watchlist'
+        """).fetchone()
+        if obj and obj[0] == 'BASE TABLE':
+            con.execute("DROP TABLE screener_watchlist")
+        con.execute("DROP VIEW IF EXISTS v_screener_dashboard")
+
         con.execute("""
-            CREATE OR REPLACE VIEW v_screener_dashboard AS
-            -- Step 1: Detect trend sessions using C1+C2+C6 only (matches v_d1_candidates)
-            --         C1: close > SMA150, C2: close > SMA200, C6: close > SMA50
-            WITH trend_c8_base AS (
-                SELECT
-                    t2.ticker,
-                    t2.date,
-                    t2.trend_ok,
-                    t2.breakout_ok,
-                    COALESCE(
-                        t2.close > t2.sma_150
-                        AND t2.close > t2.sma_200
-                        AND t2.close > t2.sma_50,
-                        FALSE
-                    ) AS trend_c8
-                FROM t2_screener_features t2
-                INNER JOIN company_profiles c ON t2.ticker = c.ticker
-                WHERE c.is_active = TRUE
-            ),
-            trend_sessions AS (
-                SELECT
-                    *,
-                    CASE WHEN trend_c8 AND NOT COALESCE(
-                        LAG(trend_c8) OVER (PARTITION BY ticker ORDER BY date),
-                        FALSE
-                    ) THEN 1 ELSE 0 END AS trend_session_start
-                FROM trend_c8_base
-            ),
-            sessions AS (
-                SELECT
-                    ticker, date, trend_ok, breakout_ok, trend_c8,
-                    SUM(trend_session_start) OVER (
-                        PARTITION BY ticker ORDER BY date
-                    ) AS session_id
-                FROM trend_sessions
-                WHERE trend_c8
-            ),
-            -- Step 2: First breakout per session = entry (requires full trend_ok + breakout_ok)
-            entries AS (
-                SELECT
-                    ticker,
-                    session_id,
-                    MIN(date) AS entry_date
-                FROM sessions
-                WHERE trend_ok AND breakout_ok
-                GROUP BY ticker, session_id
-            ),
-            -- Step 3: Session end = last C1-C8 True day
-            session_bounds AS (
-                SELECT ticker, session_id, MAX(date) AS last_trend_date
-                FROM sessions
-                GROUP BY ticker, session_id
-            ),
-            -- Precompute LEAD(date)/LEAD(close) to avoid O(n²) correlated subqueries
-            price_with_next AS (
-                SELECT
-                    ticker, date, close,
-                    LEAD(date)  OVER (PARTITION BY ticker ORDER BY date) AS next_date,
-                    LEAD(close) OVER (PARTITION BY ticker ORDER BY date) AS next_close
-                FROM price_data
-            ),
-            -- Step 4: Entry price + exit price per trade
-            --         Exit = first trading day AFTER trend breaks (no lookahead bias)
-            trades AS (
-                SELECT
-                    e.ticker,
-                    e.session_id,
-                    e.entry_date,
-                    pe.close AS entry_price,
-                    COALESCE(px.next_date,  sb.last_trend_date) AS exit_date,
-                    COALESCE(px.next_close, px.close)           AS exit_price
-                FROM entries e
-                INNER JOIN session_bounds sb
-                    ON e.ticker = sb.ticker AND e.session_id = sb.session_id
-                LEFT JOIN price_with_next pe
-                    ON e.ticker = pe.ticker AND e.entry_date = pe.date
-                LEFT JOIN price_with_next px
-                    ON sb.ticker = px.ticker AND sb.last_trend_date = px.date
-            ),
-            -- Step 5: Latest available close per ticker (handles delistings)
-            latest_prices AS (
+            CREATE OR REPLACE VIEW screener_watchlist AS
+            -- ponytail: latest_prices re-scans price_data per query (sub-second in
+            -- DuckDB, and the dashboard caches reads 300s); re-materialise nightly
+            -- if it ever measurably drags.
+            WITH latest_prices AS (
                 SELECT
                     ticker,
                     MAX(date) AS latest_date,
@@ -1409,83 +1359,46 @@ class ViewManager:
                 FROM price_data
                 GROUP BY ticker
             ),
-            -- Step 6: Determine status and pick the right reference price
-            with_status AS (
-                SELECT
-                    t.*,
-                    cp.name AS company_name,
-                    cp.sector,
-                    cp.industry,
-                    cp.market_cap,
-                    CASE WHEN t.exit_date >= COALESCE(lp.latest_date, t.exit_date)
-                        THEN 'ACTIVE' ELSE 'EXITED' END AS status,
-                    lp.current_close,
-                    lp.latest_date
-                FROM trades t
-                INNER JOIN company_profiles cp ON t.ticker = cp.ticker
-                LEFT JOIN latest_prices lp ON t.ticker = lp.ticker
-            )
+            frontier AS (SELECT MAX(date) AS max_d FROM price_data)
             SELECT
-                ticker,
-                company_name,
-                sector,
-                industry,
-                market_cap,
-                entry_date,
-                entry_price,
-                exit_date,
-                status,
-                CASE WHEN status = 'ACTIVE' THEN current_close
-                     ELSE exit_price END AS close_price,
-                CASE WHEN status = 'ACTIVE' THEN latest_date
-                     ELSE exit_date END AS price_date,
-                CASE WHEN entry_price > 0 THEN
-                    ((CASE WHEN status = 'ACTIVE' THEN current_close
-                           ELSE exit_price END) / entry_price - 1.0) * 100.0
+                w.ticker,
+                cp.name AS company_name,
+                cp.sector,
+                cp.industry,
+                cp.market_cap,
+                w.entry_date,
+                pe.close AS entry_price,
+                COALESCE(w.exit_date, lp.latest_date) AS exit_date,
+                CASE WHEN w.exit_date IS NULL
+                          AND lp.latest_date >= f.max_d - INTERVAL 7 DAY
+                     THEN 'ACTIVE' ELSE 'EXITED' END AS status,
+                CASE WHEN w.exit_date IS NULL THEN lp.current_close
+                     ELSE px.close END AS close_price,
+                CASE WHEN w.exit_date IS NULL THEN lp.latest_date
+                     ELSE w.exit_date END AS price_date,
+                CASE WHEN pe.close > 0 THEN
+                    ((CASE WHEN w.exit_date IS NULL THEN lp.current_close
+                           ELSE px.close END) / pe.close - 1.0) * 100.0
                 END AS pct_return,
-                CAST(datediff('day', entry_date,
-                    CASE WHEN status = 'ACTIVE' THEN COALESCE(latest_date, exit_date)
-                         ELSE exit_date END) AS INTEGER) AS days_held
-            FROM with_status
-            ORDER BY entry_date DESC, ticker
+                CAST(datediff('day', w.entry_date,
+                    CASE WHEN w.exit_date IS NULL THEN COALESCE(lp.latest_date, w.entry_date)
+                         ELSE w.exit_date END) AS INTEGER) AS days_held,
+                w.updated_at AS refreshed_at
+            FROM sepa_watchlist w
+            CROSS JOIN frontier f
+            LEFT JOIN company_profiles cp ON w.ticker = cp.ticker
+            LEFT JOIN latest_prices lp    ON w.ticker = lp.ticker
+            LEFT JOIN price_data pe ON w.ticker = pe.ticker AND w.entry_date = pe.date
+            LEFT JOIN price_data px ON w.ticker = px.ticker AND w.exit_date  = px.date
+            ORDER BY w.entry_date DESC, w.ticker
         """)
         n = con.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT ticker) FROM v_screener_dashboard"
+            "SELECT COUNT(*), COUNT(DISTINCT ticker) FROM screener_watchlist"
         ).fetchone()
         active = con.execute(
-            "SELECT COUNT(*) FROM v_screener_dashboard WHERE status = 'ACTIVE'"
+            "SELECT COUNT(*) FROM screener_watchlist WHERE status = 'ACTIVE'"
         ).fetchone()[0]
-        print(f"   [OK] v_screener_dashboard: {n[0]:,} trades, {n[1]} tickers ({active} active)")
-
-    # ------------------------------------------------------------------
-    # MATERIALIZED TABLE: screener_watchlist
-    # ------------------------------------------------------------------
-
-    def _refresh_screener_watchlist(self, con: duckdb.DuckDBPyConnection) -> None:
-        """Materialise v_screener_dashboard into screener_watchlist table."""
-        start = time.time()
-        con.execute("""
-            CREATE OR REPLACE TABLE screener_watchlist AS
-            SELECT *, CURRENT_TIMESTAMP AS refreshed_at
-            FROM v_screener_dashboard
-        """)
-        elapsed = time.time() - start
-        n = con.execute("SELECT COUNT(*), COUNT(DISTINCT ticker) FROM screener_watchlist").fetchone()
-        active = con.execute("SELECT COUNT(*) FROM screener_watchlist WHERE status = 'ACTIVE'").fetchone()[0]
-        print(f"   [OK] screener_watchlist: {n[0]:,} trades, {n[1]} tickers ({active} active) [{elapsed:.1f}s]")
-
-    def refresh_screener_watchlist(self, verbose: bool = True) -> None:
-        """Public API: refresh screener_watchlist table (standalone call)."""
-        con = db.connect(self.db_path)
-        try:
-            self._refresh_screener_watchlist(con)
-        except Exception as e:
-            logger.error(f"screener_watchlist refresh failed: {e}")
-            if verbose:
-                print(f"   [ERROR] screener_watchlist refresh failed: {e}")
-            raise
-        finally:
-            con.close()
+        print(f"   [OK] screener_watchlist (view): {n[0]:,} sessions, {n[1]} tickers ({active} active)")
 
     def _refresh_t3_training_cache(self, con: duckdb.DuckDBPyConnection) -> None:
         """Materialise v_t3_training (t3 features + ASOF-joined fundamentals/shares +

@@ -1,8 +1,8 @@
 """
 Backfill the sepa_watchlist event log from full t2_screener_features history.
 
-Single SQL pass + Python cooldown sweep — see SepaWatchlistManager.backfill().
-Authoritative rebuild: any existing sepa_watchlist rows are wiped before insert.
+Single SQL pass — see SepaWatchlistManager.backfill().
+Authoritative rebuild: the existing sepa_watchlist table is dropped and rebuilt.
 
 Usage:
     python scripts/backfill_sepa_watchlist.py
@@ -46,7 +46,6 @@ def main() -> int:
     logger.info(f"  sessions: {stats['sessions']:,}")
     logger.info(f"  tickers:  {stats['tickers']:,}")
     logger.info(f"  active:   {stats['active']:,}")
-    logger.info(f"  cooldown: {stats['cooldown']:,}")
     logger.info(f"  exited:   {stats['exited']:,}")
     logger.info(f"  range:    {stats['earliest_entry']} -> {stats['latest_entry']}")
     logger.info("=" * 60)

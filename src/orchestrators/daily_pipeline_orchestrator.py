@@ -332,8 +332,8 @@ class DailyPipelineOrchestrator:
             target_date
         )
         run_stats['views'] = phase_stats
-        if phase_success and phase_stats.get('rows_processed', 0) > 0:
-            self.run_manager.record_write('screener_watchlist', phase_stats['rows_processed'], 'views')
+        # (no record_write here: screener_watchlist is a VIEW since 2026-07-18 —
+        # the views phase no longer materialises any table)
         if not phase_success:
             critical_success = False
             return False
@@ -1260,16 +1260,15 @@ class DailyPipelineOrchestrator:
         """Phase 4b: Update sepa_watchlist event log for the target date.
 
         Reads `t2_screener_features` for `target_date` and applies session events
-        (open/close/cooldown→exited) per SepaWatchlistManager.update_daily(). Must
-        run AFTER Phase 3 (t2 features written) and BEFORE Phase 5 (T3 filters
-        universe via SELECT DISTINCT ticker FROM sepa_watchlist).
+        (open/close) per SepaWatchlistManager.update_daily(). Must run AFTER
+        Phase 3 (t2 features written) and BEFORE Phase 5 (T3 filters universe
+        via SELECT DISTINCT ticker FROM sepa_watchlist).
         """
         result = self.sepa_watchlist_manager.update_daily(target_date)
         return {
             'rows_processed': result['opened'] + result['closed'],
             'opened':         result['opened'],
             'closed':         result['closed'],
-            'cooldown_to_exited': result['cooldown_to_exited'],
             'active':         result['active'],
         }
 

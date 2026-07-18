@@ -87,7 +87,7 @@ class ScreenerDiagnostics:
                ROUND(close_price, 2) AS exit_price,
                ROUND(pct_return, 2) AS pct_return,
                days_held
-        FROM v_screener_dashboard
+        FROM screener_watchlist
         WHERE ticker = '{ticker}'
         ORDER BY entry_date DESC
         LIMIT {limit}
@@ -155,7 +155,7 @@ class ScreenerDiagnostics:
         if freshness["lag_days"] > 0:
             print(f"   ⚠️  t2 features lag behind price data by {freshness['lag_days']} day(s)")
 
-        print(f"\n📋 Recent trades (v_screener_dashboard):")
+        print(f"\n📋 Recent trades (screener_watchlist):")
         trades = result["trades"]
         if trades.empty:
             print("   No trades found.")
