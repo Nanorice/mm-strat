@@ -99,7 +99,7 @@ policy. Do not remove as part of the rename.
 | **The phase id** (`pipeline_runs.phase_name`) | KEEP | persisted key; renaming strands audit history | none (avoided) |
 | **The T3-gate string** (`SELECT DISTINCT ticker FROM sepa_watchlist`) | KEEP | pure pipeline plumbing | none |
 | **The file/class** (`sepa_watchlist_manager.py` / `SepaWatchlistManager`) | KEEP | internal module identity | none |
-| **The dashboard label / column header** the user sees | **RENAME** | this is the only misnamed *user-facing* surface | display-string edit |
+| **The dashboard label / column header** the user sees | ~~RENAME~~ → **NO ACTION** (2026-07-18, verified) | the assumed label **does not exist** — see below | none |
 
 **Rationale:** the "watchlist" name is only *wrong* where a user reads it and infers "things
 I'm watching now" (it's actually an event log of trade sessions). Everywhere else it's an
@@ -107,10 +107,33 @@ internal identifier whose literal meaning nobody consumes. Keeping the infra nam
 DB migration, the persisted-key orphan decision, and the R2 MANIFEST churn entirely — all
 the cost in the original draft was in the infra rename, which we are NOT doing.
 
-**Scope of the actual rename:** wherever the dashboard prints "SEPA watchlist" (or similar)
-as a heading/label/tooltip to the user, replace with an accurate term (e.g. "SEPA trade
-sessions" / "SEPA setups"). Grep the dashboard render strings, not the table refs. The new
-dashboard table (§0.5c) is where this lands — it gets an honest name from the start.
+**Scope of the actual rename — CLOSED 2026-07-18, no action. The premise was wrong.**
+
+The plan assumed the dashboard prints "SEPA watchlist" as a heading/label/tooltip.
+It does not. A case-insensitive grep for `sepa` across `dashboard.py`,
+`dashboard_uplift.py` and every `scripts/pages/*.py` returns **no such label** —
+the string "SEPA watchlist" is never rendered to a user anywhere. What the grep
+actually finds:
+
+| Hits | Where | Kind | Renameable? |
+|---|---|---|---|
+| 5 | `dashboard.py` :264,307,309,345,596 | prose captions — "ACTIVE SEPA breakouts", "in/out of a SEPA session", "daily SEPA status" | **No** — correct usage |
+| 4 | `pages/4_Portfolio.py` :14,143,153,272 | prose — "outside the SEPA screen", "SEPA lifecycle universe" | **No** — correct usage |
+| 3 | `4_Backtest_Studio*.py` :46,58,75 | class names (`SEPABacktestRunner`, `SEPAHybridV1`) | No — §1 KEEP |
+| 2 | `pages/5_Pipeline_Health.py` :80,81 | table names (`sepa_watchlist`, `t3_sepa_features`) | No — §1 KEEP |
+
+**Why no action:** in all 9 prose hits, "SEPA" names the *methodology* (Minervini's
+SEPA) and is used **accurately** — "today's ACTIVE SEPA breakouts" is a true
+statement about a SEPA screen. The glossary's complaint was never the word "SEPA";
+it was that **`sepa_watchlist` is an uninformative TABLE name** (it's an event log of
+trade sessions, not a watchlist). §1 already decided the table name stays. So the
+misnaming lives entirely in a surface we deliberately chose not to touch, and the
+surface we planned to fix contains nothing wrong. Renaming "SEPA session" in a
+caption would make the copy *less* accurate, not more.
+
+⚠️ Do not re-derive this: the item looks actionable from the §1 table alone. The
+honest-naming opportunity that remains is the **new dashboard table (§0.5c)** — name
+that one well from the start; there is no retrofit to do.
 
 ## 2 · Blast radius — REFERENCE MAP ONLY (not the plan of record)
 
