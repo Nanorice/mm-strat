@@ -33,6 +33,11 @@ except Exception:
 # DB path is configurable so the same app runs against the full local DB or a
 # slim, remote-synced dashboard.duckdb. Set DASHBOARD_DB_PATH (absolute, or
 # relative to repo root) to point at the slim DB. Default: full local DB.
+# The ONLY filename an R2 pull may ever write to. `_ensure_local_db` downloads
+# the slim dashboard DB, so any other destination means a misconfiguration that
+# would destroy the target — see the guard there.
+_SLIM_DB_NAME = "dashboard.duckdb"
+
 _db_env = os.environ.get("DASHBOARD_DB_PATH")
 if _db_env:
     _db = Path(_db_env)
@@ -42,18 +47,27 @@ else:
 
 
 def _on_cloud() -> bool:
-    """True when R2 creds are present (Streamlit Cloud); False on local runs.
+    """True only when this process is the REMOTE VIEWER that consumes R2.
 
-    ⚠️ KNOWN FLAW (2026-07-16, not yet fixed — needs the user's call): this infers
-    "am I the cloud app?" from R2 creds, but the ops box (sh019) holds the same
-    creds for the nightly sync and the dev box's .env carries them too. So any
-    dotenv-loading process that imports dashboard_utils (pytest, scripts) starts a
-    ~751 MB R2 download. Creds mean "can reach R2", not "am the cloud app". A real
-    fix needs a positive cloud marker whose value can be verified ON Streamlit
-    Cloud — guessing it here would silently stop the remote pull (stale DB, worse
-    than this). Locally, `_db_env` (DASHBOARD_DB_PATH) usually short-circuits it.
+    🛑 **Rewritten 2026-07-18 after a tier-0 incident** — the previous version
+    inferred "am I the cloud app?" from **R2 credentials**, which only prove "can
+    reach R2". The ops box (sh019) holds them for the nightly sync and the dev
+    box's `.env` carries them too, so importing this module anywhere started a
+    ~790 MB download — and, with `DASHBOARD_DB_PATH` pointed at the main DB,
+    **overwrote 23 years of history with an 8-month window**.
+
+    **The data flow is ONE-WAY (user rule, 2026-07-18):**
+
+        local main DB → build_dashboard_db → slim DB → R2 → remote viewer
+
+    Nothing ever flows R2 → local. A pull is now an **explicit opt-in**: set
+    `DASHBOARD_PULL_FROM_R2=1`, which only the Streamlit Cloud deployment does.
+    Credentials alone grant nothing. A machine that forgets to set it serves a
+    stale DB — visibly wrong and recoverable; the alternative destroyed data.
     """
-    return bool(os.environ.get("R2_ACCOUNT_ID") and os.environ.get("R2_ACCESS_KEY"))
+    return os.environ.get("DASHBOARD_PULL_FROM_R2", "").strip().lower() in {
+        "1", "true", "yes",
+    }
 
 
 def _r2_client():
@@ -79,6 +93,26 @@ def _ensure_local_db() -> None:
     which is ~793 MB every day and matched spuriously, leaving the app serving
     yesterday's DB for up to the TTL. Downloads atomically (temp file + rename)
     so a failed download never leaves a truncated DB behind. No-op on local runs.
+
+    🛑 **DESTRUCTIVE-OVERWRITE GUARD** (added 2026-07-18, after this function
+    destroyed the 67 GB main DB). The object pulled from R2 is ALWAYS the slim
+    `dashboard.duckdb`. The destination is whatever `DASHBOARD_DB_PATH` names —
+    and `_on_cloud()` is true on the dev/ops boxes too (it only proves creds
+    exist). So pointing `DASHBOARD_DB_PATH` at `market_data.duckdb` — which reads
+    like an innocuous "run the dashboard against the full DB" — silently
+    `os.replace`s ~892 MB of slim data over the real database.
+
+    That is exactly what happened: verification runs used
+    `DASHBOARD_DB_PATH=data/market_data.duckdb`, and the import-time pull
+    overwrote 23 years of history with a 172-day window.
+
+    **Two independent barriers now stand between R2 and your data** (defence in
+    depth — either alone would have prevented the incident):
+
+      1. `_on_cloud()` requires an explicit `DASHBOARD_PULL_FROM_R2=1` opt-in, so
+         no dev/ops box pulls at all. Credentials grant nothing.
+      2. This guard refuses to write to any filename that isn't the slim DB, so
+         even a machine that legitimately pulls cannot land it on the main DB.
     """
     if not _on_cloud():
         return  # local run — do nothing
@@ -88,6 +122,16 @@ def _ensure_local_db() -> None:
     import time
 
     target = DB_PATH
+
+    # The payload is always the slim DB; refuse to land it anywhere else.
+    if target.name != _SLIM_DB_NAME:
+        raise RuntimeError(
+            f"Refusing R2 pull: would overwrite {target} with the slim "
+            f"'{_SLIM_DB_NAME}'. DASHBOARD_DB_PATH must name a file called "
+            f"'{_SLIM_DB_NAME}' (got '{target.name}'). To read the FULL database, "
+            "leave DASHBOARD_DB_PATH unset — the default already resolves to it."
+        )
+
     marker = target.with_suffix(".r2etag")  # git-ignored; last-pulled ETag
     client = _r2_client()
     bucket = os.environ["R2_BUCKET_NAME"]
@@ -233,6 +277,16 @@ def _ensure_asset_dirs() -> None:
             ASSET_PULL_DIAG.append(rec)
 
 
+# ⚠️ **MODULE-SCOPE SIDE EFFECTS — the structural flaw behind the 2026-07-18
+# incident.** These two calls WRITE (download a ~790 MB DB; mirror asset dirs),
+# so `import dashboard_utils` is not a read — it is a provisioning action. A
+# read-only data layer should not provision its own storage; that is a deploy-time
+# concern. It lives here because Streamlit Cloud offers no other bootstrap hook.
+#
+# Both are now inert unless `DASHBOARD_PULL_FROM_R2=1` (see `_on_cloud`), so the
+# blast radius is closed. The remaining cleanup — move provisioning into an
+# explicit `bootstrap_remote()` called only from the cloud entrypoint, leaving
+# import side-effect-free — is DEFERRED, not done. Do not add further work here.
 _ensure_local_db()
 _ensure_asset_dirs()
 
@@ -1768,5 +1822,78 @@ def load_models_table() -> pd.DataFrame:
                 CASE status_flag WHEN 'prod' THEN 0 WHEN 'test' THEN 1 ELSE 2 END,
                 training_date DESC
         """).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=900)
+def load_sector_comovement(window: int = 252) -> tuple[pd.DataFrame, pd.Series, int]:
+    """Sector x sector return-correlation matrix + per-sector company counts.
+
+    🛑 CO-MOVEMENT, NOT DEPENDENCY. Sectors co-move via shared macro factors,
+    common ownership and index flows — none of which implies a supply
+    relationship. The Supply-chain page renders this as a placeholder format
+    until real edges exist (`supply_chain_page.md` Tier 1/2); every caller MUST
+    caption it as such.
+
+    Mirrors `scripts/build_supply_chain_mock.py::load_matrix` (that script writes
+    the standalone HTML mock; this serves the Streamlit page) — same equal-weight
+    daily sector return from `price_data`, ETF pseudo-sectors excluded.
+
+    ⚠️ `price_data` is MANIFEST-`window`ed (~252d) in the slim DB, so on the
+    remote the usable history is shorter than `window` asks for. The returned
+    `n_days` is the ACTUAL row count used, not the request — callers caption it
+    so a short remote window is visible rather than silently assumed.
+    """
+    con = _connect()
+    try:
+        rets = con.execute("""
+            WITH universe AS (
+                SELECT ticker, sector FROM company_profiles
+                WHERE sector IS NOT NULL AND sector NOT LIKE 'ETF:%'
+            ),
+            px AS (
+                SELECT p.date, u.sector, p.close,
+                       LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date) prev
+                FROM price_data p JOIN universe u USING (ticker)
+                WHERE p.date >= (SELECT MAX(date) - INTERVAL 400 DAY FROM price_data)
+            )
+            SELECT date, sector, AVG(close / prev - 1) AS ret
+            FROM px WHERE prev IS NOT NULL AND prev > 0
+            GROUP BY date, sector
+        """).fetchdf()
+        counts = con.execute("""
+            SELECT sector, COUNT(*) n FROM company_profiles
+            WHERE sector IS NOT NULL AND sector NOT LIKE 'ETF:%'
+            GROUP BY sector
+        """).fetchdf().set_index("sector")["n"]
+    finally:
+        con.close()
+
+    if rets.empty:
+        return pd.DataFrame(), pd.Series(dtype=int), 0
+    wide = rets.pivot(index="date", columns="sector", values="ret")
+    wide = wide.dropna(how="any").tail(window)
+    return wide.corr(), counts, len(wide)
+
+
+@st.cache_data(ttl=900)
+def load_sector_industries(sector: str) -> pd.DataFrame:
+    """Industries within one sector, with company counts (149 industries / 11
+    sectors as of 2026-07-18).
+
+    Powers the Supply-chain page's sector drill-down. This is a TAXONOMY view —
+    `company_profiles.industry` says what a company IS, never what it BUYS from.
+    Drilling in adds resolution, not edges.
+    """
+    con = _connect()
+    try:
+        return con.execute("""
+            SELECT industry, COUNT(*) AS n_companies
+            FROM company_profiles
+            WHERE sector = ? AND industry IS NOT NULL AND sector NOT LIKE 'ETF:%'
+            GROUP BY industry
+            ORDER BY n_companies DESC
+        """, [sector]).fetchdf()
     finally:
         con.close()
