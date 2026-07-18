@@ -532,6 +532,50 @@ in alongside whichever data thread lands them.
   - **Switch-over reminder**: fold shadow pages into `dashboard.py`'s `st.navigation`
     and delete `dashboard_uplift.py` once the full uplift is ready.
 
+## Switch-over checklist (2026-07-18 — the gap, measured)
+
+Live `dashboard.py` = Today · Dataset EDA · Model Lab · Backtest Studio · Pipeline Health.
+Shadow `dashboard_uplift.py` = Macro · Screening · Portfolio · Model Lab v2 · Backtest Studio v2.
+
+**Blocking — the Today monolith has 13 sections; 5 migrated, 8 not:**
+
+| Today section | → | Status |
+|---|---|---|
+| 6-Pillar Macro · Weather Gauge | Macro | ✅ |
+| Daily Shortlist · Pre-Breakout · VIP | Screening | ✅ (one filterable population) |
+| Screener Watchlist (held trades) | Portfolio | ❌ |
+| Watchlist Activity | Portfolio | ❌ |
+| Decision Log | Portfolio | ❌ |
+| Performance of Past Decisions | Portfolio | ❌ |
+| Daily Rank Bump | Model Lab | ❌ |
+| Cohort-Return Tracker | Model Lab | ❌ |
+| Analytics (diagnostics) | Model Lab | ❌ |
+| Sector Heat | Macro | ❌ (S2 `sector_breadth` exists; "Sector Heat" as such doesn't) |
+
+⚠️ **User (2026-07-18): most of these 8 are DUPLICATES of what the new pages already do** —
+triage each as *duplicate → delete* vs *genuinely orphaned → rehouse*. **Don't rebuild by
+default**; verify against the new home first.
+
+**Mechanical steps (after triage):** fold shadow pages into `dashboard.py`'s
+`st.navigation` · retire `3_Model_Lab.py` / `4_Backtest_Studio.py`, drop the `_v2` suffix ·
+keep `1_Dataset_EDA.py` + `5_Pipeline_Health.py` · decide the slim "Today" landing ·
+re-verify slim-DB MANIFEST parity for every loader the merged app uses · delete
+`dashboard_uplift.py`.
+
+**New pages requested 2026-07-18:** Supply-chain (wire the mock in; hover→sub-sectors,
+click→company network — placeholders) · **Equity Research** (`equity_research_page.md`,
+reads `research_reports.raw_md` — placeholder).
+
+### ⬜ Deployment — UNSCOPED, needed to actually close the migration
+Nobody has scoped how the switched-over app **deploys**:
+- **`sh019` (ops box)** — runs the Prefect server + nightly scheduler. How does the
+  dashboard get served/restarted there? Is it a service, a scheduled task, manual?
+- **Remote dashboard** — Streamlit Cloud reads the slim `dashboard.duckdb` from R2.
+  Confirm every merged loader's table is in the MANIFEST, and re-check the
+  `_on_cloud()` creds false-positive (`project_on_cloud_creds_false_positive`, still OPEN
+  — R2 creds ≠ "am the cloud app", so a dotenv-loading import can start a 751 MB download).
+- Decide whether the shadow app keeps existing during a transition or is deleted at cut-over.
+
 ## Open questions (user)
 
 1. **tradingagent output** — what does it emit, can it write DuckDB or drop a file? (sizes the ingest side of the research layer)
@@ -552,8 +596,12 @@ in alongside whichever data thread lands them.
   shape** with an `engine` tag, rather than rendering an unpersisted fan.
 - `rename_sepa_watchlist_plan.md` — display-rename plan; **CLOSED no-action 2026-07-18**
   (the assumed user-facing label does not exist — see its "Scope" section).
-- `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers. **Step 1 done;
-  step 3 (edges build-vs-buy) is the open blocker.**
+- `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers. **Step 1 done.**
+  Now framed (user) as the **knowledge-base map**: `screening → shortlist → agentic
+  markdown report → agentic digestion → knowledge base`; edges accrue as that pipeline
+  runs, so the page ships framework-first and is **not** gated on edges.
+- `equity_research_page.md` — **STUB (new 2026-07-18)**: read surface for single-name
+  markdown reports (`research_reports.raw_md`). Placeholder next session.
 - `supply_chain_mock.html` — Tier-0 chord mock (**generated** by
   `scripts/build_supply_chain_mock.py`; re-run to refresh, don't hand-edit). Real
   co-movement data, **zero supply-chain edges** — read the caveat on the page.

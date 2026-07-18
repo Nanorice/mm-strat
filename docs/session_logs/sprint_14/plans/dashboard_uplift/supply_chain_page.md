@@ -123,6 +123,28 @@ Sector matrix for the chord = aggregate edges up to `company_profiles.sector`.
 
 ---
 
+## Interaction roadmap (user, 2026-07-18) — placeholders next session
+
+The page is the **map of our knowledge base**, and the pipeline that fills it is:
+
+> `screening → shortlist → agentic markdown report → agentic digestion → knowledge base`
+
+Edges accrue as that pipeline runs, so the page ships as a **framework first** and is
+explicitly *not* gated on having edges.
+
+1. **Wire it into the dashboard.** Today it's a standalone gitignored `.html` — not a
+   Streamlit page, not in any nav. Next session it becomes a real page.
+2. **Sector arc hover → expand to SUB-SECTORS.** ✔️ Verified feasible today:
+   `company_profiles.industry` holds **148 distinct industries** under the 11 real
+   sectors (Industrials 29 · Financial Services 24 · Consumer Cyclical 23 · Real Estate
+   13 …). The sub-sector level **already exists in the DB** — this is a render change,
+   not a sourcing problem. (The doc's earlier "149" counted one ETF-only industry.)
+3. **Sector/company click → a company-network page.** A second page rendering the
+   companies within a lane and the edges between them, where **edges come from the
+   company research files + their digestion** (not from a vendor feed). Placeholder now.
+4. Both are **placeholders** until the research-file digestion actually produces edges.
+   Ship the navigation + empty states; don't fake the network.
+
 ## Sub-chains (HBM/DDR/NAND/…)
 
 The named lanes (AI Compute, Power, Packaging…) are **thematic groupings**, not
