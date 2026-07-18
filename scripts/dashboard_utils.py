@@ -314,6 +314,38 @@ def exposure_band_label(target_exposure: float) -> tuple[str, str]:
 # ── DB loaders (cached) ───────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
+def load_cone_cells(arm: str | None = None,
+                    engine: str = "BackTrader") -> pd.DataFrame:
+    """Per-cell cone metrics from cone_cells. Each row is ONE start-date draw.
+
+    `cone_cells` holds BOTH cones, split by engine — they are different objects
+    (glossary: strategy_cone vs label_cone) and must never be mixed:
+      - engine='BackTrader'   → STRATEGY cone (C3, exit-P&L, metric = sharpe)
+      - engine='basket_paths' → LABEL cone   (C1, buy-and-hold, metric = total_return)
+    So `engine` is REQUIRED-by-default (BackTrader) — a caller must opt into the
+    label cone explicitly. `arm=None` → all arms of that engine (for the picker).
+    """
+    clauses = ["engine = ?"]
+    params: list = [engine]
+    if arm is not None:
+        clauses.append("arm = ?")
+        params.append(arm)
+    where = "WHERE " + " AND ".join(clauses)
+    con = _connect()
+    try:
+        return con.execute(f"""
+            SELECT arm, grid, cell, cell_id, start, "end", n_days,
+                   sharpe, ann_return, ann_vol, max_drawdown, total_return,
+                   engine, score_scale
+            FROM cone_cells
+            {where}
+            ORDER BY arm, start
+        """, params).fetchdf()
+    finally:
+        con.close()
+
+
+@st.cache_data(ttl=300)
 def load_regime() -> pd.Series | None:
     con = _connect()
     try:

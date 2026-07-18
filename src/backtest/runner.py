@@ -832,6 +832,7 @@ class SEPABacktestRunner:
             'manifest_version': 'v1',
             'run_id': run_id,
             'created_at': pd.Timestamp.now().isoformat(),
+            'engine': 'BackTrader',
             'strategy': strategy_class,
             'fingerprint': fingerprint,
             'description': description,

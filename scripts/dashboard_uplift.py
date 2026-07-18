@@ -26,5 +26,7 @@ pg = st.navigation([
     st.Page(str(PAGES_DIR / "2_Macro.py"), title="Macro", icon="🌐"),
     st.Page(str(PAGES_DIR / "3_Screening.py"), title="Screening", icon="🔍"),
     st.Page(str(PAGES_DIR / "4_Portfolio.py"), title="Portfolio", icon="💼"),
+    st.Page(str(PAGES_DIR / "3_Model_Lab_v2.py"), title="Model Lab", icon="🧪"),
+    st.Page(str(PAGES_DIR / "4_Backtest_Studio_v2.py"), title="Backtest Studio", icon="📊"),
 ])
 pg.run()

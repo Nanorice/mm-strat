@@ -97,6 +97,7 @@ MANIFEST: list[tuple[str, str, dict]] = [
     ("trades",               "full", {}),   # hand-entered real fills (Portfolio page); append-only log
     ("cash_flows",           "full", {}),   # external deposits/withdrawals — the cash leg of NAV
     ("nav_history",          "full", {}),   # daily NAV mark (cash + positions) + net_flow for TWR
+    ("cone_cells",           "full", {}),   # BOTH cones: strategy (BackTrader, build_cone_cache.py) + label (basket_paths, build_label_cone_cache.py); ~6.3k rows, split by engine
     ("earnings_calendar",    "full", {}),
     ("pipeline_runs",        "full", {}),   # 597 rows; 297 MB on disk is pure fragmentation, compacts to <1 MB
     ("pipeline_error_log",   "full", {}),

@@ -19,7 +19,8 @@ Run:
 import argparse
 import json
 import sys
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -27,6 +28,11 @@ import duckdb
 sys.path.insert(0, ".")
 from config import DUCKDB_PATH
 from src.orchestrators.phase_registry import label_for
+
+SWEEP_ROOT = Path("data/selection_sweep/starttime")
+# The label cone's source: basket_paths reads this calibrated score cache. Its mtime
+# is the staleness signal for the basket_paths rows (they have no summary.json).
+SCORE_CACHE = Path("data/score_cache/m01_binary_calibrated_2003-01-01_2026-05-22.parquet")
 
 # (table, date_col, stale_warn_days, phase_id) — stale_warn = observed worst gap
 # + headroom. Label is resolved from the registry so it can't drift.
@@ -112,6 +118,62 @@ def check_sanity(con: duckdb.DuckDBPyConnection) -> None:
         pass
 
 
+def _cone_staleness(con: duckdb.DuckDBPyConnection, engine: str,
+                    newest_source_mtime: float | None, source_desc: str,
+                    rebuild_cmd: str) -> None:
+    """One cone's staleness = its own engine rows' built_at vs its source mtime.
+
+    Engine-scoped because cone_cells holds BOTH cones (BackTrader strategy cone +
+    basket_paths label cone) with independent sources and build cadences. A shared
+    MAX(built_at) would let one fresh cone mask the other's staleness.
+
+    No calendar tolerance (unlike freshness checks) — file-mtime vs build-time, not
+    days-since. A month-old cone is fine if its source didn't change.
+    """
+    built_at = con.execute(
+        "SELECT MAX(built_at) FROM cone_cells WHERE engine = ?", [engine]).fetchone()[0]
+    if built_at is None:
+        _check("cone_cells", f"{engine}_rows", "INFO", 0,
+               f"no {engine} rows in cone_cells — run {rebuild_cmd}")
+        return
+    if newest_source_mtime is None:
+        _check("cone_cells", f"{engine}_source", "INFO", 0,
+               f"{source_desc} not on this host (dev-box local)")
+        return
+
+    newest_dt = datetime.fromtimestamp(newest_source_mtime)
+    built_dt = built_at if isinstance(built_at, datetime) else datetime.fromisoformat(str(built_at))
+    stale = newest_dt > built_dt
+    _check("cone_cells", f"{engine}_current",
+           "WARNING" if stale else "OK",
+           newest_dt.strftime("%Y-%m-%d %H:%M"),
+           f"newest {source_desc} {newest_dt:%Y-%m-%d %H:%M} vs {engine} built "
+           f"{built_dt:%Y-%m-%d %H:%M}" + (f" — rerun {rebuild_cmd}" if stale else ""))
+
+
+def check_cone_cache(con: duckdb.DuckDBPyConnection) -> None:
+    """cone_cells is CLI-built (not nightly) — its risk is a silently-stale cache
+    after a re-score/sweep. Two cones, two sources, checked independently:
+      - BackTrader (strategy cone): newest sweep summary.json vs its built_at.
+      - basket_paths (label cone): the score cache parquet vs its built_at.
+    """
+    try:
+        con.execute("SELECT 1 FROM cone_cells LIMIT 1")
+    except duckdb.Error as e:
+        _check("cone_cells", "cone_cells_exists", "FAIL", "missing",
+               f"cone_cells not queryable — run build_cone_cache.py: {str(e)[:60]}")
+        return
+
+    summaries = list(SWEEP_ROOT.glob("**/summary.json"))
+    newest_sweep = max((s.stat().st_mtime for s in summaries), default=None)
+    _cone_staleness(con, "BackTrader", newest_sweep, "sweep summary",
+                    "build_cone_cache.py")
+
+    newest_score = (SCORE_CACHE.stat().st_mtime if SCORE_CACHE.exists() else None)
+    _cone_staleness(con, "basket_paths", newest_score, "score cache",
+                    "build_label_cone_cache.py")
+
+
 def _render_text(warn_only: bool) -> int:
     prefix = {"FAIL": "[FAIL]   ", "WARNING": "[WARN]   ", "OK": "[OK]     ", "INFO": "[INFO]   "}
     shown = [r for r in _results if not warn_only or r["status"] in ("FAIL", "WARNING")]
@@ -137,6 +199,7 @@ def main() -> None:
             print(f"Auditing serving tables in: {DUCKDB_PATH}")
         check_freshness(con)
         check_sanity(con)
+        check_cone_cache(con)
     finally:
         con.close()
 
