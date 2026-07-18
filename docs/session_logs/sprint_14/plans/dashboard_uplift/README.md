@@ -50,7 +50,7 @@ Status: ⬜ not started · 🟡 planned (design doc done) · 🔵 mock built · 
 | **Screening** | ✅ | `screening_page.md` | **near-zero** (P/E derived) | **SHIPPED** (`scripts/pages/3_Screening.py` on shadow app; `v_d3_screening` view + MANIFEST + `load_screening`). Population = trend_ok∨breakout_ok (619); stage/fundamental filters in `st.form`; P(HR) rank + aggressive small-cap strip. No point-return column (honest cone). |
 | **Portfolio** | ✅ | `portfolio_risk_section.md` | **closed** (`trades` + `cash_flows` + `nav_history`) | **SHIPPED incl. Risk section** (`scripts/pages/4_Portfolio.py` on shadow app). Append-only `trades` + `cash_flows` cash leg via `scripts/portfolio.py` CLI → derived positions/cash. **NAV = cash + positions; return TIME-WEIGHTED** (flows stripped per day → a deposit is not a gain) so YTD/drawdown are truthful. Score (raw) + cohort + %NLV + concentration + sector tilt. **Risk** = ATR/vol/S-R/52w/beta + 1-ATR-per-NAV, all from `price_data` so off-screen holdings are covered (entries are discretionary). Empty until fills are logged. ✅ `nav_history` **wired into the nightly** 2026-07-17 — **Phase 7.47** (`portfolio_nav`, WARN, between sector_breadth 7.46 and dashboard_db 7.5 so the row ships in the slim DB). |
 | **Track Record** | ❌ **DROPPED** | — | n/a | **Retired 2026-07-17 (user).** Overlaps Portfolio: reports are *study material*, entries/exits are **discretionary**, so the only thing actually "projected" is the entry/exit decision — which IS the `trades` log on Portfolio. Scoring the *report* would measure a thing that never bound the decision. The tradingagent structured-block contract it was blocked on wouldn't fix the overlap. ⚠️ The old "Brier/**cone** scoring already exists" claim was **wrong** — the cone is the *start-date* cone (strategy evaluation across 90 start dates); it has no role in scoring a forecast ledger. Two different things called "scoring". |
-| **Supply-chain** | 🟡 | `supply_chain_page.md` | **highest** (nodes yes, **zero edges**) | long-term; Tier-0 correlation mock → Tier-1 EDGAR 10-K extraction (new engine) vs Tier-2 buy |
+| **Supply-chain** | 🔵 **Tier-0 mock built** | `supply_chain_page.md` + `supply_chain_mock.html` | **highest** (nodes yes, **still ZERO edges**) | **Mock shipped 2026-07-18** (`scripts/build_supply_chain_mock.py` → `supply_chain_mock.html`): d3 chord on a **real** 252d sector return-correlation matrix from `price_data` (11 sectors, 3,920 cos) — **co-movement, NOT dependency**, captioned as such. Locks the format + is the platform stress case. ⬅️ **BLOCKED on an open user decision: edges build (Tier-1 EDGAR 10-K extraction, multi-week new engine) vs buy (Tier-2 vendor feed, paid).** The page's entire value is the edge data; nothing else can proceed. |
 
 ### Tier 2 — Workshop pages (exist; grow, don't rebuild)
 
@@ -552,5 +552,9 @@ in alongside whichever data thread lands them.
   shape** with an `engine` tag, rather than rendering an unpersisted fan.
 - `rename_sepa_watchlist_plan.md` — display-rename plan; **CLOSED no-action 2026-07-18**
   (the assumed user-facing label does not exist — see its "Scope" section).
-- `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers.
+- `supply_chain_page.md` — Supply-chain design + edge-sourcing tiers. **Step 1 done;
+  step 3 (edges build-vs-buy) is the open blocker.**
+- `supply_chain_mock.html` — Tier-0 chord mock (**generated** by
+  `scripts/build_supply_chain_mock.py`; re-run to refresh, don't hand-edit). Real
+  co-movement data, **zero supply-chain edges** — read the caveat on the page.
 - `research_layer_contract.md` — tradingagent → repo boundary.
