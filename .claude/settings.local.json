@@ -64,7 +64,10 @@
       "Bash(find /c/Users/sh019 -name \"python3*.exe\" 2>/dev/null | grep -v \".venv\" | head -10; find /c/Windows -name \"python*.exe\" 2>/dev/null | head -5)",
       "Bash(winget show *)",
       "Bash(/c/Users/sh019/AppData/Local/Programs/Python/Python312/python.exe -m venv .venv)",
-      "Bash(/c/Users/sh019/Documents/projects/mm-strat/.venv/Scripts/python.exe --version)"
+      "Bash(/c/Users/sh019/Documents/projects/mm-strat/.venv/Scripts/python.exe --version)",
+      "PowerShell(git branch --show-current; Write-Output \"---PYTHON PROCS---\"; Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, StartTime, @{N='CPU\\(s\\)';E={[math]::Round\\($_.CPU,1\\)}} | Format-Table -AutoSize; Write-Output \"---PREFECT PORT 4200---\"; Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table -AutoSize)",
+      "PowerShell(Write-Output \"NOW: $\\(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'\\)\"; Write-Output \"---PROC CMDLINES---\"; Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Select-Object ProcessId, @{N='Start';E={$_.CreationDate}}, CommandLine | Format-List)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\sh019\\\\Documents\\\\projects\\\\mm-strat\\\\logs\\\\prefect\\\\\" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 12 Name, LastWriteTime, @{N='KB';E={[math]::Round\\($_.Length/1KB,1\\)}} | Format-Table -AutoSize)"
     ],
     "deny": [],
     "ask": [],
