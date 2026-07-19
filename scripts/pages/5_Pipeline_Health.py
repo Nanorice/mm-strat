@@ -244,10 +244,13 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
     fig.update_layout(
         height=max(280, 24 * len(pivot_status.index) + 80),
         margin=dict(l=30, r=20, t=30, b=80),
-        xaxis_tickangle=-45,
         yaxis_autorange="reversed",
+        # Date-like strings get auto-parsed as a DATE axis; with a single run day
+        # that becomes a sub-second range (23:59:59.9996 … ). These are one cell
+        # per day — categorical is what a heatmap column actually is.
+        xaxis=dict(type="category", tickangle=-45),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Drill-downs: failed phases, then success-with-warnings.
     failed = r[r["status"] == "failed"]
@@ -255,7 +258,7 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
         with st.expander(f"🔴 {len(failed)} failed run(s) — details", expanded=False):
             show = failed[["target_date", "phase_name", "started_at",
                            "runtime_seconds", "error_message"]].copy()
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.dataframe(show, width='stretch', hide_index=True)
 
     warned = r[r["display_status"] == "warning"]
     if not warned.empty:
@@ -267,7 +270,7 @@ def render_runs_heatmap(runs: pd.DataFrame) -> None:
             show = warned[["target_date", "phase_name", "n_errors",
                            "runtime_seconds", "started_at"]].copy()
             show = show.rename(columns={"n_errors": "Entity Errors"})
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.dataframe(show, width='stretch', hide_index=True)
 
 
 # ── Data freshness ───────────────────────────────────────────────────────────
@@ -313,7 +316,7 @@ def render_freshness(fresh: pd.DataFrame) -> None:
     styled = f.style
     styled = styled.format("{:,.0f}", subset=["Rows"], na_rep="—")
     styled = styled.format("{:.0f}", subset=["Lag (days)", "Tolerance (days)"], na_rep="—")
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=380)
+    st.dataframe(styled, width='stretch', hide_index=True, height=380)
 
 
 # ── T1 ingestion failures ────────────────────────────────────────────────────
@@ -354,7 +357,7 @@ def render_t1_failures() -> None:
     }
     show = fails.rename(columns=rename)
     st.dataframe(
-        show, use_container_width=True, hide_index=True, height=380,
+        show, width='stretch', hide_index=True, height=380,
         column_config={
             "Ticker": st.column_config.LinkColumn(
                 "Ticker", display_text=r"finviz\.com/quote\.ashx\?t=(.+)$"
@@ -393,7 +396,7 @@ def render_fundamentals_audit() -> None:
                 styled = styled.format("{:,.0f}", subset=[c], na_rep="—")
         if "Basic EPS" in show.columns:
             styled = styled.format("{:.2f}", subset=["Basic EPS"], na_rep="—")
-        st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
+        st.dataframe(styled, width='stretch', hide_index=True, height=320)
 
     # ── NULL filing_date written (per-run DQ) ──
     nfw = load_null_filing_writes(days=30)
@@ -434,7 +437,7 @@ def render_fundamentals_audit() -> None:
         xaxis_tickangle=-45, yaxis_title="Rows", xaxis_title="",
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.caption(
         "Mid-quarter dips (latest bar) are expected — companies report on rolling "
         "schedules. Look for prior-quarter drops vs the trailing baseline."
@@ -459,7 +462,7 @@ def render_universe_trend(trend: pd.DataFrame) -> None:
         yaxis_title="Count",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 # ── Audit history ────────────────────────────────────────────────────────────
@@ -535,13 +538,13 @@ def render_data_quality() -> None:
     if per_audit:
         pa = pd.DataFrame(per_audit).T.reindex(columns=["FAIL", "WARNING", "OK", "INFO"]).fillna(0)
         pa.index.name = "audit"
-        st.dataframe(pa.astype(int).reset_index(), use_container_width=True, hide_index=True)
+        st.dataframe(pa.astype(int).reset_index(), width='stretch', hide_index=True)
 
     # New fails = a regression vs the previous run. The signal worth paging on.
     new_fails = rep.get("new_fails") or []
     if new_fails:
         st.error(f"🛑 {len(new_fails)} NEW failure(s) vs the previous run")
-        st.dataframe(pd.DataFrame(new_fails), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(new_fails), width='stretch', hide_index=True)
 
     results = rep.get("results") or []
     bad = [r for r in results if r.get("status") in ("FAIL", "WARNING")]
@@ -551,7 +554,7 @@ def render_data_quality() -> None:
     df = pd.DataFrame(bad)
     keep = [c for c in ["status", "audit", "section", "check", "value", "detail"] if c in df.columns]
     with st.expander(f"Failing / warning checks ({len(bad)})", expanded=bool(new_fails)):
-        st.dataframe(df[keep], use_container_width=True, hide_index=True)
+        st.dataframe(df[keep], width='stretch', hide_index=True)
 
 
 def render_audit_history() -> None:
@@ -571,22 +574,25 @@ def render_audit_history() -> None:
         st.warning("⚠️ Only 1 audit report on disk — line chart shows a single point. "
                    "More will accumulate as the daily pipeline runs.")
 
+    # Stacked area: the top edge is total checks run, and a widening yellow/red
+    # band is the signal. fail is drawn FIRST so it sits at the baseline where a
+    # few rows stay visible — stacked above ~225 passes it would be unreadable.
     fig = go.Figure()
-    fig.add_scatter(x=audit["date"], y=audit["pass"], mode="lines+markers",
-                    name="pass", line=dict(color="#2e7d32"))
-    fig.add_scatter(x=audit["date"], y=audit["warn"], mode="lines+markers",
-                    name="warn", line=dict(color="#fdd835"))
-    fig.add_scatter(x=audit["date"], y=audit["fail"], mode="lines+markers",
-                    name="fail", line=dict(color="#c62828"))
+    for col, color in [("fail", "#c62828"), ("warn", "#fdd835"), ("pass", "#2e7d32")]:
+        fig.add_scatter(x=audit["date"], y=audit[col], name=col, mode="lines",
+                        stackgroup="checks", line=dict(width=0.5, color=color),
+                        fillcolor=color,
+                        hovertemplate=f"%{{x}}<br>{col}: %{{y}}<extra></extra>")
     fig.update_layout(
         height=280, margin=dict(l=40, r=20, t=20, b=30),
-        yaxis_title="Count",
+        yaxis_title="Checks (stacked)",
+        hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     with st.expander("Raw audit files", expanded=False):
-        st.dataframe(audit, use_container_width=True, hide_index=True)
+        st.dataframe(audit, width='stretch', hide_index=True)
 
 
 # ── Storage ──────────────────────────────────────────────────────────────────
@@ -621,7 +627,7 @@ def render_storage() -> None:
             "size": f"{size / 1024 ** 2:.1f} MB" if size < 1024 ** 3 else f"{size / 1024 ** 3:.2f} GB",
         })
     df = pd.DataFrame(rows)
-    st.dataframe(df[["path", "size"]], use_container_width=True, hide_index=True)
+    st.dataframe(df[["path", "size"]], width='stretch', hide_index=True)
 
 
 # ── Page entrypoint ──────────────────────────────────────────────────────────
@@ -639,7 +645,7 @@ def render_asset_pull_diag() -> None:
         df = pd.DataFrame(ASSET_PULL_DIAG)[
             ["prefix", "pulled", "skipped", "exists", "error"]
         ]
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
         st.caption(
             "pulled = files fetched this boot · skipped = sentinel <23h (no pull) · "
             "exists = dir present after · error = swallowed exception (still non-fatal). "

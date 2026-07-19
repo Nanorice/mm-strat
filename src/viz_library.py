@@ -8,7 +8,7 @@ Usage:
     from src.viz_library import create_mae_mfe_scatter, create_decile_bar_chart
 
     fig = create_mae_mfe_scatter(data)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 """
 
 import plotly.graph_objects as go

@@ -119,7 +119,7 @@ def _render_risk(pos: pd.DataFrame, nav: float) -> None:
         risk[["ticker", "atr_14", "atr_pct", "atr_pct_nav", "vol_20d", "vol_60d",
               "sup_50d", "res_50d", "atr_to_sup_50d", "atr_to_res_50d",
               "high_52w", "low_52w", "beta"]],
-        hide_index=True, use_container_width=True,
+        hide_index=True, width='stretch',
         column_config={
             "ticker":   st.column_config.TextColumn("Ticker"),
             "atr_14":   st.column_config.NumberColumn("ATR(14)", format="%.2f"),
@@ -241,7 +241,7 @@ def render() -> None:
              "unrealized_pnl", "pct_return", "score_raw", "cohort", "sector",
              "first_entry", "n_fills"]],
         hide_index=True,
-        use_container_width=True,
+        width='stretch',
         column_config={
             "ticker":         st.column_config.TextColumn("Ticker"),
             "qty":            st.column_config.NumberColumn("Qty", format="%.4g"),
@@ -283,7 +283,7 @@ def render() -> None:
             pd.DataFrame({"sector": tilt.index,
                           "market_value": tilt.values,
                           "pct_nlv": tilt.values / nav * 100 if nav else 0}),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width='stretch',
             column_config={
                 "sector":       st.column_config.TextColumn("Sector"),
                 "market_value": st.column_config.NumberColumn("Mkt value", format="%.2f"),

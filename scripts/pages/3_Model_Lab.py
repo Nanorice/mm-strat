@@ -102,7 +102,7 @@ def _render_png_group(stems: list[str], captions: dict[str, str]) -> None:
         if not png.exists():
             continue
         st.markdown(f"**{captions.get(stem, stem)}**")
-        st.image(str(png), use_container_width=True)
+        st.image(str(png), width='stretch')
         shown += 1
     if shown == 0:
         st.info("No matching EDA PNGs found for this tab.")
@@ -192,7 +192,7 @@ def render_label_cone() -> None:
         height=320, xaxis_title="Basket fwd return", xaxis_tickformat=".0%",
         yaxis_title="# start-days", margin=dict(l=40, r=20, t=50, b=30),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # fwd_return over start date — the regime ride (which eras threw home-runs).
     cc = c.dropna(subset=["total_return"]).copy()
@@ -207,7 +207,7 @@ def render_label_cone() -> None:
         height=300, xaxis_title="Start date", yaxis_title="Basket fwd return",
         yaxis_tickformat=".0%", margin=dict(l=40, r=20, t=50, b=30),
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width='stretch')
 
     st.caption("Each point is one start-day's basket (top-5 by calibrated prob_elite, "
                "held to exit). Home-runs cluster in regime eras — a single start-date "
@@ -218,7 +218,7 @@ def render_label_cone() -> None:
     fan_png = EDA_DIR / "s5_fan.png"
     if fan_png.exists():
         with st.expander("Equity-path overlay (every start-day's path, aligned at entry)"):
-            st.image(str(fan_png), use_container_width=True)
+            st.image(str(fan_png), width='stretch')
             st.caption("The 4 gated variants — a curve ending early shows the basket "
                        "fully exiting (the 'when do we stop' variable made visual).")
 
@@ -355,7 +355,7 @@ def render_live_monitoring() -> None:
         yaxis=dict(title="rank (1 = best)", autorange="reversed",
                    dtick=1 if int(top_n) <= 20 else 5),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.caption(
         f"{df['ticker'].nunique()} distinct names · {len(df):,} name-days · "
         f"**{len(persistent)} coloured** (≥{min_days} days), the rest grey · "
@@ -397,7 +397,7 @@ def _render_registry_table(models: pd.DataFrame) -> str | None:
             styled = styled.format("{:.3f}", subset=[col], na_rep="—")
     if "Rows" in table.columns:
         styled = styled.format("{:,.0f}", subset=["Rows"], na_rep="—")
-    st.dataframe(styled, use_container_width=True, height=340, hide_index=True)
+    st.dataframe(styled, width='stretch', height=340, hide_index=True)
 
     return st.selectbox("Select a model to inspect", df["version_id"].tolist(),
                         index=0, key="ml2_selected")
@@ -468,7 +468,7 @@ def _render_plots_tab(art_dir: Path | None) -> None:
         cols = st.columns(2)
         for i, (_, png) in enumerate(members):
             with cols[i % 2]:
-                st.image(str(png), caption=png.stem.replace("_", " "), use_container_width=True)
+                st.image(str(png), caption=png.stem.replace("_", " "), width='stretch')
             consumed.add(png.stem)
     other = [p for p in pngs if p.stem not in consumed]
     if other:
@@ -477,7 +477,7 @@ def _render_plots_tab(art_dir: Path | None) -> None:
         for i, png in enumerate(other):
             with cols[i % 2]:
                 st.image(str(png), caption=str(png.relative_to(search_dir)),
-                         use_container_width=True)
+                         width='stretch')
 
 
 def _render_specs_tab(row: pd.Series) -> None:

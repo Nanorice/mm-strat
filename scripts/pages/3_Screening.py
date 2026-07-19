@@ -247,7 +247,7 @@ if rg_min is not None:
     d = d[d["revenue_growth_yoy"].isna() | (d["revenue_growth_yoy"] >= rg_min)]
 
 st.caption(f"**{len(d)}** of {len(df)} names match")
-st.dataframe(_shape(d), column_config=_TABLE_COLS, use_container_width=True,
+st.dataframe(_shape(d), column_config=_TABLE_COLS, width='stretch',
              hide_index=True, height=620)
 
 # ── watchlist ────────────────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ else:
     st.caption(f"{len(v)} curated name{'s' if len(v) != 1 else ''} · "
                "CLI-managed (`vip_add.py`); this page is read-only.")
     st.dataframe(v[list(_VIP_COLS.keys())], column_config=_VIP_COLS,
-                 use_container_width=True, hide_index=True,
+                 width='stretch', hide_index=True,
                  height=min(60 + 35 * len(v), 400))
     if bool(v["as_of_date"].isna().any()):
         st.caption("○ Names with no as-of date have no t3 row yet — just added, or "

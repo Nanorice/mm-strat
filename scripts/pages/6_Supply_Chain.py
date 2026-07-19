@@ -280,7 +280,7 @@ def _render_matrix(order: list[str], m: pd.DataFrame) -> None:
         yaxis=dict(autorange="reversed"),
         plot_bgcolor="#fcfbf8", paper_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def _render_hubs(order: list[str], m: pd.DataFrame, counts: pd.Series) -> None:
@@ -292,7 +292,7 @@ def _render_hubs(order: list[str], m: pd.DataFrame, counts: pd.Series) -> None:
         "Mean corr": mean_corr.values,
     })
     st.dataframe(
-        tbl, hide_index=True, use_container_width=True,
+        tbl, hide_index=True, width='stretch',
         column_config={
             "Sector": st.column_config.TextColumn(width="medium"),
             "Companies": st.column_config.NumberColumn(format="%d", width="small"),
@@ -324,7 +324,7 @@ def _render_drilldown(order: list[str]) -> None:
         xaxis_title="companies", yaxis=dict(autorange="reversed"),
         plot_bgcolor="#fcfbf8", paper_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.caption("⚠️ Taxonomy only — `company_profiles.industry` says what a company "
                "**is**, never what it **buys from**. More resolution, still zero edges.")
 

@@ -97,7 +97,7 @@ def _render_open(wl: pd.DataFrame) -> None:
         "days_held": _DAYS,
     }
     have = [c for c in cols if c in open_s.columns]
-    st.dataframe(open_s[have], column_config=cols, use_container_width=True,
+    st.dataframe(open_s[have], column_config=cols, width='stretch',
                  hide_index=True, height=min(60 + 35 * len(open_s), 560))
     st.caption(f"{len(open_s)} open session{'s' if len(open_s) != 1 else ''} · "
                "oldest first. Move % is the session's mark, not a realized trade.")
@@ -118,7 +118,7 @@ def _render_closed(days: int) -> None:
         "days_held": _DAYS,
     }
     have = [c for c in cols if c in exits.columns]
-    st.dataframe(exits[have], column_config=cols, use_container_width=True,
+    st.dataframe(exits[have], column_config=cols, width='stretch',
                  hide_index=True, height=min(60 + 35 * len(exits), 520))
     win = float((exits["pct_return"] > 0).mean() * 100) if exits["pct_return"].notna().any() else float("nan")
     med = exits["pct_return"].median()
@@ -149,7 +149,7 @@ def _render_feed(days: int) -> None:
         "detail": st.column_config.TextColumn("Detail", width="medium"),
     }
     have = [c for c in cols if c in disp.columns]
-    st.dataframe(disp[have], column_config=cols, use_container_width=True,
+    st.dataframe(disp[have], column_config=cols, width='stretch',
                  hide_index=True, height=520)
     st.caption(f"{len(view)} event{'s' if len(view) != 1 else ''} in the last {days} days. "
                "Universe add/remove = the screener's tradable-universe membership "
@@ -187,7 +187,7 @@ def _render_lookup(version_id: str | None) -> None:
         "days_held": _DAYS,
     }
     have = [c for c in cols if c in h.columns]
-    st.dataframe(h[have], column_config=cols, use_container_width=True,
+    st.dataframe(h[have], column_config=cols, width='stretch',
                  hide_index=True)
 
 

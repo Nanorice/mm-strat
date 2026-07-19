@@ -172,6 +172,95 @@ def load_cell_artifacts(arm: str, grid: str, cell: str) -> dict:
     return out
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_arm_fan(arm: str, cells: tuple[tuple[str, str], ...]) -> pd.DataFrame:
+    """Every cell's equity curve for one arm, normalized to 1.0 and aligned at
+    day 0 — the strategy cone as a fan of paths.
+
+    The cone scatter answers "what Sharpe would I have got", the fan answers
+    "what would the ride have looked like". Same object, different projection.
+
+    `cells` is a tuple so the result caches: the sweep tree is ~2.5k parquets and
+    re-reading one arm's worth on every rerun is the expensive path.
+    """
+    frames = []
+    for grid, cell in cells:
+        f = SWEEP_ROOT / arm / grid / cell / "equity.parquet"
+        if not f.exists():
+            continue
+        try:
+            eq = pd.read_parquet(f, columns=["date", "value"])
+        except (OSError, ValueError):
+            continue
+        # A 1-row cell has no path to draw (degenerate short window).
+        if len(eq) < 2 or float(eq["value"].iloc[0]) <= 0:
+            continue
+        frames.append(pd.DataFrame({
+            "cell": cell,
+            "day": range(len(eq)),
+            "nav": eq["value"].to_numpy() / float(eq["value"].iloc[0]),
+        }))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def render_fan(arm: str, c: pd.DataFrame) -> None:
+    """The fan: all start-date draws overlaid, aligned at entry.
+
+    Individual paths are drawn thin and translucent — with 90-269 cells the
+    readable signal is the DENSITY plus the median/decile bands, not any one
+    curve. Bands are cross-sectional per day, so they are the cone's shape over
+    holding time rather than a tradeable path.
+    """
+    cells = tuple(c[["grid", "cell"]].itertuples(index=False, name=None))
+    fan = load_arm_fan(arm, cells)
+    if fan.empty:
+        st.info(f"No per-cell `equity.parquet` under `{SWEEP_ROOT.name}/{arm}/` — "
+                "the sweep tree is dev-box-local, so the fan is blank on the remote.")
+        return
+
+    # Trim the long thin tail: past the point where few cells still run, the
+    # bands are computed on a handful of curves and read as noise.
+    per_day = fan.groupby("day")["cell"].size()
+    n_cells = int(fan["cell"].nunique())
+    keep = per_day[per_day >= max(3, n_cells * 0.1)].index.max()
+    fan = fan[fan["day"] <= keep]
+
+    q = (fan.groupby("day")["nav"]
+            .quantile([0.1, 0.5, 0.9]).unstack()
+            .rename(columns={0.1: "p10", 0.5: "p50", 0.9: "p90"}))
+
+    fig = go.Figure()
+    for _, g in fan.groupby("cell", sort=False):
+        fig.add_scatter(x=g["day"], y=g["nav"], mode="lines",
+                        line=dict(color="rgba(31,119,180,0.13)", width=1),
+                        hoverinfo="skip", showlegend=False)
+    fig.add_scatter(x=q.index, y=q["p90"], mode="lines", name="p90",
+                    line=dict(color="#2e7d32", width=1, dash="dot"))
+    fig.add_scatter(x=q.index, y=q["p10"], mode="lines", name="p10",
+                    line=dict(color="#c62828", width=1, dash="dot"),
+                    fill="tonexty", fillcolor="rgba(31,119,180,0.10)")
+    fig.add_scatter(x=q.index, y=q["p50"], mode="lines", name="median",
+                    line=dict(color="#1f77b4", width=2.5))
+    fig.add_hline(y=1.0, line=dict(color="#999", width=1))
+    fig.update_layout(
+        title=f"Equity fan — {arm} ({n_cells} start-date draws, aligned at entry)",
+        height=420, xaxis_title="Trading days from entry",
+        yaxis_title="NAV (×start)", margin=dict(l=40, r=20, t=50, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=1, xanchor="right"),
+    )
+    st.plotly_chart(fig, width='stretch')
+
+    end = fan.sort_values("day").groupby("cell")["nav"].last()
+    st.caption(
+        f"Each faint line is one start date's equity curve, normalized to 1.0 and "
+        f"aligned at day 0 — the same {n_cells} draws the scatter above scores. "
+        f"Bands are the per-day 10th/50th/90th percentile **across cells**, not a "
+        f"path any single run took. Final NAV: median {end.median():.2f}×, "
+        f"{(end < 1).mean() * 100:.0f}% of draws end below water. "
+        f"Truncated at day {int(keep)} (where <10% of cells still run)."
+    )
+
+
 def _bear_spans(eq: pd.DataFrame) -> list[tuple]:
     """Consecutive bear-regime bars (regime 1-2) collapsed to (start, end) date
     spans, for vrect shading. Empty if the cell never went bear."""
@@ -212,7 +301,7 @@ def render_exposure(equity: pd.DataFrame) -> None:
         title="Exposure — open positions over time (bear regime shaded)",
         height=220, yaxis_title="# open", margin=dict(l=40, r=20, t=40, b=20),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Cash vs deployed capital — the same story in dollars.
     fig_c = go.Figure()
@@ -226,7 +315,7 @@ def render_exposure(equity: pd.DataFrame) -> None:
         height=220, yaxis_title="$", margin=dict(l=40, r=20, t=40, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, x=1, xanchor="right"),
     )
-    st.plotly_chart(fig_c, use_container_width=True)
+    st.plotly_chart(fig_c, width='stretch')
 
 
 def render_pnl_distribution(trades: pd.DataFrame) -> None:
@@ -244,7 +333,7 @@ def render_pnl_distribution(trades: pd.DataFrame) -> None:
         height=260, xaxis_title="P&L %", yaxis_title="# trades",
         margin=dict(l=40, r=20, t=50, b=30),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_rejections(rejections: pd.DataFrame) -> None:
@@ -264,7 +353,7 @@ def render_rejections(rejections: pd.DataFrame) -> None:
     styled = by_reason.style.format({
         "count": "{:,.0f}", "distinct_tickers": "{:,.0f}", "median_score": "{:.1f}",
     })
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width='stretch', hide_index=True)
     st.caption(f"{len(r):,} rejection rows across {r['ticker'].nunique():,} tickers "
                f"and {r['date'].nunique():,} days. Grouped by reason — not the "
                "counterfactual of a different gate (slot-refill is path-dependent).")
@@ -273,8 +362,10 @@ def render_rejections(rejections: pd.DataFrame) -> None:
 def render_cell_zoom(cell_rows: pd.DataFrame) -> None:
     """Drill into one cone cell's trades / exposure / rejections. Same detail as the
     run browser, entered from the cone (design §3: one detail, two ways in)."""
-    st.markdown("**Zoom into a cell** — each is one start-date draw. Trades and "
-                "rejections are local-only (dev box), not synced to the remote.")
+    st.subheader("Zoom into a cell")
+    st.caption("Each cell is one start-date draw from the arm selected above. "
+               "Trades and rejections are local-only (dev box), not synced to "
+               "the remote.")
 
     # Label carries the grid: an arm mixes rolling (start-date draws, fixed 12m),
     # horizon (varying holding period), and matrix cells — a bare start date would
@@ -284,13 +375,29 @@ def render_cell_zoom(cell_rows: pd.DataFrame) -> None:
         return f"[{row.grid}] {row.start} · {row.cell}{sh}"
     labels = {_label(row): (row.arm, row.grid, row.cell)
               for row in cell_rows.itertuples()}
-    pick = st.selectbox("Cell (start date)", list(labels.keys()), key="btv2_cell_zoom")
+
+    # Key the widget on the ARM. Streamlit restores a selectbox's previous value
+    # by key, so a shared key survives an arm switch and keeps pointing at the old
+    # arm's cell — which then loads a path that doesn't exist under the new arm
+    # (champion_gated has no `horizon` grid at all). Silent wrong-arm data.
+    pick = st.selectbox("Cell (start date)", list(labels.keys()),
+                        key=f"btv2_cell_zoom_{cell_rows['arm'].iloc[0]}")
     arm, grid, cell = labels[pick]
 
     art = load_cell_artifacts(arm, grid, cell)
     if art["trades"] is None and art["equity"] is None:
         st.info(f"No local artifacts for `{arm}/{grid}/{cell}` — the sweep tree "
                 "isn't on this host (trades/rejections stay dev-box-local).")
+        return
+
+    # A cell that never traded has a single equity row (start bar only). Charting
+    # one point renders an epoch-scaled axis and reads as broken data — it isn't,
+    # the draw just deployed no capital. Same len<2 rule load_arm_fan drops on.
+    eq = art["equity"]
+    if eq is not None and len(eq) < 2:
+        st.info(f"`{cell}` never opened a position — the window closed before any "
+                "signal fired, so there is no path to chart. This is a real (zero-"
+                "trade) draw, not missing data.")
         return
 
     render_exposure(art["equity"])
@@ -368,7 +475,12 @@ def render_cone() -> None:
         height=340, xaxis_title="Start date", yaxis_title="Sharpe",
         margin=dict(l=40, r=80, t=50, b=30), showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
+
+    # The fan — the same draws as equity paths rather than scored points. This is
+    # the plot the cone was missing: the scatter says what each draw scored, the
+    # fan says what the ride looked like.
+    render_fan(arm, c)
 
     # Distribution of the same Sharpes — the cone as a histogram.
     fig_h = go.Figure()
@@ -380,7 +492,7 @@ def render_cone() -> None:
         height=260, xaxis_title="Sharpe", yaxis_title="# start dates",
         margin=dict(l=40, r=20, t=50, b=30),
     )
-    st.plotly_chart(fig_h, use_container_width=True)
+    st.plotly_chart(fig_h, width='stretch')
 
     # Drill into any cell of this arm — same detail as the run browser, entered
     # from the cone (design §3: one detail component, two ways in).
@@ -390,13 +502,32 @@ def render_cone() -> None:
 
 # ── Run list panel ───────────────────────────────────────────────────────────
 
-def render_run_list(runs: pd.DataFrame) -> Optional[str]:
-    st.subheader("Backtest Runs")
+def render_run_list(runs: pd.DataFrame, cone_cells: pd.DataFrame) -> Optional[str]:
+    st.subheader("Backtest Runs — raw manifests")
 
     if runs.empty:
         st.warning("No runs with `manifest_version=v1` found in `data/backtest/`. "
                    "Re-run a backtest with the current pipeline to populate.")
         return None
+
+    # 119 of the 121 v1 runs ARE cone cells written by the same sweep — same
+    # run_id, same window. They are NOT an independent result set, and their
+    # metrics DISAGREE with the cone (h_start_h6: manifest Sharpe 2.76 vs cone
+    # 4.86) because build_cone_cache.py reads the arm's curated summary.json,
+    # which carries the window-fair annualization; the per-run manifest carries
+    # the raw BackTrader figure. The cone is authoritative — say so here rather
+    # than let two different Sharpes for one run sit on the page unexplained.
+    overlap = sorted(set(runs["run_id"]) & set(cone_cells["cell"])) if not cone_cells.empty else []
+    if overlap:
+        st.warning(
+            f"⚠️ **{len(overlap)} of these {len(runs)} runs are sweep cells already "
+            "scored in the cone above** — same run, re-derived. Where the two "
+            "disagree the **cone wins**: it reads each arm's curated `summary.json` "
+            "(window-fair annualization, degenerate short-window cells filtered), "
+            "while these manifests carry the raw per-run BackTrader metrics. Use "
+            "this table to inspect a run's artifacts, **not to score it**.",
+            icon="⚠️",
+        )
 
     show = runs[["run_id", "engine", "strategy", "model_name", "model_version_id",
                  "start_date", "end_date",
@@ -421,7 +552,7 @@ def render_run_list(runs: pd.DataFrame) -> Optional[str]:
     if "Trades" in show.columns:
         styled = styled.format("{:,.0f}", subset=["Trades"], na_rep="—")
 
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=200)
+    st.dataframe(styled, width='stretch', hide_index=True, height=200)
 
     if (runs["engine"].astype(str).str.startswith("BackTrader")).all():
         st.caption("All runs here are **BackTrader** (the promotion engine). "
@@ -438,14 +569,24 @@ def render_run_list(runs: pd.DataFrame) -> Optional[str]:
 
 # ── Per-run rendering ────────────────────────────────────────────────────────
 
+def _date_indexed(equity: pd.DataFrame) -> pd.DataFrame:
+    """Equity parquets carry a `date` COLUMN over a RangeIndex. Converting that
+    RangeIndex with to_datetime silently reads 0,1,2… as nanoseconds since epoch —
+    the Jan-1-1970 axis. Prefer the column; only fall back to the index."""
+    eq = equity.copy()
+    if "date" in eq.columns:
+        eq.index = pd.to_datetime(eq["date"])
+    elif not isinstance(eq.index, pd.DatetimeIndex):
+        eq.index = pd.to_datetime(eq.index)
+    return eq.sort_index()
+
+
 def render_equity_dd(equity: pd.DataFrame, run_id: str) -> None:
     if equity is None or equity.empty:
         st.info("No equity curve data.")
         return
 
-    eq = equity.copy()
-    if not isinstance(eq.index, pd.DatetimeIndex):
-        eq.index = pd.to_datetime(eq.index)
+    eq = _date_indexed(equity)
 
     nav = eq["value"] / float(eq["value"].iloc[0])
     drawdown = nav / nav.cummax() - 1
@@ -460,7 +601,7 @@ def render_equity_dd(equity: pd.DataFrame, run_id: str) -> None:
         height=380, xaxis_title="", yaxis_title="NAV (×start)",
         margin=dict(l=40, r=20, t=50, b=30),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     fig_dd = go.Figure()
     fig_dd.add_scatter(x=drawdown.index, y=drawdown, mode="lines",
@@ -474,7 +615,7 @@ def render_equity_dd(equity: pd.DataFrame, run_id: str) -> None:
         height=260, yaxis_tickformat=".0%",
         margin=dict(l=40, r=20, t=50, b=30),
     )
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width='stretch')
 
 
 def render_breakdowns(trades: pd.DataFrame) -> None:
@@ -500,7 +641,7 @@ def render_breakdowns(trades: pd.DataFrame) -> None:
             "avg_pnl": "{:+.2f}%", "median_pnl": "{:+.2f}%",
             "win_rate": "{:.0f}%", "trades": "{:,.0f}",
         })
-        st.dataframe(styled, use_container_width=True, hide_index=True, height=240)
+        st.dataframe(styled, width='stretch', hide_index=True, height=240)
 
     with col_reg:
         if "entry_regime" in t.columns:
@@ -516,7 +657,7 @@ def render_breakdowns(trades: pd.DataFrame) -> None:
                 "avg_pnl": "{:+.2f}%", "win_rate": "{:.0f}%",
                 "trades": "{:,.0f}",
             })
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=240)
+            st.dataframe(styled, width='stretch', hide_index=True, height=240)
         else:
             st.info("No entry_regime column in trades.")
 
@@ -582,7 +723,7 @@ def render_trade_table(trades: pd.DataFrame, key_prefix: str = "btv2") -> None:
         if c in show.columns:
             styled = styled.format("${:.2f}", subset=[c])
 
-    st.dataframe(styled, use_container_width=True, height=360)
+    st.dataframe(styled, width='stretch', height=360)
     st.caption(f"Showing {len(show):,} of {len(trades):,} trades")
 
 
@@ -599,7 +740,7 @@ def render_fingerprint_glossary(fingerprint: str) -> None:
     gloss = pd.DataFrame(
         [{"Term": f, "Meaning": KNOB_GLOSSARY[f]} for f in families])
     with st.expander(f"What the terms mean — `{fingerprint}`"):
-        st.dataframe(gloss, use_container_width=True, hide_index=True)
+        st.dataframe(gloss, width='stretch', hide_index=True)
 
 
 # ── Compare mode ─────────────────────────────────────────────────────────────
@@ -622,9 +763,7 @@ def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
         eq = art["equity"]
         if eq is None or eq.empty:
             continue
-        eq = eq.copy()
-        if not isinstance(eq.index, pd.DatetimeIndex):
-            eq.index = pd.to_datetime(eq.index)
+        eq = _date_indexed(eq)
         nav = eq["value"] / float(eq["value"].iloc[0])
         if align == "Days from start":
             x = np.arange(len(nav))
@@ -636,6 +775,17 @@ def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
         st.info("Could not load both equity curves.")
         return
 
+    # Two runs whose windows both got truncated by the data frontier produce the
+    # SAME path under different nominal horizons (h6 vs h24 both end at the last
+    # bar). Overplotted, that reads as one curve — say so rather than let the user
+    # infer two horizons agreed.
+    if np.array_equal(rows[0][2], rows[1][2]):
+        st.warning(
+            f"⚠️ `{primary_run_id}` and `{other}` have **identical** equity paths — "
+            "both windows were cut short by the end of available data, so the "
+            "nominal horizons never diverged. This is one draw shown twice, not "
+            "two horizons agreeing.", icon="🟠")
+
     fig = go.Figure()
     for rid, x, y in rows:
         fig.add_scatter(x=x, y=y, mode="lines", name=rid)
@@ -646,14 +796,14 @@ def render_compare(runs: pd.DataFrame, primary_run_id: str) -> None:
         margin=dict(l=40, r=20, t=50, b=30),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     side = runs[runs["run_id"].isin([primary_run_id, other])][
         ["run_id", "engine", "model_name", "model_version_id",
          "total_return", "ann_return_pct", "max_drawdown", "total_trades",
          "win_rate", "sharpe_ratio"]
     ].set_index("run_id").T
-    st.dataframe(side, use_container_width=True)
+    st.dataframe(side, width='stretch')
 
 
 # ── Page entrypoint ──────────────────────────────────────────────────────────
@@ -669,7 +819,12 @@ render_cone()
 st.markdown("---")
 
 runs = discover_runs()
-selected = render_run_list(runs)
+try:
+    from dashboard_utils import load_cone_cells as _lcc
+    _cone_cells = _lcc()
+except Exception:
+    _cone_cells = pd.DataFrame(columns=["cell"])
+selected = render_run_list(runs, _cone_cells)
 if selected is None:
     st.stop()
 
@@ -708,7 +863,7 @@ if fingerprint:
 plot_png = Path(run_row["_path"]) / "plot.png"
 if plot_png.exists():
     with st.expander("6-panel diagnostic (equity/regime · underwater · monthly · per-trade · by-regime · exits)", expanded=True):
-        st.image(str(plot_png), use_container_width=True)
+        st.image(str(plot_png), width='stretch')
 
 render_equity_dd(art["equity"], selected)
 st.markdown("---")

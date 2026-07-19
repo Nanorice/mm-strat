@@ -135,7 +135,7 @@ def render_macro_dashboard() -> None:
             height=300, margin=dict(l=0, r=20, t=10, b=0),
             xaxis=dict(range=[0, 100], title="Percentile"),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         if _cape_note:
             st.caption(_cape_note)
 
@@ -184,7 +184,7 @@ def render_macro_dashboard() -> None:
             yaxis=dict(range=[0, 100], title="Percentile"),
             legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0)
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
 
 
 # ── Regime / risk history charts ──────────────────────────────────────────────
@@ -262,7 +262,7 @@ def render_weather_gauge() -> None:
                    ticktext=["Aside", "Trim", "Deploy", "More"], range=[-0.3, 3.3]),
         xaxis=dict(title=None),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 # ── Daily shortlist (tail-edge artifact) ──────────────────────────────────────
@@ -305,7 +305,7 @@ def render_shortlist() -> None:
             "P(Home Run)": "{:.1%}", "$Vol/day ($M)": "{:.1f}",
             "Mkt Cap ($M)": "{:,.0f}", "Score": "{:.3f}",
         }, na_rep="—"),
-        use_container_width=True, hide_index=True,
+        width='stretch', hide_index=True,
     )
 
 
@@ -345,7 +345,7 @@ def render_vip_watchlist() -> None:
             "P(Home Run)": "{:.1%}", "RS %ile": "{:.2f}", "Close": "{:.2f}",
             "$Vol/day ($M)": "{:.1f}",
         }, na_rep="—"),
-        use_container_width=True, hide_index=True,
+        width='stretch', hide_index=True,
     )
 
 
@@ -506,7 +506,7 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     if "Return %" in table.columns:
         styled = styled.format("{:+.2f}%", subset=["Return %"])
 
-    st.dataframe(styled, use_container_width=True, height=500,
+    st.dataframe(styled, width='stretch', height=500,
                  column_config=column_config)
     cap_note = f" (capped at {MAX_ROWS:,} of {len(display):,})" if truncated else ""
     st.caption(f"Showing {len(table)} trades{cap_note} · sorted by {sort_choice}")
@@ -563,7 +563,7 @@ def render_activity_feed(model_version_id: str | None = None) -> None:
             styled = _style_return_col(tbl.style, "Return %")
             styled = styled.format("{:.0f}", subset=["Days"], na_rep="—")
             st.dataframe(
-                styled, use_container_width=True, hide_index=True, height=420,
+                styled, width='stretch', hide_index=True, height=420,
                 column_config={"Ticker": _FINVIZ_LINK},
             )
             st.caption(f"{len(exits)} exits · sorted by exit date (newest first)")
@@ -596,7 +596,7 @@ def render_activity_feed(model_version_id: str | None = None) -> None:
                 "event_type": "Event", "detail": "Detail",
             })
             st.dataframe(
-                disp, use_container_width=True, hide_index=True, height=420,
+                disp, width='stretch', hide_index=True, height=420,
                 column_config={"Ticker": _FINVIZ_LINK},
             )
             st.caption(f"{len(view)} events in the last {window} days")
@@ -633,7 +633,7 @@ def render_activity_feed(model_version_id: str | None = None) -> None:
                 styled = styled.format("{:.0f}", subset=["Days"], na_rep="—")
                 if "Entry P(HR)" in show:
                     styled = styled.format("{:.2f}", subset=["Entry P(HR)"], na_rep="—")
-                st.dataframe(styled, use_container_width=True, hide_index=True)
+                st.dataframe(styled, width='stretch', hide_index=True)
                 st.caption("Entry P(HR) = prod M01 P(Home Run) as the signal fired "
                            "(NULL for sessions predating the scored window).")
 
@@ -683,7 +683,7 @@ def render_pre_breakout(scored: pd.DataFrame) -> None:
         if fcol in table.columns:
             styled = styled.format("{:.2f}", subset=[fcol])
 
-    st.dataframe(styled, use_container_width=True, height=400)
+    st.dataframe(styled, width='stretch', height=400)
     st.caption(f"Showing {len(table)} candidates (scored nightly)")
 
 
@@ -796,7 +796,7 @@ def render_rank_bump_chart(model_version_id: str | None) -> None:
         yaxis=dict(title="rank (1 = best)", autorange="reversed",
                    dtick=1 if top_n <= 20 else 5),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_cohort_return_tracker(model_version_id: str | None) -> None:
@@ -879,7 +879,7 @@ def render_cohort_return_tracker(model_version_id: str | None) -> None:
         yaxis=dict(title="return %"),
         legend=dict(orientation="h", y=1.05),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     span = f"{int(x.min())}–{int(x.max())} days back"
     tail = (f" · forward mode: the newest ~{int(horizon)} days lack a full "
             "future window and drop out." if mode == "forward" else "")
@@ -943,7 +943,7 @@ def render_sector_heat() -> None:
         height=420, margin=dict(l=30, r=30, t=60, b=90),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 # ── Analytics (legacy panel, kept) ────────────────────────────────────────────
@@ -1041,7 +1041,7 @@ def render_analytics(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
             if lock_x:
                 fig.update_xaxes(fixedrange=True)
                 fig.update_yaxes(fixedrange=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             with st.expander("Tickers by quadrant", expanded=False):
                 quad_filter = st.multiselect(
@@ -1059,7 +1059,7 @@ def render_analytics(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
                                         "days_held": "Days", "pct_return": "Return %",
                                         "quadrant": "Quadrant"})
                        .style.format({"Return %": "{:+.2f}%", "Days": "{:.0f}"}),
-                    use_container_width=True, hide_index=True,
+                    width='stretch', hide_index=True,
                 )
         else:
             st.info("No active trades.")
@@ -1073,7 +1073,7 @@ def render_analytics(scored: pd.DataFrame, watchlist: pd.DataFrame) -> None:
             fig.update_traces(marker_color="#42a5f5")
             fig.update_layout(height=350, xaxis_tickangle=-45,
                               yaxis_title="Trades", xaxis_title="")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("No active trades.")
 
@@ -1139,7 +1139,7 @@ def render_decision_log() -> None:
             ),
         },
         hide_index=True,
-        use_container_width=True,
+        width='stretch',
         key="decision_editor",
     )
 
@@ -1210,7 +1210,7 @@ def render_past_decisions() -> None:
     if "Return %" in show.columns:
         styled = styled.format("{:+.2f}%", subset=["Return %"], na_rep="—")
 
-    st.dataframe(styled, use_container_width=True, height=400)
+    st.dataframe(styled, width='stretch', height=400)
 
     # Aggregate stats: hit-rate of "taken" decisions
     taken = past[past["decision_taken"] == "taken"]
