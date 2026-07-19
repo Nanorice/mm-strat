@@ -26,9 +26,11 @@ flowchart TD
     API_FRED & API_YF --> P1_MACRO
     P1_MACRO --> T1_M & T1_TM
 
-    %% ── Phase 1.5: Price Quality Gate ──
+    %% ── Phase 1.5 + 1.6: Quality & Plausibility Gates ──
     P15{{"1.5 Price Quality Gate<br/>read + conditional retry"}}
+    P16{{"1.6 Plausibility Gate<br/>FAIL ceilings; red = withhold R2"}}
     T1_P --> P15
+    T1_P & T1_S --> P16
 
     %% ── Phase 2: Screener Membership ──
     subgraph P2_Screener [Phase 2: Screener]
@@ -77,17 +79,18 @@ flowchart TD
         V_D2T(["v_d2_training"])
         V_D3D(["v_d3_deployment"])
         V_D3P(["v_d3_prebreakout"])
-        V_SD(["v_screener_dashboard"])
+        V_SW(["screener_watchlist<br/>(VIEW since 2026-07-18)"])
+        V_D3L(["v_d3_lifecycle / shortlist / vip / screening"])
 
-        MAT_SW[("screener_watchlist")]
-
-        V_D1 --> V_D2F & V_D2H & V_SD
+        V_D1 --> V_D2F & V_D2H
         V_D2F --> V_D2T & V_D3D & V_D3P & V_D2H
         V_D2H --> V_D2T
-        V_SD --> MAT_SW
+        V_SW --> V_D3L
+        V_D3P --> V_D3L
     end
     T3_SF & T1_P & T1_F & T1_S --> P6
-    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_D3P & V_SD
+    SW --> V_SW
+    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_D3P & V_SW & V_D3L
 
     %% ── Phase 7: Cache Refresh ──
     subgraph P7_Cache [Phase 7: Cache]
@@ -98,18 +101,31 @@ flowchart TD
 
     %% ── Phase 7.4–7.6: Scoring & Serving ──
     subgraph P74_Serving [Phase 7.4-7.6: Scoring & Serving]
-        P74["7.4 Prod-Model Scoring<br/>ScoreEngine · both cohorts"]
+        P74["7.4 Prod-Model Scoring<br/>ScoreEngine · both cohorts + shadow pass"]
         DP[("daily_predictions")]
+        SDV[("shadow_divergence")]
+        P745["7.45 Weather Gauge"]
+        WG[("weather_gauge")]
+        P746["7.46 Sector Breadth"]
+        SB[("sector_breadth")]
+        P747["7.47 Portfolio NAV"]
+        NAV[("nav_history")]
         P75["7.5 Slim DB Build"]
         SLIM[("dashboard.duckdb")]
         P76["7.6 R2 Sync"]
         R2[("Cloudflare R2")]
 
         P74 --> DP --> P75 --> SLIM --> P76 --> R2
+        P74 --> SDV
+        P745 --> WG --> P75
+        P746 --> SB --> P75
+        P747 --> NAV --> P75
     end
     V_D3D & V_D3P & MODELS --> P74
-    %% Slim build copies the serving tables into dashboard.duckdb
-    MAT_SW & T2_RS & T2_RK & T2_SF --> P75
+    %% Slim build copies serving tables + materializes views into dashboard.duckdb
+    T2_RS & T2_RK & T2_SF & V_SW & V_D3L --> P75
+    %% Red plausibility gate withholds the publish (slim DB still builds)
+    P16 -.->|red = withhold| P76
 
     %% ── Phase 8: Monitoring · Phase 10: Model Card ──
     subgraph P8_Monitor [Phase 8 + 10: Monitoring & Model Card]

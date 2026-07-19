@@ -1,6 +1,6 @@
 # Conceptual Architecture
 
-> Last updated: 2026-06-21 — Prefect scheduling on ITX. Prior: EDGAR engine, instrument reclassification, macro fix, model card Phase 4, slim dashboard DB.
+> Last updated: 2026-07-19 — accuracy pass in the docs overhaul: binary prod model, no session cooldown, `screener_watchlist` = VIEW, serving phases 7.4–7.6/10 added. Module-level reference now lives in `docs/modules/` (see `comprehensive_methodology.md` for the doc map). Prior: Prefect scheduling on ITX (sh019).
 
 > Naming convention: t1 is raw data in phase 1. t2 is filtered data for investible universe, with lightweight and alpha (because it uses crossectional features so need a larger universe). t3 is furthered filter for SEPA entry criterias.
 
@@ -54,9 +54,24 @@ Phase 1 (price/fund/shares/macro) ──CRITICAL──▶ Phase 2 (screener memb
 │                         Phase 7 (training cache) [non-crit]
 │                         -> d2_training_cache
 │                                 │
+│                         Phase 7.4 (scoring) [best-effort]
+│                         -> daily_predictions + shadow_divergence
+│                                 │
+│                         Phase 7.45-7.47 (gauges) [best-effort]
+│                         -> weather_gauge, sector_breadth, nav_history
+│                                 │
+│                         Phase 7.5-7.6 (slim DB + R2) [best-effort]
+│                         -> data/dashboard.duckdb -> R2 latest/
+│                            (publish withheld if Phase 1.6 plausibility gate red)
+│                                 │
 │                         Phase 8 (monitoring) [always]
 │                         -> logs / alerts only
+│                                 │
+│                         Phase 10 (weekly drift model card) [advisory]
 ```
+
+> Phase identity/order lives in `src/orchestrators/phase_registry.py` (stable ids).
+> Full phase reference: `docs/modules/orchestrator.md`.
 
 ### Detailed Data Flow & Dependency Chart
 
@@ -238,23 +253,22 @@ python tools/run_all_audits.py --skip t1 t3   # Skip specific audits
 
 **Input**: `t2_screener_features` for `target_date` (reads `trend_ok`, `breakout_ok`, `close`, `sma_50/150/200`).
 
-**Process** (one SQL pass, three operations, in order):
-1. **Close** open sessions whose trend boundary breaks today (`close < sma_50 OR sma_150 OR sma_200`) → `exit_date = today`, `cooldown_end = today + 14 days`, `status = 'COOLDOWN'`.
-2. **Open** new sessions for tickers with `trend_ok AND breakout_ok` today AND no open session AND past prior `cooldown_end` → INSERT `status = 'ACTIVE'`, `session_id = max(prior) + 1`.
-3. **Promote** any `COOLDOWN` row whose `cooldown_end < today` → `status = 'EXITED'`. Refresh `trend_ok`/`breakout_ok` on remaining ACTIVE rows.
+**Process** (one SQL pass, three operations, in order — post-2026-07-18 merge):
+1. **Close** open sessions whose trend boundary breaks today (`close < sma_50 OR sma_150 OR sma_200`) → `exit_date = today`, `status = 'EXITED'` (no COOLDOWN state).
+2. **Open** new sessions for tickers with `trend_ok AND breakout_ok` today AND no open session → INSERT `status = 'ACTIVE'`, `session_id = max(prior) + 1`.
+3. **Refresh** `trend_ok`/`breakout_ok` on remaining ACTIVE rows.
 
-**Output**: `sepa_watchlist` — event log keyed by `(ticker, entry_date)`. Columns: `ticker, entry_date, exit_date, cooldown_end, session_id, trend_ok, breakout_ok, status, updated_at`.
+**Output**: `sepa_watchlist` — event log keyed by `(ticker, entry_date)`. Columns: `ticker, entry_date, exit_date, session_id, trend_ok, breakout_ok, status, updated_at`. `status ∈ {ACTIVE, EXITED}` — the `COOLDOWN` state and `cooldown_end` column were **removed 2026-07-18**.
 
 **Session model**:
 - **Entry trigger**: `trend_ok AND breakout_ok` (full SEPA setup).
 - **Exit trigger**: C1+C2+C6 break (close drops below sma_50/150/200). Uses C1+C2+C6 only — *not* full `trend_ok` — to avoid C9 RS-line flicker fragmenting one long session into many short ones.
-- **Cooldown**: 14 calendar days after `exit_date` before a new session can open for the same ticker.
-- **Re-entry**: new `session_id`, new row. Prior session's `exit_date`/`cooldown_end` are preserved.
+- **No re-entry cooldown** (removed 2026-07-18): a re-trigger the day after an exit is a new session with a new `session_id`. Where episode-dedup matters (label work), derive it at read time: `is_retrigger := entry_date - LAG(exit_date) OVER (PARTITION BY ticker ORDER BY entry_date) <= 14 days`.
 
 **Key design notes**:
-- Cooldown is a **session-opening gate**, not a row-inclusion gate. T3 carries full history for every ticker that has ever appeared in `sepa_watchlist`, regardless of cooldown state.
-- `update_daily(date)` is **not idempotent** — re-running it for the same date would attempt to open duplicate sessions on tickers that already entered today. Use the `pipeline_runs` idempotency guard (set by orchestrator) or manually clean up (see Backfill notes below) before re-running.
-- Distinct from `screener_watchlist` (the dashboard trade log). Both coexist.
+- T3 carries full history for every ticker that has ever appeared in `sepa_watchlist`, regardless of current session state. Delisted tickers are kept — the store matches the training grain.
+- Re-running `update_daily(date)` for the same date is safe for opens (the no-open-session guard blocks duplicates); the orchestrator's `pipeline_runs` idempotency guard still applies to the phase as a whole.
+- **Single session store** since 2026-07-18: `screener_watchlist` is a display VIEW over this table (company info + realized returns) — it no longer derives its own sessions.
 
 **Toolkit:**
 | File | Purpose |
@@ -275,7 +289,7 @@ Always run *before* T3 backfill — T3 reads `SELECT DISTINCT ticker FROM sepa_w
 ```sql
 DELETE FROM sepa_watchlist WHERE entry_date = '<DATE>';
 UPDATE sepa_watchlist
-SET exit_date = NULL, cooldown_end = NULL, status = 'ACTIVE'
+SET exit_date = NULL, status = 'ACTIVE'
 WHERE exit_date = '<DATE>';
 ```
 Then call `update_daily('<DATE>')` again.
@@ -332,44 +346,40 @@ After completion: `python scripts/create_duckdb_views.py && python scripts/refre
 
 **Input**: `t3_sepa_features`, `price_data`, `fundamentals`, `company_profiles`.
 
-**Observed timing (2026-05-13, 38K trades):**
-- Phase 6 (DDL only — `CREATE OR REPLACE VIEW`): ~16 min
-- Phase 7 (materialise `d2_training_cache`): **~592s (~10 min)** — STALE, see note below
-- Combined Phase 6+7: ~26 min out of ~38 min total pipeline
-
-**Performance bottleneck (RESOLVED in code, timing not re-measured)**: The `sl_exits` CTE in `v_d2_training` previously ran a correlated subquery — `SELECT p.date FROM price_data WHERE p.ticker = s.ticker AND p.date > s.sl_date ORDER BY p.date LIMIT 1` — once per SL-triggered trade. This has been rewritten using the `price_with_next` CTE with `LEAD(date) OVER (PARTITION BY ticker ORDER BY date)` (see `src/managers/view_manager.py:580-597`). The 592s timing above predates this fix. **Action: re-time Phase 7 to determine current bottleneck (if any).**
+**Timing note**: Phase 6 is DDL-only since 2026-07-18 (no materialisation) — cheap. The historical ~592s `sl_exits` correlated-subquery bottleneck in Phase 7 was rewritten 2026-05-14 (`price_with_next` CTE with `LEAD()`); re-time Phase 7 if it ever looks slow again.
 
 **Process**: The view chain progressively transforms daily SEPA observations into trade-level rows with outcomes:
 
 | View | Row represents | Status | Downstream consumers |
 |------|---------------|--------|----------------------|
+| `v_price_combined` / `v_shares_combined` | union of prod + backfill tables | **Active** | internal to the chain |
 | `v_sepa_candidates` | 1 day per ticker (while in trend) | **Active** | Diagnostic queries, notebooks |
-| `v_d1_candidates` | **1 trade** (session) | **Active** | `v_d2_features`, `v_d2_hydrated`, `v_screener_dashboard` |
-| `v_d1_trades` | Alias for `v_d1_candidates` | Alias (low use) | Notebooks only — prefer `v_d1_candidates` |
-| `v_d2_features` | 1 trade + fundamentals | **Active** | `v_d2_training`, `v_d3_deployment`, `v_d2_hydrated` |
-| `v_d2_hydrated` | **N days per trade** (entry→exit daily rows) | **Active — ML only** | `v_d2_training` only. Backtest no longer uses this — backtest reads `t3_sepa_features` + `price_data` directly via `DuckDBCandidateFeed`. |
-| `v_d2r_hydrated` | Alias for `v_d2_hydrated` | **Backward-compat alias** | Old scripts/notebooks. Migrate to `v_d2_hydrated`. |
+| `v_d1_candidates` | **1 trade** (session) | **Active** | `v_d2_features`, `v_d2_hydrated` |
+| `v_d2_features` | 1 trade + fundamentals | **Active** | `v_d2_training`, `v_d3_deployment`, `v_d3_prebreakout`, `v_d2_hydrated` |
+| `v_d2_hydrated` | **N days per trade** (entry→exit daily rows) | **Active — ML only** | `v_d2_training` only |
 | `v_d2_training` | **1 trade + outcomes** | **Active — ML hub** | `train_mfe_classifier.py`, `d2_training_cache`, ablation, validation scripts |
-| `v_d3_deployment` | Last 252 days of SEPA candidates | **Active** | `dashboard.py` (live M01 scoring) |
-| `v_screener_dashboard` | **1 trade** (session) | **Active — duplicates session logic** | Source for `screener_watchlist`. Re-implements `v_d1_candidates` session detection on T2 — same full LAG/window pass. |
+| `v_d3_deployment` | Last 252 days of SEPA candidates | **Active** | Phase 7.4 scoring, dashboard |
+| `v_d3_prebreakout` | trend-ok, not-yet-broken-out cohort | **Active** | Phase 7.4 scoring (pre-breakout cohort) |
+| `screener_watchlist` | 1 session, display columns | **VIEW since 2026-07-18** | Dashboard Session activity; joins predictions to outcomes. Thin projection over `sepa_watchlist` — no session derivation of its own |
+| `v_d3_lifecycle` | one-pass MECE scoring cohorts (pre_breakout / active / removed) | **Active** | Dashboard Screening (via materialized snapshots) |
+| `v_d3_shortlist` / `v_d3_vip` / `v_d3_screening` | shortlist / VIP join / T2 population ⋈ preds | **Active** | Weather gauge, dashboard |
+| `v_t3_training` | dense T3 training view | **Active — weekly** | `refresh_t3_training_cache()` (~215s ASOF joins; cache table built on demand, absent by default) |
 
-**Output**: 9 production views + 2 backward-compat aliases + 2 materialised tables.
+Retired: `v_screener_dashboard` (its session-detection duplicate died with the 2026-07-18 watchlist merge), `v_d1_trades` and `v_d2r_hydrated` aliases (explicitly dropped by `create_all()`).
 
-**Materialised tables:**
-| Table | Source | Rows (2026-05-13) | Refresh wall time |
-|-------|--------|-------------------|-------------------|
-| `screener_watchlist` | `v_screener_dashboard` | ~38K (all trades ever) | ~7s (DDL only — view is cheap to materialise) |
-| `d2_training_cache` | `v_d2_training` | ~38K | ~592s (pre-2026-05-14; correlated subquery resolved — re-time needed) |
+**Materialised tables** (Phase 6 itself materialises **nothing** since the merge):
+| Table | Source | Rows | Refreshed by |
+|-------|--------|------|--------------|
+| `d2_training_cache` | `v_d2_training` | ~39K | Phase 7 (`refresh_cache()`) |
 
 **Known tech debt in Phase 6+7:**
-- `v_screener_dashboard` duplicates the full session-detection CTE block (`trend_c8_base` → `trend_sessions` → `sessions` → `entries` → `session_bounds`) that `v_d1_candidates` already computes. These could share a materialised intermediate, halving T2 scan work.
-- `v_d2_hydrated` exists solely to feed `v_d2_training`. If `v_d2_training` were rewritten to compute MAE/MFE/SL directly against `price_data` (pre-joined), `v_d2_hydrated` could be dropped.
-- ~~The `sl_exits` correlated subquery is the primary Phase 7 bottleneck.~~ RESOLVED 2026-05-14: rewritten using a `price_with_next` CTE with `LEAD(date/close) OVER (PARTITION BY ticker ORDER BY date)` (see session log). Re-time Phase 7 to find the new bottleneck (if any).
+- `v_d2_hydrated` exists solely to feed `v_d2_training`. If `v_d2_training` computed MAE/MFE/SL directly against `price_data`, it could be dropped.
+- `trend_c8` CTE misnomer — computes C1+C2+C6 (exit criteria), not C1–C8. Glossary verdict: RENAME → `trend_exit`.
 
 **Toolkit:**
 | File | Purpose |
 |------|---------|
-| `src/managers/view_manager.py` | `ViewManager.create_all()` (views + screener_watchlist) |
+| `src/managers/view_manager.py` | `ViewManager.create_all()` (views only, incl. the `screener_watchlist` view) |
 | `src/screener_diagnostics.py` | `ScreenerDiagnostics` — reusable library for per-ticker SEPA criteria diagnosis |
 | `scripts/create_duckdb_views.py` | Standalone CLI for view recreation |
 | `scripts/show_screener.py` | CLI table of active SEPA trades (reads `screener_watchlist`) |
@@ -425,6 +435,28 @@ Shows: data freshness, recent trades, per-day C1-C9 trend + B1-B2 breakout pass/
 
 ---
 
+### Phases 7.4–7.6 — Scoring & Serving *(best-effort — failures WARN, never halt)*
+
+| Phase | What | Output | Notes |
+|---|---|---|---|
+| 7.4 Scoring | Prod model scores breakout + pre-breakout cohorts (`ScoreEngine`, RAW softprob), then the shadow model scores the same candidates | `daily_predictions`, `shadow_divergence` | Dashboard reads these materialized scores, never scores live. Backfill: `scripts/backfill_daily_predictions.py` |
+| 7.45 Weather | `WeatherEngine.refresh()` — full recompute (expanding stats) | `weather_gauge` | |
+| 7.46 Breadth | `SectorBreadthEngine.refresh()` — latest-day snapshot | `sector_breadth` | |
+| 7.47 NAV | `PortfolioManager.snapshot_nav()` — mark real book to close | `nav_history` | **Cannot be honestly backfilled** (TWR needs same-day net_flow); a missed night is a permanent hole |
+| 7.5 Slim DB | subprocess `scripts/build_dashboard_db.py` | `data/dashboard.duckdb` | Any new dashboard loader's table MUST be in the MANIFEST (remote breaks otherwise) |
+| 7.6 R2 Sync | subprocess `scripts/sync_dashboard_db.py` → R2 `latest/` | remote copy | Skipped (loud warning) if `R2_ACCOUNT_ID` unset; **withheld while the Phase 1.6 plausibility gate is red**. 🛑 One-way flow — see `local_vs_remote_db.md` |
+
+Phases 7.4–7.47 run **before** 7.5 so their tables ship in that night's slim DB.
+
+### Phase 10 — Weekly drift model card *(advisory)*
+
+Trailing 1-year card re-testing the FROZEN prod model against recent data →
+`model_card_drift_path` (never overwrites the promotion-gate card at
+`model_card_path`). Skips if a drift card is <7 days old. "Phase 10" with no
+Phase 9 is a cosmetic label artifact of the old positional numbering.
+
+---
+
 ### Phase 8 — Monitoring *(always runs)*
 
 **Purpose**: Log health metrics, check coverage, and fire alerts on anomalies.
@@ -465,17 +497,25 @@ Shows: data freshness, recent trades, per-day C1-C9 trend + B1-B2 breakout pass/
 | `ticker_blacklist` | maintenance | ~200 | Permanent record of purged non-tradeable tickers |
 | `screener_criteria_versions` | 2 | ~5 | Historical criteria parameter sets (v1, v2, ...) |
 | `screener_membership` | 2 | ~20K | Event log — one row per entry/exit per ticker |
-| `t2_screener_features` | 3 | ~9.6M | Full universe: OHLCV, SMAs, EMAs, RS, alphas, ranks, SEPA flags |
-| `t2_regime_scores` | 4 | ~1.5K | One row per date: M03 score + pillars + deltas |
-| `sepa_watchlist` | 4b | ~35K | Event log — one row per SEPA session per ticker. T3 universe gate. |
+| `t2_screener_features` | 3 | ~9.9M | Full universe: OHLCV, SMAs, EMAs, RS, alphas, ranks, SEPA flags (68 cols) |
+| `t2_regime_scores` | 4 | ~8K | One row per date: M03 score + pillars + deltas |
+| `t2_risk_scores` | 4 | ~5K | 5-factor risk model: exposure target + z-scores |
+| `sepa_watchlist` | 4.5 | ~39K | **Single session store** — one row per SEPA session. T3 universe gate. No cooldown; delisted kept. |
 | `t3_sepa_features` | 5 | ~9.4M | sepa_watchlist universe, full history per ticker: 144 cols, single ML source of truth |
-| `screener_watchlist` | 6 | ~38K | Materialized `v_screener_dashboard` (all trades, ACTIVE/EXITED, with returns) |
-| `d2_training_cache` | 7 | ~38K | Materialized `v_d2_training` (trade-level with outcomes, ~592s to refresh) |
-| `pipeline_runs` | 8 | varies | Phase execution tracking + idempotency |
-| `pipeline_error_log` | 8 | varies | Per-ticker errors by phase; drives heatmap warning state |
-| `daily_predictions` | 8 | varies | Point-in-time M01 scores for every SEPA candidate each day |
-| `cik_map` | 1.2b | 10.4K | Ticker → SEC CIK; maintained by `EDGAREngine` (weekly refresh) |
-| `models` | ML | varies | Model registry — versions, metrics, artifact paths, model card path/timestamp |
+| `screener_watchlist` | 6 | view | Display **VIEW** over `sepa_watchlist` since 2026-07-18 (company info + realized returns) |
+| `d2_training_cache` | 7 | ~39K | Materialized `v_d2_training` (trade grain + MFE/MAE outcomes, 200 cols) |
+| `daily_predictions` | 7.4 | ~300K | Materialized nightly scores per (date, ticker, model, cohort); RAW score — dashboard never scores live |
+| `shadow_divergence` | 7.4 | varies | Prod-vs-shadow ranking-diff verdicts |
+| `weather_gauge` | 7.45 | 1/day | Deploy-posture state (SPY>200d brake + stress composite + breadth) |
+| `sector_breadth` | 7.46 | snapshot | Macro-page heatmap aggregate |
+| `trades` / `cash_flows` / `nav_history` | manual + 7.47 | varies | Real-money book: append-only fills + external flows → derived TWR NAV |
+| `pipeline_runs` | 8 | varies | Phase execution tracking + idempotency (keyed by stable phase ids) |
+| `pipeline_error_log` / `table_write_log` | 8 | varies | Per-ticker errors by phase / table-write bookkeeping |
+| `cik_map` | 1.2b | ~10.8K | Ticker → SEC CIK; maintained by `EDGAREngine` (weekly refresh) |
+| `models` / `model_feature_sets` / `feature_catalog` / `forced_promotions` | ML | varies | Registry, named feature sets, feature metadata, forced-promotion audit log |
+| `fundamental_features` | derived | varies | Derived ratios; joined at query time by `v_d2_features` (pe/ps/peg/pb NOT included) |
+| `vip_watchlist` | manual | varies | Hand-picked tickers (surfaced via `v_d3_vip`) |
+| `cone_cells` | research | ~2.5K | Cached cone cells (`build_cone_cache.py`); `cell_id` = content fingerprint |
 
 ---
 
@@ -749,7 +789,7 @@ These are importable from notebooks/scripts — not just CLI tools.
 | `src/model_registry.py` | `ModelRegistry` | CRUD for `models` table — list, register, promote, archive model versions. |
 | `src/evaluation/classification_evaluator.py` | `ClassificationEvaluator` | Confusion matrix, ROC/PR curves, SHAP, feature importance. Auto-registers via `ModelRegistry`. |
 | `src/evaluation/leakage_guard.py` | `LeakageGuard` | Temporal leakage validation — checks no future data bleeds into training. |
-| `src/managers/view_manager.py` | `ViewManager` | `create_all()` recreates all views + `screener_watchlist`. `refresh_cache()` materializes `d2_training_cache`. Constructor: `ViewManager(feature_version='v3.1')`. |
+| `src/managers/view_manager.py` | `ViewManager` | `create_all()` recreates all views (incl. the `screener_watchlist` view — nothing materialised). `refresh_cache()` materializes `d2_training_cache`. Constructor: `ViewManager(feature_version='v3.1')`. |
 | `src/managers/screener_manager.py` | `ScreenerManager` | `evaluate_and_log(date)` — evaluates screener criteria for one date and logs entry/exit events. |
 | `src/managers/sepa_watchlist_manager.py` | `SepaWatchlistManager` | `backfill()` — full rebuild from t2 history. `update_daily(date)` — open/close sessions for one trading day. `get_universe()` — `SELECT DISTINCT ticker FROM sepa_watchlist` (T3 universe gate). `get_stats()` — quick monitoring summary. |
 | `src/managers/pipeline_run_manager.py` | `PipelineRunManager` | Phase execution tracking, idempotency checks, health reports. |
@@ -805,7 +845,7 @@ These are importable from notebooks/scripts — not just CLI tools.
 }
 ```
 
-**Current prod model**: `M01_baseline_v0.1` (status=`prod`). Latest prototype: `m01_prototype_2003_2026_20260506_160054`.
+**Current prod model**: `m01_binary_20260524_222020` (`m01_binary`, promoted 2026-07-15 — binary won the honest-Sharpe start-date cone; the 4-class prototype is archived). Promotion enforces the `results.json` blocking gates; forced overrides are logged to `forced_promotions`. A shadow slot (`set_shadow()`) drives the nightly Phase 7.4 shadow pass.
 
 **Artifact layout** (written by `train_mfe_classifier.py`):
 ```
@@ -839,14 +879,12 @@ reg.get_artifacts_path('version_id')     # Returns Path to artifacts dir
 **All model artifacts** are under `models/`:
 ```
 models/
-    m01_prototype_2003_2026/v1/   # Prototype trained 2003-2026 (first run)
-    m01_prototype_2003_2026/v2/   # Prototype trained 2003-2026 (second run, current best)
-    m01_baseline/v1/              # Baseline (registered as M01_baseline_v0.1 in prod)
+    m01_binary/<version>/         # PROD — binary home-run classifier
+    m01_prototype_2003_2026/v1|v2 # Archived 4-class prototype (load via the FULL path — bare m01_prototype/ errors)
+    m01_baseline/v1/              # Archived original baseline
     artifacts/                    # Legacy registered artifacts (mostly empty dirs — pre-P1 fix)
     m03_configs/                  # M03 regime config files
     ablation_study/               # M01 ablation results
-    feature_importance_*.csv
-    model_report_*.md
 ```
 
 > **Note on `artifacts_path`**: Before 2026-05-07, the registry auto-generated `models/artifacts/<version_id>/` as `artifacts_path`, creating an empty dir that nothing wrote to. This was fixed (P1) — the trainer now passes `artifacts_path=model_dir` explicitly. Existing pre-fix registrations still point to empty dirs; use filesystem paths directly with `model_diff.py` for those models.
@@ -857,10 +895,13 @@ models/
 
 **Purpose**: Train M01 MFE classifier on `v_d2_training` data. Not part of the daily pipeline — run periodically or after significant feature changes.
 
-**Current model**: M01 — 4-class XGBoost MFE (Maximum Favorable Excursion) classifier.
-- Classes: 0=Noise (0-2%), 1=Moderate (2-10%), 2=Strong (10-30%), 3=Home Run (>30%)
-- Features: 105 (8 groups: Moving Averages, Momentum/RS, Volume, Volatility, Oscillators, Fundamentals, Alphas, M03 Regime)
-- Baseline metrics: accuracy=67%, weighted_F1=0.58, macro_F1=0.25 (class imbalance)
+**Current prod model**: `m01_binary` — binary XGBoost home-run classifier
+(label `mfe_binary_homerun_v1`: 1 if MFE > 30% over the SEPA holding period, base
+rate ~14.5%). The 4-class taxonomy (`mfe_4class_v1`: Noise/Moderate/Strong/Home
+Run) remains available in the label registry for research; the 4-class prototype
+is archived. Features come from `model_feature_sets` (8 groups: Moving Averages,
+Momentum/RS, Volume, Volatility, Oscillators, Fundamentals, Alphas, M03 Regime).
+Current metrics: read the model card / `evaluation/results.json`, not this doc.
 
 **Data flow**:
 ```
@@ -952,7 +993,7 @@ python scripts/model_diff.py --model-a ... --model-b ... --top-n 20
 
 ## Evaluation Framework
 
-> Built out 2026-05-23 → 2026-05-24 to deliver the rigour spec in `docs/plans/whitepaper_path_forward_2026_05_23.md` §5. The framework is **operational**: every gate has a script, every script writes a JSON artifact, the trainer can wire them all into one run.
+> Built out 2026-05-23 → 2026-05-24 to deliver the rigour spec in `docs/session_logs/sprint_11/plans/whitepaper_path_forward_2026_05_23.md` §5. The framework is **operational**: every gate has a script, every script writes a JSON artifact, the trainer can wire them all into one run.
 
 **Philosophy.** A trained model is not "done" until it has passed the gate battery. Each library module returns a JSON-serialisable `dict` containing a `gates` list — every gate has `name`, `status` (`pass`/`fail`/`skipped`), `value`, `threshold`, and `blocking` (bool). Blocking failures block prod promotion via `ModelRegistry.set_prod()`.
 
@@ -1158,7 +1199,7 @@ Each label registry entry declares `production_class`. The evaluator's blocking 
 
 ### Outstanding operational items
 
-- [ ] **Quarterly drift report wiring.** `drift.py` library shipped + tested; the Phase-9 hook in `daily_pipeline_orchestrator.py` that fires on the 1st of Jan/Apr/Jul/Oct is not yet built. See `docs/plans/evaluation_remaining_implementation_plan_2026_05_24.md` §2.2 step 3.
+- [ ] **Quarterly drift report wiring.** `drift.py` library shipped + tested; the Phase-9 hook in `daily_pipeline_orchestrator.py` that fires on the 1st of Jan/Apr/Jul/Oct is not yet built. See `docs/session_logs/sprint_11/plans/evaluation_remaining_implementation_plan_2026_05_24.md` §2.2 step 3.
 - [ ] **Backfill historical `daily_predictions`.** Phase 8 prediction logger was silently broken until 2026-05-24; the `daily_predictions` table is empty for the historical period of the prod model. `scripts/backfill_daily_predictions.py` not yet written. See plan §3.2.
 - [ ] **Deep-rigor scripts hard-code `MODEL_DIR`.** Add `--model-dir` argument to `run_bootstrap_ci.py`, `run_permutation_null.py`, `run_decile_analysis.py` so they don't need an edit-per-model. Trivial change.
 - [ ] **Lazy `src/evaluation/__init__.py`.** Eager re-exports trigger `m03_evaluator → macro_engine → yfinance` import chain → ~25 min pytest cold start on Windows + Defender. See plan §3.1.
@@ -1167,54 +1208,33 @@ Each label registry entry declares `production_class`. The evaluator's blocking 
 
 ## Backtesting
 
-**Purpose**: Simulate the SEPA strategy historically using BackTrader. Not part of the daily pipeline — run on-demand.
+**Purpose**: Simulate strategies historically. Not part of the daily pipeline — run on-demand.
+Full module reference (engines, registry, forward shadow book): `docs/modules/backtest.md`;
+vectorized-harness how-to: `backtester_manual.md`.
 
-**Strategy**: `SEPAHybridV1` — M01 score-based selection + M03 regime gating + 3-tranche exit with trailing stops.
-
-**Data flow (DuckDB — default)**:
-```
-d2_training_cache                   → UniverseScorer.score_from_duckdb() → M01 scoring (vectorized)
-t2_regime_scores                    → regime feed (regime_cat 0-4 from m03_score thresholds: <20 strong_bear, <40 bear, <60 neutral, <80 bull, >=80 strong_bull — defaults in src/pipeline/m03_regime.py)
-price_data                          → OHLCV feeds + inline ATR-14
-    → SEPABacktestRunner.setup_from_duckdb() + run()
-    → report + equity curve + trade log
-```
-
-**Data flow (legacy parquet — `--full` / `--run`)**:
-```
-prepare_regime_feed()     → data/backtest/m03_feed.parquet
-UniverseScorer.score()    → data/backtest/universe_scores.parquet    ← reads data/ml/d2.parquet
-prepare_price_feeds()     → data/backtest/prices/*.parquet
-    → SEPABacktestRunner.setup() + run()
-    → report + equity curve + trade log
-```
-
-**Toolkit:**
-| File | Purpose |
-|------|---------|
-| `scripts/run_backtest.py` | CLI entrypoint (`--duckdb` default, `--full`/`--run` legacy) |
-| `scripts/backtest_optimization.py` | Hyperparameter optimization for backtest |
-| `src/backtest/runner.py` | `SEPABacktestRunner` |
-| `src/backtest/sepa_strategy.py` | `SEPAHybridV1` BackTrader strategy |
-| `src/backtest/universe_scorer.py` | `UniverseScorer` — `score_from_duckdb()` or `score_universe()` |
-| `src/backtest/score_lookup.py` | `ScoreLookup` — in-memory O(1) daily candidate filtering |
-| `src/backtest/position_tracker.py` | `PositionTracker` — 3-tranche exits |
-| `src/backtest/report.py` | Post-backtest markdown report generation |
-| `src/backtest/analyzers.py` | Custom BackTrader analyzers (CalmarRatio) |
-| `src/backtest/feeds.py` | `SEPAStockFeed`, `M03RegimeFeed` |
-| `src/backtest/price_feed.py` | Legacy parquet-based price feed |
-| `src/backtest/duckdb_feed.py` | `DuckDBCandidateFeed` — **do NOT delete** (imported by `backtest_optimization.py`) |
+**Essentials** (verified 2026-07-19):
+- **Scoring**: `UniverseScorer.score_from_t3()` is the canonical path (parity with
+  `daily_predictions` is guarded by `scripts/check_backtest_parity.py` + smoke test).
+  `ScoreLookup` indexes the scored panel for O(1) per-day candidate queries.
+- **Two engines**: BackTrader `SEPAHybridV1` (promotion authority) and
+  `VectorizedSEPABacktest` (fast, optimistic — ranking only). Legacy parquet-feed
+  mode and `duckdb_feed.py`/`price_feed.py` were removed (archived under
+  `src/backtest/archive/`).
+- **Strategies** are named registry configs (`src/backtest/strategy_registry.py`) —
+  champion: `champion_trail_spygate` (2026-07-10).
+- **Verdicts are cones**, not single runs: `run_starttime_sweep.py`,
+  `run_cone_gate.py`; OOS via `run_oos_gate.py --strategy <name>`.
 
 **CLI:**
 ```bash
-python scripts/run_backtest.py                                 # DuckDB mode (default)
-python scripts/run_backtest.py --duckdb --model m01_baseline/v1
-python scripts/run_backtest.py --duckdb --max-tickers 50       # Quick test
-python scripts/run_backtest.py --duckdb --start 2021-01-01 --end 2023-12-31
-python scripts/run_backtest.py --full                          # Legacy: prepare parquet + run
+python scripts/run_backtest.py --model m01_binary/<version>    # single run
+python scripts/run_strategy_array.py --strategies ...          # S-series arms via population_runner
+python scripts/run_oos_gate.py --strategy champion_trail_spygate
+python scripts/run_starttime_sweep.py --strategy champion_trail_spygate --grid rolling
+python scripts/run_shadow_book.py --strategy champion_trail_spygate --start-date ...
 ```
 
-**Output**: `data/backtest/` — reports, equity curves, trade logs.
+**Output**: `data/backtest/` (manifested runs), `data/selection_sweep/` (cones/gates).
 
 ---
 
@@ -1228,7 +1248,7 @@ python scripts/run_backtest.py --full                          # Legacy: prepare
 
 The slim DB (`data/dashboard.duckdb`, 783 MB) is rebuilt nightly by orchestrator Phase 7.5 via `scripts/build_dashboard_db.py`. It contains only the tables/windows the dashboard actually queries — safe to sync across devices. The main DB (`data/market_data.duckdb`) remains the pipeline source of truth.
 
-**Plan / spec:** `docs/plans/dashboard_implementation_plan_2026_05_23.md`. The dashboard's philosophy is *expose existing work, do not recompute*: DuckDB tables + registered models + pre-generated HTML reports are the canonical artifacts; pages render them.
+**Plan / spec:** `docs/session_logs/sprint_11/plans/dashboard_implementation_plan_2026_05_23.md`. The dashboard's philosophy is *expose existing work, do not recompute*: DuckDB tables + registered models + pre-generated HTML reports are the canonical artifacts; pages render them.
 
 ### Page map (MVP — 2026-05-23)
 
@@ -1258,29 +1278,12 @@ The slim DB (`data/dashboard.duckdb`, 783 MB) is rebuilt nightly by orchestrator
 | Backtest Studio | `scripts/pages/4_Backtest_Studio.py` | **C3** — **strategy cone** above the run browser + per-cell zoom (exposure/P&L/trades/rejections) |
 | Pipeline Health | `scripts/pages/5_Pipeline_Health.py` | Ops — runs heatmap, freshness, universe trend, audit history, DQ section, storage |
 
-### Page 1 — Today
+> Per-page detail lives in `docs/modules/dashboard.md`. Scores shown anywhere are
+> the **materialized** `daily_predictions` (RAW score, rendered "Score (raw)" — never
+> "P(...)"); nothing is live-scored on pageload. The retired Today-monolith sections
+> were removed from this doc 2026-07-19 (see git history if needed).
 
-Sections, in order:
-
-1. **Pipeline status bar** — `pipeline_runs` latest row (icon + phase + timestamp).
-2. **Regime cards (side-by-side)** —
-   - **M03** (left): composite score, label band (Strong Bull / Bull / Neutral / Bear / Strong Bear), 3 pillar metrics with formula tooltips. Source: `t2_regime_scores`.
-   - **5F** (right): `target_exposure` mapped to band label (Full / Reduced / Cautious / Defensive / Heavy Defensive / Veto), worst factor with σ, weighted z, expander for all 5 z-scores. Source: `t2_risk_scores`.
-3. **Screener Watchlist** — filterable (status / sector / date range / ticker) inside an `st.form` so typing doesn't retrigger the page. Default sort: Entry Date desc. Other sorts: P(HR), P(Strong+HR), Return %, Days Held. Columns: ticker / company / sector / entry date / entry $ / price $ / return % / days / M01 class / all 4 P(class) / status.
-4. **Pre-Breakout Watch** — `trend_ok=TRUE AND breakout_ok=FALSE` cohort joined to t3 features and **live-scored by prod M01**. Sort: P(HR) desc. Shows close, dist-from-20d-high, vol ratio, VCP, days_in_setup, class + probs.
-5. **Sector Heat** — bar chart of `trend_ok` + `breakout_ok` counts per sector, with window selector (Today / 5d avg / 20d avg). ETF pseudo-sectors filtered. Y-axis floored at 150, `cliponaxis=False`.
-6. **Analytics** —
-   - Quick stats: active count, avg return active, win rate exited, avg holding period.
-   - **Days Held × Return scatter** with 4 quadrants (Hot / Mature / Young / Aging) split at 60d × 5%. Tickers labeled on points. Expander below lets you filter by quadrant and see the ticker list.
-   - Active sector concentration: single-color bar chart.
-   - Exited-trade return distribution (symlog histogram).
-
-**M01 class taxonomy** (used everywhere): 4-class XGBoost MFE classifier (`multi:softprob`).
-- 0 Noise (0–2%), 1 Moderate (2–10%), 2 Strong (10–30%), 3 Home Run (>30%).
-
-**Data flow for the screener table:** `screener_watchlist` (active rows) → joined to latest `v_d3_deployment` by ticker → `score_features_df` → 4-class probabilities + class label.
-
-### Page 3 — Model Lab
+### Model Lab (Workshop)
 
 Registry list (`models` table) with status / feature-version filters. Selecting a row opens 6 tabs:
 
@@ -1295,7 +1298,7 @@ Registry list (`models` table) with status / feature-version filters. Selecting 
 
 **Read-only.** No "Promote to prod" / "Archive" buttons in v1 — promotion remains `ModelRegistry().set_prod(version_id)` from a shell.
 
-### Page 4 — Backtest Studio
+### Backtest Studio (Workshop)
 
 Scans `data/backtest/*/manifest.json` and **shows only runs with `manifest_version == "v1"`**. Stale runs (pre-2026-05-23 schema, or hand-named experimental dirs) remain on disk but are silently hidden.
 
@@ -1322,7 +1325,7 @@ Manifest schema (v1), written by `src/backtest/runner.py:_build_manifest`:
 
 `model.version_id` is resolved from `models.artifacts_path` when the on-disk model dir is registered; otherwise it falls back to `<name>/<version-dir>` (e.g. `m01_prototype_2003_2026/v1`).
 
-### Page 5 — Pipeline Health
+### Pipeline Health (Workshop)
 
 - **Runs heatmap (last 30d)** — `pipeline_runs` pivoted to phase × date. Cells colored success (green) / running (yellow) / failed (red); hover shows runtime + error message. Failed runs in window are expanded in a drill-down panel.
 - **Data freshness** — `MAX(date)` per key table + lag-day status badge (🟢 fresh / 🟡 stale / 🔴 very stale). Per-table tolerances configured in `FRESHNESS_TOLERANCE_DAYS`.
@@ -1345,7 +1348,7 @@ Manifest schema (v1), written by `src/backtest/runner.py:_build_manifest`:
 | `scripts/pages/5_Pipeline_Health.py` | Ops dashboard |
 | `scripts/pages/6_Supply_Chain.py` | Sector co-movement map (zero real edges) |
 | `scripts/pages/7_Equity_Research.py` | Report read surface (empty state) |
-| `models/m01_prototype_2003_2026/v2/model.json` | Current prod XGBoost classifier (auto-discovered via `status_flag='prod'`) |
+| `models/m01_binary/<version>/model.json` | Current prod XGBoost classifier (auto-discovered via `status_flag='prod'`) |
 | `docs/reports/pretrain_audit_*.html` | Pre-generated pretrain HTML reports — Model Lab iframes the newest |
 
 ### Generating a fresh pretrain HTML report
@@ -1364,9 +1367,9 @@ Model Lab's "Pretrain Report (HTML)" tab picks up the newest file by mtime.
   M01 `predict_proba` on the pre-breakout cohort).
 - **`@st.cache_data(ttl=300)`** on every read-path loader in `dashboard_utils.py`.
   `@st.cache_resource` for the XGBoost model.
-- **Page-1 pre-breakout cohort scoring is live**, not cached to a snapshot
-  table. ~50 tickers, acceptable for MVP. If load gets painful, the plan's
-  `dashboard_snapshot` table (deferred) is the lever.
+- ~~Page-1 pre-breakout cohort scoring is live~~ — superseded: all dashboard
+  scores come from the materialized `daily_predictions` (Phase 7.4); nothing
+  scores on pageload.
 - **Lookback windows: use `LIMIT N` on DISTINCT dates**, not `INTERVAL N DAY`.
   The latter counts calendar days incl. weekends, so 1-day windows after a
   Monday return Friday+Monday. See `load_sector_heat`.

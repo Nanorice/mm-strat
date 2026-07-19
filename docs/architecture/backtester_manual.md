@@ -5,9 +5,10 @@
 > The strategy (enter / exit / size / rebalance) is defined by engine parameters, NOT by the
 > model. Any model that can emit a `(date, ticker, score)` panel plugs into the same harness.
 >
-> This documents the *current* path. The older BackTrader event-driven `runner.py` +
-> parquet-feed stack (`docs/modules/manual/07_Backtest.md`) is legacy; the parquet infra was
-> removed. Use the vectorized engine for research/iteration.
+> Use the vectorized engine for research/iteration — it is optimistic by construction
+> (no cash-block, charitable stop fills), so **promotion verdicts come from the
+> BackTrader engine** (`runner.py` + `SEPAHybridV1`, DuckDB feeds — the old parquet-feed
+> infra was removed). Full module reference: [backtest.md](../modules/backtest.md).
 
 ## 1. Mental model — signal vs strategy
 

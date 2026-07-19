@@ -18,12 +18,12 @@
 Read the deep docs (below) for *why*; this is *where*.
 
 - **Engines (data I/O)** → `src/*_engine.py` (data, fundamental, shares, macro, edgar, earnings, company_profile). Each fetches and writes one raw table.
-- **Pipelines (compute)** → `src/feature_pipeline.py` (daily_features T1→T3), `src/regime_pipeline.py` (M03 regime).
+- **Pipelines (compute)** → `src/feature_pipeline.py` (t2_screener_features + t3_sepa_features), `src/regime_pipeline.py` (M03 regime).
 - **Managers (state/lifecycle)** → `src/managers/`: `view_manager.py` (DuckDB views), `screener_manager.py`, `sepa_watchlist_manager.py`, `pipeline_run_manager.py`.
 - **Orchestrator (workflow)** → `src/orchestrators/daily_pipeline_orchestrator.py` + `phase_registry.py` (stable phase IDs).
 - **Model registry** → `src/model_registry.py` (feature_catalog, model_feature_sets). NOT ViewManager.
 - **Backtest** → `src/backtest/` (`runner.py`, `sepa_strategy.py`, `universe_scorer.py`, `vectorized_backtest.py`).
-- **Data loaders** → `src/data_loader_duckdb.py` (`load_training_data_from_db`).
+- **Training data loader** → `src/evaluation/training_data_loader.py` (`load_training_data`, modes `dense`/`trades`). `src/data_loader_duckdb.py` (`DuckDBDataLoader`) is the legacy batch loader still referencing the retired `daily_features` name.
 - **CLI entrypoints** → `scripts/` (e.g. `run_daily_pipeline.py`, `create_duckdb_views.py`, `refresh_training_cache.py`, `build_model_card.py`).
 
 ## Deep docs — read on demand (progressive disclosure)
@@ -34,11 +34,13 @@ Read the deep docs (below) for *why*; this is *where*.
   false (`prob_elite` is not always a probability; `trend_c8` computes C1+C2+C6).
   If code and the glossary disagree, one is a bug — say which.
 
-These are large (~1k–1.5k lines each). Do NOT read whole; jump to the named section.
-- **Full methodology / replication** → `docs/architecture/comprehensive_methodology.md`
-  (sections: Feature Engineering, Market Regime M03, SEPA Session Mgmt, ML Methodology, Backtesting, Ops).
+- **Meta doc (system narrative + doc map + replication)** → `docs/architecture/comprehensive_methodology.md`
+  (~370 lines; audited 2026-07-18). It links into the per-module reference docs.
+- **Per-module reference** → `docs/modules/` — engines, feature_pipeline, regime_m03,
+  managers, orchestrator, model_registry, evaluation, backtest, dashboard. Read the
+  module doc before reading the module's code.
 - **Ops quick-reference / runbooks** → `docs/architecture/manual_for_me.md`
-  (sections: Phase Map, Key Tables, Audit System, Ticker Lifecycle, Model Training, Backtesting, Runbooks, Open TODOs).
+  (LARGE ~1.5k lines — jump to the named section: Phase Map, Key Tables, Audit System, Ticker Lifecycle, Model Training, Backtesting, Runbooks, Open TODOs).
 - **Pipeline diagram (source of truth)** → `docs/architecture/data_flow.mmd`
 - **Active research** → `docs/research/`, **session logs** → `docs/session_logs/sprint_N/`.
 
@@ -75,7 +77,7 @@ You are a Senior Engineer, not a text generator.
 - **Errors**: specific exceptions, never bare `except:`.
 
 ## Data Query Safety (DuckDB)
-- Scope queries to views (`v_d2_training`, `v_d3_deployment`, `daily_features`, `price_data`). Bare `SELECT *` or `COUNT(DISTINCT (ticker,date))` on raw tables OOMs the session.
+- Scope queries to views (`v_d2_training`, `v_d3_deployment`, `price_data`; the T3 table is `t3_sepa_features` — `daily_features` no longer exists). Bare `SELECT *` or `COUNT(DISTINCT (ticker,date))` on raw tables OOMs the session.
 - `price_data.volume` is `UBIGINT` — `CAST(volume AS BIGINT)` before any subtraction.
 - `adj_close`/`adj_factor`/`vwap` are 100% NULL — compute returns from `close`.
 

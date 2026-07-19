@@ -10,7 +10,8 @@ flowchart TD
         D2_CACHE[("d2_training_cache")]
         T3_SF[("t3_sepa_features")]
         T1_P[("price_data")]
-        MAT_SW[("screener_watchlist")]
+        V_SW(["screener_watchlist (VIEW)"])
+        V_D3L(["v_d3_lifecycle / shortlist / vip / screening"])
         T2_RS[("t2_regime_scores")]
         T2_RK[("t2_risk_scores")]
         T2_SF[("t2_screener_features")]
@@ -21,13 +22,21 @@ flowchart TD
     MODELS[("models")]
     D2_CACHE --> ML_TRAIN --> MODELS
 
-    %% ── Phase 7.4: Scoring ──
+    %% ── Phase 7.4: Scoring (+ shadow pass) ──
     subgraph P74 [Phase 7.4: Prod-Model Scoring]
-        P74S["ScoreEngine<br/>both cohorts · RAW softprob"]
+        P74S["ScoreEngine<br/>both cohorts · RAW softprob<br/>+ shadow model pass"]
         DP[("daily_predictions")]
-        P74S --> DP
+        SDV[("shadow_divergence")]
+        P74S --> DP & SDV
     end
     V_D3D & V_D3P & MODELS --> P74S
+
+    %% ── Phase 7.45–7.47: nightly materializers (ship in the slim DB) ──
+    subgraph P745_747 [Phase 7.45-7.47: Materializers]
+        P745["7.45 Weather Gauge"] --> WG[("weather_gauge")]
+        P746["7.46 Sector Breadth"] --> SB[("sector_breadth")]
+        P747["7.47 Portfolio NAV"] --> NAV[("nav_history")]
+    end
 
     %% ── Phase 8 + 10: Monitoring & Model Card ──
     %% NOTE: phase numbering jumps 8 -> 10 (no Phase 9). Historical: monitoring
@@ -51,8 +60,10 @@ flowchart TD
         R2[("Cloudflare R2")]
         P75 --> SLIM --> P76 --> R2
     end
-    %% Slim build copies the serving tables (predictions + regime/risk + watchlist)
-    DP & MAT_SW & T2_RS & T2_RK & T2_SF --> P75
+    %% Slim build copies serving tables + materializes the views (watchlist, v_d3_*)
+    DP & V_SW & V_D3L & T2_RS & T2_RK & T2_SF & WG & SB & NAV --> P75
+    %% Red Phase-1.6 plausibility gate withholds the publish (slim DB still builds)
+    P16{{"1.6 Plausibility Gate (upstream)"}} -.->|red = withhold publish| P76
 
     %% ── Downstream applications ──
     subgraph Downstream [Downstream Applications]

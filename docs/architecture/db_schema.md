@@ -1,8 +1,8 @@
 # DB schema reference (generated)
 
-> Auto-generated 2026-07-18 from `data/market_data.duckdb` `information_schema` by `scripts/gen_db_schema_doc.py`. **Do not hand-edit** — rerun the script. Row counts are `COUNT(*)` at generation time.
+> Auto-generated 2026-07-19 from `data/market_data.duckdb` `information_schema` by `scripts/gen_db_schema_doc.py`. **Do not hand-edit** — rerun the script. Row counts are `COUNT(*)` at generation time.
 
-40 base tables · 15 views. Column types are DuckDB types; `NULL?` = column is nullable (not whether it's actually populated — see memory for 100%-NULL columns like `adj_close`/`vwap`/`listing_date`).
+34 base tables · 15 views. Column types are DuckDB types; `NULL?` = column is nullable (not whether it's actually populated — see memory for 100%-NULL columns like `adj_close`/`vwap`/`listing_date`).
 
 ## Base tables
 
@@ -17,7 +17,7 @@
 | note | VARCHAR | yes |
 | created_at | TIMESTAMP | yes |
 
-### `cik_map`  — 10,764 rows
+### `cik_map`  — 10,777 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -47,7 +47,7 @@
 | discovered_at | TIMESTAMP | yes |
 | ticker_type | VARCHAR | yes |
 
-### `cone_cells`  — 6,345 rows
+### `cone_cells`  — 2,460 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -69,7 +69,7 @@
 | source_mtime | TIMESTAMP_NS | yes |
 | built_at | TIMESTAMP | yes |
 
-### `d2_training_cache`  — 38,648 rows
+### `d2_training_cache`  — 39,088 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -274,7 +274,7 @@
 | sl_pct | DOUBLE | yes |
 | cached_at | TIMESTAMP WITH TIME ZONE | yes |
 
-### `daily_predictions`  — 302,220 rows
+### `daily_predictions`  — 303,803 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -293,7 +293,7 @@
 | notes | VARCHAR | yes |
 | ingested_at | TIMESTAMP | yes |
 
-### `earnings_calendar`  — 17,030 rows
+### `earnings_calendar`  — 14,448 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -377,7 +377,7 @@
 | feature_version | VARCHAR | yes |
 | updated_at | TIMESTAMP WITH TIME ZONE | yes |
 
-### `fundamentals`  — 301,394 rows
+### `fundamentals`  — 301,376 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -427,31 +427,7 @@
 | period_type | VARCHAR | yes |
 | fetched_at | TIMESTAMP | yes |
 
-### `m02_breakout_targets`  — 16,136,189 rows
-
-| column | type | NULL? |
-|---|---|---|
-| ticker | VARCHAR | yes |
-| date | DATE | yes |
-| entry_close | DOUBLE | yes |
-| next_breakout_date | DATE | yes |
-| days_to_breakout | BIGINT | yes |
-| breakout_proximity | DOUBLE | yes |
-
-### `m02_prototype_targets`  — 16,120,397 rows
-
-| column | type | NULL? |
-|---|---|---|
-| ticker | VARCHAR | yes |
-| date | DATE | yes |
-| entry_close | DOUBLE | yes |
-| horizon | INTEGER | yes |
-| has_full_window | BOOLEAN | yes |
-| fwd_mfe_pct | DOUBLE | yes |
-| fwd_mae_pct | DOUBLE | yes |
-| fwd_ret_pct | DOUBLE | yes |
-
-### `macro_data`  — 214,751 rows
+### `macro_data`  — 250,901 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -471,7 +447,7 @@
 | feature_group | VARCHAR | yes |
 | ordinal | INTEGER | yes |
 
-### `models`  — 19 rows
+### `models`  — 17 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -513,7 +489,7 @@
 | n_open | INTEGER | yes |
 | updated_at | TIMESTAMP | yes |
 
-### `pipeline_error_log`  — 17,256 rows
+### `pipeline_error_log`  — 16,480 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -525,7 +501,7 @@
 | error_detail | VARCHAR | yes |
 | occurred_at | TIMESTAMP | yes |
 
-### `pipeline_runs`  — 817 rows
+### `pipeline_runs`  — 703 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -541,7 +517,7 @@
 | started_at | TIMESTAMP | yes |
 | completed_at | TIMESTAMP | yes |
 
-### `price_data`  — 16,194,968 rows
+### `price_data`  — 16,194,487 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -572,7 +548,7 @@
 | notes | VARCHAR | yes |
 | created_at | TIMESTAMP | yes |
 
-### `screener_membership`  — 11,221 rows
+### `screener_membership`  — 11,344 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -584,25 +560,6 @@
 | avg_volume_20d | DOUBLE | yes |
 | market_cap | DOUBLE | yes |
 | consec_fail_days | INTEGER | yes |
-
-### `screener_watchlist`  — 38,648 rows
-
-| column | type | NULL? |
-|---|---|---|
-| ticker | VARCHAR | yes |
-| company_name | VARCHAR | yes |
-| sector | VARCHAR | yes |
-| industry | VARCHAR | yes |
-| market_cap | DOUBLE | yes |
-| entry_date | DATE | yes |
-| entry_price | DOUBLE | yes |
-| exit_date | DATE | yes |
-| status | VARCHAR | yes |
-| close_price | DOUBLE | yes |
-| price_date | DATE | yes |
-| pct_return | DOUBLE | yes |
-| days_held | INTEGER | yes |
-| refreshed_at | TIMESTAMP WITH TIME ZONE | yes |
 
 ### `sector_breadth`  — 169 rows
 
@@ -628,50 +585,18 @@
 | breakout_added_5d | BIGINT | yes |
 | ret_hist | VARCHAR | yes |
 
-### `sepa_watchlist`  — 35,884 rows
+### `sepa_watchlist`  — 39,088 rows
 
 | column | type | NULL? |
 |---|---|---|
 | ticker | VARCHAR | no |
 | entry_date | DATE | no |
 | exit_date | DATE | yes |
-| cooldown_end | DATE | yes |
 | session_id | INTEGER | no |
 | trend_ok | BOOLEAN | yes |
 | breakout_ok | BOOLEAN | yes |
 | status | VARCHAR | no |
 | updated_at | TIMESTAMP | yes |
-
-### `shadow_action`  — 214 rows
-
-| column | type | NULL? |
-|---|---|---|
-| book_id | VARCHAR | no |
-| strategy | VARCHAR | no |
-| date | DATE | no |
-| ticker | VARCHAR | no |
-| kind | VARCHAR | no |
-| shares | INTEGER | yes |
-| price | DOUBLE | yes |
-| reason | VARCHAR | yes |
-| pnl_pct | DOUBLE | yes |
-
-### `shadow_book`  — 5 rows
-
-| column | type | NULL? |
-|---|---|---|
-| book_id | VARCHAR | no |
-| strategy | VARCHAR | no |
-| as_of | DATE | no |
-| ticker | VARCHAR | no |
-| entry_date | DATE | yes |
-| entry_price | DOUBLE | yes |
-| remaining_shares | INTEGER | yes |
-| current_stop | DOUBLE | yes |
-| target1 | DOUBLE | yes |
-| target2 | DOUBLE | yes |
-| tranche1_sold | BOOLEAN | yes |
-| tranche2_sold | BOOLEAN | yes |
 
 ### `shadow_divergence`  — 1 rows
 
@@ -687,7 +612,7 @@
 | n_disagreements | INTEGER | yes |
 | computed_at | TIMESTAMP | yes |
 
-### `shares_history`  — 388,255 rows
+### `shares_history`  — 380,839 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -696,7 +621,7 @@
 | shares_outstanding | BIGINT | yes |
 | updated_at | TIMESTAMP | yes |
 
-### `t1_macro`  — 6,664 rows
+### `t1_macro`  — 6,669 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -712,7 +637,7 @@
 | vix_close | DOUBLE | yes |
 | updated_at | TIMESTAMP | yes |
 
-### `t2_regime_scores`  — 8,398 rows
+### `t2_regime_scores`  — 8,399 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -727,7 +652,7 @@
 | model_version | VARCHAR | yes |
 | updated_at | TIMESTAMP | yes |
 
-### `t2_risk_scores`  — 5,169 rows
+### `t2_risk_scores`  — 5,170 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -755,7 +680,7 @@
 | model_version | VARCHAR | yes |
 | updated_at | TIMESTAMP | yes |
 
-### `t2_screener_features`  — 9,854,505 rows
+### `t2_screener_features`  — 9,854,872 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -828,7 +753,7 @@
 | close | DOUBLE | yes |
 | volume | UBIGINT | yes |
 
-### `t3_sepa_features`  — 9,404,076 rows
+### `t3_sepa_features`  — 9,406,883 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -977,190 +902,6 @@
 | m03_regime_vol | DOUBLE | yes |
 | ingested_at | TIMESTAMP | yes |
 
-### `t3_training_cache`  — 9,360,773 rows
-
-| column | type | NULL? |
-|---|---|---|
-| ticker | VARCHAR | yes |
-| date | DATE | yes |
-| feature_version | VARCHAR | yes |
-| open | DOUBLE | yes |
-| high | DOUBLE | yes |
-| low | DOUBLE | yes |
-| close | DOUBLE | yes |
-| volume | BIGINT | yes |
-| sma_20 | DOUBLE | yes |
-| sma_50 | DOUBLE | yes |
-| sma_150 | DOUBLE | yes |
-| sma_200 | DOUBLE | yes |
-| sma_200_lag20 | DOUBLE | yes |
-| price_vs_sma_50 | DOUBLE | yes |
-| price_vs_sma_150 | DOUBLE | yes |
-| price_vs_sma_200 | DOUBLE | yes |
-| close_above_sma200 | BOOLEAN | yes |
-| price_vs_spy | DOUBLE | yes |
-| price_vs_spy_ma63 | DOUBLE | yes |
-| rs_rating | DOUBLE | yes |
-| rs | DOUBLE | yes |
-| rs_ma | DOUBLE | yes |
-| rs_line_log | DOUBLE | yes |
-| rs_line_delta | DOUBLE | yes |
-| rs_line_uptrend | BOOLEAN | yes |
-| high_52w | DOUBLE | yes |
-| low_52w | DOUBLE | yes |
-| dist_from_52w_high | DOUBLE | yes |
-| dist_from_52w_low | DOUBLE | yes |
-| pct_from_high_52w | DOUBLE | yes |
-| pct_above_low_52w | DOUBLE | yes |
-| high_20d | DOUBLE | yes |
-| lowest_low_20d | DOUBLE | yes |
-| highest_high_20d | DOUBLE | yes |
-| dist_from_20d_high | DOUBLE | yes |
-| dist_from_20d_low | DOUBLE | yes |
-| vol_avg_20 | DOUBLE | yes |
-| vol_avg_50 | DOUBLE | yes |
-| vol_ratio | DOUBLE | yes |
-| dry_up_volume | DOUBLE | yes |
-| atr_20d | DOUBLE | yes |
-| natr | DOUBLE | yes |
-| volatility_20d | DOUBLE | yes |
-| vcp_ratio | DOUBLE | yes |
-| consolidation_width | DOUBLE | yes |
-| trend_ok | BOOLEAN | yes |
-| breakout_ok | BOOLEAN | yes |
-| RS_Universe_Rank | DOUBLE | yes |
-| RS_Sector_Rank | DOUBLE | yes |
-| RS_vs_Sector | DOUBLE | yes |
-| Sector_Momentum | DOUBLE | yes |
-| RS_Industry_Rank | DOUBLE | yes |
-| RS_vs_Industry | DOUBLE | yes |
-| Industry_Momentum | DOUBLE | yes |
-| alpha001 | DOUBLE | yes |
-| alpha002 | DOUBLE | yes |
-| alpha004 | DOUBLE | yes |
-| alpha008 | DOUBLE | yes |
-| alpha011 | DOUBLE | yes |
-| alpha013 | DOUBLE | yes |
-| alpha015 | DOUBLE | yes |
-| alpha019 | DOUBLE | yes |
-| alpha060 | DOUBLE | yes |
-| ema_8 | DOUBLE | yes |
-| ema_21 | DOUBLE | yes |
-| ema_50 | DOUBLE | yes |
-| ema_100 | DOUBLE | yes |
-| ema_200 | DOUBLE | yes |
-| rs_line_lag_delta | DOUBLE | yes |
-| mom_21d | DOUBLE | yes |
-| mom_63d | DOUBLE | yes |
-| mom_126d | DOUBLE | yes |
-| mom_189d | DOUBLE | yes |
-| mom_252d | DOUBLE | yes |
-| rsi_14 | DOUBLE | yes |
-| sma_50_slope | DOUBLE | yes |
-| vol_ma20 | DOUBLE | yes |
-| vol_ma50 | DOUBLE | yes |
-| vol_ratio_50 | DOUBLE | yes |
-| dollar_volume_avg_20 | DOUBLE | yes |
-| turnover | DOUBLE | yes |
-| turnover_ma20 | DOUBLE | yes |
-| atr_14 | DOUBLE | yes |
-| return_1d | DOUBLE | yes |
-| return_5d | DOUBLE | yes |
-| return_20d | DOUBLE | yes |
-| return_60d | DOUBLE | yes |
-| breakout | INTEGER | yes |
-| is_green_day | INTEGER | yes |
-| green_days_ratio_20d | DOUBLE | yes |
-| adr_20d | DOUBLE | yes |
-| rs_velocity | DOUBLE | yes |
-| volume_acceleration | DOUBLE | yes |
-| breakout_momentum | DOUBLE | yes |
-| consolidation_duration | DOUBLE | yes |
-| price_momentum_curve | DOUBLE | yes |
-| volume_velocity_2d | DOUBLE | yes |
-| price_accel_10d | DOUBLE | yes |
-| immediate_thrust | DOUBLE | yes |
-| price_vs_sma_50_pct_chg | DOUBLE | yes |
-| price_vs_sma_150_pct_chg | DOUBLE | yes |
-| price_vs_sma_200_pct_chg | DOUBLE | yes |
-| rs_pct_chg | DOUBLE | yes |
-| rs_ma_pct_chg | DOUBLE | yes |
-| dry_up_volume_pct_chg | DOUBLE | yes |
-| natr_pct_chg | DOUBLE | yes |
-| atr_pct_chg | DOUBLE | yes |
-| vcp_ratio_pct_chg | DOUBLE | yes |
-| consolidation_width_pct_chg | DOUBLE | yes |
-| rsi_14_pct_chg | DOUBLE | yes |
-| dist_from_52w_high_pct_chg | DOUBLE | yes |
-| dist_from_52w_low_pct_chg | DOUBLE | yes |
-| low_52w_pct_chg | DOUBLE | yes |
-| high_52w_pct_chg | DOUBLE | yes |
-| dist_from_20d_high_pct_chg | DOUBLE | yes |
-| dist_from_20d_low_pct_chg | DOUBLE | yes |
-| lowest_low_20d_pct_chg | DOUBLE | yes |
-| highest_high_20d_pct_chg | DOUBLE | yes |
-| ema_8_21_ratio | DOUBLE | yes |
-| ema_21_50_ratio | DOUBLE | yes |
-| ema_50_100_ratio | DOUBLE | yes |
-| mom_slope_21_63 | DOUBLE | yes |
-| mom_slope_63_126 | DOUBLE | yes |
-| sma_ratio_150_200 | DOUBLE | yes |
-| gap_risk_ratio | DOUBLE | yes |
-| price_vs_sma_50_vol_adj | DOUBLE | yes |
-| mom_21d_vol_adj | DOUBLE | yes |
-| alpha006 | DOUBLE | yes |
-| alpha009 | DOUBLE | yes |
-| alpha012 | DOUBLE | yes |
-| alpha041 | DOUBLE | yes |
-| alpha046 | DOUBLE | yes |
-| alpha049 | DOUBLE | yes |
-| alpha051 | DOUBLE | yes |
-| alpha054 | DOUBLE | yes |
-| alpha101 | DOUBLE | yes |
-| m03_score | DOUBLE | yes |
-| m03_pillar_trend | DOUBLE | yes |
-| m03_pillar_liq | DOUBLE | yes |
-| m03_pillar_risk | DOUBLE | yes |
-| m03_delta_5d | DOUBLE | yes |
-| m03_delta_20d | DOUBLE | yes |
-| m03_regime_vol | DOUBLE | yes |
-| ingested_at | TIMESTAMP | yes |
-| sector | VARCHAR | yes |
-| industry | VARCHAR | yes |
-| ticker_type | VARCHAR | yes |
-| shares_outstanding | BIGINT | yes |
-| revenue | DOUBLE | yes |
-| net_income | DOUBLE | yes |
-| eps_diluted | DOUBLE | yes |
-| total_assets | DOUBLE | yes |
-| total_equity | DOUBLE | yes |
-| revenue_growth_yoy | DOUBLE | yes |
-| eps_growth_yoy | DOUBLE | yes |
-| net_income_growth_yoy | DOUBLE | yes |
-| revenue_cagr_3y | DOUBLE | yes |
-| eps_accel | DOUBLE | yes |
-| revenue_accel | DOUBLE | yes |
-| eps_stability_score | DOUBLE | yes |
-| earnings_quality_score | DOUBLE | yes |
-| debt_to_equity | DOUBLE | yes |
-| current_ratio | DOUBLE | yes |
-| quick_ratio | DOUBLE | yes |
-| gross_margin | DOUBLE | yes |
-| operating_margin | DOUBLE | yes |
-| net_margin | DOUBLE | yes |
-| gross_margin_trend | DOUBLE | yes |
-| roe | DOUBLE | yes |
-| roa | DOUBLE | yes |
-| fcf_margin | DOUBLE | yes |
-| inventory_growth_yoy | DOUBLE | yes |
-| inventory_vs_sales_spread | DOUBLE | yes |
-| days_since_report | INTEGER | yes |
-| pe_ratio | DOUBLE | yes |
-| ps_ratio | DOUBLE | yes |
-| pb_ratio | DOUBLE | yes |
-| peg_adjusted | DOUBLE | yes |
-| cached_at | TIMESTAMP WITH TIME ZONE | yes |
-
 ### `table_write_log`  — 9 rows
 
 | column | type | NULL? |
@@ -1204,7 +945,7 @@
 | active | BOOLEAN | no |
 | updated_at | TIMESTAMP | yes |
 
-### `weather_gauge`  — 5,911 rows
+### `weather_gauge`  — 5,917 rows
 
 | column | type | NULL? |
 |---|---|---|
@@ -1218,6 +959,25 @@
 | deploy_posture | VARCHAR | yes |
 
 ## Views
+
+### `screener_watchlist`
+
+| column | type | NULL? |
+|---|---|---|
+| ticker | VARCHAR | yes |
+| company_name | VARCHAR | yes |
+| sector | VARCHAR | yes |
+| industry | VARCHAR | yes |
+| market_cap | DOUBLE | yes |
+| entry_date | DATE | yes |
+| entry_price | DOUBLE | yes |
+| exit_date | DATE | yes |
+| status | VARCHAR | yes |
+| close_price | DOUBLE | yes |
+| price_date | DATE | yes |
+| pct_return | DOUBLE | yes |
+| days_held | INTEGER | yes |
+| refreshed_at | TIMESTAMP | yes |
 
 ### `v_d1_candidates`
 
@@ -2459,24 +2219,6 @@
 | low | DOUBLE | yes |
 | close | DOUBLE | yes |
 | volume | UBIGINT | yes |
-
-### `v_screener_dashboard`
-
-| column | type | NULL? |
-|---|---|---|
-| ticker | VARCHAR | yes |
-| company_name | VARCHAR | yes |
-| sector | VARCHAR | yes |
-| industry | VARCHAR | yes |
-| market_cap | DOUBLE | yes |
-| entry_date | DATE | yes |
-| entry_price | DOUBLE | yes |
-| exit_date | DATE | yes |
-| status | VARCHAR | yes |
-| close_price | DOUBLE | yes |
-| price_date | DATE | yes |
-| pct_return | DOUBLE | yes |
-| days_held | INTEGER | yes |
 
 ### `v_sepa_candidates`
 

@@ -18,7 +18,11 @@ Maps each node in [`data_flow.mmd`](data_flow.mmd) to the Python module that pro
 | Phase 1.5 — Price Quality Gate | `src/orchestrators/daily_pipeline_orchestrator.py` · `_run_phase_1_5_quality_gate()` |
 | Phase 6 — Views | `src/managers/view_manager.py` · `ViewManager.create_all()` |
 | Phase 7 — Cache Refresh | `src/managers/view_manager.py` · `ViewManager.refresh_cache()` |
-| Phase 7.4 — Prod-Model Scoring | `src/evaluation/score_engine.py` · `ScoreEngine`<br>`src/evaluation/prediction_logger.py` · `log_daily_predictions()` |
+| Phase 1.6 — Plausibility Gate | `src/orchestrators/daily_pipeline_orchestrator.py` · `_run_phase_1_6_plausibility_gate()` (red gate withholds the 7.6 publish) |
+| Phase 7.4 — Prod-Model Scoring | `src/evaluation/score_engine.py` · `ScoreEngine`<br>`src/evaluation/prediction_logger.py` · `log_daily_predictions()`<br>shadow pass: `src/evaluation/shadow_compare.py` |
+| Phase 7.45 — Weather Gauge | `src/weather_engine.py` · `WeatherEngine.refresh()` |
+| Phase 7.46 — Sector Breadth | `src/sector_breadth_engine.py` · `SectorBreadthEngine.refresh()` |
+| Phase 7.47 — Portfolio NAV | `src/managers/portfolio_manager.py` · `PortfolioManager.snapshot_nav()` |
 | Phase 7.5 — Slim DB Build | `scripts/build_dashboard_db.py` |
 | Phase 7.6 — R2 Sync | `src/orchestrators/daily_pipeline_orchestrator.py` · `_run_phase_7_6_r2_sync()` |
 | Phase 8 — Monitoring | `src/orchestrators/daily_pipeline_orchestrator.py` |
@@ -37,13 +41,15 @@ Maps each node in [`data_flow.mmd`](data_flow.mmd) to the Python module that pro
 | `macro_data` | 1.4 | FRED indicators + VIX (read by 5F risk) |
 | `t1_macro` | 1.4 | SPY/QQQ/VIX OHLCV (read by Phase 3 SPY benchmark + Phase 4 regime) |
 | `screener_membership` | 2 | Append-only event log |
-| `t2_screener_features` | 3 | ~9.6M rows; full investable universe |
+| `t2_screener_features` | 3 | ~9.9M rows; full investable universe |
 | `t2_regime_scores` | 4 | M03 score + pillars |
 | `t2_risk_scores` | 4 | 5-Factor exposure target + z-scores |
 | `sepa_watchlist` | 4b | T3 universe gate; one row per SEPA session |
 | `t3_sepa_features` | 5 | ~9.4M rows; single ML source of truth |
-| `screener_watchlist` | 6 | Materialised `v_screener_dashboard` |
+| `screener_watchlist` | 6 | **VIEW** over `sepa_watchlist` since 2026-07-18 (company info + realized returns); materialised into the slim DB by 7.5 |
 | `d2_training_cache` | 7 | Materialised `v_d2_training` |
+| `shadow_divergence` | 7.4 | prod-vs-shadow ranking-diff verdicts |
+| `weather_gauge` / `sector_breadth` / `nav_history` | 7.45–7.47 | nightly materializers, ship in the slim DB |
 | `models` | ML | Registry; written by `ModelRegistry.register()` |
 | `daily_predictions` | 7.4 | RAW-softprob prod-model scores per trading day; both cohorts (breakout + pre-breakout) |
 | `dashboard.duckdb` | 7.5 | Slim serving DB (subset of tables); copied to R2 for Streamlit Cloud |

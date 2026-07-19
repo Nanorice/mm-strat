@@ -148,7 +148,7 @@ S-series, and experiment arms. Not a class hierarchy: configs are
 - `to_fingerprint(kwargs: Dict[str, Any]) -> str` — canonical label (round-trips with parse).
 - `get(name: str) -> StrategyDef`
 - `by_status(status: str) -> List[StrategyDef]`
-- `STRATEGIES: Dict[str, StrategyDef]` — the registry. Current champion = `champion` / `E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5`.
+- `STRATEGIES: Dict[str, StrategyDef]` — the registry. Current champion = `champion_trail_spygate` (2026-07-10): champion selection × trend-exit-only (`disable_tranches`, independent SMA50 exit, 15% stop) + SPY-200d ex-ante deploy gate (gate dict injected per-window, not baked). The 2026-07-05 tranche champion (`champion` / `E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5`) was demoted to candidate — the trail+gate arm beat it on every cone metric (floor +0.68, median +0.29, %neg −5pp).
 
 **Fingerprint scheme** (`<Entry>_<Stop>_<TP>_<Selection>`): `E1.d0` immediate entry / `E2.dN` delayed · `X1.slNN` whole-% stop · `Xt.t1_NN` tranche T1 target · `X3.smaNN` decoupled SMA trend exit · `S0.topN` top-N by score · `skipK` selection_skip_top. Only components a config sets appear.
 
@@ -303,15 +303,30 @@ new `StrategyDef`. The knobs below are the ones the registry sets.
 | `sma_exit_period` | `int` | Trend-exit SMA (champion = 50). |
 | `sma_exit_independent` | `bool` | `True` = decoupled SMA (close<SMA ⇒ out), beats tranche-gated. Champion = `True`. |
 
-> The champion (`E1.d0_X1.sl15_Xt.t1_10_X3.sma50_S0.top5`) is a **stop×TP
-> interaction**: the wide 15% stop lets winners breathe; the early +10% T1 banks
-> the first pop before the wide stop gives it back. `sl15` and `tpTight` each
-> *alone* underperform the old seed — together they win (IS 1.10, OOS-gated 1.47).
+> The 2026-07-05 tranche champion was a **stop×TP interaction**: the wide 15% stop
+> lets winners breathe; the early +10% T1 banks the first pop before the wide stop
+> gives it back (`sl15`/`tpTight` each *alone* underperform; together IS 1.10,
+> OOS-gated 1.47). The R3 sweep then showed removing the tranche TP entirely
+> (`disable_tranches` + independent SMA50 trend exit) harvests the tail better
+> (+0.21 median), and stacking the SPY-200d deploy gate on the trail exit won on
+> all cone metrics → current champion `champion_trail_spygate` (2026-07-10).
+> With tranches disabled, `min_target1_pct` is inert; zeroing target legs is NOT
+> an off-switch (`disable_tranches` is — see the comment in `strategy_registry`).
+
+### Engine fidelity (which result you may believe)
+
+- **Vectorized engine is optimistic by construction**: no cash-block, and stops
+  are booked at `stop_level` even on gap-down opens (fix `min(stop_level, open)`
+  known but not applied). Use it for *ranking* arms; **promote only on
+  BackTrader** — configs that win vec have failed BackTrader (wash) before.
+- Cone verdicts are **start-date sweeps**, never a single P&L
+  (`run_starttime_sweep.py`, `run_cone_gate.py`); the reference cone has median
+  Sharpe ≈ 0.47 with 33% negative cells.
 
 ## 8. Productionisation workflow (registry → gate → promote)
 
 The 2026-07-05 backtest productionisation
-(`docs/architecture/backtest_productionisation_plan.md`) folded the ad-hoc
+(`docs/session_logs/sprint_13/plans/backtest_productionisation_plan.md`) folded the ad-hoc
 strategy-exploration harness into the prod suite behind clean seams. **Phases 1–3
 + the G7 fix are shipped; Phase 4 is planned (below).**
 
@@ -342,7 +357,7 @@ round-trip), `tests/test_oos_gate.py` (prod gate reproduces recorded Sharpe),
 
 Re-scoped after a design review into two independent tracks. **Full spec + gap
 analysis + step-by-step plan live in
-`docs/architecture/backtest_productionisation_plan.md` §Phase 4** — this is the
+`docs/session_logs/sprint_13/plans/backtest_productionisation_plan.md` §Phase 4** — this is the
 summary.
 
 - **Thing 2 — start-time sweep ✅ SHIPPED (all runs done).**
@@ -379,6 +394,10 @@ summary.
 
 ## 9. Maintenance Log
 
+- **2026-07-18** — Doc refresh in the docs overhaul: champion updated to
+  `champion_trail_spygate` (2026-07-10 promotion), added §7 engine-fidelity
+  caveats (vec optimism, cone-not-point verdicts). Productionisation plan file
+  moved to `docs/session_logs/sprint_13/plans/`.
 - **2026-07-05 (cont.)** — Phase 4 shipped: added `forward_engine` (synchronous
   next-open step-engine + `build_price_frame`) and `scripts/run_shadow_book.py`
   (`shadow_book`/`shadow_action` tables); `run_starttime_sweep.py` full runs done

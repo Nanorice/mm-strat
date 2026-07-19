@@ -26,6 +26,8 @@ flowchart TD
 
         %% 1.5 quality gate is part of ingestion: reads price_data, may retry
         P15{{"1.5 Price Quality Gate"}}
+        %% 1.6 plausibility gate: FAIL ceilings; red = R2 publish withheld (serving side)
+        P16{{"1.6 Plausibility Gate"}}
     end
 
     API_YF --> P1_PRICE --> T1_P
@@ -35,6 +37,7 @@ flowchart TD
     API_YF & API_FRED --> P1_MACRO
     P1_MACRO --> T1_M & T1_TM
     T1_P --> P15
+    T1_P & T1_S --> P16
 
     %% ── Phase 2: Screener Membership ──
     subgraph P2_Screener [Phase 2: Screener]
@@ -87,17 +90,20 @@ flowchart TD
         V_D2T(["v_d2_training"])
         V_D3D(["v_d3_deployment"])
         V_D3P(["v_d3_prebreakout"])
-        V_SD(["v_screener_dashboard"])
-        MAT_SW[("screener_watchlist")]
+        V_SW(["screener_watchlist<br/>(VIEW since 2026-07-18)"])
+        V_D3L(["v_d3_lifecycle / shortlist / vip / screening"])
 
-        V_D1 --> V_D2F & V_D2H & V_SD
+        V_D1 --> V_D2F & V_D2H
         V_D2F --> V_D2T & V_D3D & V_D3P & V_D2H
         V_D2H --> V_D2T
-        V_SD --> MAT_SW
+        V_SW --> V_D3L
+        V_D3P --> V_D3L
     end
     %% Phase 6 inputs: T3 features + the two combine-views + fundamentals
+    %% screener_watchlist is a display VIEW over sepa_watchlist (2026-07-18 merge)
     T3_SF & VPC & VSC & T1_F --> P6
-    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_D3P & V_SD
+    SW --> V_SW
+    P6 --> V_SEPA & V_D1 & V_D2F & V_D2H & V_D2T & V_D3D & V_D3P & V_SW & V_D3L
 
     %% ── Phase 7: Cache Refresh ──
     subgraph P7_Cache [Phase 7: Cache]
