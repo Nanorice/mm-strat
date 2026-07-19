@@ -46,7 +46,19 @@ ASSET_DIRS: list[tuple[Path, str, tuple[str, ...]]] = [
     # the weights are filtered by name in upload_asset_dir so live-scoring can't
     # be resurrected on the serving host.
     (PROJECT_ROOT / "models",             "model_artifacts", (".png", ".html", ".csv", ".txt", ".md", ".json")),
+    # Cone fan: one equity curve per sweep cell. ~2.5k files / 22 MB, and they are
+    # FROZEN research artifacts — the ETag skip above makes this a one-time cost,
+    # ~0 MB/day after. Without it the remote cone renders no fan (the page says so).
+    # Deliberately equity-only: trades.parquet + rejections.parquet are another
+    # 78 MB and only feed the per-cell zoom, which stays dev-box-local
+    # (cone_and_studio_design.md §4). If the zoom is ever wanted remotely, ship a
+    # materialized rejection SUMMARY in the slim DB, not 125k raw rows per cell.
+    (PROJECT_ROOT / "data" / "selection_sweep" / "starttime", "sweep_starttime", (".parquet",)),
 ]
+
+# Filenames allowed through for sweep_starttime — the suffix filter alone would
+# pull trades/rejections too.
+SWEEP_KEEP = {"equity.parquet"}
 
 
 def _r2_client():
@@ -140,9 +152,13 @@ def upload_asset_dir(local_dir: Path, r2_prefix: str, suffixes: tuple[str, ...],
     # model.json is the trained weights — never ship it (keeps the serving host
     # read-only and stops live-scoring creeping back). All other .json (cards,
     # results, diffs) are fine.
+    # The sweep tree is suffix-uniform (.parquet), so it needs a name allowlist on
+    # top: equity feeds the cone fan, trades/rejections are 78 MB of dev-box zoom.
+    keep = SWEEP_KEEP if r2_prefix == "sweep_starttime" else None
     files = sorted(
         f for f in local_dir.rglob("*")
         if f.is_file() and f.suffix.lower() in suffixes and f.name != "model.json"
+        and (keep is None or f.name in keep)
     )
     if not files:
         print(f"  [SKIP] {local_dir.name}/ — no matching files")

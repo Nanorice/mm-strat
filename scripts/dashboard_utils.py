@@ -206,6 +206,9 @@ _ASSET_DIRS: list[tuple[Path, str]] = [
     (ROOT / "data" / "audit_reports", "audit_reports"),
     (ROOT / "docs" / "reports",       "docs_reports"),
     (ROOT / "models",                 "model_artifacts"),
+    # Per-cell equity curves for the Backtest Studio cone fan (~2.5k files/22 MB,
+    # equity.parquet only — see sync_dashboard_db.SWEEP_KEEP).
+    (ROOT / "data" / "selection_sweep" / "starttime", "sweep_starttime"),
 ]
 
 
