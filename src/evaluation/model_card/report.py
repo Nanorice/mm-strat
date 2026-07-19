@@ -33,6 +33,10 @@ STYLE = """
 <style>
 :root { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: #222; }
 body { max-width: 1200px; margin: 32px auto; padding: 0 24px; line-height: 1.45; }
+/* The card renders standalone AND inside a narrow Streamlit iframe. Without this
+   the 1200px body just overflows the frame and clips. */
+@media (max-width: 1248px) { body { margin: 16px 0; padding: 0 12px; } }
+table.grid { display: block; overflow-x: auto; }
 h1, h2, h3 { color: #1a1a1a; }
 h1 { border-bottom: 2px solid #1f77b4; padding-bottom: 8px; }
 .section { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px 20px; margin: 18px 0; }
@@ -165,11 +169,17 @@ def _chart_html(table_name: str, title: str, rows: list[dict]) -> str:
     else:
         return _table_html(title, rows)
 
+    # autosize + responsive: the card is viewed standalone and in a Streamlit
+    # iframe, so a fixed pixel width clips in the narrower one.
+    layout.setdefault("autosize", True)
+    layout.setdefault("margin", {"l": 60, "r": 30, "t": 50, "b": 50})
+
     return f"""
     <h4>{html.escape(title)}</h4>
-    <div id="{div_id}"></div>
+    <div id="{div_id}" style="width:100%"></div>
     <script>
-      Plotly.newPlot('{div_id}', {json.dumps(data)}, {json.dumps(layout)});
+      Plotly.newPlot('{div_id}', {json.dumps(data)}, {json.dumps(layout)},
+                     {{responsive: true, displayModeBar: false}});
     </script>
     """
 

@@ -306,27 +306,48 @@ def render_live_monitoring() -> None:
     date_pos = {d: i for i, d in enumerate(sorted(df["prediction_date"].unique()))}
     df["dpos"] = df["prediction_date"].map(date_pos)
 
+    # Colour is a scarce channel: a 50-hue qualitative palette across every name
+    # makes the chart unreadable and implies a distinction between names that
+    # doesn't exist. Only names that PERSIST (appear on >= min_days distinct days)
+    # earn a colour — they're the ones with a trajectory worth tracing. One-day
+    # names still render, in grey, so the pool isn't silently hidden.
+    min_days = st.slider(
+        "Colour names appearing on at least N days", 2, 10, 3, key="ml_rank_persist",
+        help="Transient names stay grey — a line needs at least two days to exist. "
+             "Raise this to thin a crowded chart.")
+
+    day_count = df.groupby("ticker")["dpos"].nunique()
+    persistent = [t for t in day_count[day_count >= min_days].index]
+
     fig = go.Figure()
-    palette = px.colors.qualitative.Alphabet + px.colors.qualitative.Light24
-    for i, (tk, g) in enumerate(df.groupby("ticker", sort=False)):
+    # Safe (colour-blind friendly) qualitative set, applied to few names.
+    palette = px.colors.qualitative.Safe
+    color_of = {tk: palette[i % len(palette)] for i, tk in enumerate(persistent)}
+    TRANSIENT = "rgba(150,150,150,0.35)"
+
+    for tk, g in df.groupby("ticker", sort=False):
         g = g.sort_values("dpos")
-        color = palette[i % len(palette)]
+        is_persistent = tk in color_of
+        color = color_of.get(tk, TRANSIENT)
         for _, run in g.groupby((g["dpos"].diff() != 1).cumsum()):
             fig.add_trace(go.Scatter(
                 x=run["prediction_date"], y=run["rank_within_day"],
                 mode="lines+markers" if len(run) >= 2 else "markers",
                 name=tk, legendgroup=tk, showlegend=False,
-                line=dict(color=color, width=1.6),
-                marker=dict(color=color, size=6),
+                line=dict(color=color, width=1.8 if is_persistent else 1.0),
+                marker=dict(color=color, size=6 if is_persistent else 4),
                 customdata=run[["score"]],
                 hovertemplate=(f"<b>{tk}</b><br>%{{x|%Y-%m-%d}}<br>rank %{{y}}"
                                "<br>score %{customdata[0]:.3f}<extra></extra>"),
             ))
-        fig.add_trace(go.Scatter(
-            x=[g["prediction_date"].iloc[-1]], y=[g["rank_within_day"].iloc[-1]],
-            mode="text", text=[tk], textposition="middle right",
-            textfont=dict(size=9, color=color), showlegend=False, hoverinfo="skip",
-        ))
+        # Only label the coloured names — labelling every transient name is what
+        # made the right margin unreadable.
+        if is_persistent:
+            fig.add_trace(go.Scatter(
+                x=[g["prediction_date"].iloc[-1]], y=[g["rank_within_day"].iloc[-1]],
+                mode="text", text=[tk], textposition="middle right",
+                textfont=dict(size=9, color=color), showlegend=False, hoverinfo="skip",
+            ))
 
     fig.update_layout(
         height=520, margin=dict(l=30, r=60, t=20, b=30),
@@ -337,6 +358,7 @@ def render_live_monitoring() -> None:
     st.plotly_chart(fig, use_container_width=True)
     st.caption(
         f"{df['ticker'].nunique()} distinct names · {len(df):,} name-days · "
+        f"**{len(persistent)} coloured** (≥{min_days} days), the rest grey · "
         f"model `{version_id}` · score = RAW {metric} (a rank, not odds). "
         + _COHORT_NOTE.get(cohort, "")
     )

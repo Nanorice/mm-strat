@@ -95,7 +95,14 @@ def discover_runs() -> pd.DataFrame:
             "win_rate": summary.get("win_rate"),
             "_path": str(d),
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    # Newest first. The scan is alphabetical, which put a May run at index 0 and
+    # made the selectbox default to a stale run — every panel below the selector
+    # then rendered that run.
+    return df.sort_values("created_at", ascending=False, na_position="last") \
+             .reset_index(drop=True)
 
 
 @st.cache_data(ttl=60)

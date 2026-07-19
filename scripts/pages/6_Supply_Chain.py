@@ -25,6 +25,7 @@ sector×sector matrix) rendered with the charting lib every other page already u
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -32,6 +33,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
@@ -86,13 +88,184 @@ def _chord_matrix(corr: pd.DataFrame) -> tuple[list[str], pd.DataFrame]:
     return order, m
 
 
+def _render_chord(order: list[str], m: pd.DataFrame, counts: pd.Series,
+                  n_days: int) -> None:
+    """The chord diagram — the format the Tier-0 mock locked.
+
+    Hand-rolled SVG, no d3. The mock loads d3 from a CDN and guards against it
+    failing; vendoring a 280KB library to draw 55 ribbons is the wrong trade, and
+    a CDN is exactly what breaks on the remote. The chord layout is ~30 lines of
+    arithmetic (cumulative angles, then a quadratic-Bezier ribbon through the
+    circle centre), so it's computed in Python and emitted as static SVG paths.
+
+    Hover-to-isolate is preserved via a tiny inline script — that interaction is
+    what makes an 11-sector chord legible, and dropping it was most of why the
+    heatmap replaced it.
+    """
+    n = len(order)
+    if n == 0:
+        return
+
+    W = 760
+    cx = cy = W / 2
+    outer_r = W * 0.5 - 110
+    inner_r = outer_r - 20
+    pad = 0.02  # radians between arcs
+
+    totals = [float(m.loc[s].sum()) for s in order]
+    grand = sum(totals)
+    if grand <= 0:
+        st.info("No positive co-movement to draw.")
+        return
+
+    # Angular span per sector, proportional to its total correlation.
+    avail = 2 * math.pi - pad * n
+    spans = [t / grand * avail for t in totals]
+    starts, acc = [], -math.pi / 2  # start at 12 o'clock
+    for sp in spans:
+        starts.append(acc)
+        acc += sp + pad
+
+    def pt(r: float, a: float) -> tuple[float, float]:
+        return cx + r * math.cos(a), cy + r * math.sin(a)
+
+    def arc_path(r_in: float, r_out: float, a0: float, a1: float) -> str:
+        x0, y0 = pt(r_out, a0)
+        x1, y1 = pt(r_out, a1)
+        x2, y2 = pt(r_in, a1)
+        x3, y3 = pt(r_in, a0)
+        large = 1 if (a1 - a0) > math.pi else 0
+        return (f"M{x0:.1f},{y0:.1f}A{r_out:.1f},{r_out:.1f} 0 {large},1 {x1:.1f},{y1:.1f}"
+                f"L{x2:.1f},{y2:.1f}A{r_in:.1f},{r_in:.1f} 0 {large},0 {x3:.1f},{y3:.1f}Z")
+
+    # Sub-arc allocation: each sector's span is divided among its partners, so a
+    # ribbon lands on a slice sized by that pair's correlation (same construction
+    # as d3.chord).
+    cursor = list(starts)
+    ribbons = []
+    for i, si in enumerate(order):
+        for j, sj in enumerate(order):
+            w = float(m.iloc[i, j])
+            if w <= 0:
+                continue
+            sub = w / totals[i] * spans[i] if totals[i] > 0 else 0.0
+            a0 = cursor[i]
+            cursor[i] += sub
+            if j > i:  # draw each pair once, from the i-side; store both ends
+                ribbons.append({"i": i, "j": j, "a0": a0, "a1": cursor[i], "w": w})
+
+    # Match each stored i-side slice with its j-side counterpart.
+    cursor2 = list(starts)
+    jslice: dict[tuple[int, int], tuple[float, float]] = {}
+    for i, si in enumerate(order):
+        for j, sj in enumerate(order):
+            w = float(m.iloc[i, j])
+            if w <= 0:
+                continue
+            sub = w / totals[i] * spans[i] if totals[i] > 0 else 0.0
+            a0 = cursor2[i]
+            cursor2[i] += sub
+            if j < i:
+                jslice[(j, i)] = (a0, cursor2[i])
+
+    parts = []
+    for rb in ribbons:
+        i, j = rb["i"], rb["j"]
+        b0, b1 = jslice.get((i, j), (rb["a0"], rb["a1"]))
+        x0, y0 = pt(inner_r, rb["a0"])
+        x1, y1 = pt(inner_r, rb["a1"])
+        x2, y2 = pt(inner_r, b0)
+        x3, y3 = pt(inner_r, b1)
+        color = SECTOR_COLORS.get(order[i], "#8a8272")
+        # Quadratic Bezier through the centre — the classic chord ribbon.
+        d = (f"M{x0:.1f},{y0:.1f}"
+             f"A{inner_r:.1f},{inner_r:.1f} 0 0,1 {x1:.1f},{y1:.1f}"
+             f"Q{cx:.1f},{cy:.1f} {x2:.1f},{y2:.1f}"
+             f"A{inner_r:.1f},{inner_r:.1f} 0 0,1 {x3:.1f},{y3:.1f}"
+             f"Q{cx:.1f},{cy:.1f} {x0:.1f},{y0:.1f}Z")
+        parts.append(
+            f"<path class='rb' data-i='{i}' data-j='{j}' d='{d}' fill='{color}' "
+            f"fill-opacity='.35' stroke='rgba(0,0,0,.06)'>"
+            f"<title>{order[i]} ↔ {order[j]} — corr {rb['w']:.2f} "
+            f"(co-movement, not dependency)</title></path>")
+
+    for i, s in enumerate(order):
+        a0, a1 = starts[i], starts[i] + spans[i]
+        color = SECTOR_COLORS.get(s, "#8a8272")
+        parts.append(
+            f"<path class='arc' data-i='{i}' d='{arc_path(inner_r, outer_r, a0, a1)}' "
+            f"fill='{color}'><title>{s} — {int(counts.get(s, 0))} companies</title></path>")
+        mid = (a0 + a1) / 2
+        lx, ly = pt(outer_r + 8, mid)
+        deg = math.degrees(mid)
+        flip = 90 < deg % 360 < 270 or -270 < deg < -90
+        anchor = "end" if flip else "start"
+        rot = f"rotate({deg + 180:.1f},{lx:.1f},{ly:.1f})" if flip else \
+              f"rotate({deg:.1f},{lx:.1f},{ly:.1f})"
+        parts.append(
+            f"<text class='arc-label' x='{lx:.1f}' y='{ly:.1f}' transform='{rot}' "
+            f"text-anchor='{anchor}' dy='-0.1em'>{s}</text>"
+            f"<text class='arc-sub' x='{lx:.1f}' y='{ly:.1f}' transform='{rot}' "
+            f"text-anchor='{anchor}' dy='1.05em'>{int(counts.get(s, 0))} cos</text>")
+
+    svg = "".join(parts)
+    components.html(f"""
+<style>
+  body{{margin:0;background:transparent;
+    font-family:"Source Serif 4",Georgia,serif}}
+  .hero{{text-align:center;margin:6px 0 2px}}
+  .hero h1{{font-size:26px;font-weight:600;margin:0;letter-spacing:-.01em;color:#1c1a17}}
+  .hero .sub{{color:#8a8272;font-size:15px;font-style:italic;margin-top:2px}}
+  .arc-label{{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;fill:#1c1a17}}
+  .arc-sub{{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:9px;fill:#8a8272}}
+  .rb,.arc{{transition:fill-opacity 180ms}}
+  .meta{{text-align:center;color:#8a8272;font-size:12px;margin-top:6px;
+    font-family:"JetBrains Mono",ui-monospace,monospace}}
+  .hint{{text-align:center;color:#8a8272;font-size:12px;font-style:italic;margin-top:8px}}
+  svg{{display:block;margin:0 auto;max-width:100%;height:auto}}
+</style>
+<div class="hero">
+  <h1>The market is not a list of sectors.</h1>
+  <div class="sub">It is a dependency system.</div>
+</div>
+<svg id="chord" viewBox="0 0 {W} {W}" width="{W}" height="{W}">{svg}</svg>
+<div class="meta">{int(counts.sum()):,} companies · {n} sectors ·
+  {n_days}d correlation · 0 supply-chain edges</div>
+<div class="hint">Hover a sector arc to isolate its ribbons — try the top arc (the hub).</div>
+<script>
+  const rbs = [...document.querySelectorAll('.rb')];
+  const arcs = [...document.querySelectorAll('.arc')];
+  const reset = () => {{
+    rbs.forEach(r => r.setAttribute('fill-opacity', .35));
+    arcs.forEach(a => a.setAttribute('fill-opacity', 1));
+  }};
+  arcs.forEach(a => {{
+    a.addEventListener('mouseenter', () => {{
+      const i = a.dataset.i;
+      rbs.forEach(r => r.setAttribute('fill-opacity',
+        (r.dataset.i === i || r.dataset.j === i) ? .85 : .06));
+      arcs.forEach(x => x.setAttribute('fill-opacity', x.dataset.i === i ? 1 : .35));
+    }});
+    a.addEventListener('mouseleave', reset);
+  }});
+  rbs.forEach(r => {{
+    r.addEventListener('mouseenter', () => {{
+      rbs.forEach(o => o.setAttribute('fill-opacity', o === r ? .85 : .06));
+      arcs.forEach(x => x.setAttribute('fill-opacity',
+        (x.dataset.i === r.dataset.i || x.dataset.i === r.dataset.j) ? 1 : .35));
+    }});
+    r.addEventListener('mouseleave', reset);
+  }});
+</script>
+""", height=W + 120, scrolling=False)
+
+
 def _render_matrix(order: list[str], m: pd.DataFrame) -> None:
     """Heatmap of the same matrix the chord encodes.
 
-    Chose a heatmap over a chord: at 11 sectors a chord is prettier but reads
-    ordinally at best, while the question here ("who co-moves with whom, how
-    much") is a pairwise magnitude lookup — which a matrix answers exactly and a
-    ribbon does not. The mock keeps the chord for the format decision.
+    Kept ALONGSIDE the chord, not instead of it: the chord locks the format and
+    shows structure, but a pairwise magnitude lookup ("how correlated are these
+    two exactly?") is what a matrix answers and a ribbon does not.
     """
     fig = go.Figure(go.Heatmap(
         z=m.values, x=order, y=order,
@@ -207,13 +380,16 @@ tab_map, tab_drill, tab_net = st.tabs(
 )
 
 with tab_map:
-    _render_matrix(order, m)
+    _render_chord(order, m, counts, n_days)
     st.caption(
         f"Equal-weight daily sector returns, {n_days} trading days. Diagonal zeroed "
         "(self-correlation would swamp the scale) and negatives clipped to 0 — a "
         "negative co-movement has no place on a dependency-shaped chart. "
-        "ETF pseudo-sectors excluded."
+        "ETF pseudo-sectors excluded. Ribbon width is the pair's correlation; arc "
+        "width is the sector's total co-movement."
     )
+    with st.expander("Pairwise matrix — exact values"):
+        _render_matrix(order, m)
     st.markdown("##### Hubs and loners")
     _render_hubs(order, m, counts)
 
