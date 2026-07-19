@@ -978,3 +978,32 @@ MFE tail is watchlist-ordering value, NOT systematic alpha. **No open action rem
   to PROD via the real gate, `daily_predictions` backfilled (124,715 rows). Suite 406 passed. Dropped
   (user-approved) `m02_prototype_targets` + `t3_training_cache` — closed research, one-command rebuild.
   sh019 migration + backup story still open. `[[project_r2_pull_destroyed_main_db]]`
+
+## Thread P — pipeline gap detection (2026-07-19, session 02)
+
+77. **Which sh019 catch-up items genuinely need a human, and which should the pipeline
+    detect itself?** → `create_duckdb_views.py` is REDUNDANT (Phase 6 runs `create_all()`
+    nightly; the watchlist view self-migrates `BASE TABLE`→VIEW, proven idempotent);
+    `backfill_sepa_watchlist.py` is still REQUIRED (rebuilds the source table, which
+    nothing self-heals). Code pull + backups correctly manual. `[[project_watchlist_merge]]`
+78. **Why did the post-tier-0 "pipeline should detect gaps" steer only half-land?** →
+    detectors were incident-driven, not designed: T1-price/T2/T3 each got one after a
+    specific incident; macro, watchlist history and model-promotion state never did — and
+    those are the three that bit sh019. Not architecture, sequence.
+79. **What makes these gaps invisible rather than loud?** → all three fail in a
+    success-shaped way: `backfill_t1_macro.py` prints `[OK] Rows written: 0` on a
+    rate-limit; Phase 7.4 logged "no prod model registered" at INFO and returned 0. →
+    heal from LOCAL data (no network → no silent no-op); alert, don't log.
+80. **Can interior panel holes be caught generically rather than per-incident?** → YES —
+    `audit_date_coverage.py` asks every daily panel whether a trading day is missing
+    between its own first and last row. Tolerance **0**, MEASURED over full history
+    (t2/t3/regime all 0; t1_macro 5, now self-healed). 6th audit in the Phase 8 battery.
+81. **Should the backtest cones be rebuilt on sh019?** → NO — no orchestrator phase builds
+    them, their inputs (24 sweep summaries + 3.3 GB score cache) are dev-box-local and not
+    in git, and two boxes rebuilding the honest-Sharpe gate from divergent sweep state
+    yields two answers to "did this champion pass?". ⚠️ Implication: the slim DB must keep
+    being built on the research box or the remote loses its cones.
+- ✅ **Ops: 4 detectors shipped + carried-over work committed** (3 commits: gap detection,
+  model-card static SVG, dashboard cone fan + Streamlit width migration). Suite 439 passed
+  (was 406). sh019 checklist written but **UNEXECUTED**; backup story still open.
+  `plans/sh019_catchup_checklist.md`
