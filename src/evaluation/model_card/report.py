@@ -8,12 +8,24 @@ charts come in Phase 2/3 (decile profiles, reliability diagrams).
 from __future__ import annotations
 
 import html
-import json
-import uuid
+import io
+import re
 from pathlib import Path
 from typing import Any
 
-from .rubric import SectionResult
+import matplotlib
+
+matplotlib.use("Agg")  # headless: the card builds in CLI/CI, never in a GUI
+import matplotlib.pyplot as plt  # noqa: E402
+
+from .rubric import SectionResult  # noqa: E402
+
+plt.rcParams.update({
+    "font.size": 8,
+    "axes.titlesize": 10,
+    "axes.edgecolor": "#cccccc",
+    "figure.facecolor": "white",
+})
 
 STATUS_COLOR = {
     "pass": "#2e7d32",
@@ -37,6 +49,10 @@ body { max-width: 1200px; margin: 32px auto; padding: 0 24px; line-height: 1.45;
    the 1200px body just overflows the frame and clips. */
 @media (max-width: 1248px) { body { margin: 16px 0; padding: 0 12px; } }
 table.grid { display: block; overflow-x: auto; }
+/* Charts are static inline SVG (no plotly, no CDN, no JS sizing). The viewBox
+   has no intrinsic width, so these two rules are what scale them to the frame. */
+.chart { margin: 8px 0; }
+.chart svg { width: 100%; height: auto; max-width: 720px; display: block; }
 h1, h2, h3 { color: #1a1a1a; }
 h1 { border-bottom: 2px solid #1f77b4; padding-bottom: 8px; }
 .section { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px 20px; margin: 18px 0; }
@@ -122,66 +138,121 @@ def _table_html(title: str, rows: list[dict]) -> str:
     )
 
 
+def _svg(fig) -> str:
+    """Serialize a matplotlib figure to inline SVG and close it.
+
+    SVG, not PNG: it is text (no base64 bloat), scales without blurring, and
+    needs no kaleido. `viewBox` without a fixed width lets the card CSS scale it
+    to the container — which is the whole point of going static.
+    """
+    buf = io.StringIO()
+    fig.savefig(buf, format="svg", bbox_inches="tight")
+    plt.close(fig)
+    svg = buf.getvalue()
+    svg = svg[svg.index("<svg"):]  # drop the XML/DOCTYPE preamble
+    # Strip the hardcoded pt dimensions; viewBox + CSS drive the size instead.
+    return re.sub(r'<svg width="[^"]*" height="[^"]*"', "<svg", svg, count=1)
+
+
 def _chart_html(table_name: str, title: str, rows: list[dict]) -> str:
+    """Render a card chart as a static inline SVG.
+
+    Deliberately NOT interactive. These are 5-10 row diagnostics that are read,
+    not explored, and the interactive Plotly build was a standing format risk: it
+    pulled plotly.js from a CDN (dead offline / on a locked-down remote) and sized
+    itself in JS, which clipped inside the Streamlit iframe. Static SVG has no
+    CDN, no JS, and no measurement step, so it renders identically everywhere.
+    """
     if not rows:
         return ""
-    
-    div_id = f"plotly_{table_name}_{uuid.uuid4().hex[:8]}"
-    
+
+    # An empty score bin yields an all-None row. Plotly dropped these silently;
+    # matplotlib raises on them. Skip them for plotting but SAY SO underneath —
+    # "3 of 10 bins had no rows" is a calibration fact, not a rendering detail.
+    def _usable(keys: tuple[str, ...]) -> tuple[list[dict], str]:
+        good = [r for r in rows if all(r.get(k) is not None for k in keys)]
+        n_empty = len(rows) - len(good)
+        note = (f"<p class='detail'>{n_empty} of {len(rows)} bins were empty "
+                f"(no rows) and are not plotted.</p>") if n_empty else ""
+        return good, note
+
     if table_name == "reliability_curve":
-        x = [r.get("mean_pred") for r in rows]
-        y = [r.get("mean_obs") for r in rows]
-        trace1 = {"x": x, "y": y, "mode": "markers+lines", "name": "Observed"}
-        trace2 = {"x": [0, 1], "y": [0, 1], "mode": "lines", "name": "Perfect Calibration", "line": {"dash": "dash"}}
-        data = [trace1, trace2]
-        layout = {"title": "Reliability Curve", "xaxis": {"title": "Mean Predicted"}, "yaxis": {"title": "Mean Observed"}, "height": 400}
-        
+        rows, note = _usable(("mean_pred", "mean_obs"))
+        if not rows:
+            return (f"<h4>{html.escape(title)}</h4>"
+                    "<p class='detail'>Every bin was empty — nothing to plot.</p>")
+        x = [r["mean_pred"] for r in rows]
+        y = [r["mean_obs"] for r in rows]
+        fig, ax = plt.subplots(figsize=(7.2, 3.6))
+        ax.plot([0, 1], [0, 1], "--", color="#ff7f0e", lw=1.4,
+                label="Perfect calibration")
+        ax.plot(x, y, "o-", color="#1f77b4", lw=1.8, ms=5, label="Observed")
+        ax.set_xlabel("Mean predicted")
+        ax.set_ylabel("Mean observed")
+        ax.set_title("Reliability curve")
+
     elif table_name == "threshold_bin_calibration":
-        x = [f"{r.get('bin_lo'):.1f}-{r.get('bin_hi'):.1f}" if r.get('bin_lo') is not None else "N/A" for r in rows]
-        y_obs = [r.get("observed_freq") for r in rows]
-        y_pred = [r.get("predicted_mean") for r in rows]
-        trace1 = {"x": x, "y": y_obs, "type": "bar", "name": "Observed Freq"}
-        trace2 = {"x": x, "y": y_pred, "type": "bar", "name": "Predicted Mean"}
-        data = [trace1, trace2]
-        layout = {"title": "Threshold Bin Calibration", "barmode": "group", "height": 400}
-        
+        rows, note = _usable(("observed_freq", "predicted_mean"))
+        if not rows:
+            return (f"<h4>{html.escape(title)}</h4>"
+                    "<p class='detail'>Every bin was empty — nothing to plot.</p>")
+        labels = [f"{r['bin_lo']:.1f}-{r['bin_hi']:.1f}"
+                  if r.get("bin_lo") is not None else "N/A" for r in rows]
+        obs = [r["observed_freq"] for r in rows]
+        pred = [r["predicted_mean"] for r in rows]
+        idx = range(len(labels))
+        fig, ax = plt.subplots(figsize=(7.2, 3.6))
+        ax.bar([i - 0.2 for i in idx], obs, width=0.4, color="#1f77b4",
+               label="Observed freq")
+        ax.bar([i + 0.2 for i in idx], pred, width=0.4, color="#ff7f0e",
+               label="Predicted mean")
+        ax.set_xticks(list(idx))
+        ax.set_xticklabels(labels)
+        ax.set_title("Threshold bin calibration")
+
     elif table_name.startswith("decile_"):
-        x = [f"D{r.get('decile')}" for r in rows]
-        y_mean = [r.get("mean") for r in rows]
-        y_median = [r.get("median") for r in rows]
-        p_min = [r.get("p_min") for r in rows]
-        p_max = [r.get("p_max") for r in rows]
-        
-        trace1 = {"x": x, "y": y_mean, "type": "bar", "name": "Mean Target"}
-        trace2 = {"x": x, "y": y_median, "type": "bar", "name": "Median Target"}
-        trace3 = {"x": x, "y": p_min, "type": "scatter", "mode": "lines+markers", "name": "p_min (Pred)", "yaxis": "y2", "line": {"dash": "dot"}}
-        trace4 = {"x": x, "y": p_max, "type": "scatter", "mode": "lines+markers", "name": "p_max (Pred)", "yaxis": "y2", "line": {"dash": "dot"}}
-        
-        data = [trace1, trace2, trace3, trace4]
-        layout = {
-            "title": f"{title} Profile", 
-            "barmode": "group", 
-            "height": 400,
-            "yaxis": {"title": "Target Value"},
-            "yaxis2": {"title": "Predicted Proba", "overlaying": "y", "side": "right", "range": [0, 1]}
-        }
-        
+        rows, note = _usable(("mean", "median", "p_min", "p_max"))
+        if not rows:
+            return (f"<h4>{html.escape(title)}</h4>"
+                    "<p class='detail'>Every decile was empty — nothing to plot.</p>")
+        labels = [f"D{r.get('decile')}" for r in rows]
+        mean = [r["mean"] for r in rows]
+        median = [r["median"] for r in rows]
+        p_min = [r["p_min"] for r in rows]
+        p_max = [r["p_max"] for r in rows]
+        idx = range(len(labels))
+        fig, ax = plt.subplots(figsize=(7.2, 3.6))
+        ax.bar([i - 0.2 for i in idx], mean, width=0.4, color="#1f77b4",
+               label="Mean target")
+        ax.bar([i + 0.2 for i in idx], median, width=0.4, color="#ff7f0e",
+               label="Median target")
+        ax.set_xticks(list(idx))
+        ax.set_xticklabels(labels)
+        ax.set_ylabel("Target value")
+        ax.set_title(f"{title} profile")
+        # Predicted probability lives on its own axis — it shares no units with
+        # the target, so a single scale would flatten one of them.
+        ax2 = ax.twinx()
+        ax2.plot(list(idx), p_min, ":o", color="#2e7d32", ms=3, lw=1.2,
+                 label="p_min (pred)")
+        ax2.plot(list(idx), p_max, ":o", color="#c62828", ms=3, lw=1.2,
+                 label="p_max (pred)")
+        ax2.set_ylabel("Predicted proba")
+        ax2.set_ylim(0, 1)
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=7, ncol=2, framealpha=0.9)
+        ax.grid(True, alpha=0.25)
+        return (f"<h4>{html.escape(title)}</h4>"
+                f"<div class='chart'>{_svg(fig)}</div>{note}")
+
     else:
         return _table_html(title, rows)
 
-    # autosize + responsive: the card is viewed standalone and in a Streamlit
-    # iframe, so a fixed pixel width clips in the narrower one.
-    layout.setdefault("autosize", True)
-    layout.setdefault("margin", {"l": 60, "r": 30, "t": 50, "b": 50})
-
-    return f"""
-    <h4>{html.escape(title)}</h4>
-    <div id="{div_id}" style="width:100%"></div>
-    <script>
-      Plotly.newPlot('{div_id}', {json.dumps(data)}, {json.dumps(layout)},
-                     {{responsive: true, displayModeBar: false}});
-    </script>
-    """
+    ax.legend(fontsize=8, framealpha=0.9)
+    ax.grid(True, alpha=0.25)
+    return (f"<h4>{html.escape(title)}</h4>"
+            f"<div class='chart'>{_svg(fig)}</div>{note}")
 
 
 def _rubric_html(scores: dict[str, int]) -> str:
@@ -394,6 +465,11 @@ def render(card, html_path: Path) -> None:
         f"{_benchmarks_html(card)}"
         + "".join(_section_html(s) for s in card.sections.values())
     )
-    doc = f"<!doctype html><html><head><meta charset='utf-8'><title>Model Card — {html.escape(card.model_id)}</title>{STYLE}<script src='https://cdn.plot.ly/plotly-2.27.0.min.js'></script></head><body>{body}</body></html>"
+    # No <script> and no external asset of any kind — charts are inline SVG, so
+    # the card is a single self-contained file that renders offline and inside a
+    # sandboxed iframe.
+    doc = (f"<!doctype html><html><head><meta charset='utf-8'>"
+           f"<title>Model Card — {html.escape(card.model_id)}</title>{STYLE}"
+           f"</head><body>{body}</body></html>")
     Path(html_path).parent.mkdir(parents=True, exist_ok=True)
     Path(html_path).write_text(doc, encoding="utf-8")
