@@ -785,7 +785,7 @@ These are importable from notebooks/scripts — not just CLI tools.
 | `src/screener_diagnostics.py` | `ScreenerDiagnostics` | Per-ticker SEPA criteria diagnosis. `diagnose(ticker, days)` returns dict with freshness, trades, per-day C1-C9 / B1-B2 matrix, transitions. `print_report()` for console output. |
 | `src/utils.py` | `get_latest_trading_day()` | Returns most recent completed NYSE trading day (calendar-aware). Used everywhere to determine target date. |
 | `src/utils.py` | `load_etf_exclusion_list()`, `filter_etfs()` | ETF/fund ticker exclusion. |
-| `src/data_loader_duckdb.py` | `load_training_data_from_db(use_cache=True)` | Load `d2_training_cache` (or `v_d2_training` fallback) into DataFrame. Applies `COLUMN_CASE_MAP` rename automatically. |
+| `src/evaluation/training_data_loader.py` | `load_pretrain_data(mode="trades")` | Load the pre-training input. `mode="trades"` → `d2_training_cache` if fresh, else `v_d2_training` fallback (freshness checked automatically, no flag). `mode="dense"` → `t3_sepa_features` at the pinned `feature_version`. Lowercases all column names. |
 | `src/model_registry.py` | `ModelRegistry` | CRUD for `models` table — list, register, promote, archive model versions. |
 | `src/evaluation/classification_evaluator.py` | `ClassificationEvaluator` | Confusion matrix, ROC/PR curves, SHAP, feature importance. Auto-registers via `ModelRegistry`. |
 | `src/evaluation/leakage_guard.py` | `LeakageGuard` | Temporal leakage validation — checks no future data bleeds into training. |
@@ -793,7 +793,7 @@ These are importable from notebooks/scripts — not just CLI tools.
 | `src/managers/screener_manager.py` | `ScreenerManager` | `evaluate_and_log(date)` — evaluates screener criteria for one date and logs entry/exit events. |
 | `src/managers/sepa_watchlist_manager.py` | `SepaWatchlistManager` | `backfill()` — full rebuild from t2 history. `update_daily(date)` — open/close sessions for one trading day. `get_universe()` — `SELECT DISTINCT ticker FROM sepa_watchlist` (T3 universe gate). `get_stats()` — quick monitoring summary. |
 | `src/managers/pipeline_run_manager.py` | `PipelineRunManager` | Phase execution tracking, idempotency checks, health reports. |
-| `src/regime_pipeline.py` | `RegimePipeline` | `compute_history()` or `compute_incremental()` — M03 regime scores. |
+| `src/regime_pipeline.py` | `RegimePipeline` | M03 regime scores: `compute_m03_history()` (compute), `write_to_db()`, `update_incremental()` (nightly), `backfill()`, `validate_parity()`. |
 | `src/feature_pipeline.py` | `FeaturePipeline` | `compute_t2_screener_features()`, `compute_t3_features()`, `compute_all()`. |
 
 ---

@@ -23,7 +23,7 @@ Read the deep docs (below) for *why*; this is *where*.
 - **Orchestrator (workflow)** → `src/orchestrators/daily_pipeline_orchestrator.py` + `phase_registry.py` (stable phase IDs).
 - **Model registry** → `src/model_registry.py` (feature_catalog, model_feature_sets). NOT ViewManager.
 - **Backtest** → `src/backtest/` (`runner.py`, `sepa_strategy.py`, `universe_scorer.py`, `vectorized_backtest.py`).
-- **Training data loader** → `src/evaluation/training_data_loader.py` (`load_training_data`, modes `dense`/`trades`). `src/data_loader_duckdb.py` (`DuckDBDataLoader`) is the legacy batch loader still referencing the retired `daily_features` name.
+- **Training data loader** → `src/evaluation/training_data_loader.py` (`load_pretrain_data`, modes `dense`/`trades`). `src/data_loader_duckdb.py` (`DuckDBDataLoader`) is a dead orphan — its only caller was the deleted `daily_scanner_duckdb.py`, and 3 of its 8 methods raise (retired `daily_features` table, renamed `report_date`).
 - **CLI entrypoints** → `scripts/` (e.g. `run_daily_pipeline.py`, `create_duckdb_views.py`, `refresh_training_cache.py`, `build_model_card.py`).
 
 ## Deep docs — read on demand (progressive disclosure)
