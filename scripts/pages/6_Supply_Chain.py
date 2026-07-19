@@ -81,11 +81,17 @@ def _chord_matrix(corr: pd.DataFrame) -> tuple[list[str], pd.DataFrame]:
     Self-correlation (1.0) would swamp every ribbon; a negative correlation has no
     chord representation. Both handled the same way as the mock: clip at 0, zero
     the diagonal, and say so in the caption.
+
+    `corr` arrives from an @st.cache_data loader, so its buffer may be flagged
+    read-only; whether .clip() copies it is pandas-version dependent (it does
+    locally, it didn't on the remote -> "underlying array is read-only" from
+    fill_diagonal). to_numpy(copy=True) owns the buffer unconditionally.
     """
     order = sorted(corr.columns, key=lambda s: -corr[s].drop(s).mean())
-    m = corr.loc[order, order].clip(lower=0.0).copy()
-    np.fill_diagonal(m.values, 0.0)
-    return order, m
+    m = corr.loc[order, order].clip(lower=0.0)
+    arr = m.to_numpy(dtype=float, copy=True)
+    np.fill_diagonal(arr, 0.0)
+    return order, pd.DataFrame(arr, index=m.index, columns=m.columns)
 
 
 def _render_chord(order: list[str], m: pd.DataFrame, counts: pd.Series,
