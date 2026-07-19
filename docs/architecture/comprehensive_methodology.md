@@ -147,7 +147,9 @@ CNN/AAII (sentiment). Engine-by-engine reference: [engines.md](../modules/engine
   [manual_for_me.md](manual_for_me.md).
 - **Quality gates**: engine-level clamps at write time; Phase 1.5 same-run coverage
   retry; Phase 1.6 plausibility ceilings that withhold the R2 publish; Phase 8
-  audit battery (5 audits → `data/audit_reports/*.json`).
+  audit battery (6 audits → `data/audit_reports/*.json`), incl. `audit_date_coverage`
+  (interior trading-day holes in the daily panels; incremental writers resume from
+  `MAX(date)`, so a hole behind the frontier never self-closes).
 
 ## 4. Feature engineering
 

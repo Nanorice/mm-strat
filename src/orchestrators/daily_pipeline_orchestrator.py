@@ -998,10 +998,20 @@ class DailyPipelineOrchestrator:
                 conn.close()
             md_rows = md_after - md_before
 
+            # Interior-gap self-heal. ingest_daily_macro writes ONLY the target
+            # date, so any date missed (outage, rate-limited fetch) stays a hole
+            # forever — the incremental path starts from MAX(date) and never looks
+            # back. Derived from local price_data/macro_data, so unlike
+            # backfill_t1_macro.py this cannot rate-limit or silently no-op.
+            healed = self._heal_t1_macro_gaps()
+            if healed:
+                self.run_manager.record_write('t1_macro', healed, 'phase_1_t1_macro_heal')
+
             results['macro'] = {
                 'success': True,
                 't1_macro_rows': t1_rows,
                 'macro_data_rows': md_rows,
+                't1_macro_healed': healed,
             }
             logger.info(f"[Ingestion] Macro: t1_macro +{t1_rows} rows, macro_data +{md_rows} rows")
             if t1_rows and t1_rows > 0:
@@ -1030,6 +1040,66 @@ class DailyPipelineOrchestrator:
             'rows_processed': len(active_tickers),
             'sub_phases': results
         }
+
+    # Trailing window (calendar days) scanned for t1_macro interior holes each run.
+    # Matches T3_BACKFILL_LOOKBACK_DAYS in spirit: wide enough to span a multi-day
+    # outage without rescanning 26 years of history nightly.
+    T1_MACRO_HEAL_LOOKBACK_DAYS = 120
+
+    def _heal_t1_macro_gaps(self, lookback_days: int = None) -> int:
+        """Fill interior t1_macro holes from already-ingested local tables.
+
+        `ingest_daily_macro(start_date=trading_day)` writes only that one date, and
+        the incremental path resumes from MAX(date) — so a date missed during an
+        outage is never revisited. `backfill_t1_macro.py` is not a reliable repair:
+        it refetches from yfinance and prints "[OK] ... Rows written: 0" on a
+        rate-limit, i.e. failure that looks like success.
+
+        Every t1_macro column is derivable from data already in the DB — SPY/QQQ
+        OHLCV from `price_data`, VIX from `macro_data` — so this heals offline with
+        no network call and no silent-failure path. INSERT ... SELECT with a NOT
+        EXISTS guard: never overwrites a populated row.
+
+        Expected trading days come from SPY's own `price_data` rows (the market
+        calendar the rest of the pipeline already trusts).
+        """
+        lookback = lookback_days if lookback_days is not None else self.T1_MACRO_HEAL_LOOKBACK_DAYS
+        con = db.connect(self.db_path)
+        try:
+            healed = con.execute(f"""
+                INSERT INTO t1_macro
+                    (date, spy_close, spy_volume, spy_high, spy_low,
+                     qqq_close, qqq_volume, qqq_high, qqq_low, vix_close)
+                SELECT
+                    spy.date,
+                    spy.close, spy.volume, spy.high, spy.low,
+                    qqq.close, qqq.volume, qqq.high, qqq.low,
+                    -- macro_data carries market quotes in `close` and FRED series
+                    -- in `value`; VIX is a quote, so `close` wins. COALESCE keeps
+                    -- this correct if a VIX row ever arrives via the FRED path.
+                    COALESCE(vix.close, vix.value)
+                FROM price_data spy
+                LEFT JOIN price_data qqq
+                       ON qqq.ticker = 'QQQ' AND qqq.date = spy.date
+                LEFT JOIN macro_data vix
+                       ON vix.symbol = 'VIX' AND vix.date = spy.date
+                WHERE spy.ticker = 'SPY'
+                  AND spy.date >= CURRENT_DATE - INTERVAL {int(lookback)} DAY
+                  AND NOT EXISTS (
+                      SELECT 1 FROM t1_macro m WHERE m.date = spy.date
+                  )
+                RETURNING date
+            """).fetchall()
+        finally:
+            con.close()
+
+        if healed:
+            dates = sorted(r[0].strftime('%Y-%m-%d') for r in healed)
+            logger.warning(
+                f"[Ingestion] t1_macro: healed {len(dates)} interior gap date(s) "
+                f"from local price_data/macro_data ({dates[0]} .. {dates[-1]})"
+            )
+        return len(healed)
 
     def _should_refresh_cik_map(self) -> bool:
         """Check if cik_map needs a refresh.
@@ -1265,12 +1335,49 @@ class DailyPipelineOrchestrator:
         via SELECT DISTINCT ticker FROM sepa_watchlist).
         """
         result = self.sepa_watchlist_manager.update_daily(target_date)
-        return {
+        stats = {
             'rows_processed': result['opened'] + result['closed'],
             'opened':         result['opened'],
             'closed':         result['closed'],
             'active':         result['active'],
         }
+        stats['stale_status_rows'] = self._check_watchlist_status_vocab()
+        return stats
+
+    def _check_watchlist_status_vocab(self) -> int:
+        """Warn when `sepa_watchlist.status` holds values outside {ACTIVE, EXITED}.
+
+        Unlike T2/T3 (which have real gap detectors), this phase only ever APPENDS
+        today's session events — nothing re-examines history. A box migrated from
+        the pre-2026-07-18 schema keeps its stale COOLDOWN rows forever: nothing
+        promotes them, and the nightly run never notices. The `screener_watchlist`
+        VIEW self-heals on Phase 6, but the source TABLE does not.
+
+        Detection only — the repair (`scripts/backfill_sepa_watchlist.py`) is an
+        authoritative full-history DROP+rebuild, far too destructive to trigger
+        automatically off a canary.
+        """
+        conn = db.connect(self.db_path, read_only=True)
+        try:
+            rows = conn.execute("""
+                SELECT status, COUNT(*) AS n
+                FROM sepa_watchlist
+                WHERE status NOT IN ('ACTIVE', 'EXITED')
+                GROUP BY status ORDER BY n DESC
+            """).fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return 0
+        total = sum(r[1] for r in rows)
+        detail = ", ".join(f"{r[0]}={r[1]}" for r in rows)
+        logger.warning(
+            f"[SEPA Watchlist] {total} row(s) with a retired status ({detail}). "
+            f"Nothing promotes these — this box likely predates the 2026-07-18 "
+            f"watchlist merge. Repair: python scripts/backfill_sepa_watchlist.py"
+        )
+        return total
 
     def _run_phase_5_t3_features_incremental(self, last_trading_day: str) -> Dict:
         """Phase 5 incremental: detect gap in t3_sepa_features, compute missing dates only."""
@@ -1719,6 +1826,13 @@ class DailyPipelineOrchestrator:
         finally:
             nav_con.close()
 
+        # Alert 6: prod-model identity. Which model is 'prod' is per-box registry
+        # state, so a box that never re-promoted keeps scoring an old model and
+        # says nothing (Phase 7.4 logs "no prod model" at INFO and returns 0).
+        # That produces wrong live output, not merely missing data — the failure
+        # mode that left sh019 scoring 4-class while research scored binary.
+        alerts.extend(self._check_prod_model_identity())
+
         # Log alerts
         if alerts:
             logger.warning("[Monitoring] ALERTS TRIGGERED:")
@@ -1758,6 +1872,46 @@ class DailyPipelineOrchestrator:
             'drift_report': drift_report,
             'audit_report': audit_report,
         }
+
+    def _check_prod_model_identity(self) -> List[str]:
+        """Alerts when the scoring model is absent or changed since the last scored date.
+
+        `daily_predictions.model_version_id` records which model actually scored
+        each date, so the previous run's identity is already persisted — no new
+        state needed. A promotion legitimately changes it, so this WARNS (once,
+        on the first run after the change) rather than gating anything.
+        """
+        conn = db.connect(self.db_path, read_only=True)
+        try:
+            prod = conn.execute(
+                "SELECT version_id FROM models WHERE status_flag = 'prod'"
+            ).fetchall()
+            if not prod:
+                return ["🛑 ALERT: no prod model registered — Phase 7.4 scored nothing. "
+                        "daily_predictions is not advancing; promote a model on this box."]
+            if len(prod) > 1:
+                ids = ", ".join(r[0] for r in prod)
+                return [f"🛑 ALERT: {len(prod)} models flagged 'prod' ({ids}) — "
+                        f"scoring picks one arbitrarily. Demote all but one."]
+
+            # Compare against whatever scored the LATEST date. Once the promoted
+            # model has scored a day, that date reflects it and this goes quiet —
+            # so the alert fires once at the switch, not forever off stale rows.
+            previous = conn.execute("""
+                SELECT model_version_id
+                FROM daily_predictions
+                WHERE prediction_date = (SELECT MAX(prediction_date) FROM daily_predictions)
+                  AND model_version_id <> ?
+                LIMIT 1
+            """, [prod[0][0]]).fetchone()
+        finally:
+            conn.close()
+
+        if previous and previous[0]:
+            return [f"⚠️ ALERT: prod model changed to {prod[0][0]} "
+                    f"(previously scoring {previous[0]}). Expected after a promotion — "
+                    f"investigate if you did not promote."]
+        return []
 
     def _run_daily_audits(self, target_date: str) -> Optional[Dict]:
         """Invoke tools/run_all_audits.py as a subprocess. Best-effort.

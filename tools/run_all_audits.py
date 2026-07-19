@@ -31,6 +31,7 @@ AUDITS = [
     ("T2 Screener Features",  "audit_t2_screener_features.py", lambda a: (["--date", a.date] if a.date else [])),
     ("T3 SEPA Features",      "audit_t3_sepa_features.py",     lambda a: (["--date", a.date] if a.date else [])),
     ("Serving Tables",        "audit_serving_tables.py",       lambda a: []),
+    ("Date Coverage",         "audit_date_coverage.py",        lambda a: []),
 ]
 
 # Short keys for --skip
@@ -40,6 +41,7 @@ AUDIT_KEYS = {
     "t2_screener":   "T2 Screener Features",
     "t3":            "T3 SEPA Features",
     "serving":       "Serving Tables",
+    "coverage":      "Date Coverage",
 }
 
 STATUS_ORDER = {"FAIL": 0, "WARNING": 1, "OK": 2, "INFO": 3}

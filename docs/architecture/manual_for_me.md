@@ -145,6 +145,7 @@ Boot tasks `PrefectServer` + `PrefectDailyPipelineServe` (register via
 | `scripts/ingest_t1_macro.py` | One-shot ingest of t1_macro for a date range |
 | `tools/run_all_audits.py` | **Run all audits in one go** (orchestrator) |
 | `tools/audit_t1_data_quality.py` | T1 data quality audit |
+| `tools/audit_date_coverage.py` | Interior trading-day holes in the daily panels (skip key: `coverage`) |
 | `tools/purge_t1_price_negatives.py` | Remove bad price rows |
 | `tools/purge_t1_fundamentals.py` | Remove fundamentals for specific ticker |
 | `tools/deactivate_tickers.py` | Retire delisted tickers |
