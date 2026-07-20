@@ -14,7 +14,7 @@ import duckdb
 import pandas as pd
 import pytest
 
-from src.fundamental_edgar_engine import FundamentalEdgarEngine
+from src.shares_engine import SharesEngine
 from src.universe_backfill import UniverseBackfillEngine
 
 
@@ -36,12 +36,6 @@ def backfill_engine(temp_db):
     engine = UniverseBackfillEngine(db_path=temp_db)
     engine.ensure_tables()
     return engine
-
-
-@pytest.fixture
-def edgar_engine(temp_db):
-    """Create a FundamentalEdgarEngine instance with temp database."""
-    return FundamentalEdgarEngine(db_path=temp_db)
 
 
 class TestCompanyProfiles:
@@ -224,18 +218,22 @@ class TestSharesHistory:
             con.close()
 
     def test_shares_history_idempotent(self, backfill_engine):
-        """Verify shares_history INSERT OR IGNORE prevents duplicates."""
+        """Re-writing the same shares rows must not duplicate them.
+
+        SharesEngine owns this upsert; backfill_shares delegates to it.
+        """
+        engine = SharesEngine(backfill_engine.db_path)
         df = pd.DataFrame({
             "ticker": ["AAPL", "AAPL"],
             "date": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")],
             "shares_outstanding": [17.3e9, 17.3e9],
         })
 
-        rows1 = backfill_engine._write_shares_batch(df)
+        rows1 = engine._upsert(df)
         assert rows1 == 2
 
         # Write same data again
-        rows2 = backfill_engine._write_shares_batch(df)
+        rows2 = engine._upsert(df)
         assert rows2 == 2
 
         # Verify count is still 2
@@ -299,33 +297,14 @@ class TestQuarterlyRefresh:
 
 
 class TestEdgarPlaceholder:
-    """Test SEC Edgar fundamentals placeholder."""
+    """SEC Edgar fundamentals.
 
-    def test_edgar_schema_exists(self, edgar_engine):
-        """Verify fundamentals table created."""
-        con = duckdb.connect(edgar_engine.db_path)
-        try:
-            result = con.execute("""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = 'fundamentals'
-            """).fetchall()
-
-            columns = {r[0] for r in result}
-            required = {"ticker", "period_end", "revenue", "net_income"}
-            assert required.issubset(columns)
-        finally:
-            con.close()
-
-    def test_edgar_backfill_raises_notimplemented(self, edgar_engine):
-        """Verify placeholder raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="SEC Edgar integration deferred"):
-            edgar_engine.backfill_fundamentals_edgar()
-
-    def test_edgar_metric_normalization_raises_notimplemented(self, edgar_engine):
-        """Verify normalization placeholder raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="metric normalization deferred"):
-            edgar_engine.normalize_edgar_metrics("AAPL", "2024-12-31", {})
+    The placeholder tests that lived here asserted `backfill_fundamentals_edgar`
+    and `normalize_edgar_metrics` raise NotImplementedError. Both methods were
+    removed when FundamentalEdgarEngine gained a real XBRL implementation
+    (`backfill()`), so the tests pinned a contract that no longer exists.
+    Coverage for the live path belongs with that engine, not this backfill suite.
+    """
 
 
 class TestStatusAndValidation:
