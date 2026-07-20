@@ -1,9 +1,9 @@
 # Module: Research layer (`src/research_*.py`) — report ingestion & comprehension
 
-> Verified against code 2026-07-20. Ingests the producer's report trees into
+> Verified against code 2026-07-21. Ingests the producer's report trees into
 > DuckDB, scores the quotes they rest on, and logs the relations they claim.
 > **No LLM and no network in this layer** — see §2, it is the most-asked question
-> about it.
+> about it. To just *run* it, jump to §8.
 
 Pipeline position:
 
@@ -14,8 +14,14 @@ producer (fork; LLM lives here)  →  drop dir  →  research_report_engine   �
                                             research_comprehension        →  research_relations
                                               (uses research_quote_fidelity)
                                                         ↓
-                                            supply_chain_edges               NOT BUILT (§7)
+                                            supply_chain_edges (VIEW)      →  the derived graph (§5.1)
 ```
+
+**End-to-end state (2026-07-21):** producer → ingest → comprehend → `supply_chain_edges`
+is complete and works, run by hand (§8). Not yet built: the shortlist selector that
+*chooses* the tickers (upstream of all of this), the orchestrator phases that would
+automate ingest+comprehend, the Discord briefing that would announce a finished run,
+and `dst_ticker` resolution. See §7.
 
 ---
 
@@ -176,11 +182,17 @@ verdict and discarded it, so the gate only ran when a human called it.
 - **`strength` (agent's self-assessment) and `quote_verified` (our verdict) stay
   separate columns.** Collapsing them into one "confidence" destroys the only
   question worth asking — does the agent's confidence track reality?
-- **`counterparty_key`** is the future dedup key: lowercase, punctuation to
-  spaces, legal suffixes stripped (`Inc/Corp/Ltd/plc/GmbH/S.p.A.`…), whitespace
-  collapsed. Punctuation must go **first** or `S.p.A.` never matches. An aggregate
-  gets a synthetic key (`__top5_customers__`) so "top five customers = 49% of
-  revenue" survives as a node instead of being dropped by a NULL.
+- **`counterparty_key`** is the dedup key `supply_chain_edges` groups on:
+  strip a trailing acronym gloss (`Space Development Agency (SDA)` →
+  `Space Development Agency`), then lowercase, punctuation to spaces, legal
+  suffixes stripped (`Inc/Corp/Ltd/plc/GmbH/S.p.A.`…), whitespace collapsed. The
+  gloss strip must run **before** punctuation folding (or `(SDA)`'s letters
+  survive and split the party); punctuation folding must run before the suffix
+  match (or `S.p.A.` never matches). Corroboration proved the gloss case real:
+  RKLB logged `Space Development Agency` in two runs and `…(SDA)` in a third as
+  two counterparties until the strip collapsed them. An aggregate gets a synthetic
+  key (`__top5_customers__`) so "top five customers = 49% of revenue" survives as
+  a node instead of being dropped by a NULL.
 
 ### Relation directions
 
@@ -212,6 +224,44 @@ edge.
 (`'rare earth minerals'`, `'CMOS foundry capacity'`, `'helium'`) — a different
 node type from a counterparty, and one `research_relations` does not read.
 
+### 5.1 `supply_chain_edges` — the derived graph (a **view**)
+
+`CREATE OR REPLACE VIEW` over `research_relations`, one row per distinct trading
+relationship. Built as a **view, not the table** the schema doc drew
+([`knowledge_base_schema.md`](../session_logs/sprint_15/plans/knowledge_base_schema.md)
+§2.2): it is a full `GROUP BY` recompute on every read, so there is no stored copy
+to drift and no rebuild step to forget or schedule. Created (idempotently) by
+`ensure_tables`; read with `supply_chain_edges()`.
+
+- **Grain `(src_ticker, counterparty_key, direction, accession)`.** `direction`
+  *is* the segment discriminator we have today — one counterparty can be a
+  competitor **and** a supplier and gets two rows, which is the segment-grained
+  requirement met with the columns that exist. True line-of-business segmentation
+  needs an extracted field the producer does not emit. `accession` is in the grain
+  because corroboration is per-filing; every ticker has exactly one 10-K today, so
+  it coincides with the schema's `(src, key, direction)` PK. A `ponytail:` marker
+  names the ceiling — a second filing for one name would split an edge in two.
+- **Confidence is `strength_weight × verified_rate × corroboration_rate`**
+  (§2.3), **multiplicative** so any factor at zero zeroes the edge — a repeated
+  but unverified quote is not rescued by its repetition. `verified_rate =
+  n_verified / n_runs_seen`, `corroboration_rate = n_runs_seen / n_runs_total`,
+  the latter scoped to `(src_ticker, accession)`. Two calls made here: an unknown
+  `strength` folds to moderate (0.6), not zero; `n_verified` is run-scoped so
+  `verified_rate ≤ 1`. **Provisional** — do not tune the weights until there is
+  enough data to calibrate, and never read a single-run edge (`n_runs_total = 1`)
+  as solid.
+- **Aggregates are nodes.** `__top5_customers__` (`node_type = 'aggregate'`,
+  `weight = pct_revenue`) renders in the graph rather than being dropped by a NULL
+  counterparty. `weight` is `pct_revenue` when disclosed, else NULL — **never imputed**.
+- **`dst_ticker` is NULL.** Resolving a disclosed name to a listed ticker is the
+  one real LLM job in this layer (§2) and is deliberately deferred; the edge is a
+  named node without it.
+- **`counterparty_name` is the most recent surface form** (`arg_max` on
+  `report_date`), so the *display* can still show a gloss (`…(SDA)`) even though
+  the grouping *key* is clean. That is cosmetic; the key is what dedups.
+
+Live as of 2026-07-21: 26 edges over GLW/MRVL/RKLB, corroboration `n≥2`.
+
 ---
 
 ## 6. Read surface
@@ -236,13 +286,63 @@ DB. A `research_report_sections` table would delete the splitter outright.
 
 ## 7. Not built
 
-| Thing | Gated on |
-|---|---|
-| `supply_chain_edges` | `n_runs_total > 1`; the corroboration harness has not run, so `confidence` would be decoration |
-| corroboration harness | n runs of one name against the same cached filing |
-| `research_claims` | nothing consumes it — non-relation evidence (watch items, risks, moat) has no persisted verdict, so **GLW's grafted quote is in the DB ungated** |
-| `research_report_sections` | §6 |
-| `ingest_reports` / `comprehend_reports` phases | `phase_registry.py` has no research entries; both run only when a human calls them |
-| R2 transport | sync the **EDGAR cache** with the reports (otherwise the gate silently stops being a gate) and upload `manifest.json` **last** |
-| `degraded_agents` consumption | the producer emits it as of schema 1.1; nothing here reads it |
-| `dst_ticker` resolution | §2 — the real LLM job in this layer |
+Done since the last pass: `supply_chain_edges` (§5.1, now a live view) and the
+corroboration harness (`scripts/run_corroboration.py`, run at `n≥2`). Still open,
+triaged:
+
+| Thing | Priority | Gated on |
+|---|---|---|
+| **shortlist selector** | P0 (the one gap the user names) | nothing ranks/cuts `daily_predictions` into a ticker list; today the list is passed by hand (§8). See [`agentic_digestion_layer.md`](../session_logs/sprint_15/plans/agentic_digestion_layer.md) [1] |
+| **Discord briefing** | P1 | the run-finished notification. `_discord_send` exists; the *briefing content* does not — see §8's note |
+| `ingest_reports` / `comprehend_reports` phases | P1 | `phase_registry.py` has no research entries; both run only when a human calls them (§8). A sync/ingest that silently stops never shows in the pipeline heatmap |
+| `research_claims` | P1 | nothing consumes it — non-relation evidence (watch items, risks, moat) has no persisted verdict, so **GLW's grafted quote is in the DB ungated** |
+| `dst_ticker` resolution | P2 | §2 — the real LLM job in this layer; until then edges are named nodes with no ticker link |
+| `research_report_sections` | P2 | §6 |
+| R2 transport | P2 (only when the producer moves off `sh019`) | sync the **EDGAR cache** with the reports (otherwise the gate silently stops being a gate) and upload `manifest.json` **last** |
+| `degraded_agents` consumption | P2 | the producer emits it as of schema 1.1; nothing here reads it |
+
+---
+
+## 8. Running it manually
+
+No orchestrator phase drives any of this yet, so a run is two steps by hand. Both
+producer and ingest live on `sh019` today, so there is **no transport** — reports
+land in `RESEARCH_REPORTS_DIR` (`~/.tradingagents/logs/reports/`), which is exactly
+what ingest reads.
+
+**Step 1 — generate (producer repo, its own venv, real spend ~15 min / ~$0.10 a name).**
+Only US **10-K** filers work; foreign private issuers (20-F / 40-F) fail pre-flight.
+
+```powershell
+cd $HOME\Documents\projects\TradingAgents
+foreach ($t in 'TBI','AMD','SHC') { .venv\Scripts\python.exe run_unattended.py $t }
+```
+
+Sanity-check one tree before trusting a batch (per `producer_deployment.md` §3.4):
+`complete_report.md` + `report.json` + `manifest.json` all present, and
+`report.json → agents.business_analyst` **not null** (null = fell back to free text,
+unscoreable).
+
+**Step 2 — digest (mm-strat repo). Free, idempotent, safe to re-run.** Close the
+Streamlit dashboard first — DuckDB is single-writer and the dashboard holds the lock.
+
+```powershell
+cd $HOME\Documents\projects\mm-strat
+.venv\Scripts\python.exe scripts\run_research.py TBI AMD SHC
+```
+
+`run_research.py` ingests the drop dir → `comprehend_runs()` → prints the
+`supply_chain_edges` rows (filtered to the named tickers). A bare
+`run_research.py` with no tickers digests everything new and prints the whole graph.
+Re-running is a no-op on already-seen `run_id`s. Read the report itself on the
+dashboard's **Equity Research** page (`scripts/pages/7_Equity_Research.py`, §6).
+
+**Notification — the plan, not yet built (§7 P1).** A finished run should announce
+itself in Discord, but a report is ~100 KB and does not fit a message. The design
+([`agentic_digestion_layer.md`](../session_logs/sprint_15/plans/agentic_digestion_layer.md) [5]):
+send a **compact briefing** — rating, thesis line, top risk, watch items, and the
+graph's headline edges — with a **link to the dashboard's Equity Research page** for
+the full report. **Reuse the render surface that exists** (the dashboard already
+splits sections and escapes `$`); do **not** mint PDFs or push markdown to R2 —
+that duplicates a render for no reader the dashboard link doesn't already serve.
+R2/PDF only earns its keep if the report must be readable with the dashboard down.
