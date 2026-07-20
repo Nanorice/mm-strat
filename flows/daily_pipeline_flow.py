@@ -171,6 +171,7 @@ def _serve() -> None:
     daily_pipeline.serve(
         name="daily",
         schedule=Cron(CRON, timezone=CRON_TZ),
+        limit=1,  # single-writer DuckDB: runner executes one run at a time, never fan out catch-up
     )
 
 
