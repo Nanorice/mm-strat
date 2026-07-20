@@ -24,6 +24,15 @@ reconstructed from their handovers and marked as such).
 9. **Why do `score_from_t3` and `daily_predictions` disagree for 8 tickers?** → `fundamental_features` contains 939 duplicate `(ticker, filing_date)` pairs across 354 tickers; 602 are one populated row + one all-NULL twin. Both views dedupe with `ORDER BY fiscal_period DESC`, which **ties** — so each lands on a different twin arbitrarily. `v_d3_lifecycle` gets the real numbers, `v_t3_training` the NULLs. [2026-07-20_04](logs/2026-07-20_04_stage_semantics_and_t3_universe.md)
 10. **Where should that be fixed — the views or the table?** ? **OPEN — see Open meta-questions.**
 
+## Thread D: The research producer and its verification gate
+
+11. **Why does the business analyst fall back to free text when the other structured nodes don't?** → Not flakiness: ~30× the schema surface. PM/Trader/Research Manager/Sentiment ask for 3–5 flat fields, 0–1 validators; `BusinessProfile` asks for 17, mostly lists of nested models, plus `Relation` (5 fields, 2 validators) × N. Pydantic fails the whole object on one bad element, so P(failure) rises with relation count — GLW (9) failed deterministically, RKLB (7) passed. [2026-07-20_05](logs/2026-07-20_05_producer_fork_and_kb_design.md)
+12. **Is MRVL's 60.7% fidelity a real quality gap?** ⟳ No — a checker false negative. The filing writes `("Marvell," "MTI,")`, the model `('Marvell,' 'MTI,')`; `_PUNCT` folded curly→straight but never single→double, and both forms were already straight. Folding every quote glyph: 60.7% → 96.4%, RKLB unchanged. **Second such bug this sprint — diagnose a sub-100% score as a checker bug first.** [2026-07-20_05](logs/2026-07-20_05_producer_fork_and_kb_design.md)
+13. **Is the last unverified MRVL claim a fabrication?** → No, and the flag is still correct. `cost of goods sold 49.0 [for fiscal 2026]` — figure real, bracket is the model's own gloss disambiguating two table columns. Left flagged; stripping brackets would bless an inference wearing a quote's clothing. [2026-07-20_05](logs/2026-07-20_05_producer_fork_and_kb_design.md)
+14. **Is EDGAR filing text stored outside DuckDB?** → Entirely. The DB holds only `cik_map`; all text is the producer's on-disk cache (52 MB, 11 accessions, no backup). Reconstructible — filings are immutable, `meta.json` has the URL — but verification runs against the **sliced** text, so `quote_verified` is not reproducible across a re-slice. Persist verdicts. [2026-07-20_05](logs/2026-07-20_05_producer_fork_and_kb_design.md)
+15. **How do edges stay idempotent across repeated runs?** → Make `supply_chain_edges` a `GROUP BY` projection over an append-only `research_relations` log keyed on `run_id`, never an accumulator. A second run increments a counter; it does not add a row. [plans/knowledge_base_schema.md](plans/knowledge_base_schema.md)
+16. **What is the post-fix structured-output success rate?** ? **OPEN** — 1 for 1 (MRVL). Step 3 is gated on this and it is not yet a rate.
+
 ---
 
 ## Open meta-questions
