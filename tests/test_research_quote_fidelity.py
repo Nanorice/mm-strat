@@ -75,7 +75,7 @@ def test_trailing_full_stop_the_source_lacks_is_forgiven(filing):
 
 def test_curly_quotes_and_dashes_normalise(filing):
     assert normalize('“a–b”') == '"a-b"'
-    assert normalize('  A   B \n C ') == 'a b c'
+    assert normalize('  A   B \n C ') == 'abc'
 
 
 def test_single_and_double_quotes_fold_together(filing):
@@ -84,7 +84,7 @@ def test_single_and_double_quotes_fold_together(filing):
     swapped. Folding only curly→straight missed it — both were already straight
     — and it failed 10 of 28 claims, reporting 60.7% for a materially clean run.
     """
-    assert normalize("'a' \"a\" ‘a’ “a”") == '"a" "a" "a" "a"'
+    assert normalize("'a' \"a\" ‘a’ “a”") == '"a""a""a""a"'
 
 
 def test_quote_style_swap_still_catches_an_altered_word(filing):
@@ -93,6 +93,44 @@ def test_quote_style_swap_still_catches_an_altered_word(filing):
     assert 'customers' in swapped  # guard: the substitution below must bite
     assert quote_is_grounded(swapped, filing) is True
     assert quote_is_grounded(swapped.replace('customers', 'suppliers'), filing) is False
+
+
+def test_lost_block_boundary_is_forgiven(filing):
+    """GLW 2026-07-20, Item 7: the sliced text reads "...core rate.To offset..."
+    with no space where the source had a paragraph break. The model wrote the
+    space, as any correct transcription would.
+
+    Asserted in the mirror direction — the quote drops a space the filing has —
+    because the fixture filing is well-formed and cannot be un-sliced. It is the
+    same fold either way: whitespace is gone from both sides before comparison.
+    """
+    glued = REAL_QUOTE.replace('our revenues and', 'our revenuesand')
+    assert glued != REAL_QUOTE  # guard: the substitution must bite
+    assert quote_is_grounded(glued, filing) is True
+
+
+def test_bullet_glued_to_its_list_item_is_forgiven(filing):
+    """GLW Item 1A: "...risks including: •The loss or insolvency...". The bullet
+    is layout the filer's HTML carried in; a quote need not reproduce it.
+    """
+    bulleted = '• ' + REAL_QUOTE.replace('our top five backlog', '•our top five backlog')
+    assert quote_is_grounded(bulleted, filing) is True
+
+
+def test_recomposed_sentence_fails(filing):
+    """The first true positive this checker produced, GLW 2026-07-20.
+
+    The filing reads "...growth opportunities through 2026 and beyond. We
+    therefore expect to increase both our capacity ... to achieve our goals,
+    while sharing risk appropriately...". The model wrote "...to achieve our
+    goals, through 2026 and beyond." — every word present in the filing, the
+    sentence not. Layout folding must never bless this: it is the case that
+    separates a transcription from a composition.
+    """
+    head, tail = REAL_QUOTE.split(' and our top five backlog customers')
+    recomposed = head + ' as of December 31, 2025.'
+    assert quote_is_grounded(head, filing) is True  # guard: the graft's stem is real
+    assert quote_is_grounded(recomposed, filing) is False
 
 
 def test_ellipsis_elided_quote_checks_every_fragment(filing):

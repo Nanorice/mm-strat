@@ -36,6 +36,17 @@ _PUNCT = {
     '–': '-', '—': '-', '‑': '-', ' ': ' ',
 }
 
+# Layout, not wording. The sliced filing text loses block boundaries in both
+# directions and a quote cannot be held responsible for either. GLW 2026-07-20,
+# Item 7: "...107 Japanese yen to USD core rate.To offset the change..." carries
+# no space where the source had a paragraph break, and Item 1A glues a bullet
+# straight to its item ("...risks including: •The loss or insolvency..."). A
+# model that transcribes both passages correctly writes the space and drops the
+# bullet, and scored 90.3% for it. Removing whitespace entirely rather than
+# collapsing it makes the check indifferent to every artifact of this family
+# instead of the two so far observed. Altering a *word* still fails.
+_LAYOUT = re.compile(r'[\s•‣▪○●◦⁃·]+')
+
 # A quote elided with "..." is two or more real fragments; each is checked.
 _ELLIPSIS = re.compile(r'\s*(?:\.\.\.|…)\s*')
 
@@ -54,10 +65,11 @@ _MIN_WHOLE_QUOTE_CHARS = 8
 
 
 def normalize(text: str) -> str:
+    """Fold text to its comparison form. Not meant to stay readable."""
     text = unicodedata.normalize('NFKC', text)
     for src, dst in _PUNCT.items():
         text = text.replace(src, dst)
-    return ' '.join(text.lower().split())
+    return _LAYOUT.sub('', text.lower())
 
 
 def load_filing_text(ticker: str, cache_dir=None) -> Tuple[str, str]:
