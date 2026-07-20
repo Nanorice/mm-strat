@@ -57,20 +57,20 @@ class UniverseBackfillEngine:
                     country VARCHAR,
                     market_cap DOUBLE,
                     beta DOUBLE,
+                    is_active BOOLEAN DEFAULT TRUE,
                     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # Add missing columns if they don't exist (backward compatibility)
-            try:
-                con.execute("ALTER TABLE company_profiles ADD COLUMN beta DOUBLE")
-            except Exception:
-                pass  # Column already exists
-
-            try:
-                con.execute("ALTER TABLE company_profiles ADD COLUMN discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-            except Exception:
-                pass  # Column already exists
+            # Backward compatibility: DBs created before these columns existed.
+            # IF NOT EXISTS is required — a duplicate-column ALTER aborts the DuckDB
+            # transaction, taking every later CREATE in this method down with it.
+            con.execute("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS beta DOUBLE")
+            con.execute("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+            con.execute(
+                "ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS "
+                "discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            )
 
             con.execute("""
                 CREATE TABLE IF NOT EXISTS price_data (
@@ -85,14 +85,6 @@ class UniverseBackfillEngine:
                 )
             """)
             con.execute("""
-                CREATE TABLE IF NOT EXISTS shares_history (
-                    ticker VARCHAR NOT NULL,
-                    date DATE NOT NULL,
-                    shares_outstanding BIGINT,
-                    PRIMARY KEY (ticker, date)
-                )
-            """)
-            con.execute("""
                 CREATE TABLE IF NOT EXISTS ticker_blacklist (
                     ticker VARCHAR NOT NULL PRIMARY KEY,
                     reason VARCHAR,
@@ -102,6 +94,11 @@ class UniverseBackfillEngine:
             """)
         finally:
             con.close()
+
+        # shares_history belongs to SharesEngine — it must own the DDL, or a
+        # CREATE TABLE IF NOT EXISTS race here silently wins with a schema its
+        # own _upsert (updated_at) can't write to.
+        SharesEngine(self.db_path).ensure_table()
 
     # ------------------------------------------------------------------
     # Blacklist
@@ -673,10 +670,9 @@ class UniverseBackfillEngine:
     # ------------------------------------------------------------------
 
     def backfill_shares(self, max_workers: int = 8) -> int:
-        """Backfill shares_history for all tickers in company_profiles.
+        """Backfill shares_history for tickers in company_profiles.
 
-        Uses yfinance quarterly financials (limited but free).
-        Idempotent: INSERT OR IGNORE.
+        Delegates to SharesEngine, which owns fetching and the idempotent upsert.
         """
         pending = self._get_pending_tickers("shares")
         if not pending:
@@ -684,58 +680,13 @@ class UniverseBackfillEngine:
             return 0
 
         print(f"   Backfilling shares for {len(pending):,} tickers (workers={max_workers})")
-        total_rows = 0
         t0 = time.perf_counter()
-        buffer: list[pd.DataFrame] = []
-        flush_threshold = 500
 
-        pbar = tqdm(total=len(pending), desc="   Shares", unit="ticker", disable=False)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(SharesEngine._fetch_one, t, "1990-01-01"): t
-                for t in pending
-            }
-            completed = 0
-            for future in as_completed(futures):
-                df = future.result()
-                if df is not None:
-                    buffer.append(df)
-                completed += 1
-                pbar.update(1)
-
-                # Flush periodically
-                if len(buffer) >= flush_threshold:
-                    rows = self._write_shares_batch(pd.concat(buffer, ignore_index=True))
-                    total_rows += rows
-                    buffer.clear()
-
-        pbar.close()
-
-        # Final flush
-        if buffer:
-            rows = self._write_shares_batch(pd.concat(buffer, ignore_index=True))
-            total_rows += rows
+        rows = SharesEngine(self.db_path).backfill(pending, max_workers=max_workers)
 
         elapsed = time.perf_counter() - t0
-        rate = total_rows / max(elapsed, 1)
-        print(f"   [OK] Shares backfill complete: {total_rows:,} rows in {elapsed / 60:.1f} min ({rate:.0f} rows/sec)")
-        return total_rows
-
-    def _write_shares_batch(self, df: pd.DataFrame) -> int:
-        if df.empty:
-            return 0
-        con = db.connect(self.db_path)
-        try:
-            con.execute("""
-                INSERT INTO shares_history (ticker, date, shares_outstanding)
-                SELECT ticker, date, shares_outstanding
-                FROM df
-                ON CONFLICT (ticker, date) DO NOTHING
-            """)
-            return len(df)
-        finally:
-            con.close()
+        print(f"   [OK] Shares backfill complete: {rows:,} rows in {elapsed / 60:.1f} min")
+        return rows
 
     # ------------------------------------------------------------------
     # Step 4: Quarterly universe refresh (gated in daily_pipeline_orchestrator)
