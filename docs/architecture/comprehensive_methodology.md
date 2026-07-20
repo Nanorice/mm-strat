@@ -378,7 +378,7 @@ python scripts/run_daily_pipeline.py                # or the Prefect deployment
 | sh019 needs backfill + view refresh after the 2026-07-18 watchlist merge | ops box | pull code, rerun backfill + `create_duckdb_views` |
 | Nightly DB backup story open | ops | post-incident follow-up |
 | Shadow book orchestrator wiring (Step 6) deferred | `forward_engine` / sh019 | remember dashboard-manifest parity when wiring |
-| `score_from_t3` vs `v_d3_lifecycle` feature-snapshot seam | `universe_scorer.py` / `view_manager.py` | 8 tickers diverge (1.01% vs 1.0% threshold) — `test_backtest_matches_prod_predictions` fails. Two scoring paths that should agree exactly; **do not raise the threshold**, find the feature that differs |
+| **Duplicate `(ticker, filing_date)` rows in `fundamental_features`** | `fundamental_features` table / both dedupe sites | **939 pairs across 354 tickers; 602 are one populated row + one all-NULL twin.** Both `ff_dedup` (`v_d3_lifecycle`) and the `v_t3_training` join dedupe with `ORDER BY fiscal_period DESC`, which **ties** — each lands on a different twin, so the same ticker-date gets real fundamentals in one view and NULLs in the other. Surfaces as `test_backtest_matches_prod_predictions` at 1.014% vs a 1.0% threshold (SNDK). **Do not raise the threshold.** 252 further pairs have two *populated* rows — tie-broken arbitrarily, no NULL check catches those. Fix upstream, not per-view — see sprint_15 RESEARCH_LOG Q10 |
 | T3 self-heal window is 30d | `daily_pipeline_orchestrator.py` | a rebuild back-dating sessions >30d leaves permanent holes before the window |
 
 DuckDB gotchas (UBIGINT volume, no window in UPDATE, named-window limits) and data
