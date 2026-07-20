@@ -4,6 +4,13 @@
 Close the promotion defect that caused session 02, then fix what session 02 surfaced but
 could not name: the Screening `stage` was a same-day event flag masquerading as a state,
 and the T3 universe structurally excluded the names `pre_breakout` scoring exists to rank.
+Ended by root-causing the one test the day's work left failing.
+
+> **Recurring theme:** every defect closed today was an **event used where a state was
+> meant**, or **one definition living in two places**. `breakout_ok` (a day) as the stage
+> (a state); "has opened a session" (an event) as the T3 universe where "is in the trend
+> template" (a state) was meant; the T3 universe defined twice; the fundamentals dedup
+> defined twice. Worth carrying as a search pattern, not just a list of fixes.
 
 ## ✅ Accomplished
 
@@ -58,6 +65,25 @@ silently never render. Now `trend_ok ∨ active VIP`. MRVL + RKLB added as live 
 (new `session` + **Screening stages** entries), `feature_pipeline.md`, `orchestrator.md` (new
 T3 self-heal section), `model_registry.md`, `managers.md`, `dashboard.md`.
 
+**Root-caused the `score_from_t3` vs `daily_predictions` seam** (the failing test)
+- Not scoring drift — a **data defect** surfacing through two views that dedupe differently.
+- `fundamental_features` holds **939 duplicate `(ticker, filing_date)` pairs across 354
+  tickers**; **602** are one populated row + one all-NULL twin filed the same day at a
+  slightly different `report_date` (SNDK 2025-11-07: `report_date` 2025-09-30 → eps 0.75 /
+  rev 2.308B; `report_date` 2025-10-03 → empty).
+- Both dedupe sites — `ff_dedup` in `v_d3_lifecycle` and the `v_t3_training` join — order by
+  `fiscal_period DESC`, which **ties** when the twins share a fiscal period. Each view lands
+  on a different twin arbitrarily: lifecycle gets the numbers, `v_t3_training` the NULLs.
+- The tell: all 14 diverging model features are **fundamentals**. T3 doesn't store them, it
+  joins them at query time — so the divergence had to be in the join, not in the features.
+- ⚠️ A further **252 pairs have two *populated* rows**, tie-broken arbitrarily too. No
+  NULL-preference fix covers those.
+- **Not fixed** — see Next Steps 2. Logged as RESEARCH_LOG Q10 with both options.
+
+**Opened `sprint_15/RESEARCH_LOG.md`** — the sprint had none. Threads A–C, 10 questions
+reconstructed from this sprint's handovers; Q5 (M01 validity on session-less names) and Q10
+(where to fix the coin-flip) left open with methods.
+
 ## 📝 Files Changed
 - `src/model_registry.py`: `_assert_scores_backfilled()` + call in `set_prod`.
 - `src/managers/view_manager.py`: `stage` keyed to session; `pop` admits active VIP; `models`
@@ -68,7 +94,12 @@ T3 self-heal section), `model_registry.md`, `managers.md`, `dashboard.md`.
 - `tests/test_promotion_gate.py`: score-coverage test.
 - `tests/test_feature_pipeline.py`: universe test rewritten to the new contract + a
   "guard the guard" assertion so it can't pass trivially.
-- Docs: 7 files (above).
+- Docs: 7 files (above) + `docs/session_logs/sprint_15/RESEARCH_LOG.md` (new).
+
+Commits: `e94e907` (code + docs), `6f0d431` (stale-TODO correction), `8399e31` (seam
+root cause + RESEARCH_LOG), `3ccd01e` (knowledge-base design doc, not authored here —
+committed separately so it isn't misattributed). `18d3a16` carries session 03's
+uncommitted research-report work, which was sitting in the tree when this session began.
 
 ## 🚧 Work in Progress (CRITICAL)
 
@@ -78,20 +109,28 @@ T3 self-heal section), `model_registry.md`, `managers.md`, `dashboard.md`.
   its old timestamp until the final second — do not read that as a stall, as I briefly did.)
 - **NOT pushed to R2.** `sync_dashboard_db.py` publishes externally; left for a human. The
   nightly `r2_sync` phase will otherwise pick it up.
-- **1 failing test, deliberately not silenced**: `test_backtest_matches_prod_predictions` at
-  **1.014% vs a 1.0% threshold**. Verified NOT mine — the 8 diverging tickers (AXTI, BLTE,
-  GALT, GRC, HYMC, NHC, SNDK, VERI) are all pre-existing and **zero** newly-admitted tickers
-  appear in the test's window. It is a real seam: `score_from_t3` reads t3 directly while
-  `daily_predictions` is hydrated via `v_d3_lifecycle`, and they disagree for a few names.
-  My backfill refreshed prod predictions and nudged a pre-existing residual over the line.
-  **Do not raise the threshold** — find the feature that differs.
+- **1 failing test, root-caused but deliberately NOT fixed**:
+  `test_backtest_matches_prod_predictions` at **1.014% vs a 1.0% threshold**. Verified not
+  mine — the 8 diverging tickers are all pre-existing and **zero** newly-admitted tickers
+  appear in the test's window; my backfill merely refreshed prod predictions and nudged a
+  pre-existing residual over the line. Root cause below (💡). **Left failing on purpose**:
+  the fix is a judgement call between patching every consumer and a destructive prod write,
+  and raising the threshold would hide ~600 silent coin-flips. Logged as RESEARCH_LOG Q10.
 
 ## ⏭️ Next Steps
 1. Verify tonight's run: **first nightly under the widened universe.** Phase 5 should be a
    no-op (0 holes). Slim DB is already correct, so Phase 7.5 should simply reproduce it.
-2. Root-cause the `score_from_t3` vs `v_d3_lifecycle` feature seam (the failing test).
-3. Plan Q3 — is M01 valid on session-less names? The 12 first-time setups now receive scores
-   of unverified validity. User accepted this as placeholder-grade for non-`triggered` rows.
+2. **Decide where to fix the duplicate-fundamentals coin-flip** (RESEARCH_LOG Q10 — root
+   cause found this session, fix deliberately deferred). Answer the upstream question first:
+   *why does the fundamentals engine write an empty shell at a slightly different
+   `report_date`?* Then choose — patch every consumer's tie-break (small, but the next new
+   view forgets it) or clean the table (correct, but a destructive prod write, and
+   `d2_training_cache` needs refreshing since training data may embed the coin-flip).
+   ⚠️ 252 pairs have two *populated* rows — a NULL-preference fix does **not** cover them.
+3. Plan Q3 — is M01 valid on session-less names? Now recorded with a method in
+   [RESEARCH_LOG.md](../RESEARCH_LOG.md) open meta-questions. The 12 first-time setups
+   receive scores of unverified validity; the user accepted them as placeholder-grade for
+   non-`triggered` rows, which is a **display** decision, not a validity finding.
 4. ~~`sepa_watchlist` rebuild~~ — **already done**, 2026-07-20 02:31:13. Verified after the
    user challenged it: one `updated_at` across all 39,088 rows (full rewrite), the six
    formerly-corrupt days now carry 11/6/14/6/26/33 entries where they had zero, and the
@@ -118,6 +157,15 @@ T3 self-heal section), `model_registry.md`, `managers.md`, `dashboard.md`.
 - **Do not run `pytest tests/` while a prod-DB writer is in flight.** It produces ~10
   failures with `IO Error: ... used by another process` that look exactly like real
   regressions. Cost me a debugging detour; now recorded in memory.
+- **A failing test can be a data defect wearing a threshold's clothes.** The seam looked like
+  scoring drift and sat 0.014pp over a tolerance — the tempting read is "flaky, bump it". The
+  diagnostic that cracked it was diffing the two views' **feature vectors** rather than their
+  scores: all 14 differing columns were fundamentals, and T3 doesn't store fundamentals. That
+  narrowed a 97-feature search to one join in two queries. **Diff the inputs, not the output.**
+- **Two consumers deduping the same rows independently is the same class of bug as the T3
+  universe having two definitions** — fixed once this session by a shared constant, found
+  again hours later in `ff_dedup` vs `v_t3_training`. Worth a sweep for other duplicated
+  as-of/dedup logic; each instance is a silent coin-flip, not a loud error.
 - **AGL was never a self-heal bug** — an out-of-band `sepa_watchlist` rebuild at 02:31 landed
   after the previous night's Phase 5. Diagnosis came from comparing `pipeline_runs` timestamps
   against `updated_at`, not from reading the heal logic. That same 02:31 rebuild *was* the
