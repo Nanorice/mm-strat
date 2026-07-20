@@ -525,7 +525,11 @@ PIPELINE_FAILURE_MODES = {
     "phase_1_t1_price": PipelineFailureMode.HALT,         # CRITICAL - drives Phase 1 ingestion HALT check
     "phase_1_t1_fundamentals": PipelineFailureMode.WARN,  # Non-critical - stale data OK
     "phase_1_t1_shares": PipelineFailureMode.WARN,        # Non-critical - use previous shares
-    "phase_1_t1_macro": PipelineFailureMode.WARN,         # Non-critical - M03 will use previous scores
+    # WARN, but NOT harmless: t2_screener reads t1_macro.spy_close for price_vs_spy,
+    # which gates trend_ok. A skipped macro day used to write an all-FALSE trend_ok
+    # universe (2026-06-01/03/04/05/09, 06-24). FeaturePipeline._assert_benchmark_coverage
+    # now hard-fails t2 instead, so this staying WARN costs a halted t2, not silent corruption.
+    "phase_1_t1_macro": PipelineFailureMode.WARN,
     "phase_1_cik_map_refresh": PipelineFailureMode.WARN,         # Non-critical - cik_map staleness only delays new SEC filings
     "phase_1_filing_date_backfill": PipelineFailureMode.WARN,    # Non-critical - fills NULL filing_dates from SEC EDGAR
     "phase_1_earnings_calendar_refresh": PipelineFailureMode.WARN,  # Non-critical - weekly cadence

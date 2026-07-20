@@ -124,6 +124,46 @@ class FeaturePipeline:
     # T2: Lightweight Screener Features (Milestone 3.3)
     # ------------------------------------------------------------------
 
+    def _assert_benchmark_coverage(self, con, start_date: str, end_date: str) -> None:
+        """Fail loudly when t1_macro lacks spy_close for a trading day we're about to compute.
+
+        `trend_ok` gates on `price_vs_spy > price_vs_spy_ma63`, and price_vs_spy is
+        close / t1_macro.spy_close. A missing benchmark row makes price_vs_spy NULL,
+        which COALESCE(..., FALSE) then turns into "not in trend" for the ENTIRE
+        universe — a silent, universe-wide false negative that looks like a market
+        event, not a bug.
+
+        That is exactly what happened on 2026-06-01/03/04/05/09 and 06-24: the WARN-mode
+        phase_1_t1_macro sub-phase no-opped, t2 ran anyway, and six days of trend_ok
+        were written as all-FALSE. t1_macro was backfilled later; the t2 rows were not.
+
+        Trading days are defined by SPY's OWN presence in price_data, not by the
+        existence of any price row. Market holidays carry a handful of phantom vendor
+        bars — 2026-06-19 (Juneteenth) has 4 tickers, 2001-09-11 has 1 — while SPY and
+        t1_macro correctly have none. Keying off "any price row" would flag those as
+        gaps and block a legitimate recompute; keying off SPY asks the right question:
+        did the benchmark trade, and if so, did we record it?
+        """
+        missing = con.execute(f"""
+            SELECT DISTINCT p.date
+            FROM {self.price_source} p
+            -- benchmark traded that day => t1_macro owes us a spy_close
+            INNER JOIN price_data spy ON spy.ticker = 'SPY' AND spy.date = p.date
+            LEFT JOIN t1_macro m ON m.date = p.date
+            WHERE p.date >= '{start_date}' AND p.date <= '{end_date}'
+              AND m.spy_close IS NULL
+            ORDER BY p.date
+        """).fetchall()
+        if missing:
+            dates = ", ".join(str(r[0]) for r in missing[:10])
+            more = f" (+{len(missing) - 10} more)" if len(missing) > 10 else ""
+            raise ValueError(
+                f"[T2] t1_macro.spy_close missing for {len(missing)} trading day(s): "
+                f"{dates}{more}. Refusing to compute trend_ok — a NULL benchmark would "
+                f"zero the flag for the whole universe. Run MacroEngine.ingest_daily_macro() "
+                f"(or _heal_t1_macro_gaps) for this range first."
+            )
+
     def compute_t2_screener_features(self, start_date: str = '2020-01-01', warmup_days: int = 400, end_date: str = None) -> int:
         """Compute T2 screener features for full universe (30 lightweight columns).
 
@@ -265,6 +305,10 @@ class FeaturePipeline:
                     con.execute(f"ALTER TABLE t2_screener_features ADD COLUMN {col_name} {col_type}")
                     logger.info(f"[T2] Added column: {col_name}")
 
+            # Benchmark must cover the write range before we touch a row — see the
+            # method docstring for the six days this would have caught.
+            self._assert_benchmark_coverage(con, start_date, end_date)
+
             # Delete existing rows in target range, then insert (avoids PK check against full table)
             con.execute(f"DELETE FROM t2_screener_features WHERE date BETWEEN '{start_date}' AND '{end_date}'")
 
@@ -298,7 +342,11 @@ class FeaturePipeline:
                         s.spy_close,
                         p.close / NULLIF(s.spy_close, 0) as price_vs_spy
                     FROM price_base p
-                    LEFT JOIN spy_data s ON p.date = s.date
+                    -- INNER, not LEFT: a benchmark-less date must drop out (loud, a row
+                    -- count that moves) rather than yield NULL price_vs_spy, which
+                    -- COALESCE turns into trend_ok = FALSE universe-wide (silent).
+                    -- _assert_benchmark_coverage is the real guard; this is depth.
+                    INNER JOIN spy_data s ON p.date = s.date
                 ),
                 core_features AS (
                     SELECT
