@@ -210,7 +210,10 @@ def get_model_features(model_name: str = 'M01', db_path: str = 'data/market_data
     """
     from src import db
 
-    con = db.connect(db_path)
+    # read_only: this function only SELECTs. A write-mode open would take the
+    # single-writer lock the nightly pipeline needs, and would CREATE the DB if
+    # the path is wrong rather than failing loudly.
+    con = db.connect(db_path, read_only=True)
     try:
         result = con.execute(
             """

@@ -4,6 +4,7 @@ Requires a populated DuckDB — run scripts/populate_feature_catalog.py first.
 """
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,7 +22,19 @@ MODEL_VERSION_ID = "M01_baseline_v0.1"
 
 
 def _con():
-    return duckdb.connect(str(DB_PATH))
+    """Read-only handle on the production DB.
+
+    read_only is mandatory: a write-mode open CREATES the database if it is
+    absent (and every manager/engine constructed against it then materialises
+    its tables there), so an inspection-only test suite would silently build a
+    stub production DB. Read-only also keeps the suite off the single-writer
+    lock the nightly pipeline needs.
+    """
+    if not DB_PATH.exists():
+        raise unittest.SkipTest(
+            f"{DB_PATH} not present — run scripts/populate_feature_catalog.py"
+        )
+    return duckdb.connect(str(DB_PATH), read_only=True)
 
 
 class TestFeatureCatalogPopulated(unittest.TestCase):
@@ -106,14 +119,36 @@ class TestFeatureCatalogImmutability(unittest.TestCase):
     """Verify the PK constraint prevents duplicate feature definitions."""
 
     def test_feature_immutability(self):
-        """Inserting duplicate (feature_name, version_introduced) must raise."""
-        con = _con()
-        with self.assertRaises(Exception):
-            con.execute(
-                "INSERT INTO feature_catalog (feature_name, source_layer, version_introduced) VALUES (?, ?, ?)",
-                ["rs", "t2_sql", "v3.1"],
-            )
-        con.close()
+        """Inserting duplicate (feature_name, version_introduced) must raise.
+
+        Runs against a throwaway DB built by ModelRegistry's own DDL. This asserts
+        a schema constraint, so it must not INSERT into production — the previous
+        version aimed its INSERT at the real DB and was safe only because the PK
+        happened to reject it.
+
+        Seeding the row here also makes the assertion honest: the old
+        assertRaises(Exception) passed even when feature_catalog was missing
+        entirely, so it never actually proved the constraint existed.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Not pre-created — DuckDB refuses to open an existing zero-byte file.
+            db_path = Path(tmpdir) / "registry.duckdb"
+            ModelRegistry(db_path=db_path)  # runs the feature_catalog DDL
+
+            row = ["rs", "t2_sql", "v3.1"]
+            con = duckdb.connect(str(db_path))
+            try:
+                con.execute(
+                    "INSERT INTO feature_catalog (feature_name, source_layer, version_introduced) VALUES (?, ?, ?)",
+                    row,
+                )
+                with self.assertRaises(duckdb.ConstraintException):
+                    con.execute(
+                        "INSERT INTO feature_catalog (feature_name, source_layer, version_introduced) VALUES (?, ?, ?)",
+                        row,
+                    )
+            finally:
+                con.close()
 
 
 class TestViewNoLogFeatures(unittest.TestCase):
@@ -141,6 +176,10 @@ class TestViewNoLogFeatures(unittest.TestCase):
 class TestGetModelFeaturesFromDB(unittest.TestCase):
     """get_model_features() must return the prod model's registered features."""
 
+    def setUp(self):
+        if not DB_PATH.exists():
+            self.skipTest(f"{DB_PATH} not present")
+
     def test_get_model_features_from_db(self):
         from src.utils import get_model_features
 
@@ -157,7 +196,18 @@ class TestGetModelFeaturesFromDB(unittest.TestCase):
 
 
 class TestReproducibilityInfo(unittest.TestCase):
-    """get_reproducibility_info must return full feature definitions for v0.1."""
+    """get_reproducibility_info must return full feature definitions for v0.1.
+
+    KNOWN GAP: ModelRegistry has no read-only mode — its constructor runs DDL and
+    all 20 of its connect sites open write mode. So these two tests still take a
+    write handle on the production DB when it is present, and the conftest guard
+    will (correctly) fail them there. Fixing that means threading read_only
+    through ModelRegistry, which is a separate change.
+    """
+
+    def setUp(self):
+        if not DB_PATH.exists():
+            self.skipTest(f"{DB_PATH} not present")
 
     def test_reproducibility_info_returns_dataframe(self):
         registry = ModelRegistry(db_path=DB_PATH)

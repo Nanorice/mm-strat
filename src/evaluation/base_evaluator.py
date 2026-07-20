@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from ..model_registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +75,6 @@ class BaseEvaluator(ABC):
         # Evaluation subdirectory
         self.eval_dir = self.output_dir / "evaluation"
         self.eval_dir.mkdir(exist_ok=True)
-
-        # Model registry connection
-        self.registry = ModelRegistry(db_path=db_path)
 
         # Metrics storage
         self.metrics: Dict[str, Any] = {}

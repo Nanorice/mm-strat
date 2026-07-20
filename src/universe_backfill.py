@@ -61,16 +61,24 @@ class UniverseBackfillEngine:
                 )
             """)
 
-            # Add missing columns if they don't exist (backward compatibility)
-            try:
+            # Backward compatibility for tables created before these columns
+            # existed. Must be checked, not attempted-and-swallowed: a failed
+            # ALTER aborts the DuckDB transaction, so `except: pass` leaves the
+            # connection poisoned and every later statement raises
+            # TransactionException.
+            existing_cols = {
+                r[0] for r in con.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'company_profiles'"
+                ).fetchall()
+            }
+            if "beta" not in existing_cols:
                 con.execute("ALTER TABLE company_profiles ADD COLUMN beta DOUBLE")
-            except Exception:
-                pass  # Column already exists
-
-            try:
-                con.execute("ALTER TABLE company_profiles ADD COLUMN discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-            except Exception:
-                pass  # Column already exists
+            if "discovered_at" not in existing_cols:
+                con.execute(
+                    "ALTER TABLE company_profiles ADD COLUMN discovered_at "
+                    "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                )
 
             con.execute("""
                 CREATE TABLE IF NOT EXISTS price_data (
