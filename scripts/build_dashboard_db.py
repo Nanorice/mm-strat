@@ -104,6 +104,11 @@ MANIFEST: list[tuple[str, str, dict]] = [
     ("pipeline_error_log",   "full", {}),
     ("models",               "full", {}),
     ("cik_map",              "full", {}),
+    # Agentic research reports. raw_md is 40-60 KB/row, so this is the one "full"
+    # entry with a real growth path — 100 names/day is ~1.8 GB/yr against a 10 GB
+    # R2 tier. Copied whole while row counts are in the dozens.
+    # ponytail: window this on report_date once the table passes ~2k rows.
+    ("research_reports",     "full", {}),
 ]
 
 

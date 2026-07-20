@@ -1,4 +1,4 @@
-"""Equity Research — read surface for single-name markdown reports (PLACEHOLDER).
+"""Equity Research — read surface for single-name markdown reports.
 
 Per `equity_research_page.md`. One step in the knowledge-base pipeline:
 
@@ -6,14 +6,12 @@ Per `equity_research_page.md`. One step in the knowledge-base pipeline:
 
 This page is where a human reads step 3.
 
-⚠️ **`research_reports` DOES NOT EXIST YET.** It is a *contract*
-(`research_layer_contract.md`), not a built table — verified against the live DB
-2026-07-18: zero tables matching %research%/%report%. So this page ships as an
-honest empty state and degrades the moment the table appears, without a rewrite:
-`_load_reports` probes for the table and returns None when absent.
+`research_reports` landed 2026-07-20 (`src/research_report_engine.py`), but the
+empty states stay: the table is absent from any DB built before that, and
+`_load_reports` still distinguishes "table missing" from "table empty".
 
-Placeholder means placeholder — no scoring, no NLP, no summary generation. An
-honest empty state beats a fabricated report.
+No scoring, no NLP, no summary generation here — this page renders what the
+agent wrote and nothing else.
 """
 from __future__ import annotations
 
@@ -27,7 +25,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard_utils import _connect  # noqa: E402
+from dashboard_utils import (  # noqa: E402
+    _connect, escape_markdown_dollars, fell_back_to_free_text,
+    split_report_sections,
+)
 
 _CSS = """
 <style>
@@ -66,7 +67,7 @@ def _load_reports() -> pd.DataFrame | None:
         if not exists:
             return None
         return con.execute("""
-            SELECT ticker, report_date, raw_md
+            SELECT ticker, report_date, raw_md, key_facts_json
             FROM research_reports
             QUALIFY row_number() OVER (PARTITION BY ticker ORDER BY report_date DESC) = 1
             ORDER BY ticker
@@ -113,5 +114,38 @@ tickers = reports["ticker"].tolist()
 pick = st.selectbox(f"Ticker · {len(tickers)} with a report", tickers)
 row = reports[reports["ticker"] == pick].iloc[0]
 st.caption(f"**{pick}** · report date {str(row['report_date'])[:10]}")
+
+raw_md = row["raw_md"] or ""
+sections = split_report_sections(raw_md)
+
+if not sections:
+    # Older or hand-written report with no agent headings — render it whole
+    # rather than showing nothing.
+    st.markdown("---")
+    st.markdown(escape_markdown_dollars(raw_md) or
+                "_Report row exists but `raw_md` is empty._")
+    st.stop()
+
+# Business analyst first: it carries the relations/evidence the knowledge base
+# is built from, so it is what this page is usually opened for.
+names = list(sections)
+if "Business Analyst" in names:
+    names.insert(0, names.pop(names.index("Business Analyst")))
+choice = st.radio("Section", names + ["Everything"], horizontal=True,
+                  label_visibility="collapsed")
+
 st.markdown("---")
-st.markdown(row["raw_md"] or "_Report row exists but `raw_md` is empty._")
+if choice == "Everything":
+    st.markdown(escape_markdown_dollars(raw_md))
+else:
+    st.markdown(f"#### {choice}")
+    if fell_back_to_free_text(row["key_facts_json"], choice):
+        st.warning(
+            f"**This section is a free-text fallback, not the agent's typed "
+            f"output.** {choice}'s structured call failed on this run, so "
+            f"`report.json` holds `null` and the prose below is whatever the "
+            f"model emitted unconstrained — often a raw JSON dump. Nothing "
+            f"downstream (relations, quote fidelity) can score it. "
+            f"Re-run the name to replace it."
+        )
+    st.markdown(escape_markdown_dollars(sections[choice]))

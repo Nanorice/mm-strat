@@ -6,7 +6,9 @@ rendering. Read-only DB access throughout.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 
 import duckdb
@@ -1907,3 +1909,74 @@ def load_sector_industries(sector: str) -> pd.DataFrame:
         """, [sector]).fetchdf()
     finally:
         con.close()
+
+
+# ── Research report rendering ────────────────────────────────────────────────
+# The agent's `complete_report.md` is one blob per run. Its agent sections are
+# `### <Agent Name>` headings, but every agent BODY also carries `###` headings
+# ("### 1. Macro Market Context", "### 🔥 Rebuttal: ..."), so a bare `^### `
+# split shreds the bodies. Match the exact agent names instead — no body heading
+# is ever exactly one of these.
+REPORT_AGENTS = [
+    "Business Analyst", "Market Analyst", "Sentiment Analyst", "News Analyst",
+    "Fundamentals Analyst", "Bull Researcher", "Bear Researcher",
+    "Research Manager", "Trader", "Aggressive Analyst", "Conservative Analyst",
+    "Neutral Analyst", "Portfolio Manager",
+]
+_AGENT_SPLIT = re.compile(
+    r"^### (" + "|".join(re.escape(a) for a in REPORT_AGENTS) + r")\s*$",
+    re.MULTILINE,
+)
+
+
+def split_report_sections(raw_md: str) -> dict[str, str]:
+    """Split `complete_report.md` into {agent name: body}, in document order.
+
+    Empty dict when nothing matches (an older or hand-written report) — the
+    caller falls back to rendering the whole blob.
+    """
+    parts = _AGENT_SPLIT.split(raw_md or "")
+    return {parts[i]: parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
+
+
+def escape_markdown_dollars(md: str) -> str:
+    """Escape `$` so Streamlit doesn't read prices as LaTeX.
+
+    st.markdown treats `$...$` as inline math. An equity report is full of
+    "from **$53** to **$271.78**" — everything between two dollar signs renders
+    as run-together math text with the spaces eaten. That is the "words with no
+    whitespace" symptom. No report here uses real LaTeX, so escape all of them.
+    """
+    return (md or "").replace("$", r"\$")
+
+
+# Display name -> report.json agents key, for the agents that emit typed output.
+# A key present with a NULL value means "ran, produced nothing typed" — the
+# free-text fallback. Absent means the agent wasn't in the graph, which is not a
+# failure. Agents with no typed schema at all (Bull/Bear, risk debaters) are
+# prose by design and never warn.
+TYPED_AGENTS = {
+    "Business Analyst": "business_analyst",
+    "Sentiment Analyst": "sentiment_analyst",
+    "Research Manager": "research_manager",
+    "Trader": "trader",
+    "Portfolio Manager": "portfolio_manager",
+}
+
+
+def fell_back_to_free_text(key_facts_json: str | None, display_name: str) -> bool:
+    """True when this agent's structured call failed on the run being rendered.
+
+    The fallback prose is unconstrained model output — frequently a raw JSON
+    dump, which reads as a finished report but carries no typed relations and
+    cannot be quote-scored. Rendering it silently is what made a broken GLW run
+    look like a working one.
+    """
+    agent = TYPED_AGENTS.get(display_name)
+    if not agent or not key_facts_json:
+        return False
+    try:
+        agents = (json.loads(key_facts_json) or {}).get("agents") or {}
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return agent in agents and agents[agent] is None
