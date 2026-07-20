@@ -21,7 +21,7 @@ unknown ids default to HALT, fail-safe).
 | 3.0 | `t2_screener` | T2 Features | `FeaturePipeline` incremental; <99% coverage → full-date recompute |
 | 4.0 | `t2_regime` | T2 Regime | `RegimePipeline.update_incremental()` |
 | 4.5 | `sepa_watchlist` | SEPA Watchlist | `SepaWatchlistManager.update_daily(date)` — after T2, before T3. Appends today's events only; a **status-vocabulary canary** warns on retired statuses (see below) |
-| 5.0 | `t3_features` | T3 Features | `FeaturePipeline` incremental; missing-breakout-ticker check → rerun date |
+| 5.0 | `t3_features` | T3 Features | `FeaturePipeline` incremental; missing-breakout-ticker check → rerun date; **trailing-window hole self-heal** (`_t3_holed_dates` → `_recompute_t3_dates`, see below) |
 | 6.0 | `views` | Views | `ViewManager.create_all()` (views only — nothing materialised since the 2026-07-18 watchlist merge) |
 | 7.0 | `cache` | Training Cache | `ViewManager.refresh_cache()` → `d2_training_cache` |
 | 7.4 | `scoring` | Scoring | Prod model scores → `daily_predictions` (breakout + pre-breakout cohorts), then the **shadow pass**: shadow model scored on the same candidates, divergence → `shadow_divergence`. Dashboard always reads these materialized scores, never scores live |
@@ -89,6 +89,35 @@ shaped exactly like success. Prefer the self-heal.
 ⚠️ `macro_data` stores market quotes in `close` and FRED series in `value`. VIX is a
 quote, so `value` is NULL — reading it writes NULL `vix_close`. Covered by
 `test_vix_read_from_close_not_value`. Tests: `tests/test_t1_macro_gap_heal.py`.
+
+### T3 hole self-heal (Phase 5)
+
+`_t3_holed_dates(target_date)` → `_recompute_t3_dates(dates)`. T3 is materialized
+lazily per date-chunk, writing rows only for tickers in the universe *at the moment
+the chunk ran*. A ticker admitted later never gets its earlier history — those chunks
+already ran and won't run again, so the rows were **never written** (not written and
+lost). The gap grows monotonically between bulk rebuilds.
+
+Expected-set = `T3_UNIVERSE_SQL` tickers **∪** ACTIVE/recently-EXITED
+`screener_watchlist` names, each gated on having a `t2_screener_features` row that day
+(mirrors the INSERT's inner join, so a raw-price-bar-only ticker isn't a false hole).
+A date is holed if any expected `(ticker, date)` is missing. Window:
+`T3_BACKFILL_LOOKBACK_DAYS = 30`.
+
+🛑 **`_recompute_t3_dates` DELETEs `[min, max]` before recomputing** — the INSERT is
+plain and needs an empty window. Snapshot the span to parquet first if you run it by
+hand.
+
+⚠️ It reads `feature_pipeline.T3_UNIVERSE_SQL`, the same constant
+`compute_t3_features` materializes from. **They must never diverge** — if this
+expected-set is narrower than what the pipeline admits, the self-heal silently stops
+covering the difference, and nothing surfaces until a ticker appears unscored.
+
+Two limits worth knowing: the 30-day window means a rebuild that back-dates sessions
+further than that leaves permanent holes before the window; and a universe change made
+*after* the last T3 run isn't healed until the next run (2026-07-20: AGL/ABSI/XLK
+looked like self-heal misses but were simply an out-of-band `sepa_watchlist` rebuild
+that landed after the previous night's Phase 5).
 
 ### Watchlist status canary (Phase 4b)
 

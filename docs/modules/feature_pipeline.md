@@ -49,11 +49,38 @@ breakout_ok = new 20d high AND volume / vol_avg_50_prev > 1.3
 `vol_avg_50_prev` excludes the current bar so the breakout day doesn't inflate its
 own denominator.
 
-## Phase 5 — T3 SEPA features (`t3_sepa_features`, 144 cols, ~9.4M rows)
+## Phase 5 — T3 SEPA features (`t3_sepa_features`, 144 cols, ~9.47M rows)
 
-Universe = every ticker that has **ever** opened a SEPA session (`SELECT DISTINCT
-ticker FROM sepa_watchlist`), carrying **complete price history** regardless of
-current session state ("Option C", 2026-05-08). Keyed `(ticker, date, feature_version)`.
+Universe = **`T3_UNIVERSE_SQL`** (module constant):
+
+```sql
+    SELECT ticker FROM sepa_watchlist              -- ever opened a SEPA session
+    UNION
+    SELECT ticker FROM vip_watchlist WHERE active  -- hand-curated
+    UNION
+    SELECT DISTINCT ticker FROM t2_screener_features WHERE trend_ok   -- ever trend_ok
+```
+
+carrying **complete price history** regardless of current session state ("Option C",
+2026-05-08). Keyed `(ticker, date, feature_version)`. 2,836 tickers as of 2026-07-20.
+
+The `ever trend_ok` arm was added 2026-07-20. Gating on `sepa_watchlist` alone made a
+ticker invisible to the model until it had opened a session — i.e. until it
+**triggered**, which is precisely when it stops being a pre-breakout candidate. Cost
+measured before the change: 107 tickers / 56,085 rows = **0.6%** of t3.
+
+⚠️ **`T3_UNIVERSE_SQL` has two readers.** This method materializes from it; the
+orchestrator's Phase 5 self-heal (`_t3_holed_dates`) decides what *should* exist from
+it. Never widen one by editing a SQL literal — edit the constant. A mismatch leaves
+the self-heal blind to the new names, which is unobservable until a ticker surfaces
+unscored on the dashboard.
+
+`compute_t3_features(only_tickers=[...])` narrows a run to a subset of the universe,
+for backfilling newly-admitted names without DELETE-ing and recomputing a whole span
+(the INSERT is plain — no `OR IGNORE` — so the target must be empty). Safe for
+cross-sectional correctness: XS alphas and rank columns are carried forward from T2
+(already computed universe-wide) and TS alphas are per-ticker. The alpha stage is
+mostly **fixed cost** (2 tickers ≈ 79s, 109 tickers ≈ 77s) — batch, never loop.
 
 | Sub-phase | Method | What |
 |---|---|---|
@@ -89,5 +116,6 @@ current session state ("Option C", 2026-05-08). Keyed `(ticker, date, feature_ve
 ## Related
 
 - Serving views over T3: [managers.md](managers.md) (ViewManager)
-- Session store that defines the T3 universe: [managers.md](managers.md) (SepaWatchlistManager)
+- Session store, one input to the T3 universe: [managers.md](managers.md) (SepaWatchlistManager)
+- The self-heal that reads `T3_UNIVERSE_SQL`: [orchestrator.md](orchestrator.md) (Phase 5)
 - Feature metadata: `feature_catalog` + `model_feature_sets` tables ([model_registry.md](model_registry.md))

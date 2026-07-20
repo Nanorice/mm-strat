@@ -29,7 +29,7 @@ from src.fundamental_engine import FundamentalEngine
 from src.shares_engine import SharesEngine
 from src.macro_engine import MacroEngine
 from src.edgar_engine import EDGAREngine
-from src.feature_pipeline import FeaturePipeline
+from src.feature_pipeline import FeaturePipeline, T3_UNIVERSE_SQL
 from src.regime_pipeline import RegimePipeline
 from src.pipeline.risk_5_factor import RiskFiveFactorCalculator
 from src.universe_backfill import UniverseBackfillEngine
@@ -1448,12 +1448,15 @@ class DailyPipelineOrchestrator:
 
         Expected universe per date is the union of two sets that must have a t3 row:
 
-          1. **Candidate frontier** — sepa_watchlist tickers with a
-             `t2_screener_features` row on that date. This mirrors what
-             compute_t3_features materializes (its INSERT inner-joins
-             t2_screener_features), so a ticker with a raw price_data bar but no t2
-             row is *legitimately* absent — using price_data as the expected set
-             would over-report stale-ticker edges as holes and recompute nightly.
+          1. **Candidate frontier** — `T3_UNIVERSE_SQL` tickers (sepa_watchlist ∪
+             active VIP ∪ ever-trend_ok) with a `t2_screener_features` row on that
+             date. Reads the SAME constant compute_t3_features materializes from, so
+             the two cannot drift — widening one alone would leave this blind to the
+             new names, which is unobservable until something shows up unscored.
+             The t2-row gate mirrors that INSERT's inner join, so a ticker with a raw
+             price_data bar but no t2 row is *legitimately* absent — using price_data
+             as the expected set would over-report stale-ticker edges as holes and
+             recompute nightly.
           2. **Held / recently-removed names** (lifecycle-scoring requirement, 4e) —
              ACTIVE or recently-EXITED `screener_watchlist` tickers that have a t2
              row on that date. A held name can drift behind the candidate frontier
@@ -1496,7 +1499,7 @@ class DailyPipelineOrchestrator:
                     FROM t2_screener_features t2
                     WHERE t2.date BETWEEN '{window_start}' AND '{target_date}'
                       AND (
-                          t2.ticker IN (SELECT DISTINCT ticker FROM sepa_watchlist)
+                          t2.ticker IN ({T3_UNIVERSE_SQL})
                           OR t2.ticker IN (SELECT ticker FROM lifecycle_tickers)
                       )
                 )

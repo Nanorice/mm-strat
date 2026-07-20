@@ -83,6 +83,34 @@ would never have traded. Measured: **8,934,524 → 122,359 rows (1.37%)**. So a 
 population is part of its identity — **the same scores under a different gate are a
 different study.**
 
+### `session` — the persistent state the gate creates
+A row in `sepa_watchlist` (badly named — see §1; it is a **trade-session store**).
+```
+entry_date = first day (trend_ok ∧ breakout_ok) with no open session
+exit_date  = first day close < sma_50 ∨ close < sma_150 ∨ close < sma_200   -- C1+C2+C6
+status     = ACTIVE (exit_date NULL) | EXITED
+```
+⚠️ **Entry and exit use different tests.** Entry needs the full C1–C9 template; exit only
+breaks on C1+C2+C6 (deliberate — C9 RS flicker would shred one session into many). So a
+name can **fail `trend_ok` while its session stays open**, and that is not a bug: 42 such
+names on 2026-07-17, all of them `trend_ok ∧ breakout_ok` at entry and still above all
+three SMAs.
+
+### Screening stages — *what the Screening page shows*
+**Base rule: a ticker must be `trend_ok` to appear at all.** One exception: `vip_watchlist`.
+
+| stage | Predicate | Means |
+|---|---|---|
+| **`triggered`** | open session exists | **has broken out** and the trend hasn't broken |
+| **`setup`** | `trend_ok`, no open session | hasn't broken out yet (never, or exited and re-basing) |
+| **`watchlist`** | in `vip_watchlist`, ¬`trend_ok` | curated name, ripening, outside the template |
+
+🛑 **`triggered` is NOT `breakout_ok`.** `breakout_ok` is a one-**day** event flag; the
+stage is a **state**. Keying the stage off the flag (the bug through 2026-07-20) labelled
+403 of 630 rows `setup` that had broken out up to a year earlier and were still in an open
+session — only the 37 breaking out *that day* read as `triggered`. The session is the
+persistent record of "has broken out"; use it.
+
 ### Labels — the registry is the source of truth
 `label_registry/*.json` + a copy in each model's artifact dir. **No label defines "elite".**
 

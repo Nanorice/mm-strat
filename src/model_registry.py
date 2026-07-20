@@ -399,6 +399,13 @@ class ModelRegistry:
         # an adverse card verdict so a human notices, then promote regardless.
         self._warn_on_adverse_card(version_id)
 
+        # 3c. Score-coverage gate — the d3 dashboard views join status_flag='prod',
+        # so promoting a version with less daily_predictions history than the
+        # outgoing prod silently blanks the page (2026-07-20: a shadow model with
+        # 6 rows/day replaced one with 837).
+        if not force:
+            self._assert_scores_backfilled(version_id)
+
         # 4. Proceed with original promotion logic.
         con = self._connect()
         try:
@@ -413,6 +420,39 @@ class ModelRegistry:
             print(f"[OK] {version_id} is now PRODUCTION")
         finally:
             con.close()
+
+    def _assert_scores_backfilled(self, version_id: str) -> None:
+        """Refuse promotion until `version_id` has at least as many scored dates
+        as the outgoing prod model.
+
+        Nothing else triggers the backfill, and the only downstream signal is the
+        monitoring phase's identity alert ~10 min into the next nightly run.
+        """
+        outgoing = self.get_prod_version()
+        if outgoing is None or outgoing == version_id:
+            return
+        con = self._connect()
+        try:
+            counts = dict(con.execute(
+                "SELECT model_version_id, COUNT(DISTINCT prediction_date) "
+                "FROM daily_predictions WHERE model_version_id IN (?, ?) GROUP BY 1",
+                [version_id, outgoing],
+            ).fetchall())
+        except duckdb.CatalogException:
+            return  # no daily_predictions table — no history to orphan
+        finally:
+            con.close()
+
+        new, old = counts.get(version_id, 0), counts.get(outgoing, 0)
+        if new < old:
+            raise PromotionError(
+                f"Promotion blocked for {version_id} — it has scores for {new} "
+                f"date(s) vs {old} under the outgoing prod {outgoing}. Promoting "
+                f"now would blank the dashboard. Backfill first:\n"
+                f"  python scripts/backfill_daily_predictions.py "
+                f"--model-version-id {version_id}\n"
+                f"Then re-run set_prod, or override with force=True."
+            )
 
     def _warn_on_adverse_card(
         self, version_id: str, use_case: str = "composite_gate_plus_rank"

@@ -2,6 +2,8 @@
 
 > Last full audit: **2026-07-18** (verified against code and the live DB; binary-model
 > promotion, watchlist merge, and the 16-phase orchestrator are reflected).
+> Amended **2026-07-20**: T3 universe widened to ever-`trend_ok`, screening `stage`
+> re-keyed to the session, `set_prod` score-coverage gate. See §4, §6, §7, §9.
 > This is the **meta document**: the narrative of what the system is and why, with
 > pointers into per-module reference docs. When this doc and code disagree, the code
 > is the truth — fix the doc.
@@ -114,8 +116,8 @@ Europe/London, one coarse flow shelling out to `scripts/run_daily_pipeline.py`
 | `screener_criteria_versions` / `screener_membership` | 2 | 3 / 20K | criteria history / append-only membership event log (126-day grace) |
 | `t2_screener_features` | 3 | 9.9M | full universe, 68 cols, SEPA flags |
 | `t2_regime_scores` / `t2_risk_scores` | 4 | 1.5K+ | M03 score+pillars / 5-factor risk model |
-| `sepa_watchlist` | 4.5 | 39K sessions | **single session store** (one row per SEPA session; T3 universe gate; no cooldown; delisted kept) |
-| `t3_sepa_features` | 5 | 9.4M | SEPA universe full history, 144 cols, single ML source of truth |
+| `sepa_watchlist` | 4.5 | 39K sessions | **single session store** (one row per SEPA session; one input to the T3 universe; no cooldown; delisted kept). Also drives the Screening `stage` — see §6 |
+| `t3_sepa_features` | 5 | 9.47M | T3 universe full history (2,836 tickers), 144 cols, single ML source of truth |
 | `screener_watchlist` | 6 | view | display VIEW over `sepa_watchlist` (company info + realized returns) |
 | `d2_training_cache` | 7 | 39K | materialised `v_d2_training` (trade grain + MFE/MAE outcomes, 200 cols) |
 | `daily_predictions` | 7.4 | grows daily | materialized nightly scores per (date, ticker, model, cohort) — dashboard **never scores live**. Stores RAW score (see glossary on `prob_elite`) |
@@ -159,10 +161,24 @@ Two tiers ([feature_pipeline.md](../modules/feature_pipeline.md)):
   line/rating, ranges, ATR/NATR, VCP, `trend_ok`/`breakout_ok`), Python passes
   (9 XS alphas — valid only on the full cross-section; 5 EMAs), SQL rank pass
   (7 universe/sector/industry rank columns).
-- **T3** (`t3_sepa_features`, 144 cols): every ticker that has *ever* opened a SEPA
-  session, full history. Carries all T2 columns + windowed momentum/volume/velocity
-  features, 19 `*_pct_chg` deltas, 9 TS alphas, M03 columns. Fundamentals are
-  **not** stored — joined at query time.
+- **T3** (`t3_sepa_features`, 144 cols): the T3 universe, full history. Carries all
+  T2 columns + windowed momentum/volume/velocity features, 19 `*_pct_chg` deltas,
+  9 TS alphas, M03 columns. Fundamentals are **not** stored — joined at query time.
+
+**T3 universe** = `sepa_watchlist ∪ vip_watchlist(active) ∪ ever-`trend_ok``, defined
+once in `feature_pipeline.T3_UNIVERSE_SQL`. Widened 2026-07-20: gating on
+`sepa_watchlist` alone made a ticker invisible to the model until it had opened a
+session — i.e. until it **triggered**, which is exactly when it stops being a
+pre-breakout candidate. Since `pre_breakout` ranking exists to rank names *before*
+they trigger, the highest-value case was the one structurally unscoreable. Measured
+cost of admitting them: 107 tickers / 56,085 rows = **0.6%** of t3.
+
+⚠️ **Two readers, one constant.** The orchestrator's Phase 5 self-heal
+(`_t3_holed_dates`) decides what *should* exist and must read the same
+`T3_UNIVERSE_SQL` that `compute_t3_features` materializes from. Widening one alone
+leaves the self-heal blind to the new names — unobservable until something shows up
+unscored. `compute_t3_features(only_tickers=…)` backfills newly-admitted names
+without deleting and recomputing a whole span.
 
 **The SEPA gate** `trend_ok ∧ breakout_ok` (exact SQL in glossary §2) is a
 **population definition, not an optimization** — scoring un-gated rows inflates the
@@ -195,6 +211,24 @@ dedup matters). `screener_watchlist` is a display view over it. Details:
 Sessions are the **trade grain**: one session = one row in `v_d2_training` /
 `d2_training_cache` with MFE/MAE outcomes over the session's holding period.
 
+The session is also the **persistent record of "has broken out"**, and therefore what
+`v_d3_screening.stage` keys off (glossary §2 · Screening stages):
+
+| stage | Predicate | Means |
+|---|---|---|
+| `triggered` | open session exists | has broken out, trend not yet broken |
+| `setup` | `trend_ok`, no open session | hasn't broken out yet (never, or exited and re-basing) |
+| `watchlist` | active VIP, ¬`trend_ok` | curated name ripening outside the template |
+
+🛑 **`triggered` is not `breakout_ok`.** `breakout_ok` is a one-**day** event flag;
+the stage is a state. Keying the stage off the flag (the bug through 2026-07-20)
+labelled 403 of 630 rows `setup` that had broken out days-to-months earlier and were
+still in an open session — only the 37 breaking out *that day* read as `triggered`.
+
+Because entry needs the full C1–C9 template but exit only breaks on C1+C2+C6, a name
+can **fail `trend_ok` while its session stays open** (42 such names on 2026-07-17).
+That is by design, not a stale session.
+
 ## 7. Machine learning
 
 Full methodology (gates G0–G7, three currencies, promotion rules):
@@ -215,8 +249,13 @@ histories: `docs/model_doc/`. Code map: [evaluation.md](../modules/evaluation.md
   walk-forward, optional isotonic calibration, LeakageGuard + pretrain audit baked
   in. Artifacts + registration: [model_registry.md](../modules/model_registry.md).
 - **Prod model**: `m01_binary` (promoted 2026-07-15). Promotion gate =
-  `results.json` blocking gates (code) + start-date **cone** (practice); the model
-  card is advisory. Nightly it scores both cohorts into `daily_predictions`
+  `results.json` blocking gates + a **score-coverage gate** (code) + start-date
+  **cone** (practice); the model card is advisory. `set_prod()` refuses to promote a
+  version with fewer scored dates in `daily_predictions` than the outgoing prod
+  (`_assert_scores_backfilled`, `force=True` overrides) — the d3 views join
+  `status_flag='prod'`, so promoting an unscored version silently blanks every score
+  on the dashboard. Backfill first:
+  `backfill_daily_predictions.py --model-version-id <new>`, then promote. Nightly it scores both cohorts into `daily_predictions`
   (**RAW score, not a calibrated probability** — the dashboard renders "Score
   (raw)"); a shadow model scores the same universe for divergence monitoring.
 - **Two-model system**: `m01_prototype` = selection, `m01_rank` = timing — never
@@ -339,6 +378,8 @@ python scripts/run_daily_pipeline.py                # or the Prefect deployment
 | sh019 needs backfill + view refresh after the 2026-07-18 watchlist merge | ops box | pull code, rerun backfill + `create_duckdb_views` |
 | Nightly DB backup story open | ops | post-incident follow-up |
 | Shadow book orchestrator wiring (Step 6) deferred | `forward_engine` / sh019 | remember dashboard-manifest parity when wiring |
+| `score_from_t3` vs `v_d3_lifecycle` feature-snapshot seam | `universe_scorer.py` / `view_manager.py` | 8 tickers diverge (1.01% vs 1.0% threshold) — `test_backtest_matches_prod_predictions` fails. Two scoring paths that should agree exactly; **do not raise the threshold**, find the feature that differs |
+| T3 self-heal window is 30d | `daily_pipeline_orchestrator.py` | a rebuild back-dating sessions >30d leaves permanent holes before the window |
 
 DuckDB gotchas (UBIGINT volume, no window in UPDATE, named-window limits) and data
 gotchas (gappy T3 panel, NULL adj_close, OHLC dirt policy) are catalogued in the

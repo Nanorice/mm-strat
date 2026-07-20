@@ -42,6 +42,23 @@ RANK_COLS = [
 EMA_SPANS = [8, 21, 50, 100, 200]
 EMA_COLS = [f"ema_{s}" for s in EMA_SPANS]
 
+# The T3 universe — ONE definition, two readers. compute_t3_features uses it to
+# decide what to materialize; the orchestrator's _t3_holed_dates uses it to decide
+# what SHOULD exist. If they disagree, the self-heal silently stops covering part
+# of the universe, which is unobservable until a name shows up unscored.
+#
+# `ever trend_ok` (added 2026-07-20) admits first-time setups. Without it a ticker
+# is invisible to the model until it has opened a session, i.e. until it triggers —
+# precisely when it stops being a pre-breakout candidate. Measured cost: 107
+# tickers / 56,085 rows = 0.6% of t3.
+T3_UNIVERSE_SQL = """
+    SELECT ticker FROM sepa_watchlist
+    UNION
+    SELECT ticker FROM vip_watchlist WHERE active
+    UNION
+    SELECT DISTINCT ticker FROM t2_screener_features WHERE trend_ok
+"""
+
 M03_BASE_COLS = ['m03_score', 'm03_pillar_trend', 'm03_pillar_liq', 'm03_pillar_risk']
 M03_DERIVED_COLS = ['m03_delta_5d', 'm03_delta_20d', 'm03_regime_vol']
 
@@ -618,13 +635,18 @@ class FeaturePipeline:
             )
         """)
 
-    def compute_t3_features(self, start_date: str = '2020-01-01', end_date: str = None) -> int:
-        """Compute T3 features densely over the SEPA-watchlist universe.
+    def compute_t3_features(self, start_date: str = '2020-01-01', end_date: str = None,
+                            only_tickers: Optional[List[str]] = None) -> int:
+        """Compute T3 features densely over the T3 universe (`T3_UNIVERSE_SQL`).
 
-        Universe gate (Option C): a ticker is in T3 iff it has ever entered a SEPA
-        session (i.e. appears in `sepa_watchlist`). T3 carries the ticker's full
-        history regardless of current session status; cooldown gates new sessions
-        in `sepa_watchlist`, not row inclusion in T3.
+        Universe gate: a ticker is in T3 if it has ever entered a SEPA session, is an
+        active VIP name, or has ever been `trend_ok`. T3 carries the ticker's full
+        history regardless of current session status; cooldown gates new sessions in
+        `sepa_watchlist`, not row inclusion in T3.
+
+        `only_tickers` narrows the run to a subset of that universe — for backfilling
+        newly-admitted names without deleting and recomputing the whole span. The
+        INSERT is plain (no OR IGNORE), so the (ticker, date) target must be empty.
 
         `trend_ok` and `breakout_ok` are stored as explicit columns — neither is
         implicit. Filter downstream consumers explicitly:
@@ -647,6 +669,13 @@ class FeaturePipeline:
 
         # Warmup: fetch 365d before start for rolling windows
         fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=365)).strftime('%Y-%m-%d')
+
+        if only_tickers:
+            escaped = ", ".join("'" + t.replace("'", "''") + "'" for t in only_tickers)
+            ticker_filter = f"AND p.ticker IN ({escaped})"
+            logger.info(f"[T3] Narrowed to {len(only_tickers)} ticker(s)")
+        else:
+            ticker_filter = ""
 
         logger.info(f"[T3] Computing SEPA features for {start_date} to {end_date}...")
         con = db.connect(self.db_path)
@@ -679,11 +708,8 @@ class FeaturePipeline:
                     FROM {self.price_source} p
                     WHERE p.date >= '{fetch_start}'
                       AND p.date <= '{end_date}'
-                      AND p.ticker IN (
-                          SELECT ticker FROM sepa_watchlist
-                          UNION
-                          SELECT ticker FROM vip_watchlist WHERE active
-                      )
+                      AND p.ticker IN ({T3_UNIVERSE_SQL})
+                      {ticker_filter}
                     WINDOW w_tk AS (PARTITION BY p.ticker ORDER BY p.date)
                 ),
                 per_ticker AS (

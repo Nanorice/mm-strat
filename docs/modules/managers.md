@@ -57,7 +57,7 @@ Phase 6 no longer materialises any table). Current chain:
 | `v_d3_lifecycle` | one-pass MECE scoring cohorts (pre_breakout / active / removed) | dashboard Screening |
 | `v_d3_shortlist` | shortlist for the weather gauge | Phase 7.45, dashboard |
 | `v_d3_vip` | VIP list ⋈ lifecycle cohort | dashboard |
-| `v_d3_screening` | T2 population ⋈ predictions ⋈ fundamentals | dashboard Screening |
+| `v_d3_screening` | `trend_ok` (∪ active VIP) ⋈ predictions ⋈ fundamentals, latest day; carries `stage` + "in play since" anchors | dashboard Screening |
 | `v_t3_training` | dense T3 training view | `refresh_t3_training_cache()` (weekly, on demand — its ASOF joins cost ~215s; the cache table may be absent locally) |
 
 Also: `refresh_cache()` materialises `d2_training_cache` (Phase 7, 200 cols);
@@ -66,6 +66,28 @@ Retired views (`v_d1_trades`, `v_d2r_hydrated`) are explicitly dropped on each r
 
 ⚠️ `trend_c8` CTE inside the view SQL computes C1+C2+C6 (exit criteria), not C1–C8
 — known misnomer, glossary verdict RENAME.
+
+### `v_d3_screening.stage` (corrected 2026-07-20)
+
+Population is `trend_ok`, with **active VIP names as the sole exception** (they render
+`watchlist` so a curated name stays visible while it ripens). `stage` keys off the
+**open session**, not the same-day `breakout_ok` flag:
+
+| stage | Predicate | 2026-07-17 |
+|---|---|---|
+| `triggered` | open `sepa_watchlist` session | 440 |
+| `setup` | `trend_ok`, no open session | 190 |
+| `watchlist` | active VIP, ¬`trend_ok` | 2 |
+
+🛑 `breakout_ok` is a one-**day** event flag; the stage is a state. The previous
+`CASE WHEN breakout_ok` labelled 403 of 630 rows `setup` that had broken out
+days-to-months earlier and were still in an open session. The session is the
+persistent record of "has broken out" — use it. See glossary §2 · Screening stages.
+
+Two earlier corrections on this view, both still live: the population is `trend_ok`,
+**not** `trend_ok ∨ breakout_ok` (the SEPA gate is AND — the OR admitted breakouts
+failing C1–C9, 42 of 79 "triggered" rows on 2026-07-17); and `sess_px` is an INNER
+join so `entry_date`/`entry_close` are never split across sources.
 
 ## 4. PipelineRunManager (`pipeline_run_manager.py`)
 

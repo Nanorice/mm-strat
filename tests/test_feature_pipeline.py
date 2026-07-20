@@ -19,6 +19,7 @@ from src.feature_pipeline import (
     EMA_COLS,
     EXPECTED_T3_COLUMN_COUNT,
     RANK_COLS,
+    T3_UNIVERSE_SQL,
     FeaturePipeline,
 )
 
@@ -348,19 +349,41 @@ class TestT2Ranks(unittest.TestCase):
 class TestT3SepaFeatures(unittest.TestCase):
     """T3: per-ticker windows + T2 carry-forward + TS alphas + M03 join."""
 
-    def test_universe_is_sepa_watchlist(self):
-        """T3 is gated on sepa_watchlist — TSLA is in T2 but not on the watchlist."""
+    def test_universe_is_watchlist_plus_ever_trend_ok(self):
+        """T3 = sepa_watchlist ∪ vip_watchlist(active) ∪ ever-trend_ok.
+
+        Widened 2026-07-20: gating on sepa_watchlist alone made a first-time setup
+        invisible to the model until it opened a session — i.e. until it triggered,
+        which is exactly when it stops being a pre-breakout candidate.
+
+        Still NOT all of T2: a ticker that never passes the trend template and was
+        never watchlisted stays out. That exclusion is the point of the gate.
+        """
         con = duckdb.connect(TEST_DB, read_only=True)
-        tickers = sorted(r[0] for r in con.execute(
-            "SELECT DISTINCT ticker FROM t3_sepa_features"
-        ).fetchall())
-        con.close()
-        self.assertEqual(tickers, T3_TICKERS)
+        try:
+            t3 = sorted(r[0] for r in con.execute(
+                "SELECT DISTINCT ticker FROM t3_sepa_features").fetchall())
+            expected = sorted(r[0] for r in con.execute(
+                f"SELECT DISTINCT ticker FROM ({T3_UNIVERSE_SQL})").fetchall())
+            excluded = sorted(r[0] for r in con.execute(
+                f"SELECT DISTINCT ticker FROM t2_screener_features "
+                f"EXCEPT SELECT ticker FROM ({T3_UNIVERSE_SQL})").fetchall())
+        finally:
+            con.close()
+
+        self.assertEqual(t3, expected)
+        # Watchlist names reach t3 regardless of whether they ever pass the template.
+        self.assertTrue(set(T3_TICKERS).issubset(t3))
+        # Guard the guard: without an excluded ticker the equality above proves nothing.
+        self.assertTrue(excluded, "fixture must contain a ticker T3 excludes")
+        self.assertFalse(set(excluded) & set(t3))
 
     def test_row_count(self):
         expected_days = len(pd.bdate_range(START, END))
+        universe = _scalar(
+            f"SELECT COUNT(*) FROM (SELECT DISTINCT ticker FROM ({T3_UNIVERSE_SQL}))")
         count = _scalar("SELECT COUNT(*) FROM t3_sepa_features")
-        self.assertEqual(count, len(T3_TICKERS) * expected_days)
+        self.assertEqual(count, universe * expected_days)
 
     def test_column_count_matches_tripwire(self):
         self.assertEqual(len(_describe('t3_sepa_features')), EXPECTED_T3_COLUMN_COUNT)

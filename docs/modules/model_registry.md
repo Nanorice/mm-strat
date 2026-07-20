@@ -35,7 +35,7 @@ reg.get_reproducibility_info(version_id)   # models ⋈ model_feature_sets ⋈ f
 ModelRegistry.get_git_sha()
 ```
 
-## Promotion gates (`set_prod`) — three layers
+## Promotion gates (`set_prod`) — four layers
 
 1. **Blocking**: `evaluation/results.json` gate battery — any gate with
    `blocking=True` and `status='fail'` refuses promotion. Override only with
@@ -43,13 +43,36 @@ ModelRegistry.get_git_sha()
    `forced_promotions`.
 2. **Advisory**: `_warn_on_adverse_card()` — warns on REJECT/PENDING/stale/void
    model card but never blocks (card thresholds are hand-set and unvalidated).
-3. **Practice (not in code)**: the real strategy-level promotion decision is the
+3. **Blocking — score coverage** (`_assert_scores_backfilled`, added 2026-07-20):
+   refuses promotion if the incoming version has **fewer scored dates** in
+   `daily_predictions` than the outgoing prod. `force=True` skips it.
+
+   `daily_predictions` is keyed `(date, ticker, model_version_id, cohort)` and the d3
+   views join `status_flag='prod'`, so promotion **orphans all history under the
+   outgoing id** — the old rows remain but are no longer joined, and the new id has
+   none. The dashboard goes blank with no error anywhere; the only signal is the
+   Phase 8 prod-model-identity alert ~10 min into the *next* nightly run.
+
+   Hit for real on 2026-07-20: `m01_binary_20260524_222020` was promoted having only
+   ever run as **shadow**, which scores the `breakout` cohort alone — 2,249 rows
+   total vs the outgoing model's ~837/day. Screening showed 666 of 672 rows unscored.
+   The gate compares *date coverage*, not mere existence, precisely because that
+   shadow model had rows and would have passed a non-zero check.
+
+   Correct order: `backfill_daily_predictions.py --model-version-id <new>` → verify →
+   `set_prod(<new>)` → rebuild the slim DB.
+4. **Practice (not in code)**: the real strategy-level promotion decision is the
    **start-date cone** (`scripts/run_cone_gate.py` / `run_oos_gate.py`) — a single
    backtest P&L is one draw, not a verdict. See
    [model_development_methodology.md](../architecture/model_development_methodology.md).
 
 **Shadow slot**: `set_shadow()` marks one version for the nightly shadow scoring
-pass (orchestrator Phase 7.4 → `shadow_divergence`).
+pass (orchestrator Phase 7.4 → `shadow_divergence`). The live `models` CHECK
+constraint is `('prod','test','archived','shadow')` — verified 2026-07-20 against
+`duckdb_tables()`. `ViewManager._create_models_table` carried a stale 3-value list
+(no `'shadow'`) until 2026-07-20; being `CREATE TABLE IF NOT EXISTS` it never touched
+the live table, so the shadow path always worked. **Read the DB's own DDL, not the
+code's, before calling a constraint contradiction.**
 
 ## Feature metadata tables
 

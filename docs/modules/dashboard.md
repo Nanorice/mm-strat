@@ -36,7 +36,7 @@ Two run contexts, same code:
 | `scripts/dashboard_utils.py` | **Data + infra layer.** All `load_*` loaders (each `@st.cache_data`), the DB path resolution, `_connect(read_only=True)`, and the R2 sync (`_ensure_local_db`, `_maybe_refresh_from_r2`, `_ensure_asset_dirs`). Pages stay render-only; every DB read routes through here. |
 | **— Decide —** | |
 | `scripts/pages/2_Macro.py` | **Default landing.** S1 F&G dial + 6 macro-pillar tiles + deploy headline · S2 sector/subsector breadth · S3 45-series indicator board. |
-| `scripts/pages/3_Screening.py` | **sepa_active** (`v_d3_screening`) + **watchlist** (`v_d3_vip`). Score is RAW/uncalibrated — a rank, never odds. |
+| `scripts/pages/3_Screening.py` | **sepa_active** (`v_d3_screening`) + **watchlist** (`v_d3_vip`). Score is RAW/uncalibrated — a rank, never odds. Rows are `trend_ok` (∪ active VIP); `stage` ∈ `triggered`/`setup`/`watchlist` keys off the **open session**, not `breakout_ok` — see [managers.md](managers.md) §3. Carries "in play since" anchors (`anchor_date`/`anchor_close`/`pct_return`: session entry where one exists, else trend-run start). |
 | `scripts/pages/5_Session_Activity.py` | `screener_watchlist` read surface — open/closed sessions, activity feed, ticker history. 🛑 **sessions ≠ trades.** |
 | `scripts/pages/4_Portfolio.py` | The **real** book: `trades` + `cash_flows` → derived positions/cash, TWR NAV, risk (ATR-per-NAV). |
 | `scripts/pages/6_Supply_Chain.py` | Sector co-movement map + sub-sector drill-down. 🛑 **co-movement, NOT dependency**; zero real edges. |

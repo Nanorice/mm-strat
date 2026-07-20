@@ -157,6 +157,39 @@ def test_force_with_reason_logs_to_forced_promotions(tmp_path: Path, registry: M
     assert row[2] == "hang"
 
 
+def _seed_predictions(db_path: str, rows: list[tuple[str, str]]) -> None:
+    """rows: (prediction_date, model_version_id)."""
+    con = duckdb.connect(db_path)
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS daily_predictions "
+            "(prediction_date DATE, model_version_id VARCHAR)"
+        )
+        con.executemany("INSERT INTO daily_predictions VALUES (?, ?)", rows)
+    finally:
+        con.close()
+
+
+def test_promotion_blocked_when_scores_behind_outgoing_prod(tmp_path: Path, registry: ModelRegistry):
+    """The 2026-07-20 defect: a shadow-scored model replacing a fully-scored one."""
+    for vid in ("v_old", "v_new"):
+        artifacts = tmp_path / f"art_{vid}"
+        _register_version(registry, vid, artifacts)
+        _write_results(artifacts, [_pass_gate()])
+    _seed_predictions(registry.db_path, [(f"2026-07-{d:02d}", "v_old") for d in range(1, 11)])
+    registry.set_prod("v_old")
+
+    _seed_predictions(registry.db_path, [("2026-07-10", "v_new")])
+    with pytest.raises(PromotionError, match="1 date"):
+        registry.set_prod("v_new")
+    assert registry.get_prod_version() == "v_old"
+
+    # Backfilled to parity — now allowed.
+    _seed_predictions(registry.db_path, [(f"2026-07-{d:02d}", "v_new") for d in range(1, 11)])
+    registry.set_prod("v_new")
+    assert registry.get_prod_version() == "v_new"
+
+
 def test_missing_results_json_blocks_without_force(tmp_path: Path, registry: ModelRegistry):
     artifacts = tmp_path / "art_noresults"
     _register_version(registry, "v_noresults", artifacts)

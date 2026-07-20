@@ -118,7 +118,7 @@ class ViewManager:
         con.execute("""
             CREATE TABLE IF NOT EXISTS models (
                 version_id VARCHAR PRIMARY KEY,
-                status_flag VARCHAR CHECK (status_flag IN ('prod', 'test', 'archived')),
+                status_flag VARCHAR CHECK (status_flag IN ('prod', 'test', 'archived', 'shadow')),
                 specs_json JSON,
                 feature_version VARCHAR,
                 training_date DATE,
@@ -1123,8 +1123,8 @@ class ViewManager:
     # ------------------------------------------------------------------
 
     def _create_v_d3_screening(self, con: duckdb.DuckDBPyConnection) -> None:
-        """One screening surface: today's trend_ok∨breakout_ok universe with the
-        prod model's P(Home Run), precomputed fundamentals, and a derived P/E.
+        """One screening surface: today's trend_ok universe (plus VIP names) with
+        the prod model's P(Home Run), precomputed fundamentals, and a derived P/E.
 
         Pure JOIN of already-materialized parts (no new compute), latest day only:
             t2_screener_features (population + price + RS + stage flags)
@@ -1205,9 +1205,14 @@ class ViewManager:
                 SELECT t.ticker, t.date, t.close, t.trend_ok, t.breakout_ok,
                        t."RS_Universe_Rank" AS rs_universe_rank,
                        t."RS_Sector_Rank"   AS rs_sector_rank
+                --
+                -- VIP is the one exception to the trend_ok requirement: manually
+                -- curated names stay visible while they ripen, which is the whole
+                -- point of curating them. They render as stage='watchlist'.
                 FROM t2_screener_features t
                 WHERE t.date = (SELECT d FROM mx)
-                  AND t.trend_ok
+                  AND (t.trend_ok
+                       OR t.ticker IN (SELECT ticker FROM vip_watchlist WHERE active))
             ),
             -- ── "in play since" anchors ──────────────────────────────────────
             -- Two dates, because the two stages change state on different clocks:
@@ -1253,8 +1258,18 @@ class ViewManager:
                 cp.market_cap, cp.shares_outstanding,
                 pop.close, pop.trend_ok, pop.breakout_ok,
                 pop.rs_universe_rank, pop.rs_sector_rank,
-                -- stage: triggered if breaking out, else setup.
-                CASE WHEN pop.breakout_ok THEN 'triggered' ELSE 'setup' END AS stage,
+                -- stage: keyed off the SESSION, not the same-day breakout flag.
+                -- `breakout_ok` is a one-day event (glossary §2: "a genuine breakout
+                -- DAY"), so using it as the stage labelled 403 of 630 rows `setup`
+                -- that had broken out days-to-months earlier and were still in an
+                -- open session. A session opens on trend_ok ∧ breakout_ok and closes
+                -- on C1+C2+C6, which IS the persistent "has broken out" state.
+                --   watchlist — present only by the VIP exception (¬trend_ok)
+                --   triggered — has an open session
+                --   setup     — trend_ok, no open session (never entered, or exited)
+                CASE WHEN NOT pop.trend_ok        THEN 'watchlist'
+                     WHEN sp.entry_date IS NOT NULL THEN 'triggered'
+                     ELSE 'setup' END AS stage,
                 p.prob_home_run,
                 p.prediction_date AS rating_date,
                 ts.trend_start_date, ts.trend_start_close, ts.trend_run_len,
