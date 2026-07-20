@@ -30,6 +30,19 @@ NOTEBOOKS_DIR = BASE_DIR / 'notebooks'
 # DuckDB database path (used by engines/pipelines)
 DUCKDB_PATH = DATA_DIR / 'market_data.duckdb'
 
+# TradingAgents drop dir + filing cache. The agent writes report trees here; this
+# repo only reads them. Both currently resolve on the same box, but they are
+# env-overridable so a synced/copied folder needs no code change.
+TRADINGAGENTS_HOME = Path(
+    os.getenv('TRADINGAGENTS_HOME', Path.home() / '.tradingagents')
+)
+RESEARCH_REPORTS_DIR = Path(
+    os.getenv('RESEARCH_REPORTS_DIR', TRADINGAGENTS_HOME / 'logs' / 'reports')
+)
+EDGAR_CACHE_DIR = Path(
+    os.getenv('EDGAR_CACHE_DIR', TRADINGAGENTS_HOME / 'cache' / 'edgar')
+)
+
 # Ensure directories exist
 for dir_path in [PRICE_DATA_DIR, FUNDAMENTALS_DIR, COMPANY_INFO_DIR, EARNINGS_DIR, MACRO_DATA_DIR, DATABASE_DIR, NOTEBOOKS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
