@@ -224,12 +224,7 @@ with st.expander("How to read the dates"):
         "no stop, no exit rule, no sizing. Prices are unadjusted (`adj_close` is NULL "
         "repo-wide), so a split inside the window will distort it.\n"
         "- Blank Since = a breakout that fired from **outside** the trend template "
-        "(≈half of triggered names): no run to date, no session yet.\n"
-        "- ⚠️ **Trend since is currently censored at 2026-06-25.** Six days in June 2026 "
-        "(06-01/03/04/05/09, 06-24) wrote `trend_ok = FALSE` universe-wide because "
-        "`t1_macro.spy_close` was missing when T2 ran, so no run can appear to start "
-        "before 06-25. The pipeline now hard-fails instead of writing this; the June "
-        "rows still need a T2 recompute. **Entry** is unaffected."
+        "(≈half of triggered names): no run to date, no session yet."
     )
 
 df = load_screening()
