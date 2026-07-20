@@ -52,17 +52,41 @@ class PromotionError(RuntimeError):
     """Raised when ModelRegistry.set_prod refuses to promote a version."""
 
 
-class ModelRegistry:
-    """Manages model versions, specs, metrics, and feature catalog in DuckDB."""
+class ReadOnlyRegistryError(RuntimeError):
+    """Raised when a write method is called on a read-only ModelRegistry."""
 
-    def __init__(self, db_path: Optional[Path] = None):
+
+class ModelRegistry:
+    """Manages model versions, specs, metrics, and feature catalog in DuckDB.
+
+    `read_only=True` opens every connection read-only and skips the constructor
+    DDL, so readers (tests, dashboards, notebooks) can query the registry without
+    taking the single writer handle on market_data.duckdb. Write methods raise
+    ReadOnlyRegistryError rather than failing deep inside DuckDB.
+    """
+
+    def __init__(self, db_path: Optional[Path] = None, read_only: bool = False):
         self.db_path = str(db_path or DEFAULT_DB_PATH)
+        self.read_only = read_only
+        if read_only:
+            return
         ARTIFACTS_BASE.mkdir(parents=True, exist_ok=True)
         self._create_feature_catalog_tables()
         self._create_forced_promotions_table()
 
+    def _connect(self) -> duckdb.DuckDBPyConnection:
+        return db.connect(self.db_path, read_only=self.read_only)
+
+    def _require_writable(self, method: str) -> None:
+        if self.read_only:
+            raise ReadOnlyRegistryError(
+                f"ModelRegistry.{method}() requires a writable registry, but this "
+                f"instance was constructed with read_only=True "
+                f"(db_path={self.db_path}). Re-construct with read_only=False."
+            )
+
     def _create_forced_promotions_table(self) -> None:
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             con.execute(
                 """
@@ -83,7 +107,7 @@ class ModelRegistry:
     # ------------------------------------------------------------------
 
     def _create_feature_catalog_tables(self) -> None:
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             self._migrate_models_table(con)
             con.execute("""
@@ -175,6 +199,7 @@ class ModelRegistry:
         model_name: Optional[str] = None,
         model_version: Optional[str] = None,
     ) -> None:
+        self._require_writable("register_version")
         if status not in ("test", "prod", "shadow", "archived"):
             raise ValueError(
                 f"Invalid status: {status}. Must be test/prod/shadow/archived"
@@ -191,7 +216,7 @@ class ModelRegistry:
         training_date = training_date or date.today()
         specs_json = json.dumps(specs)
 
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             con.execute(
                 """
@@ -220,7 +245,7 @@ class ModelRegistry:
             con.close()
 
     def get_model_specs(self, version_id: str) -> Dict[str, Any]:
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             result = con.execute(
                 "SELECT specs_json FROM models WHERE version_id = ?", [version_id]
@@ -242,6 +267,7 @@ class ModelRegistry:
         weighted_f1: Optional[float] = None,
         macro_f1: Optional[float] = None,
     ) -> None:
+        self._require_writable("update_metrics")
         updates = []
         params = []
 
@@ -261,7 +287,7 @@ class ModelRegistry:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         params.append(version_id)
 
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             con.execute(
                 f"UPDATE models SET {', '.join(updates)} WHERE version_id = ?", params
@@ -285,8 +311,9 @@ class ModelRegistry:
         unless `force=True` and `force_reason` is non-empty. Forced promotions
         are logged to the `forced_promotions` table.
         """
+        self._require_writable("set_prod")
         # 1. Existence check first — fail fast on typos.
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             exists = con.execute(
                 "SELECT COUNT(*) FROM models WHERE version_id = ?", [version_id]
@@ -366,7 +393,7 @@ class ModelRegistry:
         self._warn_on_adverse_card(version_id)
 
         # 4. Proceed with original promotion logic.
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             con.execute(
                 "UPDATE models SET status_flag = 'archived' WHERE status_flag = 'prod'"
@@ -435,7 +462,8 @@ class ModelRegistry:
         failed_gates: List[Dict[str, Any]],
         promoted_by: Optional[str],
     ) -> None:
-        con = db.connect(self.db_path)
+        self._require_writable("_log_forced_promotion")
+        con = self._connect()
         try:
             con.execute(
                 """
@@ -455,7 +483,7 @@ class ModelRegistry:
     def list_versions(
         self, status: Optional[str] = None, limit: int = 20
     ) -> pd.DataFrame:
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             where = "WHERE status_flag = ?" if status else ""
             params = [status, limit] if status else [limit]
@@ -474,7 +502,7 @@ class ModelRegistry:
             con.close()
 
     def get_prod_version(self) -> Optional[str]:
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             result = con.execute(
                 "SELECT version_id FROM models WHERE status_flag = 'prod' LIMIT 1"
@@ -485,7 +513,7 @@ class ModelRegistry:
 
     def get_shadow_version(self) -> Optional[str]:
         """version_id of the single shadow model, or None if none designated."""
-        con = duckdb.connect(self.db_path)
+        con = self._connect()
         try:
             result = con.execute(
                 "SELECT version_id FROM models WHERE status_flag = 'shadow' LIMIT 1"
@@ -502,7 +530,8 @@ class ModelRegistry:
         flags this version 'shadow'. At most one shadow at a time. Refuses to
         shadow the current prod version (a model cannot be its own shadow).
         """
-        con = duckdb.connect(self.db_path)
+        self._require_writable("set_shadow")
+        con = self._connect()
         try:
             row = con.execute(
                 "SELECT status_flag FROM models WHERE version_id = ?", [version_id]
@@ -537,7 +566,8 @@ class ModelRegistry:
         CURRENT_TIMESTAMP if not supplied (pass the card's own built_at to keep
         them aligned).
         """
-        con = db.connect(self.db_path)
+        self._require_writable("register_model_card")
+        con = self._connect()
         try:
             if built_at is None:
                 con.execute(
@@ -566,7 +596,8 @@ class ModelRegistry:
         monitoring artifact and must NOT overwrite model_card_path, which is the
         full-history promotion-gate card.
         """
-        con = db.connect(self.db_path)
+        self._require_writable("register_drift_card")
+        con = self._connect()
         try:
             if built_at is None:
                 con.execute(
@@ -588,7 +619,7 @@ class ModelRegistry:
 
     def get_drift_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
         """Return {'path', 'built_at'} for the version's drift card, or None."""
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             row = con.execute(
                 "SELECT model_card_drift_path, model_card_drift_built_at FROM models "
@@ -603,7 +634,7 @@ class ModelRegistry:
 
     def get_model_card_info(self, version_id: str) -> Optional[Dict[str, Any]]:
         """Return {'path', 'built_at'} for the version's card, or None if unset."""
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             row = con.execute(
                 "SELECT model_card_path, model_card_built_at FROM models "
@@ -617,7 +648,7 @@ class ModelRegistry:
             con.close()
 
     def get_artifacts_path(self, version_id: str) -> Path:
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             result = con.execute(
                 "SELECT artifacts_path FROM models WHERE version_id = ?", [version_id]
@@ -635,7 +666,7 @@ class ModelRegistry:
         (maps to models/<name>/<version>/model.json) and yields a clean card
         filename — unlike a raw file path or the timestamped version_id.
         """
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             row = con.execute(
                 "SELECT model_name, model_version FROM models WHERE version_id = ?",
@@ -660,6 +691,7 @@ class ModelRegistry:
         feature_groups: Dict[str, List[str]],
     ) -> None:
         """Insert feature set rows into model_feature_sets."""
+        self._require_writable("register_feature_set")
         group_lookup: Dict[str, str] = {}
         for group, names in feature_groups.items():
             for name in names:
@@ -670,7 +702,7 @@ class ModelRegistry:
             for i, f in enumerate(features)
         ]
 
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             con.executemany(
                 "INSERT OR IGNORE INTO model_feature_sets "
@@ -686,7 +718,7 @@ class ModelRegistry:
 
         Joins models → model_feature_sets → feature_catalog.
         """
-        con = db.connect(self.db_path)
+        con = self._connect()
         try:
             result = con.execute(
                 "SELECT feature_set_id, git_sha, model_type, feature_version "

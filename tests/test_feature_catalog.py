@@ -160,7 +160,7 @@ class TestReproducibilityInfo(unittest.TestCase):
     """get_reproducibility_info must return full feature definitions for v0.1."""
 
     def test_reproducibility_info_returns_dataframe(self):
-        registry = ModelRegistry(db_path=DB_PATH)
+        registry = ModelRegistry(db_path=DB_PATH, read_only=True)
         df = registry.get_reproducibility_info(MODEL_VERSION_ID)
         self.assertFalse(df.empty, "Reproducibility info should not be empty")
         self.assertIn("feature_name", df.columns)
@@ -168,7 +168,7 @@ class TestReproducibilityInfo(unittest.TestCase):
         self.assertIn("source_layer", df.columns)
 
     def test_reproducibility_info_row_count(self):
-        registry = ModelRegistry(db_path=DB_PATH)
+        registry = ModelRegistry(db_path=DB_PATH, read_only=True)
         df = registry.get_reproducibility_info(MODEL_VERSION_ID)
         # Feature set has 106 entries (105 valid + atr_delta)
         self.assertGreaterEqual(len(df), 105)
