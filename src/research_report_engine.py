@@ -217,7 +217,12 @@ class ResearchReportEngine:
             'source':           SOURCE,
             'raw_md':           md_path.read_text(encoding='utf-8'),
             'summary':          manager.get('rationale'),
-            'thesis':           manager.get('recommendation'),
+            # thesis is the argument, conviction is the verdict. Mapping
+            # research_manager.recommendation here made them the same
+            # PortfolioRating on every row ("Underweight"/"Underweight"), which
+            # reads as agreement between two agents and is really one field
+            # printed twice.
+            'thesis':           portfolio.get('investment_thesis'),
             'conviction':       portfolio.get('rating'),
             'key_facts_json':   json.dumps(report) if report is not None else None,
             'run_id':           manifest.get('run_id'),
@@ -230,9 +235,18 @@ class ResearchReportEngine:
     # Ingest
     # =========================================================================
 
-    def ingest_run_dir(self, run_dir: Path) -> bool:
+    def ingest_run_dir(self, run_dir: Path, force: bool = False) -> bool:
         """Ingest one report tree. Returns True if a row landed, False if the run
-        was skipped or already ingested."""
+        was skipped or already ingested.
+
+        `force` re-parses a run already in `research_report_runs`. The reason it
+        exists: a parser fix does not reach rows already ingested, because the
+        run_id gate skips them. `thesis` mapped the wrong field for three
+        sessions and every stored row was wrong until this could re-read the
+        sidecars sitting on disk. Same rule as
+        `research_comprehension.comprehend_runs` — a reader change is the one
+        legitimate reason to recompute.
+        """
         row = self.parse_run_dir(Path(run_dir))
         if row is None:
             return False
@@ -244,7 +258,10 @@ class ResearchReportEngine:
                 seen = conn.execute(
                     "SELECT 1 FROM research_report_runs WHERE run_id = ?", [run_id]
                 ).fetchone()
-                if seen:
+                if seen and force:
+                    conn.execute(
+                        "DELETE FROM research_report_runs WHERE run_id = ?", [run_id])
+                elif seen:
                     logger.info(
                         f"[ResearchReports] {Path(run_dir).name}: run_id {run_id} "
                         f"already ingested - no-op."
@@ -293,11 +310,13 @@ class ResearchReportEngine:
         )
         return True
 
-    def ingest_drop_dir(self, reports_dir: str = None) -> Tuple[int, int]:
+    def ingest_drop_dir(self, reports_dir: str = None,
+                        force: bool = False) -> Tuple[int, int]:
         """Ingest every report tree under the drop dir. Returns (ingested, skipped).
 
         Re-running over the same drop dir is a no-op: already-seen run_ids are
-        skipped, so the counts come back (0, n).
+        skipped, so the counts come back (0, n). `force` re-parses everything —
+        see `ingest_run_dir`.
         """
         root = Path(reports_dir or self.reports_dir)
         if not root.exists():
@@ -306,7 +325,7 @@ class ResearchReportEngine:
 
         ingested = skipped = 0
         for run_dir in sorted(d for d in root.iterdir() if d.is_dir()):
-            if self.ingest_run_dir(run_dir):
+            if self.ingest_run_dir(run_dir, force=force):
                 ingested += 1
             else:
                 skipped += 1

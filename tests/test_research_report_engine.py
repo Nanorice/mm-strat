@@ -161,7 +161,10 @@ def test_populated_fields_map_from_the_sidecar(engine, run_copy):
     engine.ingest_run_dir(run_copy)
     row = engine.list_reports('RKLB')[0]
     assert row['conviction'] == 'Underweight'      # portfolio_manager.rating
-    assert row['thesis'] == 'Underweight'          # research_manager.recommendation
+    # thesis is the argument, not the verdict. These two being equal was the bug.
+    assert row['thesis'] != row['conviction']
+    # portfolio_manager.investment_thesis is prose, not one of the rating enums.
+    assert len(row['thesis']) > 100
     facts = engine.get_key_facts('RKLB', '2026-07-19')
     assert facts['agents']['business_analyst']['ticker'] == 'RKLB'
 
@@ -175,3 +178,15 @@ def _runs(engine):
         ).fetchall()
     finally:
         conn.close()
+
+
+def test_force_reingests_a_run_already_seen(engine, run_copy):
+    """A parser fix does not reach stored rows without this — the run_id gate
+    skips them. `thesis` mapped the wrong field for three sessions and every row
+    stayed wrong until the sidecars on disk could be re-read."""
+    assert engine.ingest_run_dir(run_copy) is True
+    assert engine.ingest_run_dir(run_copy) is False
+    assert engine.ingest_run_dir(run_copy, force=True) is True
+
+    # Re-ingesting must not duplicate the child row.
+    assert len([r for r in _runs(engine) if r[0] == '186fa743cc20']) == 1
