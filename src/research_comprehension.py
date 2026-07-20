@@ -77,26 +77,32 @@ def _accession(source_ref: Optional[str]) -> Optional[str]:
     return source_ref.split()[0] if source_ref else None
 
 
-def _rows_for_run(run_id: str, ticker: str, report_date, key_facts_json: str) -> List[dict]:
-    """One dict per relation in this run, with its quote scored.
-
-    `quote_verified` is None — not False — when the filing is not cached. "We
-    could not check" and "we checked and it failed" are different facts, and a
-    box without the EDGAR cache would otherwise report every quote as fabricated.
-    """
-    profile = (json.loads(key_facts_json).get('agents') or {}).get('business_analyst')
-    if not profile:
-        return []
-
+def _load_filing_or_none(ticker: str, run_id: str) -> Optional[str]:
+    """The cached filing text, or None when it is not cached — the one case where
+    `quote_verified` must be NULL, not False. "Could not check" and "checked and
+    failed" are different facts; a box without the EDGAR cache would otherwise
+    report every quote as fabricated. The gate does not error, it stops gating."""
     try:
-        filing, _ = load_filing_text(ticker)
+        return load_filing_text(ticker)[0]
     except FileNotFoundError:
-        filing = None
         logger.warning(
-            f"[Comprehension] {ticker} run {run_id}: no cached filing - relations "
+            f"[Comprehension] {ticker} run {run_id}: no cached filing - rows "
             f"logged with quote_verified NULL. The gate cannot run without the "
             f"EDGAR cache; it does not error, it stops being a gate."
         )
+        return None
+
+
+def _verdict(quote: Optional[str], filing: Optional[str]) -> Optional[bool]:
+    return None if filing is None or not quote else quote_is_grounded(quote, filing)
+
+
+def _rows_for_run(run_id: str, ticker: str, report_date, key_facts_json: str) -> List[dict]:
+    """One dict per relation in this run, with its quote scored."""
+    profile = (json.loads(key_facts_json).get('agents') or {}).get('business_analyst')
+    if not profile:
+        return []
+    filing = _load_filing_or_none(ticker, run_id)
 
     rows = []
     for idx, rel in enumerate(profile.get('relations') or []):
@@ -118,9 +124,57 @@ def _rows_for_run(run_id: str, ticker: str, report_date, key_facts_json: str) ->
             'quote':             quote,
             'source_ref':        source_ref,
             'strength':          evidence.get('strength'),
-            'quote_verified':    None if filing is None or not quote
-                                 else quote_is_grounded(quote, filing),
+            'quote_verified':    _verdict(quote, filing),
         })
+    return rows
+
+
+# A claim's human label lives under one of these, in this order (watch_item.name,
+# key_risk.title, choke_point.description); single-dict fields (moat,
+# cost_structure) have none and log NULL.
+_LABEL_KEYS = ('name', 'title', 'description')
+
+
+def _claim_rows_for_run(run_id: str, ticker: str, report_date, key_facts_json: str) -> List[dict]:
+    """One dict per non-relation evidence-bearing claim in this run.
+
+    Data-driven, not a hand-listed set of fields: every top-level profile field
+    whose item(s) carry an `evidence.quote` becomes a gated claim, so a producer
+    that adds a new evidenced section is covered without a code change here.
+    `relations` is skipped — its evidence lives in research_relations. This is the
+    table that gates non-relation claims like GLW's grafted watch_item, which
+    `research_relations` structurally cannot see.
+    """
+    profile = (json.loads(key_facts_json).get('agents') or {}).get('business_analyst')
+    if not profile:
+        return []
+    filing = _load_filing_or_none(ticker, run_id)
+
+    rows, idx = [], 0
+    for field, value in profile.items():
+        if field == 'relations':
+            continue
+        for item in (value if isinstance(value, list) else [value]):
+            if not isinstance(item, dict):
+                continue
+            evidence = item.get('evidence')
+            if not isinstance(evidence, dict) or not evidence.get('quote'):
+                continue
+            quote, source_ref = evidence.get('quote'), evidence.get('source')
+            rows.append({
+                'run_id':         run_id,
+                'claim_idx':      idx,
+                'src_ticker':     ticker,
+                'report_date':    report_date,
+                'accession':      _accession(source_ref),
+                'claim_type':     field,
+                'label':          next((item[k] for k in _LABEL_KEYS if item.get(k)), None),
+                'quote':          quote,
+                'source_ref':     source_ref,
+                'strength':       evidence.get('strength'),
+                'quote_verified': _verdict(quote, filing),
+            })
+            idx += 1
     return rows
 
 
@@ -151,6 +205,23 @@ def ensure_tables(db_path: str = None) -> None:
             "CREATE INDEX IF NOT EXISTS research_relations_tkr_idx "
             "ON research_relations (src_ticker, report_date)"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS research_claims (
+                run_id          VARCHAR NOT NULL,
+                claim_idx       INTEGER NOT NULL,
+                src_ticker      VARCHAR NOT NULL,
+                report_date     DATE    NOT NULL,
+                accession       VARCHAR,
+                claim_type      VARCHAR NOT NULL,
+                label           VARCHAR,
+                quote           VARCHAR,
+                source_ref      VARCHAR,
+                strength        VARCHAR,
+                quote_verified  BOOLEAN,
+                comprehended_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (run_id, claim_idx)
+            )
+        """)
         _ensure_edges_view(conn)
     finally:
         conn.close()
@@ -233,22 +304,34 @@ def supply_chain_edges(db_path: str = None) -> List[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
-def comprehend_runs(db_path: str = None, force: bool = False) -> Tuple[int, int]:
-    """Log the relations of every ingested run. Returns (runs_processed, relations).
+_RELATION_COLS = (
+    'run_id', 'rel_idx', 'src_ticker', 'report_date', 'accession', 'direction',
+    'counterparty_name', 'counterparty_key', 'aggregate_count', 'pct_revenue',
+    'quote', 'source_ref', 'strength', 'quote_verified')
+_CLAIM_COLS = (
+    'run_id', 'claim_idx', 'src_ticker', 'report_date', 'accession', 'claim_type',
+    'label', 'quote', 'source_ref', 'strength', 'quote_verified')
 
-    Re-running writes nothing — a run already in `research_relations` is skipped.
-    A run whose agent fell back to free text has no rows to key on, so it is
-    re-read (one JSON parse) and counted as processed every time; that is the
-    honest reading of "processed", not a leak.
+
+def _comprehend(table: str, row_fn, columns: Tuple[str, ...], path: str,
+                force: bool) -> Tuple[int, int]:
+    """Log every ingested run's rows into `table`. Returns (runs_processed, rows).
+
+    Re-running writes nothing — a run already in `table` is skipped. A run whose
+    agent fell back to free text has no rows to key on, so it is re-read (one JSON
+    parse) and counted as processed every time; that is the honest reading of
+    "processed", not a leak.
 
     `force` re-scores runs already logged. Not speculative: the fidelity checker
     was corrected twice on 2026-07-20 (quote-glyph folding, then layout folding),
     and each fix changed stored verdicts that would otherwise stay wrong forever.
     A checker change is the one reason to recompute.
-    """
-    path = db_path or str(config.DUCKDB_PATH)
-    ensure_tables(path)
 
+    `table` and `columns` are module constants, never user input — the f-strings
+    are safe.
+    """
+    collist = ', '.join(columns)
+    placeholders = ', '.join(['?'] * len(columns))
     conn = db.connect(path)
     try:
         runs = conn.execute("""
@@ -257,38 +340,47 @@ def comprehend_runs(db_path: str = None, force: bool = False) -> Tuple[int, int]
             WHERE key_facts_json IS NOT NULL
             ORDER BY report_date, ticker
         """).fetchall()
-
         done = {r[0] for r in conn.execute(
-            "SELECT DISTINCT run_id FROM research_relations").fetchall()}
+            f"SELECT DISTINCT run_id FROM {table}").fetchall()}
 
         processed = written = 0
         for run_id, ticker, report_date, key_facts_json in runs:
             if run_id in done and not force:
                 continue
-            rows = _rows_for_run(run_id, ticker, report_date, key_facts_json)
+            rows = row_fn(run_id, ticker, report_date, key_facts_json)
             if force:
-                conn.execute("DELETE FROM research_relations WHERE run_id = ?", [run_id])
+                conn.execute(f"DELETE FROM {table} WHERE run_id = ?", [run_id])
             processed += 1
             for r in rows:
-                conn.execute("""
-                    INSERT INTO research_relations
-                        (run_id, rel_idx, src_ticker, report_date, accession,
-                         direction, counterparty_name, counterparty_key,
-                         aggregate_count, pct_revenue, quote, source_ref,
-                         strength, quote_verified)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, [r[c] for c in (
-                    'run_id', 'rel_idx', 'src_ticker', 'report_date', 'accession',
-                    'direction', 'counterparty_name', 'counterparty_key',
-                    'aggregate_count', 'pct_revenue', 'quote', 'source_ref',
-                    'strength', 'quote_verified')])
+                conn.execute(
+                    f"INSERT INTO {table} ({collist}) VALUES ({placeholders})",
+                    [r[c] for c in columns])
                 written += 1
         conn.commit()
     finally:
         conn.close()
 
-    logger.info(f"[Comprehension] {processed} runs -> {written} relations")
+    logger.info(f"[Comprehension] {table}: {processed} runs -> {written} rows")
     return (processed, written)
+
+
+def comprehend_runs(db_path: str = None, force: bool = False) -> Tuple[int, int]:
+    """Log the relations of every ingested run into `research_relations`."""
+    path = db_path or str(config.DUCKDB_PATH)
+    ensure_tables(path)
+    return _comprehend('research_relations', _rows_for_run, _RELATION_COLS, path, force)
+
+
+def comprehend_claims(db_path: str = None, force: bool = False) -> Tuple[int, int]:
+    """Log the non-relation evidenced claims of every run into `research_claims`.
+
+    The sibling of `comprehend_runs` for everything that is not a counterparty
+    edge — watch items, risks, choke points, moat, cost structure — so the quote
+    gate covers the claims `research_relations` structurally cannot see.
+    """
+    path = db_path or str(config.DUCKDB_PATH)
+    ensure_tables(path)
+    return _comprehend('research_claims', _claim_rows_for_run, _CLAIM_COLS, path, force)
 
 
 def fidelity_by_run(db_path: str = None) -> List[dict]:

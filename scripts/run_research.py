@@ -23,7 +23,11 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8')  # counterparty names carry accents (Kinéis)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.research_comprehension import comprehend_runs, supply_chain_edges
+from src.research_comprehension import (
+    comprehend_claims,
+    comprehend_runs,
+    supply_chain_edges,
+)
 from src.research_report_engine import ResearchReportEngine
 
 
@@ -34,7 +38,8 @@ def main() -> None:
     tickers = {t.upper() for t in args.tickers}
 
     print('ingest:    ', ResearchReportEngine().ingest_drop_dir(), flush=True)
-    print('comprehend:', comprehend_runs(), flush=True)
+    print('relations: ', comprehend_runs(), flush=True)
+    print('claims:    ', comprehend_claims(), flush=True)
 
     edges = supply_chain_edges()
     if tickers:

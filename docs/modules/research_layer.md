@@ -262,6 +262,36 @@ to drift and no rebuild step to forget or schedule. Created (idempotently) by
 
 Live as of 2026-07-21: 26 edges over GLW/MRVL/RKLB, corroboration `n≥2`.
 
+### 5.2 `research_claims` — the non-relation gate
+
+`research_relations` gates the evidence behind *counterparty edges* only. Every
+other evidenced claim in a profile — `watch_items`, `key_risks`, `choke_points`,
+`moat`, `cost_structure`, `revenue_model`, evidenced `products` — carried an
+unchecked quote until this table. `comprehend_claims()` writes one row per such
+claim, `quote_verified` scored the same way, PK `(run_id, claim_idx)`.
+
+- **Data-driven, not a field list.** It walks every top-level profile field and
+  logs any item carrying an `evidence.quote`, skipping `relations` (logged
+  elsewhere). A producer that adds a new evidenced section is covered with no code
+  change — and it already pays off: RKLB's `products` are evidenced dicts while
+  GLW's are bare strings, and the walk logs the former without either being
+  enumerated.
+- **Shares one driver with `comprehend_runs`.** `_comprehend(table, row_fn,
+  columns, …)` is the single skip/force/insert loop; relations and claims are two
+  configs of it, so the idempotency and `force`-rescore semantics are identical by
+  construction, not by duplication.
+- **`label`** is the claim's name (`watch_item.name` / `key_risk.title` /
+  `choke_point.description`), NULL for single-dict fields (`moat`, `cost_structure`).
+
+**This is where GLW's grafted quote is finally gated.** First live run: 162 claims,
+158 verified, **4 correctly flagged** — the GLW `watch_items` graft and the MRVL
+`cost_structure` bracket-gloss (both already known, §4), plus two newly surfaced
+and genuine: a GLW `revenue_model` unmarked stitch of two non-contiguous sentences,
+and an RKLB `products` grafted qualifier ("...orbital rocket **in 2025**", where the
+filing sentence ends at "rocket"). **Zero false negatives** — every flag bisects to
+a real non-verbatim continuation, so the ellipsis-elision the flags first *looked*
+like turned out not to need a checker change.
+
 ---
 
 ## 6. Read surface
@@ -286,16 +316,15 @@ DB. A `research_report_sections` table would delete the splitter outright.
 
 ## 7. Not built
 
-Done since the last pass: `supply_chain_edges` (§5.1, now a live view) and the
-corroboration harness (`scripts/run_corroboration.py`, run at `n≥2`). Still open,
-triaged:
+Done since the last pass: `supply_chain_edges` (§5.1, now a live view), the
+corroboration harness (`scripts/run_corroboration.py`, run at `n≥2`), and
+`research_claims` (§5.2 — the GLW graft is now gated). Still open, triaged:
 
 | Thing | Priority | Gated on |
 |---|---|---|
 | **shortlist selector** | P0 (the one gap the user names) | nothing ranks/cuts `daily_predictions` into a ticker list; today the list is passed by hand (§8). See [`agentic_digestion_layer.md`](../session_logs/sprint_15/plans/agentic_digestion_layer.md) [1] |
 | **Discord briefing** | P1 | the run-finished notification. `_discord_send` exists; the *briefing content* does not — see §8's note |
 | `ingest_reports` / `comprehend_reports` phases | P1 | `phase_registry.py` has no research entries; both run only when a human calls them (§8). A sync/ingest that silently stops never shows in the pipeline heatmap |
-| `research_claims` | P1 | nothing consumes it — non-relation evidence (watch items, risks, moat) has no persisted verdict, so **GLW's grafted quote is in the DB ungated** |
 | `dst_ticker` resolution | P2 | §2 — the real LLM job in this layer; until then edges are named nodes with no ticker link |
 | `research_report_sections` | P2 | §6 |
 | R2 transport | P2 (only when the producer moves off `sh019`) | sync the **EDGAR cache** with the reports (otherwise the gate silently stops being a gate) and upload `manifest.json` **last** |
@@ -331,7 +360,8 @@ cd $HOME\Documents\projects\mm-strat
 .venv\Scripts\python.exe scripts\run_research.py TBI AMD SHC
 ```
 
-`run_research.py` ingests the drop dir → `comprehend_runs()` → prints the
+`run_research.py` ingests the drop dir → `comprehend_runs()` (relations) →
+`comprehend_claims()` (the non-relation gate, §5.2) → prints the
 `supply_chain_edges` rows (filtered to the named tickers). A bare
 `run_research.py` with no tickers digests everything new and prints the whole graph.
 Re-running is a no-op on already-seen `run_id`s. Read the report itself on the

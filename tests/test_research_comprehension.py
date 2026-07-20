@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from src.research_comprehension import (
+    comprehend_claims,
     comprehend_runs,
     counterparty_key,
     ensure_tables,
@@ -86,7 +87,20 @@ def logged(tmp_path):
          'pct_revenue': None,
          'evidence': {'quote': invented, 'source': '0001819994-26-000013 item1 ¶4',
                       'strength': 'strong'}},
-    ]}}}
+    ],
+        # Non-relation evidenced claims — the research_claims surface. One real
+        # quote, one fabricated (the GLW-graft shape). products has no evidence
+        # and must produce no claim.
+        'key_risks': [{'title': 'Concentrated customer base',
+                       'evidence': {'quote': real,
+                                    'source': '0001819994-26-000013 item1a ¶19',
+                                    'strength': 'moderate'}}],
+        'watch_items': [{'name': 'Neutron share',
+                         'evidence': {'quote': invented,
+                                      'source': '0001819994-26-000013 item1 ¶4',
+                                      'strength': 'strong'}}],
+        'products': ['Electron', 'Neutron'],
+    }}}
 
     path = str(tmp_path / 'test.duckdb')
     conn = db.connect(path)
@@ -189,6 +203,49 @@ def test_edges_are_idempotent_across_recompute(logged):
     comprehend_runs(logged, force=True)
     after = supply_chain_edges(logged)
     assert before == after
+
+
+# --- research_claims: the non-relation gate --------------------------------
+
+@pytest.mark.skipif(not (EDGAR_CACHE / 'RKLB').exists(), reason="no edgar cache")
+def test_claims_gate_grades_non_relation_evidence(logged):
+    """The point of research_claims: a fabricated non-relation quote (a watch_item,
+    the GLW-graft shape) lands as quote_verified = False, while a real risk quote
+    passes. relations are NOT logged here (they have their own table), and a field
+    with no evidence (products) produces no claim."""
+    assert comprehend_claims(logged) == (1, 2)
+    conn = db.connect(logged, read_only=True)
+    rows = conn.execute("SELECT claim_type, label, quote_verified "
+                        "FROM research_claims ORDER BY claim_idx").fetchall()
+    conn.close()
+    by_type = {r[0]: (r[1], r[2]) for r in rows}
+    assert set(by_type) == {'key_risks', 'watch_items'}          # not 'relations', not 'products'
+    assert by_type['key_risks'] == ('Concentrated customer base', True)
+    assert by_type['watch_items'] == ('Neutron share', False)    # the gate catches it
+
+
+@pytest.mark.skipif(not (EDGAR_CACHE / 'RKLB').exists(), reason="no edgar cache")
+def test_claims_rerun_inserts_nothing_and_force_rescores(logged):
+    assert comprehend_claims(logged) == (1, 2)
+    assert comprehend_claims(logged) == (0, 0)
+    assert comprehend_claims(logged, force=True) == (1, 2)
+    conn = db.connect(logged, read_only=True)
+    assert conn.execute("SELECT COUNT(*) FROM research_claims").fetchone()[0] == 2
+    conn.close()
+
+
+def test_no_typed_profile_logs_no_claims(tmp_path):
+    """A free-text fallback run has no typed fields to gate — no raise, no rows."""
+    path = str(tmp_path / 'x.duckdb')
+    conn = db.connect(path)
+    conn.execute("CREATE TABLE research_report_runs (run_id VARCHAR, ticker VARCHAR, "
+                 "report_date DATE, key_facts_json VARCHAR)")
+    conn.execute("INSERT INTO research_report_runs VALUES (?, ?, ?, ?)",
+                 ['run_c', 'GLW', '2026-07-20',
+                  json.dumps({'agents': {'business_analyst': None}})])
+    conn.commit()
+    conn.close()
+    assert comprehend_claims(path) == (1, 0)
 
 
 def test_no_typed_profile_logs_nothing(tmp_path):
