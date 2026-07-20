@@ -8,8 +8,6 @@ Tests verify:
 5. SEC Edgar placeholder raises NotImplementedError
 """
 
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import duckdb
@@ -21,18 +19,15 @@ from src.universe_backfill import UniverseBackfillEngine
 
 
 @pytest.fixture
-def temp_db():
-    """Create a temporary DuckDB database for testing."""
-    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as f:
-        db_path = f.name
+def temp_db(tmp_path):
+    """Path to a temp DuckDB for testing — deliberately NOT pre-created.
 
-    yield db_path
-
-    # Cleanup
-    try:
-        Path(db_path).unlink()
-    except FileNotFoundError:
-        pass
+    NamedTemporaryFile is the wrong tool: it leaves a zero-byte file behind, and
+    DuckDB refuses to open one ("not a valid DuckDB database file") on Windows.
+    Hand DuckDB a free path and let it create the file. tmp_path is cleaned up
+    by pytest, so no manual unlink is needed.
+    """
+    return str(tmp_path / "test.duckdb")
 
 
 @pytest.fixture

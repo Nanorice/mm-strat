@@ -147,11 +147,18 @@ class ModelRegistry:
         `model_version`. If no timestamp, the whole id becomes `model_name` and
         `model_version` stays NULL. Existing non-NULL values are not overwritten.
         """
+        # Existence must be probed via information_schema: PRAGMA table_info()
+        # RAISES CatalogException on a missing table rather than returning an
+        # empty result, so checking the column set could never detect absence.
+        table_exists = con.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'models'"
+        ).fetchone()
+        if not table_exists:
+            return  # `models` doesn't exist yet — schema_design.sql owns its creation
+
         existing_cols = {
             r[1] for r in con.execute("PRAGMA table_info('models')").fetchall()
         }
-        if not existing_cols:
-            return  # `models` doesn't exist yet — schema_design.sql owns its creation
 
         if "model_name" not in existing_cols:
             con.execute("ALTER TABLE models ADD COLUMN model_name VARCHAR")

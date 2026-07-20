@@ -87,14 +87,19 @@ def test_every_orchestrated_phase_has_an_abort_guard():
     )
 
 
-def test_execute_phase_returns_false_only_on_halt():
+def test_execute_phase_returns_false_only_on_halt(tmp_path):
     """`_execute_phase` is the single HALT control surface: a failing phase
     returns success=False iff config marks it HALT. WARN/SKIP are absorbed as
     success so the run continues.
+
+    db_path must be explicit: the orchestrator constructor eagerly builds every
+    manager/engine, each of which runs CREATE TABLE IF NOT EXISTS. Omitting it
+    creates those tables in the production DB (dry_run only gates run_pipeline,
+    not __init__).
     """
     from src.orchestrators.daily_pipeline_orchestrator import DailyPipelineOrchestrator
 
-    orch = DailyPipelineOrchestrator(dry_run=True)
+    orch = DailyPipelineOrchestrator(db_path=str(tmp_path / "orch.duckdb"), dry_run=True)
 
     def boom():
         raise RuntimeError("phase blew up")
