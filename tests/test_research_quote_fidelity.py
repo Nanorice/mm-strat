@@ -78,6 +78,23 @@ def test_curly_quotes_and_dashes_normalise(filing):
     assert normalize('  A   B \n C ') == 'a b c'
 
 
+def test_single_and_double_quotes_fold_together(filing):
+    """MRVL 2026-07-20: the filing defines terms as ("Marvell," "MTI,"); the
+    model transcribed ('Marvell,' 'MTI,'). Every word verbatim, quote style
+    swapped. Folding only curly→straight missed it — both were already straight
+    — and it failed 10 of 28 claims, reporting 60.7% for a materially clean run.
+    """
+    assert normalize("'a' \"a\" ‘a’ “a”") == '"a" "a" "a" "a"'
+
+
+def test_quote_style_swap_still_catches_an_altered_word(filing):
+    """The fold must not become a blanket pass: same swap, one word changed."""
+    swapped = REAL_QUOTE.replace('"', "'")
+    assert 'customers' in swapped  # guard: the substitution below must bite
+    assert quote_is_grounded(swapped, filing) is True
+    assert quote_is_grounded(swapped.replace('customers', 'suppliers'), filing) is False
+
+
 def test_ellipsis_elided_quote_checks_every_fragment(filing):
     """Both halves real → passes; one half invented → fails, even though the
     other half is verbatim."""

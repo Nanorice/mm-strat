@@ -24,8 +24,15 @@ import config
 # quotes for straight ones and en-dashes for hyphens without changing a word.
 # Those are not fabrications. Dropping or altering a *word* is, and survives all
 # of this.
+# EVERY quote character folds to one glyph, single and double alike. Observed on
+# MRVL 2026-07-20: the 10-K defines terms as ("Marvell," "MTI,") and the model
+# transcribed them as ('Marvell,' 'MTI,') - verbatim in every word, differing
+# only in quote style. Folding curly-to-straight was not enough, because both
+# forms were already straight. That one substitution failed 10 of 28 claims and
+# reported 60.7% fidelity for a run that is materially clean.
 _PUNCT = {
-    '‘': "'", '’': "'", '“': '"', '”': '"',
+    '‘': '"', '’': '"', '“': '"', '”': '"',
+    "'": '"', '`': '"',
     '–': '-', '—': '-', '‑': '-', ' ': ' ',
 }
 
