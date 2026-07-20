@@ -144,6 +144,22 @@ _TABLE_COLS = {
     "company_name": st.column_config.TextColumn("Name", width="medium"),
     "sector": st.column_config.TextColumn("Sector", width="small"),
     "stage": st.column_config.TextColumn("Stage", width="small"),
+    # "In play since" trio. `anchor_date` is the ACTIVE session entry when there is
+    # one, else the start of the current trend_ok run — see _create_v_d3_screening.
+    "anchor_date": st.column_config.DateColumn(
+        "Since", width="small",
+        help="When this name became actionable: its open SEPA session's entry date, "
+             "or — for names with no session yet — the first day of the current "
+             "unbroken trend_ok run. Blank for a breakout that fired from outside "
+             "the trend template (no run, no session: nothing to date yet)."),
+    "anchor_close": st.column_config.NumberColumn(
+        "Px @ since", format="$%.2f", width="small",
+        help="Close on the Since date. Unadjusted, like every price here."),
+    "close": st.column_config.NumberColumn("Price", format="$%.2f", width="small",
+                                           help="Latest close."),
+    "pct_return": st.column_config.NumberColumn(
+        "Δ %", format="%.1f%%", width="small",
+        help="Price vs Px @ since. Not a trade P&L — no stop, no exit, no sizing."),
     # RAW model score — deliberately NOT called "P(...)": daily_predictions stores
     # uncalibrated softprob, so this ranks, it does not state odds.
     "prob_home_run": st.column_config.NumberColumn(
@@ -151,7 +167,17 @@ _TABLE_COLS = {
         help="Prod binary model's RAW score for fwd return >30%. Uncalibrated — "
              "the model is overconfident, so read this as a RANK, not a probability."),
     "mcap": st.column_config.TextColumn("Mkt cap", width="small"),
-    "close": st.column_config.NumberColumn("Price", format="$%.2f", width="small"),
+    # The two clocks behind `anchor_date`, kept visible so the anchor is auditable.
+    "trend_start_date": st.column_config.DateColumn(
+        "Trend since", width="small",
+        help="First day of the current unbroken trend_ok run (C1-C9 template). "
+             "Capped at a 400-day lookback."),
+    "entry_date": st.column_config.DateColumn(
+        "Entry", width="small",
+        help="Entry date of the open SEPA session (trend_ok ∧ breakout_ok, held to a "
+             "C1∨C2∨C6 exit). Blank when the name has never opened one. This — not "
+             "`stage` — is the persistent 'triggered' state: breakout_ok is a "
+             "same-day event flag, so a triggered row always broke out TODAY."),
     "gross_margin": st.column_config.NumberColumn("Gross %", format="%.0f", width="small"),
     "net_margin": st.column_config.NumberColumn("Net %", format="%.0f", width="small"),
     "pe_ratio": st.column_config.NumberColumn("P/E", format="%.1f", width="small"),
@@ -183,6 +209,27 @@ with st.expander("How to read the score"):
         "- **No expected-return column, by design** — the median inverts, so a point "
         "forecast would mislead. We present tail-odds (cf. the champion start-date cone).\n"
         "- Blank score = the name isn't in a scored cohort. An honest gap, not a stale value."
+    )
+with st.expander("How to read the dates"):
+    st.markdown(
+        "- **Stage does not date itself.** `breakout_ok` is a *same-day event flag* "
+        "(`breakout = 1 AND volume/vol_avg_50 > 1.3`), not a sticky state — so every "
+        "**● triggered** row broke out **today**. A literal \"day of breakout\" column "
+        "would read today's date and 0.00% on every triggered name.\n"
+        "- So **Since** anchors to the sharper available date: the **Entry** of an open "
+        "SEPA session where one exists (`trend_ok ∧ breakout_ok`, held to a C1∨C2∨C6 "
+        "exit — the persistent notion of *triggered*), otherwise **Trend since**, the "
+        "first day of the current unbroken trend_ok run.\n"
+        "- **Δ %** is Price ÷ Px @ since − 1. It is a **price move, not a trade P&L** — "
+        "no stop, no exit rule, no sizing. Prices are unadjusted (`adj_close` is NULL "
+        "repo-wide), so a split inside the window will distort it.\n"
+        "- Blank Since = a breakout that fired from **outside** the trend template "
+        "(≈half of triggered names): no run to date, no session yet.\n"
+        "- ⚠️ **Trend since is currently censored at 2026-06-25.** Six days in June 2026 "
+        "(06-01/03/04/05/09, 06-24) wrote `trend_ok = FALSE` universe-wide because "
+        "`t1_macro.spy_close` was missing when T2 ran, so no run can appear to start "
+        "before 06-25. The pipeline now hard-fails instead of writing this; the June "
+        "rows still need a T2 recompute. **Entry** is unaffected."
     )
 
 df = load_screening()

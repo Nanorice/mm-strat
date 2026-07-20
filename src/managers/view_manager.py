@@ -1141,6 +1141,10 @@ class ViewManager:
         Model-swap free: score joins the `status_flag='prod'` model, like the
         shortlist. P/E derived px/eps_diluted (— when unprofitable), mirroring
         v_d3_prebreakout's ratio block.
+
+        Also carries the "in play since" block — trend_start_date / entry_date /
+        anchor_date + anchor_close + pct_return. See the CTE comments for why
+        `stage` itself cannot date a triggered row (breakout_ok is a same-day flag).
         """
         con.execute("""
             CREATE OR REPLACE VIEW v_d3_screening AS
@@ -1169,14 +1173,63 @@ class ViewManager:
                     ORDER BY fiscal_period DESC NULLS LAST
                 ) = 1
             ),
+            mx AS (SELECT MAX(date) AS d FROM t2_screener_features),
             pop AS (
                 -- today's screening universe (trend_ok ∨ breakout_ok), latest day.
                 SELECT ticker, date, close, trend_ok, breakout_ok,
                        "RS_Universe_Rank" AS rs_universe_rank,
                        "RS_Sector_Rank"   AS rs_sector_rank
                 FROM t2_screener_features
-                WHERE date = (SELECT MAX(date) FROM t2_screener_features)
+                WHERE date = (SELECT d FROM mx)
                   AND (trend_ok OR breakout_ok)
+            ),
+            -- ── "in play since" anchors ──────────────────────────────────────
+            -- Two dates, because the two stages change state on different clocks:
+            --   trend_start_date — first day of the CURRENT uninterrupted trend_ok
+            --     run. The setup clock. NULL when today's row isn't trend_ok (a
+            --     breakout can fire from outside the trend template — ~42 of 79 on
+            --     2026-07-17), and that NULL is honest: there is no run to date.
+            --   entry_date — the ACTIVE sepa_watchlist session's entry. The only
+            --     PERSISTENT notion of "triggered": breakout_ok is a same-day event
+            --     flag, so "day of breakout" for a triggered row is always today and
+            --     would render a 0.00% return on every one. Sessions open on
+            --     trend_ok ∧ breakout_ok and survive to a C1∨C2∨C6 exit.
+            -- Windowed to 400 days: unbounded, this scans a 57 GB table. A run older
+            -- than the window reports its start as the window edge (documented on the
+            -- column, not silently NULLed).
+            hist AS (
+                SELECT ticker, date, close, trend_ok
+                FROM t2_screener_features
+                WHERE date > (SELECT d FROM mx) - INTERVAL 400 DAY
+            ),
+            h AS (SELECT hist.* FROM hist JOIN pop USING (ticker)),
+            runs AS (
+                -- Gaps-and-islands: the running count of non-trend days is constant
+                -- within an uninterrupted trend_ok run, so it keys the run.
+                SELECT ticker, date, close, trend_ok,
+                       SUM(CASE WHEN trend_ok THEN 0 ELSE 1 END)
+                           OVER (PARTITION BY ticker ORDER BY date) AS run_id
+                FROM h
+            ),
+            trend_runs AS (
+                SELECT ticker, run_id, MIN(date) AS start_date, MAX(date) AS end_date,
+                       MIN_BY(close, date) AS start_close, COUNT(*) AS run_len
+                FROM runs WHERE trend_ok GROUP BY ticker, run_id
+            ),
+            trend_start AS (
+                SELECT ticker, start_date AS trend_start_date,
+                       start_close AS trend_start_close, run_len AS trend_run_len
+                FROM trend_runs WHERE end_date = (SELECT d FROM mx)
+            ),
+            sess AS (
+                SELECT ticker, MAX(entry_date) AS entry_date
+                FROM sepa_watchlist WHERE status = 'ACTIVE' GROUP BY ticker
+            ),
+            sess_px AS (
+                SELECT s.ticker, s.entry_date, t.close AS entry_close
+                FROM sess s
+                LEFT JOIN t2_screener_features t
+                  ON t.ticker = s.ticker AND t.date = s.entry_date
             )
             SELECT
                 pop.ticker, pop.date,
@@ -1188,6 +1241,15 @@ class ViewManager:
                 CASE WHEN pop.breakout_ok THEN 'triggered' ELSE 'setup' END AS stage,
                 p.prob_home_run,
                 p.prediction_date AS rating_date,
+                ts.trend_start_date, ts.trend_start_close, ts.trend_run_len,
+                sp.entry_date, sp.entry_close,
+                -- The anchor the UI shows: an open session outranks the trend run —
+                -- it's the sharper "this became actionable on" date. Falls back to the
+                -- trend-run start for the ~240 names with no session yet.
+                COALESCE(sp.entry_date, ts.trend_start_date)   AS anchor_date,
+                COALESCE(sp.entry_close, ts.trend_start_close) AS anchor_close,
+                100.0 * (pop.close / NULLIF(
+                    COALESCE(sp.entry_close, ts.trend_start_close), 0) - 1) AS pct_return,
                 ff.gross_margin, ff.net_margin, ff.operating_margin, ff.fcf_margin,
                 ff.free_cash_flow,
                 (ff.free_cash_flow > 0) AS fcf_positive,
@@ -1197,6 +1259,8 @@ class ViewManager:
                 CASE WHEN ff.eps_diluted > 0.01
                     THEN pop.close / ff.eps_diluted END AS pe_ratio
             FROM pop
+            LEFT JOIN trend_start ts ON ts.ticker = pop.ticker
+            LEFT JOIN sess_px sp ON sp.ticker = pop.ticker
             LEFT JOIN company_profiles cp ON cp.ticker = pop.ticker
             LEFT JOIN preds p
                 ON p.ticker = pop.ticker AND p.prediction_date = pop.date
