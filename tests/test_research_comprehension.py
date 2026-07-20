@@ -15,6 +15,7 @@ from src.research_comprehension import (
     counterparty_key,
     ensure_tables,
     fidelity_by_run,
+    supply_chain_edges,
 )
 from src import db
 
@@ -32,6 +33,15 @@ def test_legal_suffixes_do_not_split_one_counterparty():
            counterparty_key('Prysmian Group', 'competitor', None)
     assert counterparty_key('Infineon Technologies AG', 'customer', None) == \
            counterparty_key('Infineon Technologies', 'customer', None)
+
+
+def test_trailing_acronym_gloss_does_not_split_one_counterparty():
+    """RKLB logged "Space Development Agency" (2/3 runs) and "...(SDA)" (1/3) as
+    two counterparties. The paren's letters survived _NON_WORD and split the edge."""
+    assert counterparty_key('Space Development Agency (SDA)', 'customer', None) == \
+           counterparty_key('Space Development Agency', 'customer', None)
+    assert counterparty_key('National Reconnaissance Office (NRO)', 'customer', None) == \
+           counterparty_key('National Reconnaissance Office', 'customer', None)
 
 
 def test_distinct_names_keep_distinct_keys():
@@ -149,6 +159,36 @@ def test_uncheckable_is_null_not_false(logged, monkeypatch):
         "SELECT quote_verified FROM research_relations").fetchall()]
     conn.close()
     assert verdicts == [None, None]
+
+
+@pytest.mark.skipif(not (EDGAR_CACHE / 'RKLB').exists(), reason="no edgar cache")
+def test_edges_confidence_zeroes_an_unverified_edge(logged):
+    """The whole point of the multiplicative confidence: the aggregate row has a
+    verified quote (confidence 1.0), the invented NASA edge fails the gate and its
+    confidence collapses to 0 — repetition cannot rescue it."""
+    comprehend_runs(logged)
+    edges = {e['counterparty_key']: e for e in supply_chain_edges(logged)}
+
+    agg = edges['__top5_customers__']
+    assert agg['node_type'] == 'aggregate'
+    assert agg['weight'] == 49.0
+    assert agg['confidence'] == 1.0          # strong × verified 1/1 × seen 1/1
+
+    nasa = edges['nasa']
+    assert nasa['node_type'] is None
+    assert nasa['n_verified'] == 0
+    assert nasa['confidence'] == 0.0
+
+
+@pytest.mark.skipif(not (EDGAR_CACHE / 'RKLB').exists(), reason="no edgar cache")
+def test_edges_are_idempotent_across_recompute(logged):
+    """A view recomputes on read, so two reads with a force-rescore between them
+    return the same edge set — the property the whole append-only design buys."""
+    comprehend_runs(logged)
+    before = supply_chain_edges(logged)
+    comprehend_runs(logged, force=True)
+    after = supply_chain_edges(logged)
+    assert before == after
 
 
 def test_no_typed_profile_logs_nothing(tmp_path):

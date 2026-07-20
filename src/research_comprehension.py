@@ -51,6 +51,10 @@ def counterparty_key(name: Optional[str], direction: str,
     NULL.
     """
     if name:
+        # A trailing acronym gloss is not identity: "Space Development Agency
+        # (SDA)" and "Space Development Agency" are one party. Strip it before
+        # keying, or the paren's letters survive _NON_WORD and split the edge.
+        name = re.sub(r'\s*\([^)]*\)\s*$', '', name)
         # Punctuation goes first: "Prysmian Group S.p.A." only matches the
         # suffix pattern once the dots are spaces, because \b sits on them.
         words = re.sub(r'\s+', ' ', _NON_WORD.sub(' ', name.lower())).strip()
@@ -147,8 +151,86 @@ def ensure_tables(db_path: str = None) -> None:
             "CREATE INDEX IF NOT EXISTS research_relations_tkr_idx "
             "ON research_relations (src_ticker, report_date)"
         )
+        _ensure_edges_view(conn)
     finally:
         conn.close()
+
+
+# Strength the agent asserted → the multiplier in the confidence formula
+# (knowledge_base_schema.md §2.3). Unknown/missing folds to moderate, not zero:
+# an absent label is not evidence of weakness.
+_STRENGTH_SQL = """CASE lower(strength)
+    WHEN 'strong' THEN 1.0 WHEN 'moderate' THEN 0.6 WHEN 'weak' THEN 0.3
+    ELSE 0.6 END"""
+
+
+def _ensure_edges_view(conn) -> None:
+    """`supply_chain_edges` — the derived graph, per knowledge_base_schema.md §2.2.
+
+    A view, not a table: it is a full GROUP BY recompute over research_relations
+    on every read, so there is no stored copy to drift and no rebuild step to
+    forget. The schema's §3.3 rebuild_supply_chain_edges() is the write-path
+    version of the same projection; a view makes the recompute implicit.
+
+    `dst_ticker` is NULL for now — resolving a counterparty name to a listed
+    ticker is the one real LLM job in this layer and is deliberately deferred.
+
+    ponytail: grain is (src_ticker, counterparty_key, direction, accession).
+    The schema PK drops accession, but corroboration is per-filing (n_runs_total
+    is scoped to accession), so a counterparty named in two different 10-Ks would
+    yield two rows here — a stated-PK violation. Every ticker has exactly one
+    accession today, so the grains coincide. Upgrade when a second filing lands:
+    collapse to the latest accession per (src, key, direction).
+    """
+    conn.execute(f"""
+        CREATE OR REPLACE VIEW supply_chain_edges AS
+        WITH totals AS (
+            SELECT src_ticker, accession, COUNT(DISTINCT run_id) AS n_runs_total
+            FROM research_relations WHERE accession IS NOT NULL
+            GROUP BY src_ticker, accession
+        ),
+        edges AS (
+            SELECT
+                src_ticker, counterparty_key, direction, accession,
+                arg_max(counterparty_name, report_date)  AS counterparty_name,
+                CASE WHEN starts_with(counterparty_key, '__top')
+                     THEN 'aggregate' END                AS node_type,
+                max(pct_revenue)                         AS weight,
+                COUNT(DISTINCT run_id)                   AS n_runs_seen,
+                COUNT(DISTINCT run_id) FILTER (quote_verified) AS n_verified,
+                avg({_STRENGTH_SQL})                     AS strength_weight,
+                min(report_date)                         AS first_seen,
+                max(report_date)                         AS last_seen
+            FROM research_relations WHERE accession IS NOT NULL
+            GROUP BY src_ticker, counterparty_key, direction, accession
+        )
+        SELECT
+            e.src_ticker, e.counterparty_key, e.direction,
+            NULL::VARCHAR                                AS dst_ticker,
+            e.counterparty_name, e.node_type, e.weight,
+            e.n_runs_seen, t.n_runs_total, e.n_verified,
+            -- multiplicative: any factor at zero zeroes the edge, so a repeated
+            -- but unverified quote is not rescued by its repetition (§2.3).
+            e.strength_weight
+              * (e.n_verified::DOUBLE / e.n_runs_seen)
+              * (e.n_runs_seen::DOUBLE / t.n_runs_total) AS confidence,
+            e.first_seen, e.last_seen, e.accession
+        FROM edges e JOIN totals t USING (src_ticker, accession)
+        ORDER BY e.src_ticker, e.n_runs_seen DESC, e.direction, e.counterparty_key
+    """)
+
+
+def supply_chain_edges(db_path: str = None) -> List[dict]:
+    """Read the derived graph. Ensures the view exists first (idempotent DDL)."""
+    path = db_path or str(config.DUCKDB_PATH)
+    ensure_tables(path)
+    conn = db.connect(path, read_only=True)
+    try:
+        rows = conn.execute("SELECT * FROM supply_chain_edges").fetchall()
+        cols = [d[0] for d in conn.description]
+    finally:
+        conn.close()
+    return [dict(zip(cols, r)) for r in rows]
 
 
 def comprehend_runs(db_path: str = None, force: bool = False) -> Tuple[int, int]:
