@@ -1928,6 +1928,14 @@ _AGENT_SPLIT = re.compile(
     re.MULTILINE,
 )
 
+# The report groups agents under part headings ("## II. Research Team Decision")
+# that sit BETWEEN two agent headings, so splitting on agent names alone leaves
+# each part heading stranded at the end of the previous agent's body — the
+# Business Analyst's section ended with a bare "## II. Research Team Decision"
+# and nothing under it. Only a part heading can end up trailing: a real body
+# heading always has the body's own text after it.
+_TRAILING_HEADING = re.compile(r"(?:\A|\n)#{1,6} [^\n]*\Z")
+
 
 def split_report_sections(raw_md: str) -> dict[str, str]:
     """Split `complete_report.md` into {agent name: body}, in document order.
@@ -1936,7 +1944,10 @@ def split_report_sections(raw_md: str) -> dict[str, str]:
     caller falls back to rendering the whole blob.
     """
     parts = _AGENT_SPLIT.split(raw_md or "")
-    return {parts[i]: parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
+    return {
+        parts[i]: _TRAILING_HEADING.sub("", parts[i + 1].strip()).strip()
+        for i in range(1, len(parts) - 1, 2)
+    }
 
 
 def escape_markdown_dollars(md: str) -> str:

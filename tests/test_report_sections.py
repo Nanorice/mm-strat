@@ -46,6 +46,30 @@ def test_body_subheadings_stay_with_their_agent():
     assert "Counterparties" not in s["Market Analyst"]
 
 
+def test_part_heading_does_not_strand_on_the_previous_agent():
+    """"## II. Research Team Decision" belongs to Bull, not to Business.
+
+    Observed on MRVL: the Business Analyst section rendered with a trailing
+    "II. Research Team Decision" header and no content under it. Four boundaries
+    have this shape (II/III/IV/V), one per part.
+    """
+    s = split_report_sections(SAMPLE)
+    assert "Research Team Decision" not in s["Business Analyst"]
+    assert s["Business Analyst"].endswith("Apple Inc, 16% of revenue.")
+
+
+def test_body_heading_with_content_under_it_survives():
+    """Only a *trailing* heading is stripped — a real one keeps its body."""
+    s = split_report_sections(SAMPLE)
+    assert s["Market Analyst"].startswith("## GLW — Comprehensive Technical Analysis")
+    assert "### 1. Macro Market Context" in s["Market Analyst"]
+
+
+def test_last_agent_keeps_its_own_trailing_content():
+    s = split_report_sections(SAMPLE)
+    assert s["Bull Researcher"].endswith("Buy it.")
+
+
 def test_no_agent_headings_yields_empty_so_caller_falls_back():
     assert split_report_sections("# Just prose\n\nNo agents here.") == {}
     assert split_report_sections("") == {}
