@@ -13,7 +13,7 @@
 | Question | Document |
 |---|---|
 | What does this term mean? Which names lie? | [glossary.md](glossary.md) — **check before naming anything** |
-| How does module X work? | `docs/modules/`: [engines](../modules/engines.md) · [feature_pipeline](../modules/feature_pipeline.md) · [regime_m03](../modules/regime_m03.md) · [managers](../modules/managers.md) · [orchestrator](../modules/orchestrator.md) · [model_registry](../modules/model_registry.md) · [evaluation](../modules/evaluation.md) · [backtest](../modules/backtest.md) · [dashboard](../modules/dashboard.md) |
+| How does module X work? | `docs/modules/`: [engines](../modules/engines.md) · [feature_pipeline](../modules/feature_pipeline.md) · [regime_m03](../modules/regime_m03.md) · [managers](../modules/managers.md) · [orchestrator](../modules/orchestrator.md) · [model_registry](../modules/model_registry.md) · [evaluation](../modules/evaluation.md) · [backtest](../modules/backtest.md) · [dashboard](../modules/dashboard.md) · [research_layer](../modules/research_layer.md) |
 | How do I operate it? (runbooks, audits, lifecycle CLIs) | [manual_for_me.md](manual_for_me.md) |
 | How is a model developed and promoted? | [model_development_methodology.md](model_development_methodology.md) (8 gates, three currencies of proof) |
 | What is each model, and its research history? | `docs/model_doc/`: [m01](../model_doc/m01.md) · [m02](../model_doc/m02.md) · [regime_model](../model_doc/regime_model.md) |
