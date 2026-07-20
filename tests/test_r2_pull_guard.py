@@ -96,6 +96,35 @@ def test_pull_requires_explicit_opt_in_not_credentials():
     )
 
 
+def test_opt_in_is_hydrated_from_streamlit_secrets():
+    """Every env var the app gates on must be in _SECRET_KEYS.
+
+    Streamlit Cloud exposes config as `st.secrets`, NOT os.environ — dashboard_utils
+    copies a fixed list across at import. `DASHBOARD_PULL_FROM_R2` was gated on but
+    never listed, so _on_cloud() was unconditionally False on the only host meant to
+    pull: setting the secret in the Cloud UI was a silent no-op and the R2 asset pull
+    (model cards, audit reports, cone equity curves) never ran.
+    """
+    import ast
+
+    src = SRC.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    secret_keys: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", None) == "_SECRET_KEYS" for t in node.targets
+        ):
+            secret_keys = {
+                e.value for e in node.value.elts if isinstance(e, ast.Constant)
+            }
+    assert secret_keys, "_SECRET_KEYS not found or not a literal tuple"
+    assert "DASHBOARD_PULL_FROM_R2" in secret_keys, (
+        "DASHBOARD_PULL_FROM_R2 is read from os.environ by _on_cloud() but is not "
+        "hydrated from st.secrets — the Cloud secret would be ignored"
+    )
+    assert "DASHBOARD_DB_PATH" in secret_keys
+
+
 def test_upload_path_still_uses_credentials():
     """The LEGITIMATE direction (local → R2) must keep working.
 

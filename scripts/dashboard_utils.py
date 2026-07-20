@@ -20,6 +20,13 @@ ROOT = Path(__file__).resolve().parent.parent
 # TOML structure.
 _SECRET_KEYS = (
     "DASHBOARD_DB_PATH",
+    # The pull opt-in MUST be here: _on_cloud() reads it from os.environ, but on
+    # Streamlit Cloud it is only ever set as a secret. Omitting it made the gate
+    # unconditionally False on the one host that is supposed to pull — the DB
+    # still arrived (repo/other path) but the R2 ASSET pull never ran, so the
+    # cone fan had no equity.parquet. Adding a secret without listing it here is
+    # a silent no-op; test_r2_pull_guard pins the pairing.
+    "DASHBOARD_PULL_FROM_R2",
     "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY",
     "R2_BUCKET_NAME", "R2_JURI_ENDPOINT_URL",
 )
