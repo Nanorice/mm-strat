@@ -1174,14 +1174,40 @@ class ViewManager:
                 ) = 1
             ),
             mx AS (SELECT MAX(date) AS d FROM t2_screener_features),
+            sess AS (
+                SELECT ticker, MAX(entry_date) AS entry_date
+                FROM sepa_watchlist WHERE status = 'ACTIVE' GROUP BY ticker
+            ),
+            sess_px AS (
+                -- INNER, so entry_date and entry_close are always both present or
+                -- both absent. A LEFT join here lets anchor_date come from the
+                -- session while anchor_close falls through to the trend run —
+                -- a price stamped with someone else's date.
+                SELECT s.ticker, s.entry_date, t.close AS entry_close
+                FROM sess s
+                JOIN t2_screener_features t
+                  ON t.ticker = s.ticker AND t.date = s.entry_date
+            ),
             pop AS (
-                -- today's screening universe (trend_ok ∨ breakout_ok), latest day.
-                SELECT ticker, date, close, trend_ok, breakout_ok,
-                       "RS_Universe_Rank" AS rs_universe_rank,
-                       "RS_Sector_Rank"   AS rs_sector_rank
-                FROM t2_screener_features
-                WHERE date = (SELECT d FROM mx)
-                  AND (trend_ok OR breakout_ok)
+                -- Today's screening universe: names in the C1-C9 trend template.
+                -- `stage` then splits them — triggered = breaking out today (so it
+                -- now means trend_ok ∧ breakout_ok, the actual SEPA gate), else setup.
+                --
+                -- NOT `trend_ok OR breakout_ok` (the original predicate, 93497c9).
+                -- `breakout_ok` is computed independently of the trend template
+                -- (feature_pipeline: `breakout = 1 AND volume/vol_avg_50_prev > 1.3`),
+                -- so the OR admitted names that break out while FAILING C1-C9 — 42 of
+                -- 79 "triggered" rows on 2026-07-17, 29 of which had not been trend_ok
+                -- once in 400 days. The SEPA gate is trend_ok ∧ breakout_ok: those
+                -- names were never tradeable, had no run or session to date, and sat
+                -- outside every v_d3_lifecycle cohort so nothing ever scored them.
+                -- They rendered as a triple blank (Since / Trend since / Entry / Score).
+                SELECT t.ticker, t.date, t.close, t.trend_ok, t.breakout_ok,
+                       t."RS_Universe_Rank" AS rs_universe_rank,
+                       t."RS_Sector_Rank"   AS rs_sector_rank
+                FROM t2_screener_features t
+                WHERE t.date = (SELECT d FROM mx)
+                  AND t.trend_ok
             ),
             -- ── "in play since" anchors ──────────────────────────────────────
             -- Two dates, because the two stages change state on different clocks:
@@ -1220,16 +1246,6 @@ class ViewManager:
                 SELECT ticker, start_date AS trend_start_date,
                        start_close AS trend_start_close, run_len AS trend_run_len
                 FROM trend_runs WHERE end_date = (SELECT d FROM mx)
-            ),
-            sess AS (
-                SELECT ticker, MAX(entry_date) AS entry_date
-                FROM sepa_watchlist WHERE status = 'ACTIVE' GROUP BY ticker
-            ),
-            sess_px AS (
-                SELECT s.ticker, s.entry_date, t.close AS entry_close
-                FROM sess s
-                LEFT JOIN t2_screener_features t
-                  ON t.ticker = s.ticker AND t.date = s.entry_date
             )
             SELECT
                 pop.ticker, pop.date,
@@ -1245,11 +1261,16 @@ class ViewManager:
                 sp.entry_date, sp.entry_close,
                 -- The anchor the UI shows: an open session outranks the trend run —
                 -- it's the sharper "this became actionable on" date. Falls back to the
-                -- trend-run start for the ~240 names with no session yet.
-                COALESCE(sp.entry_date, ts.trend_start_date)   AS anchor_date,
-                COALESCE(sp.entry_close, ts.trend_start_close) AS anchor_close,
+                -- trend-run start for the ~240 names with no session yet, and finally
+                -- to TODAY for a breakout that fired outside the trend template (~42
+                -- names): no session, and its last trend run ended months ago (29 of
+                -- the 42 have never been trend_ok in 400d), so the breakout itself is
+                -- the state change. Reads 0.0% — correct, it started today.
+                COALESCE(sp.entry_date, ts.trend_start_date, pop.date)     AS anchor_date,
+                COALESCE(sp.entry_close, ts.trend_start_close, pop.close)  AS anchor_close,
                 100.0 * (pop.close / NULLIF(
-                    COALESCE(sp.entry_close, ts.trend_start_close), 0) - 1) AS pct_return,
+                    COALESCE(sp.entry_close, ts.trend_start_close, pop.close), 0) - 1)
+                    AS pct_return,
                 ff.gross_margin, ff.net_margin, ff.operating_margin, ff.fcf_margin,
                 ff.free_cash_flow,
                 (ff.free_cash_flow > 0) AS fcf_positive,
@@ -1272,7 +1293,7 @@ class ViewManager:
                 )
             ORDER BY p.prob_home_run DESC NULLS LAST, pop.rs_universe_rank DESC
         """)
-        print("   [OK] v_d3_screening: trend_ok/breakout_ok universe + P(HR) + fundamentals")
+        print("   [OK] v_d3_screening: trend_ok universe + P(HR) + fundamentals")
 
     # ------------------------------------------------------------------
     # VIEW 7e: v_d3_vip — manually-curated VIP watchlist monitor

@@ -223,8 +223,14 @@ with st.expander("How to read the dates"):
         "- **Δ %** is Price ÷ Px @ since − 1. It is a **price move, not a trade P&L** — "
         "no stop, no exit rule, no sizing. Prices are unadjusted (`adj_close` is NULL "
         "repo-wide), so a split inside the window will distort it.\n"
-        "- Blank Since = a breakout that fired from **outside** the trend template "
-        "(≈half of triggered names): no run to date, no session yet."
+        "- **● triggered now means the real SEPA gate** (`trend_ok ∧ breakout_ok`). "
+        "Until 2026-07-20 the population was `trend_ok ∨ breakout_ok`, which admitted "
+        "names that broke out while *failing* C1-C9 — 42 of 79 \"triggered\" rows, most "
+        "never in the trend template at all. They were never tradeable and no scorer "
+        "covered them, so they showed as blank rows. Dropped.\n"
+        "- A blank **Score** is the last honest gap: t3 features exist only for tickers "
+        "that have opened a SEPA session at least once, so a name in setup for the "
+        "**first time** has nothing to score yet (13 names). It fills in once it triggers."
     )
 
 df = load_screening()
