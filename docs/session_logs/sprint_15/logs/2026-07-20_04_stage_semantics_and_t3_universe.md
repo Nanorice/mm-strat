@@ -92,7 +92,11 @@ T3 self-heal section), `model_registry.md`, `managers.md`, `dashboard.md`.
 2. Root-cause the `score_from_t3` vs `v_d3_lifecycle` feature seam (the failing test).
 3. Plan Q3 — is M01 valid on session-less names? The 12 first-time setups now receive scores
    of unverified validity. User accepted this as placeholder-grade for non-`triggered` rows.
-4. `sepa_watchlist` rebuild — still outstanding, carried from session 01.
+4. ~~`sepa_watchlist` rebuild~~ — **already done**, 2026-07-20 02:31:13. Verified after the
+   user challenged it: one `updated_at` across all 39,088 rows (full rewrite), the six
+   formerly-corrupt days now carry 11/6/14/6/26/33 entries where they had zero, and the
+   06-26 pileup drained 95 → 80. Ran after the T2 repair, the required order. **This was a
+   stale TODO copied forward through three handovers without anyone re-checking the DB.**
 5. Optional cosmetic: `watchlist`-stage rows fall through the anchor COALESCE to today, so
    MRVL/RKLB read "0.0% since 2026-07-17". User OK'd leaving it.
 
@@ -116,4 +120,7 @@ T3 self-heal section), `model_registry.md`, `managers.md`, `dashboard.md`.
   regressions. Cost me a debugging detour; now recorded in memory.
 - **AGL was never a self-heal bug** — an out-of-band `sepa_watchlist` rebuild at 02:31 landed
   after the previous night's Phase 5. Diagnosis came from comparing `pipeline_runs` timestamps
-  against `updated_at`, not from reading the heal logic.
+  against `updated_at`, not from reading the heal logic. That same 02:31 rebuild *was* the
+  "outstanding" watchlist rebuild — the evidence was sitting in the timestamp I had already
+  queried twice, and I still copied the stale TODO forward. **A carried TODO is a claim about
+  live state; check it, don't relay it.**
