@@ -25,6 +25,9 @@ Two threads run through it:
 | 2 | Ticker column pinned (frozen left) on every wide table | Screening, Session Activity, Pipeline Health, main |
 | 3 | Screening default order: fresh → triggered → score | `pages/3_Screening.py` |
 | — | Screening filters: selectbox label inline with its control, capped at 220px (block height 68px → 40px); stacked again below 640px | `pages/3_Screening.py` |
+| 7 | Model Lab metrics — the columns are holdout-TEST metrics, NULL by design under `--no-holdout`; page now falls back to `specs_json.val_metrics` and labels them **(val)**. Not a backfill: val ≠ test | `pages/3_Model_Lab.py` |
+| 10c | Backtest Studio sector — narrower than triaged. Run-browser frames already carry `sector`; the **2,850+ cone-cell** parquets don't, and the cell zoom is where the filter reads. `attach_sector()` joins `company_profiles` at read (100% ticker match, 5–7 sectors/cell) | `pages/4_Backtest_Studio.py` |
+| — | `test_sweep_sync_filter` was red on main since 633eec4 — `_ASSET_DIRS` became a `{prefix: Path}` dict, test still unpacked 2-tuples | `tests/` |
 | 4 | Watchlist status — **decided: leave blank.** No Weinstein stage-4 ("distribution") exists anywhere in the repo; the derived `removed`/`watching` values were reading as claims the infra can't support | `pages/3_Screening.py` |
 
 ---
@@ -68,8 +71,6 @@ Settled. See Done table.
 
 | # | Item | Size | Blocker |
 |---|---|---|---|
-| 10c | Backtest Studio: sector filter only offers "All" — the trades frame carries no usable `sector`. Filter code is correct; fix is a read-time join to `company_profiles` or enriching the backtest writer | S | none |
-| 7 | Model Lab: accuracy / weighted F1 / macro F1 render blank. Needs a look at whether the card JSON carries them for a binary model at all | S | none |
 | 10a | Backtest Studio: Sharpe distribution is unreadable — the -32 floor flattens everything. Smaller bins + clipping, or a log axis | S | taste call |
 | 6 | Model Lab bump chart: unreadable on mobile, low information on desktop. A slope/dumbbell chart fits rank *change*; a waterfall is for additive decomposition and is probably the wrong tool | M | design |
 | E | Model card HTML not adaptive on mobile — plus its `components.html` host has a fixed 900px height | M | pairs with B |
