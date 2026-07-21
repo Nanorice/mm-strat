@@ -36,7 +36,17 @@ reconstructed from their handovers and marked as such).
 18. **Is a single extraction run reliable?** → No. MRVL gave 2/4/6 relations from identical input across 3 runs. Justifies the append-only + corroboration-counted design retroactively; n=1 confidence is fiction. [2026-07-20_06](logs/2026-07-20_06_ingestion_harness_and_kb.md)
 19. **Does GLW's one surviving fidelity flag mean the checker is still too strict?** ⟳ No — it is the **first true positive**. The model grafted a real clause from the previous sentence onto the next ("...to achieve our goals, through 2026 and beyond."). Every word real, the sentence invented. Two *other* GLW flags were checker bugs (lost block boundaries in sliced text); folding layout: 90.3 → 96.8%. Rule refined: layout difference at the divergence point = checker bug, different continuation = model. [2026-07-20_06](logs/2026-07-20_06_ingestion_harness_and_kb.md)
 20. **Where does an LLM belong in the ingestion layer?** → Not over already-typed data (the producer emitted validated Pydantic; a second pass only subtracts). It belongs on *unstructured* input: `dst_ticker` name→ticker resolution, and recovering the free-text fallback runs. [research_layer.md](../../modules/research_layer.md) [2026-07-20_06](logs/2026-07-20_06_ingestion_harness_and_kb.md)
-21. **Is `counterparty_key` strong enough to dedup an edge?** ? **OPEN — NO.** Corroboration logged "Space Development Agency" and "Space Development Agency (SDA)" (and NRO likewise) as different parties — the key strips legal suffixes but not a trailing `(...)`. One-line strip verified to collapse both; **not yet applied**. Blocks `supply_chain_edges`. [2026-07-20_06](logs/2026-07-20_06_ingestion_harness_and_kb.md)
+21. **Is `counterparty_key` strong enough to dedup an edge?** ⟳ **RESOLVED** — no, and now fixed. The trailing-`(...)` strip must run **before** the punctuation fold (`_NON_WORD` turns `(SDA)` into ` sda ` and the letters survive). Applied + `comprehend_runs(force=True)`: RKLB's SDA went 2/3 + 1/3 → **one row at 3/3**; NRO → one row at 2/3 (a true count, not a split). Now in memory `research-relations-comprehension`. [2026-07-21_02](logs/2026-07-21_02_edges_and_claims_gate.md)
+
+23. **Table or view for `supply_chain_edges`?** → **View.** KB-schema §1 argues at length that insertion must be a full recompute for idempotency; a `CREATE OR REPLACE VIEW` makes that recompute *implicit*, so the property is unfalsifiable rather than merely enforced and §3.3's `rebuild_supply_chain_edges()` stops existing. 26 live edges. [2026-07-21_02](logs/2026-07-21_02_edges_and_claims_gate.md)
+
+24. **How is an edge segment-grained when no segment field exists?** → `direction` *is* the discriminator we have: grain `(src_ticker, counterparty_key, direction, accession)` already gives one counterparty two rows when it is competitor *and* supplier, satisfying industry-study §2.3 (Q22) with existing columns. True line-of-business segmentation needs a producer field. `accession` in the grain is a knowing PK deviation (corroboration is per-filing; one 10-K per name today) — `ponytail:` marked. [2026-07-21_02](logs/2026-07-21_02_edges_and_claims_gate.md)
+
+25. **Was the non-relation evidence ever gated?** → No — `research_relations` structurally sees only counterparty edges, so watch items, risks, moat, cost structure and evidenced products carried unchecked quotes (Q19's GLW graft among them). `research_claims` + `comprehend_claims()` closes it, **data-driven** over any field with an `evidence.quote` rather than a hand-listed set — which immediately caught RKLB's evidenced `products` dicts that no field list would have included. 162 claims, 158 verified. [2026-07-21_02](logs/2026-07-21_02_edges_and_claims_gate.md)
+
+26. **Do the 4 claim flags mean the checker needs an ellipsis fix?** ⟳ **No — all 4 are true positives, and the obvious read was wrong.** Every flag diverged at a ` ... `, suggesting a legitimate elision the checker mishandles; but splitting on the ellipsis left **every** flag with a still-non-verbatim fragment. Bisecting *inside* the fragment gave the truth: the two known flags (GLW graft, MRVL bracket-gloss) plus two new genuine ones — a GLW `revenue_model` **unmarked** stitch of non-contiguous sentences, and RKLB `products` "…orbital rocket **in 2025**" where the filing sentence ends at "rocket". Refines Q19's rule: **a `...` is not evidence of a checker bug — bisect inside the fragment first.** [2026-07-21_02](logs/2026-07-21_02_edges_and_claims_gate.md)
+
+27. **How should a finished report notify?** → **Compact Discord briefing + a link to the dashboard's Equity Research page** — not R2, not PDF, not markdown. A ~100 KB report does not fit a message, and the dashboard already renders it properly, so a second artifact duplicates a render for no reader the link doesn't serve. R2/PDF only earns its keep if the report must be readable with the dashboard down. **Designed, not built** — it should be built with the orchestrator phase that fires it. [2026-07-21_02](logs/2026-07-21_02_edges_and_claims_gate.md)
 
 ## Thread E: The industry-study end state
 
@@ -45,6 +55,15 @@ reconstructed from their handovers and marked as such).
 ---
 
 ## Open meta-questions
+
+- **Sector-order vs score-order for the shortlist queue — blocks the P0 selector.**
+  Nothing ranks/cuts `daily_predictions` into a ticker list; today it is passed by hand
+  (`research_layer.md` §8). But the ordering rule is a real fork, not an implementation
+  detail: a pure top-N-by-score feed scatters one name each across eight sectors and
+  **no sector chain map ever completes**, while sector-clustering the queue delays the
+  highest-scoring names. `agentic_digestion_layer.md` flags this "Unsettled — flag,
+  don't assume." Also needs: N set by *digestion capacity* (not model confidence), and a
+  cooldown so an unchanged thesis isn't re-litigated nightly. **Get the call before building.**
 
 - **Q3 (from [t3_universe_widening.md](plans/t3_universe_widening.md)): is M01 valid on
   first-time setups?** M01 trained on the SEPA population — every training row is a name that
