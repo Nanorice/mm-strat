@@ -80,7 +80,8 @@ def test_other_asset_dirs_keep_all_suffixes(tmp_path):
 def test_pull_side_mirrors_push_side():
     """A push with no matching pull entry uploads bytes nobody downloads."""
     import dashboard_utils
-    pull_prefixes = {p for _, p in dashboard_utils._ASSET_DIRS}
+    # _ASSET_DIRS became a {prefix: Path} dict in the ensure_assets refactor.
+    pull_prefixes = set(dashboard_utils._ASSET_DIRS)
     push_prefixes = {p for _, p, _ in sync.ASSET_DIRS}
     assert push_prefixes <= pull_prefixes, (
         f"pushed but never pulled: {sorted(push_prefixes - pull_prefixes)}"

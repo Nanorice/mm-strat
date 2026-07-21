@@ -409,16 +409,42 @@ def _render_registry_table(models: pd.DataFrame) -> str | None:
                         index=0, key="ml2_selected")
 
 
+def classification_metrics(row: pd.Series) -> tuple[dict[str, float | None], str]:
+    """Registry columns are holdout-test metrics and are NULL for --no-holdout
+    models, which stash val metrics in specs_json instead. Returns the values
+    plus their provenance so the caller can label them honestly."""
+    keys = ("accuracy", "weighted_f1", "macro_f1")
+    vals = {k: (row[k] if pd.notna(row.get(k)) else None) for k in keys}
+    if any(v is not None for v in vals.values()):
+        return vals, "test"
+    try:
+        val_metrics = (json.loads(row.get("specs_json") or "{}") or {}).get("val_metrics") or {}
+    except json.JSONDecodeError:
+        return vals, "none"
+    vals = {k: val_metrics.get(k) for k in keys}
+    return vals, "val" if any(v is not None for v in vals.values()) else "none"
+
+
 def _render_overview(row: pd.Series, art_dir: Path | None) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Status", row["status_flag"] or "—")
     c2.metric("Rows", f"{int(row['dataset_rows']):,}" if pd.notna(row["dataset_rows"]) else "—")
     c3.metric("Trained", str(row["training_date"]) if pd.notna(row["training_date"]) else "—")
     c4.metric("Type", row["model_type"] or "—")
-    c5, c6, c7 = st.columns(3)
-    c5.metric("Accuracy", f"{row['accuracy']:.3f}" if pd.notna(row["accuracy"]) else "—")
-    c6.metric("Weighted F1", f"{row['weighted_f1']:.3f}" if pd.notna(row["weighted_f1"]) else "—")
-    c7.metric("Macro F1", f"{row['macro_f1']:.3f}" if pd.notna(row["macro_f1"]) else "—")
+
+    metrics, source = classification_metrics(row)
+    suffix = " (val)" if source == "val" else ""
+    for col, (label, key) in zip(st.columns(3), [
+        ("Accuracy", "accuracy"), ("Weighted F1", "weighted_f1"), ("Macro F1", "macro_f1")
+    ]):
+        v = metrics[key]
+        col.metric(label + suffix, f"{v:.3f}" if v is not None else "—")
+    if source == "val":
+        st.caption("Trained with `--no-holdout` — no test split exists, so these are "
+                   "**validation** metrics from `specs_json`, not held-out ones.")
+    elif source == "none":
+        st.caption("No classification metrics recorded for this version.")
+
     st.caption(f"Artifacts: `{row['artifacts_path']}`")
     if art_dir is None:
         st.warning("Artifacts directory does not exist on disk — metadata only.")

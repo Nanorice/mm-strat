@@ -1893,6 +1893,19 @@ def update_decision_taken(
         con.close()
 
 
+@st.cache_data(ttl=3600)
+def load_ticker_sectors() -> pd.DataFrame:
+    """ticker → sector/industry, for frames that carry only a ticker (the backtest
+    writer never emitted either into trades.parquet)."""
+    con = _connect()
+    try:
+        return con.execute(
+            "SELECT ticker, sector, industry FROM company_profiles"
+        ).fetchdf()
+    finally:
+        con.close()
+
+
 @st.cache_data(ttl=300)
 def load_models_table() -> pd.DataFrame:
     """For Model Lab — registry list."""

@@ -105,6 +105,22 @@ def discover_runs() -> pd.DataFrame:
              .reset_index(drop=True)
 
 
+def attach_sector(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Cone-cell trades.parquet carries only a ticker; the sweep writer never
+    emitted sector/industry (the run-browser frames do, so this is a no-op there).
+    Join at read — 2,850+ historical parquets make backfilling the writer the
+    wrong end to fix it.
+
+    ponytail: company_profiles is a CURRENT snapshot, so a 2005 trade is labelled
+    with today's sector. Fine for filtering; if a point-in-time sector breakdown
+    ever matters, the writer has to record it at trade time."""
+    if df is None or df.empty or "ticker" not in df.columns or "sector" in df.columns:
+        return df
+    from dashboard_utils import load_ticker_sectors
+
+    return df.merge(load_ticker_sectors(), on="ticker", how="left")
+
+
 @st.cache_data(ttl=60)
 def load_run_artifacts(run_dir: str) -> dict:
     p = Path(run_dir)
@@ -121,7 +137,7 @@ def load_run_artifacts(run_dir: str) -> dict:
     trades_f = p / "trades.parquet"
     if trades_f.exists():
         try:
-            out["trades"] = pd.read_parquet(trades_f)
+            out["trades"] = attach_sector(pd.read_parquet(trades_f))
         except OSError:
             pass
 
@@ -169,6 +185,7 @@ def load_cell_artifacts(arm: str, grid: str, cell: str) -> dict:
                 out[key] = pd.read_parquet(f)
             except OSError:
                 pass
+    out["trades"] = attach_sector(out["trades"])
     return out
 
 
