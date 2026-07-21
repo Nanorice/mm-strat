@@ -71,30 +71,59 @@ make the pages readable on a phone.
 - `docs/session_logs/sprint_15/plans/dashboard_mobile_and_model_lab.md`: **new**, the
   backlog.
 
-## 🚧 Work in Progress (CRITICAL)
-- **NOTHING IS DEPLOYED.** `origin/main` is still at `ccbaadc` and still has
-  `_ensure_asset_dirs()` at module scope. This repo is on a **detached HEAD**, 23
-  commits ahead of `origin/main` (0 behind — clean fast-forward available).
-- The user set `DUCKDB_MEMORY_LIMIT=700MB` in Cloud secrets and reported the remote
-  "works now" — **that is a fresh container from saving the secret, not the fix.**
-  On the deployed code `_SECRET_KEYS` doesn't list the key, so the secret is inert.
-  Expect the same failure on the next cold boot until this is pushed.
+## ✅ Deployed — session 04, 2026-07-21/22
+
+**All of the above is live.** `main` fast-forwarded to `633eec4` and pushed;
+`origin/main` now `2b8f39f`. `DUCKDB_MEMORY_LIMIT=700MB` is no longer inert.
+Slim DB rebuilt (768 MB, 3.14M rows, `research_reports` = 7 — AMD/SHC/TBI present)
+and synced to R2. Branch `infra` fast-forwarded to match.
+
+**Backlog 7 + 10c closed** (`66567d4`). Both were mis-triaged as rendering bugs:
+- **Model Lab metrics** — `models.accuracy/weighted_f1/macro_f1` are holdout-TEST
+  columns, deliberately NULL under `--no-holdout` (`train_mfe_classifier.py:665`),
+  which stashes val metrics in `specs_json` instead; the prod model was trained
+  that way. `classification_metrics()` falls back and labels the cards **(val)**.
+  A column backfill would have passed val numbers off as held-out.
+- **Backtest Studio sector** — narrower than triaged. The run-browser parquets
+  already carry `sector` (full feature dump); the **2,850+ cone-cell** parquets
+  don't, and the cell zoom is where that filter reads. `attach_sector()` joins
+  `company_profiles` at read; 100% ticker match, 5–7 sectors/cell.
+- Also fixed `test_sweep_sync_filter`, red on `main` since `633eec4` —
+  `_ASSET_DIRS` became a `{prefix: Path}` dict and the test still unpacked 2-tuples.
+
+**Table width** — reported as "tables too narrow"; measured, the tables were
+already equal to their container on every page, so no table code was touched.
+The dead space was chrome: wide layout pads the main block a fixed 5rem/80px per
+side at any viewport, on top of the 300px sidebar. One `clamp(1rem,2vw,5rem)` rule
+in `dashboard.py` (before `pg.run()`, so all 9 pages inherit it) scales it with the
+viewport — no media query, and the 1rem floor is exactly what mobile already had.
+Measured: **1920 1450→1533 · 1280 1120→1219 · 375 343 unchanged**, no overflow.
+
+### Still open
+- A remote `ImportError: cannot import name 'finviz_ticker_col'` right after the
+  push. **Not a code defect** — only a *mixed* checkout can raise it (new
+  `dashboard.py` importing a pre-push `dashboard_utils` still held in
+  `sys.modules`). Cloud reruns the main script on pull without restarting the
+  process. Fix is **Reboot app**; nothing to change in the repo.
+- `tests/test_backtest_smoke.py::test_backtest_matches_prod_predictions` fails at
+  **1.0136% vs a 1% threshold** (max diff 0.0363) — pre-existing, marginal, and a
+  real scoring-drift signal rather than a flaky test. Untouched, needs its own look.
 - The slim DB is 770 MB and still pulled at import: `t3_sepa_features` 355 MB +
   `t2_screener_features` 187 MB = 70% of it, both on a 252-day window. Trimming those
   two to ~90d lands it near 300 MB. Not started.
-- `dashboard.duckdb` was last built 2026-07-20 22:50, so remote has no AMD/SHC/TBI
-  research reports. Needs a `build_dashboard_db.py` + `sync_dashboard_db.py` run.
 - Pre-existing, untouched: Backtest Studio logs an `ArrowTypeError` on the
   `case2_prototype_plus_rank` column (mixed float/bytes); Streamlit auto-coerces it.
 
 ## ⏭️ Next Steps
-1. **Branch off the detached HEAD and push** — nothing above reaches the remote
-   otherwise. Fast-forward `main` to HEAD, or merge the branch.
-2. Rebuild + sync the slim DB (gets today's three reports onto remote).
-3. Backlog in dependency order — see
-   [`plans/dashboard_mobile_and_model_lab.md`](../plans/dashboard_mobile_and_model_lab.md):
-   sector filter (10c) and Model Lab blank metrics (7) are the cheap bugs; Dataset EDA
-   and the Model Lab tab consolidation are decisions first, code second.
+1. ~~Push~~ / ~~rebuild + sync the slim DB~~ — both done, see the Deployed section.
+2. Reboot the Cloud app to clear the mixed-checkout `ImportError`, and watch that
+   first cold boot: it is also the real test of the DuckDB governor fix. Blank body
+   instead of a traceback would be a *different* problem — capture the boot log.
+3. Remaining backlog — see
+   [`plans/dashboard_mobile_and_model_lab.md`](../plans/dashboard_mobile_and_model_lab.md).
+   The cheap bugs (7, 10c) are closed; what's left are the **decisions**: Dataset EDA
+   (evaluate content AND format — do not just regenerate) and the Model Lab tab
+   consolidation. Both are decisions first, code second.
 
 ## 💡 Context/Memory
 - **The canary was the clue.** "Only Dataset EDA loads" is not a Dataset EDA fact —
@@ -104,6 +133,11 @@ make the pages readable on a phone.
   time this exact shape has bitten (`DASHBOARD_PULL_FROM_R2`, then `DUCKDB_*`). The
   import order matters too: `config.py` snapshots the env at import, so the governor
   must be imported *below* the secrets bridge. Pinned by a test.
+- **"Too narrow" was not the tables.** The obvious fix — 22 columns pinned to
+  `width="small"` — was tried and measured: 1110 → 1130px, nothing. The tables
+  equalled their container exactly on every page; the width was going to fixed
+  5rem padding. Two wrong hypotheses died to a `getBoundingClientRect()` before
+  any code shipped. Same lesson as the row-height note below, one layer up.
 - **Measure row height, don't reason about it.** Inlining the S3 indicator name and
   symbol looked like it would save a line; measured, it made rows *taller*
   (64px → 72px) because the run then wraps mid-name. Shipped the stacked version.

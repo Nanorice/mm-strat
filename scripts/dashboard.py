@@ -1295,6 +1295,19 @@ def page_today() -> None:
 
 st.set_page_config(page_title="Quantamental Dashboard", layout="wide")
 
+# Tables already stretch to their container — measured, they equal it exactly on
+# every page. What made them look narrow is the chrome: Streamlit's wide layout
+# pads the main block 5rem (80px) on each side regardless of viewport, so a
+# 1920px window spent 160px on padding on top of the 300px sidebar. clamp()
+# scales the padding with the viewport instead, so this is one rule for every
+# width rather than a media query per breakpoint — the phone floor stays 1rem.
+# This runs before pg.run(), so all 9 pages inherit it.
+st.markdown(
+    "<style>.stMainBlockContainer{padding-left:clamp(1rem,2vw,5rem);"
+    "padding-right:clamp(1rem,2vw,5rem)}</style>",
+    unsafe_allow_html=True,
+)
+
 PAGES_DIR = Path(__file__).resolve().parent / "pages"
 
 # ── Two-tier navigation (sprint-14 uplift, switched over 2026-07-18) ──────────
