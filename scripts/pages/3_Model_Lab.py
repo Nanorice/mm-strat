@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import (
+    ensure_assets,
     load_models_table,
     load_cone_cells,
     load_prod_model_version_id,
@@ -39,6 +40,11 @@ from dashboard_utils import (
     load_rank_history,
     load_rank_history_bounds,
 )
+
+# The cards and artifacts this page renders live on disk, not in the DB. On the
+# cloud host they arrive from R2 here — 817 objects, so it is deliberately this
+# page's cost and not the app's boot cost. No-op locally.
+ensure_assets("model_cards", "model_artifacts")
 
 MODEL_CARDS_DIR = ROOT / "model_cards"
 EDA_DIR = ROOT / "data" / "model_output_eda" / "sprint_summary"

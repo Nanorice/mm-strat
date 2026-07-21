@@ -41,6 +41,24 @@ _CSS = """
   .er-empty b{color:#1c1a17}
   .er-empty code{font-family:"JetBrains Mono",monospace;font-size:12px;
     background:#f0ece1;padding:1px 5px;border-radius:3px}
+
+  /* Phone. Streamlit reflows its own layout; these are the things it can't know
+     about — this page's typography and the report body's own content. */
+  @media (max-width:640px){
+    /* .18em tracking on an uppercase mono line eats ~40% of a 375px screen and
+       wraps the title mid-phrase. */
+    .er-title{letter-spacing:.08em;font-size:10px}
+    .er-empty{padding:18px 14px;font-size:13px}
+    /* Accession numbers (0000002488-26-000018) and ticker/URL runs are single
+       unbreakable tokens — without this they push the whole column sideways and
+       the page scrolls horizontally. */
+    [data-testid="stExpander"] p, [data-testid="stExpander"] li{
+      overflow-wrap:anywhere}
+    /* A markdown table can't reflow; give it its own scroll rather than letting
+       it widen the body. */
+    [data-testid="stExpander"] table{display:block;overflow-x:auto;
+      max-width:100%}
+  }
 </style>
 """
 
@@ -127,25 +145,28 @@ if not sections:
     st.stop()
 
 # Business analyst first: it carries the relations/evidence the knowledge base
-# is built from, so it is what this page is usually opened for.
+# is built from, so it is what this page is usually opened for — and it is the
+# one section worth opening by default.
 names = list(sections)
 if "Business Analyst" in names:
     names.insert(0, names.pop(names.index("Business Analyst")))
-choice = st.radio("Section", names + ["Everything"], horizontal=True,
-                  label_visibility="collapsed")
 
 st.markdown("---")
-if choice == "Everything":
-    st.markdown(escape_markdown_dollars(raw_md))
-else:
-    st.markdown(f"#### {choice}")
-    if fell_back_to_free_text(row["key_facts_json"], choice):
-        st.warning(
-            f"**This section is a free-text fallback, not the agent's typed "
-            f"output.** {choice}'s structured call failed on this run, so "
-            f"`report.json` holds `null` and the prose below is whatever the "
-            f"model emitted unconstrained — often a raw JSON dump. Nothing "
-            f"downstream (relations, quote fidelity) can score it. "
-            f"Re-run the name to replace it."
-        )
-    st.markdown(escape_markdown_dollars(sections[choice]))
+
+# One collapsed expander per section, replacing a 13-option horizontal radio.
+# The radio was a single tap on a desktop and an unreadable wrapped block on a
+# phone; collapsed sections also give a scannable table of contents, which a
+# 100 KB wall of prose otherwise doesn't have. All bodies are in the DOM either
+# way, so this costs no extra query.
+for name in names:
+    with st.expander(name, expanded=(name == names[0])):
+        if fell_back_to_free_text(row["key_facts_json"], name):
+            st.warning(
+                f"**This section is a free-text fallback, not the agent's typed "
+                f"output.** {name}'s structured call failed on this run, so "
+                f"`report.json` holds `null` and the prose below is whatever the "
+                f"model emitted unconstrained — often a raw JSON dump. Nothing "
+                f"downstream (relations, quote fidelity) can score it. "
+                f"Re-run the name to replace it."
+            )
+        st.markdown(escape_markdown_dollars(sections[name]))

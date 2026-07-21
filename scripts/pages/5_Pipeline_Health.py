@@ -21,6 +21,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import (
     ASSET_PULL_DIAG,
+    ensure_assets,
+    finviz_ticker_col,
+    finviz_url,
     load_data_freshness,
     load_fundamentals_volume_by_quarter,
     load_latest_fundamentals_snapshot,
@@ -29,6 +32,11 @@ from dashboard_utils import (
     load_t1_ingestion_failures,
     load_universe_trend,
 )
+
+# Audit JSONs are disk files; on the cloud host they come from R2. Only this
+# prefix — the disk-inventory panel below lists models/ and model_cards/ but
+# must not drag 300 MB down to report a size. No-op locally.
+ensure_assets("audit_reports")
 
 AUDIT_DIR = ROOT / "data" / "audit_reports"
 ARCH_DIR = ROOT / "docs" / "architecture"
@@ -345,9 +353,7 @@ def render_t1_failures() -> None:
     # Ticker → Finviz link via LinkColumn (mirror watchlist pattern); the
     # display_text regex strips the URL back to the bare ticker.
     fails = fails.copy()
-    fails["ticker"] = fails["ticker"].apply(
-        lambda t: f"https://finviz.com/quote.ashx?t={t}" if pd.notna(t) else None
-    )
+    fails["ticker"] = fails["ticker"].apply(finviz_url)
 
     rename = {
         "ticker": "Ticker", "phase": "Phase", "error_type": "Error",
@@ -358,11 +364,7 @@ def render_t1_failures() -> None:
     show = fails.rename(columns=rename)
     st.dataframe(
         show, width='stretch', hide_index=True, height=380,
-        column_config={
-            "Ticker": st.column_config.LinkColumn(
-                "Ticker", display_text=r"finviz\.com/quote\.ashx\?t=(.+)$"
-            ),
-        },
+        column_config={"Ticker": finviz_ticker_col(pinned=True)},
     )
     st.caption(f"Total: {len(fails)} (ticker, phase, error_type) tuples.")
 

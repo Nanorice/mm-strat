@@ -18,6 +18,18 @@ import streamlit.components.v1 as components
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from dashboard_utils import ensure_assets  # noqa: E402
+
+# The audit HTMLs are disk files; on the cloud host they arrive from R2.
+#
+# TRADE-OFF: this page reads no DB table (which is why it was the only one still
+# rendering during the container OOM loop), but importing dashboard_utils now
+# makes it pay the module-scope slim-DB pull on a cold container. Accepted — the
+# pull is once per container and shared with every other page, and without the
+# import there is no way to fetch docs_reports, so remote would list nothing.
+ensure_assets("docs_reports")
 
 REPORTS_DIR = ROOT / "docs" / "reports"
 FNAME_RE = re.compile(

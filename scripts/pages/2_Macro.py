@@ -213,6 +213,14 @@ def _render_s1(pillars, weather, regime, fg) -> None:
       .s1 .dlab{{font-size:10px;color:#8a8272;text-transform:uppercase;letter-spacing:.1em}}
       .s1 .depitem b{{font-size:15px}}
       .s1 .dsub{{font-size:10px;color:#8a8272}}
+      /* Phone: 200px + six 1fr columns leaves each pillar ~29px wide. Gauge on
+         its own row, pillars two-up. */
+      @media (max-width:640px){{
+        .s1 .grid{{grid-template-columns:repeat(2,1fr)}}
+        .s1 .grid > :first-child{{grid-column:1/-1}}
+        .s1 .sectitle{{letter-spacing:.08em}}
+        .s1 .deprow{{gap:14px}}
+      }}
     </style>
     <div class="s1">
       <div class="sectitle">1 · Regime headline
@@ -370,8 +378,9 @@ def _render_s3(ind) -> None:
             <span class="gcount mono">{live}/{len(sub)} indicators</span></div>
           <table class="itab">
             <tr class="ihdr">
-              <th>Indicator</th><th>Prior</th><th>Now</th><th>Δ%</th><th>Z</th>
-              <th>History</th><th>Range</th>
+              <th class="iname">Indicator</th><th class="iprior">Prior</th>
+              <th class="ival">Now</th><th class="ichg">Δ%</th><th class="iz">Z</th>
+              <th class="ispk">History</th><th class="irange">Range</th>
             </tr>{rows}
           </table>
         </div>"""
@@ -441,6 +450,31 @@ def _render_s3(ind) -> None:
       .s3 .neg{{color:#b23b3b}}
       .s3 .neu{{color:#8a8272}}
       .s3 .foot{{font-size:10px;color:#8a8272;margin-top:10px;font-family:"JetBrains Mono",monospace}}
+      /* Phone: drop the sparkline column outright and give the width to the
+         indicator name. The name is the only column that wraps, and every line it
+         wraps to sets the height of the whole row — a 13% name column made every
+         cell three lines tall. The history column is the most redundant thing
+         here (Range already states the same span numerically), so it goes first.
+         Widths are re-stated because table-layout:fixed reads them off the header
+         row — which is why the <th>s carry the column classes. */
+      @media (max-width:640px){{
+        .s3 .gcard{{overflow-x:auto}}
+        .s3 .itab{{min-width:420px}}
+        .s3 .ispk{{display:none}}
+        .s3 .iname{{width:38%}}
+        .s3 .iprior{{width:14%}}
+        .s3 .ival{{width:15%}}
+        .s3 .ichg{{width:12%}}
+        .s3 .iz{{width:9%}}
+        .s3 .irange{{width:12%}}
+        .s3 .itab th,.s3 .itab td{{padding-left:8px;padding-right:8px}}
+        /* Trimmed from 13px: the airy desktop row costs a phone screen a row per
+           scroll. Keeping name-over-symbol stacked is deliberate — inlining them
+           was measured and came out TALLER (median 64px → 72px), because the run
+           then wraps mid-name instead of at the symbol boundary. */
+        .s3 .itab td{{padding-top:10px;padding-bottom:10px}}
+        .s3 .sectitle{{letter-spacing:.08em}}
+      }}
     </style>
     <div class="s3">
       <div class="sectitle">3 · Indicator board
@@ -522,6 +556,14 @@ def _render(df) -> None:
     border-radius:6px;padding:12px;display:none}}
   .subrow.open{{display:block}}
   .subgrid{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px}}
+  /* Phone: four cards across is ~85px each — the KDE and the return both become
+     illegible. Two-up. This block is an iframe with a fixed 1400px height, so the
+     taller stack scrolls inside it (scrolling=True); a height that follows the
+     content needs a JS→Streamlit round trip and is not worth it here. */
+  @media (max-width:640px){{
+    .heat,.subgrid{{grid-template-columns:repeat(2,1fr)}}
+    .sectitle{{letter-spacing:.08em}}
+  }}
   .subhdr{{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.1em;
     color:var(--accent);text-transform:uppercase}}
 </style>

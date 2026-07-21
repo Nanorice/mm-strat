@@ -123,6 +123,68 @@ def test_opt_in_is_hydrated_from_streamlit_secrets():
         "hydrated from st.secrets — the Cloud secret would be ignored"
     )
     assert "DASHBOARD_DB_PATH" in secret_keys
+    # Same trap, different var: config.py reads these from os.environ. Unlisted,
+    # the Cloud secret never lands there and DuckDB keeps the 6GB dev-box default
+    # — which on a ~1GB container means SIGKILL on the first query.
+    assert {"DUCKDB_MEMORY_LIMIT", "DUCKDB_THREADS"} <= secret_keys, (
+        "DuckDB resource caps must be hydrated from st.secrets or the remote "
+        "runs uncapped"
+    )
+
+
+def test_every_db_connection_goes_through_the_governor():
+    """No raw `duckdb.connect(` in dashboard_utils.
+
+    DuckDB sizes its default memory budget from the HOST's RAM, which in a
+    Streamlit Cloud container is the node's, not the cgroup's. An uncapped
+    connection allocates past the container ceiling and the app is SIGKILLed
+    mid-query — blank page, no traceback, boot log starts over. Every page except
+    Dataset EDA opens the DB, which is why Dataset EDA was the only one rendering.
+    `db.connect()` applies memory_limit/threads from config.
+    """
+    src = SRC.read_text(encoding="utf-8")
+    raw = [ln.strip() for ln in src.splitlines() if "duckdb.connect(" in ln]
+    assert not raw, (
+        f"raw duckdb.connect() bypasses the config caps in src/db.py: {raw}"
+    )
+
+
+def test_governor_import_follows_secret_hydration():
+    """`from src import db` must sit BELOW the st.secrets → os.environ bridge.
+
+    config.py snapshots DUCKDB_MEMORY_LIMIT/THREADS from os.environ at ITS import.
+    Importing the governor first freezes the 6GB dev-box default before the Cloud
+    secrets are hydrated — the caps would be set, and set wrong.
+    """
+    src = SRC.read_text(encoding="utf-8")
+    bridge = src.find("os.environ[_k] = str(st.secrets[_k])")
+    governor = src.find("from src import db")
+    assert bridge != -1 and governor != -1
+    assert bridge < governor, (
+        "src.db (→ config) is imported before st.secrets are copied into "
+        "os.environ; the DuckDB caps would freeze at the local defaults"
+    )
+
+
+def test_asset_pull_is_not_a_module_scope_side_effect():
+    """Asset dirs must be pulled by the page that reads them, never at import.
+
+    The five prefixes are 3,744 objects fetched one blocking request at a time.
+    At module scope that put ~10 minutes of round trips ahead of the first render
+    and the container was restarted long before it finished — the app served a
+    blank page forever. The slim DB pull stays at import (5 of 6 pages need it).
+    """
+    src = SRC.read_text(encoding="utf-8")
+    top_level = [ln for ln in src.splitlines()
+                 if ln.startswith("ensure_assets(") or ln.startswith("_ensure_asset_dirs(")]
+    assert not top_level, (
+        f"asset pull called at module scope: {top_level} — move it into the page "
+        "that reads the dir"
+    )
+    assert "\n_ensure_local_db()" in src, (
+        "the slim-DB pull must stay at import — every page but Dataset EDA "
+        "queries it, and a per-page pull would race five callers onto one file"
+    )
 
 
 def test_upload_path_still_uses_credentials():

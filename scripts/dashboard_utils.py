@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import duckdb
@@ -31,6 +32,12 @@ _SECRET_KEYS = (
     "DASHBOARD_PULL_FROM_R2",
     "R2_ACCOUNT_ID", "R2_ACCESS_KEY", "R2_SECRET_KEY",
     "R2_BUCKET_NAME", "R2_JURI_ENDPOINT_URL",
+    # DuckDB resource caps. Unset, config.py defaults to 6GB/4 threads — sized for
+    # a 16GB dev box, ~6x the Streamlit Cloud container. DuckDB reads the HOST's
+    # RAM, not the cgroup limit, so an uncapped connection there allocates past
+    # the container ceiling and the app is SIGKILLed mid-query: blank page, no
+    # traceback, boot log starts over. Set these as Cloud secrets.
+    "DUCKDB_MEMORY_LIMIT", "DUCKDB_THREADS",
 )
 try:
     for _k in _SECRET_KEYS:
@@ -38,6 +45,13 @@ try:
             os.environ[_k] = str(st.secrets[_k])
 except Exception:
     pass  # no st.secrets (local run) — env vars already in os.environ
+
+# ⚠️ ORDER-DEPENDENT — must stay BELOW the secrets bridge. config.py snapshots
+# DUCKDB_* from os.environ at ITS import, so importing the governor first would
+# freeze the 6GB default before the Cloud secrets ever land in os.environ.
+# test_governor_import_follows_secret_hydration pins this.
+sys.path.insert(0, str(ROOT))
+from src import db  # noqa: E402
 
 # DB path is configurable so the same app runs against the full local DB or a
 # slim, remote-synced dashboard.duckdb. Set DASHBOARD_DB_PATH (absolute, or
@@ -202,46 +216,78 @@ def _maybe_refresh_from_r2() -> None:
 def _connect(read_only: bool = True):
     """Open the dashboard DB, first re-pulling from R2 if the nightly upload
     changed it (throttled). Use for all reads so a warm cloud container stays
-    current without a manual reboot."""
+    current without a manual reboot.
+
+    Goes through db.connect (NOT raw duckdb.connect) for the project-wide
+    memory/thread caps — see the _SECRET_KEYS note on why an uncapped connection
+    kills the Cloud container."""
     _maybe_refresh_from_r2()
-    return duckdb.connect(str(DB_PATH), read_only=read_only)
+    return db.connect(str(DB_PATH), read_only=read_only)
 
 
-# Disk-file dirs pulled from R2 on cloud boot. (local_dir, r2_prefix). Mirror of
+# Disk-file dirs pulled from R2, keyed by r2_prefix. Mirror of
 # sync_dashboard_db.ASSET_DIRS — pages that read these degrade gracefully if the
 # pull fails. data/backtest/ is intentionally not synced (WIP).
-_ASSET_DIRS: list[tuple[Path, str]] = [
-    (ROOT / "model_cards",            "model_cards"),
-    (ROOT / "data" / "audit_reports", "audit_reports"),
-    (ROOT / "docs" / "reports",       "docs_reports"),
-    (ROOT / "models",                 "model_artifacts"),
-    # Per-cell equity curves for the Backtest Studio cone fan (~2.5k files/22 MB,
+#
+# PULLED LAZILY, BY THE PAGE THAT READS THE DIR — never at import. Together these
+# are 3,744 objects / 381 MB, and ensure_assets downloads them one blocking
+# request at a time, so pulling the lot at module scope put ~10 minutes of round
+# trips in front of the first render (and Cloud restarts the container long
+# before that finishes, so it never did). The landing page reads none of them.
+_ASSET_DIRS: dict[str, Path] = {
+    "model_cards":     ROOT / "model_cards",
+    "audit_reports":   ROOT / "data" / "audit_reports",
+    "docs_reports":    ROOT / "docs" / "reports",
+    "model_artifacts": ROOT / "models",
+    # Per-cell equity curves for the Backtest Studio cone fan (~2.9k files/25 MB,
     # equity.parquet only — see sync_dashboard_db.SWEEP_KEEP).
-    (ROOT / "data" / "selection_sweep" / "starttime", "sweep_starttime"),
-]
+    "sweep_starttime": ROOT / "data" / "selection_sweep" / "starttime",
+}
 
 
-# Per-dir outcome of the last _ensure_asset_dirs() run, surfaced by the
+# Outcome of every ensure_assets() call so far in this container, surfaced by the
 # Pipeline Health debug expander. One record per asset dir:
 #   {"prefix", "pulled", "skipped", "exists", "error"}
+# Prefixes appear as the pages that read them are visited, so an empty panel now
+# means "nobody opened Model Lab yet", not "the pull failed".
 ASSET_PULL_DIAG: list[dict] = []
 
 
-def _ensure_asset_dirs() -> None:
-    """Pull the dashboard's disk-file asset dirs from R2 on Streamlit Cloud.
+def _asset_fresh(prefix: str) -> bool:
+    """True when this dir was pulled from R2 <23h ago.
+
+    Keyed on a sentinel marker that ONLY the pull writes — NOT on file mtimes.
+    Git may deploy a stale/partial subset of these dirs (e.g. card .json files
+    are tracked, .html are not); an mtime gate would see those fresh files and
+    skip the R2 pull, leaving the .html (what Model Lab renders) absent. The
+    marker is git-ignored, so a cold cloud boot always pulls.
+    """
+    import time
+
+    marker = _ASSET_DIRS[prefix] / ".r2_synced"
+    return marker.exists() and (time.time() - marker.stat().st_mtime) < 23 * 3600
+
+
+def ensure_assets(*prefixes: str) -> None:
+    """Pull the named R2 asset dirs on Streamlit Cloud. Call from the page that
+    READS the dir, at the top of its script — not at import.
 
     Each dir is mirrored from latest/<prefix>/ preserving relative paths. Best-
     effort and per-dir freshness-gated (>23h) so a cold start re-pulls but warm
     reruns don't. Failures never block the app — the reading pages degrade to a
     'not available' message. No-op on local runs. Per-dir results land in
     ASSET_PULL_DIAG so the Pipeline Health page can show what actually happened
-    on the cloud host (the failure mode is invisible otherwise).
+    on the cloud host (the failure mode is invisible otherwise). Cost is paid
+    inside a live app under a spinner, by the one page that needs it.
     """
-    ASSET_PULL_DIAG.clear()
     if not _on_cloud():
         return
-
-    import time
+    # Called at the top of a page script, so it re-runs on every widget click.
+    # Nothing to do once the markers are fresh — return before building a boto3
+    # client, or an interaction pays for one it never uses.
+    pending = [p for p in prefixes if not _asset_fresh(p)]
+    if not pending:
+        return
 
     try:
         client = _r2_client()
@@ -252,21 +298,12 @@ def _ensure_asset_dirs() -> None:
         return
 
     paginator = client.get_paginator("list_objects_v2")
-    for local_dir, prefix in _ASSET_DIRS:
+    for prefix in pending:
+        local_dir = _ASSET_DIRS[prefix]  # KeyError = typo'd prefix, fail loudly
+        marker = local_dir / ".r2_synced"
         rec = {"prefix": prefix, "pulled": 0, "skipped": False,
                "exists": False, "error": None}
         try:
-            # Freshness gate keyed on a sentinel marker that ONLY this pull writes
-            # — NOT on file mtimes. Git may deploy a stale/partial subset of these
-            # dirs (e.g. card .json files are tracked, .html are not); an mtime gate
-            # would see those fresh files and skip the R2 pull, leaving the .html
-            # (what Model Lab renders) absent. The marker is git-ignored, so a
-            # cold cloud boot always pulls.
-            marker = local_dir / ".r2_synced"
-            if marker.exists() and (time.time() - marker.stat().st_mtime) < 23 * 3600:
-                rec["skipped"] = True
-                rec["exists"] = local_dir.exists()
-                continue  # pulled within 23h — skip
             for page in paginator.paginate(Bucket=bucket, Prefix=f"latest/{prefix}/"):
                 for obj in page.get("Contents", []):
                     rel = obj["Key"].split(f"latest/{prefix}/", 1)[-1]
@@ -286,21 +323,29 @@ def _ensure_asset_dirs() -> None:
         except Exception as e:
             rec["error"] = repr(e)  # surface, don't swallow — still non-fatal
         finally:
-            ASSET_PULL_DIAG.append(rec)
+            # One record per prefix: a later call replaces its own entry rather
+            # than stacking a duplicate row in the Pipeline Health panel.
+            ASSET_PULL_DIAG[:] = [r for r in ASSET_PULL_DIAG
+                                  if r["prefix"] != prefix] + [rec]
 
 
-# ⚠️ **MODULE-SCOPE SIDE EFFECTS — the structural flaw behind the 2026-07-18
-# incident.** These two calls WRITE (download a ~790 MB DB; mirror asset dirs),
-# so `import dashboard_utils` is not a read — it is a provisioning action. A
-# read-only data layer should not provision its own storage; that is a deploy-time
-# concern. It lives here because Streamlit Cloud offers no other bootstrap hook.
+# ⚠️ **MODULE-SCOPE SIDE EFFECT — the structural flaw behind the 2026-07-18
+# incident.** This call WRITES (downloads a ~770 MB DB), so `import
+# dashboard_utils` is not a read — it is a provisioning action. A read-only data
+# layer should not provision its own storage; that is a deploy-time concern. It
+# lives here because Streamlit Cloud offers no other bootstrap hook.
 #
-# Both are now inert unless `DASHBOARD_PULL_FROM_R2=1` (see `_on_cloud`), so the
-# blast radius is closed. The remaining cleanup — move provisioning into an
-# explicit `bootstrap_remote()` called only from the cloud entrypoint, leaving
-# import side-effect-free — is DEFERRED, not done. Do not add further work here.
+# It is inert unless `DASHBOARD_PULL_FROM_R2=1` (see `_on_cloud`), so the blast
+# radius is closed. The remaining cleanup — move provisioning into an explicit
+# `bootstrap_remote()` called only from the cloud entrypoint, leaving import
+# side-effect-free — is DEFERRED, not done. Do not add further work here.
+#
+# The asset-dir mirror USED to run here too. It doesn't any more: 3,744 objects
+# fetched one blocking request at a time is ~10 minutes ahead of the first
+# render, which no boot survives. Pages call ensure_assets(<prefix>) themselves.
+# The DB stays because 5 of the 6 pages open it — Dataset EDA is the lone
+# file-only page, and making the whole app boot for its sake is the wrong trade.
 _ensure_local_db()
-_ensure_asset_dirs()
 
 # ── M01 class taxonomy ────────────────────────────────────────────────────────
 
@@ -308,6 +353,34 @@ CLASS_LABELS = ["Noise (0-2%)", "Moderate (2-10%)", "Strong (10-30%)", "Home Run
 CLASS_COLORS = ["#9e9e9e", "#42a5f5", "#66bb6a", "#ffa726"]
 P_HR_COL = f"p_{CLASS_LABELS[3]}"  # P(Home Run >30%) — used as default sort key
 P_STRONG_COL = f"p_{CLASS_LABELS[2]}"
+
+# ── Finviz ticker links ───────────────────────────────────────────────────────
+# One URL shape and one display regex for the whole app. They were copy-pasted
+# across four tables in three files, all on the older /quote.ashx form — and
+# finviz has since moved to /stock, so a fifth copy is not the answer.
+
+_FINVIZ_URL = "https://finviz.com/stock?t={t}&p=d"
+_FINVIZ_DISPLAY = r"finviz\.com/stock\?t=([^&]+)"
+
+
+def finviz_url(ticker) -> str | None:
+    """Ticker → finviz daily chart URL. None (blank cell) when the ticker is NA."""
+    return _FINVIZ_URL.format(t=ticker) if pd.notna(ticker) else None
+
+
+def finviz_ticker_col(label: str = "Ticker", width: str = "small",
+                      pinned: bool = False) -> object:
+    """LinkColumn holding finviz URLs but displaying the bare ticker.
+
+    `pinned` freezes the column against the left edge — the only way a wide table
+    stays readable on a phone, where scrolling right otherwise loses the one
+    column that says which row you're on.
+    """
+    return st.column_config.LinkColumn(
+        label, width=width, pinned=pinned, help="Open the finviz chart",
+        display_text=_FINVIZ_DISPLAY,
+    )
+
 
 # ── M03 regime taxonomy ───────────────────────────────────────────────────────
 
@@ -1807,7 +1880,7 @@ def update_decision_taken(
     if decision not in (None, "taken", "skipped"):
         raise ValueError(f"decision must be 'taken' | 'skipped' | None, got {decision!r}")
 
-    con = duckdb.connect(str(DB_PATH))
+    con = db.connect(str(DB_PATH), read_only=False)
     try:
         con.execute("""
             UPDATE daily_predictions

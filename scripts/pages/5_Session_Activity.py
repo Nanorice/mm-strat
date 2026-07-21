@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import (  # noqa: E402
+    finviz_ticker_col,
+    finviz_url,
     load_activity_feed,
     load_prod_model_version_id,
     load_recent_exits,
@@ -87,7 +89,7 @@ def _render_open(wl: pd.DataFrame) -> None:
         return
     open_s = open_s.sort_values("days_held", ascending=False, na_position="last")
     cols = {
-        "ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "ticker": finviz_ticker_col(pinned=True),
         "company_name": st.column_config.TextColumn("Name", width="medium"),
         "sector": st.column_config.TextColumn("Sector", width="small"),
         "entry_date": st.column_config.DateColumn("Opened", width="small"),
@@ -96,6 +98,7 @@ def _render_open(wl: pd.DataFrame) -> None:
         "pct_return": _RET,
         "days_held": _DAYS,
     }
+    open_s = open_s.assign(ticker=open_s["ticker"].apply(finviz_url))
     have = [c for c in cols if c in open_s.columns]
     st.dataframe(open_s[have], column_config=cols, width='stretch',
                  hide_index=True, height=min(60 + 35 * len(open_s), 560))
@@ -109,7 +112,7 @@ def _render_closed(days: int) -> None:
         st.info(f"No sessions closed in the last {days} days.")
         return
     cols = {
-        "ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "ticker": finviz_ticker_col(pinned=True),
         "company_name": st.column_config.TextColumn("Name", width="medium"),
         "sector": st.column_config.TextColumn("Sector", width="small"),
         "entry_date": st.column_config.DateColumn("Opened", width="small"),
@@ -117,6 +120,7 @@ def _render_closed(days: int) -> None:
         "pct_return": _RET,
         "days_held": _DAYS,
     }
+    exits = exits.assign(ticker=exits["ticker"].apply(finviz_url))
     have = [c for c in cols if c in exits.columns]
     st.dataframe(exits[have], column_config=cols, width='stretch',
                  hide_index=True, height=min(60 + 35 * len(exits), 520))
@@ -143,11 +147,12 @@ def _render_feed(days: int) -> None:
     disp["event_type"] = disp["event_type"].map(lambda t: _EVENT_GLYPH.get(t, t))
     cols = {
         "event_date": st.column_config.DateColumn("Date", width="small"),
-        "ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "ticker": finviz_ticker_col(pinned=True),
         "company_name": st.column_config.TextColumn("Name", width="medium"),
         "event_type": st.column_config.TextColumn("Event", width="small"),
         "detail": st.column_config.TextColumn("Detail", width="medium"),
     }
+    disp = disp.assign(ticker=disp["ticker"].apply(finviz_url))
     have = [c for c in cols if c in disp.columns]
     st.dataframe(disp[have], column_config=cols, width='stretch',
                  hide_index=True, height=520)

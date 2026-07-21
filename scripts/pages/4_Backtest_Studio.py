@@ -211,6 +211,13 @@ def render_fan(arm: str, c: pd.DataFrame) -> None:
     curve. Bands are cross-sectional per day, so they are the cone's shape over
     holding time rather than a tradeable path.
     """
+    # 2,892 objects, one blocking request each — pulled here, where the fan that
+    # needs them is actually being drawn, rather than at page load (let alone at
+    # app boot, where it used to be and never finished). No-op locally.
+    from dashboard_utils import ensure_assets
+
+    ensure_assets("sweep_starttime")
+
     cells = tuple(c[["grid", "cell"]].itertuples(index=False, name=None))
     fan = load_arm_fan(arm, cells)
     if fan.empty:

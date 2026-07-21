@@ -43,6 +43,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from dashboard_utils import (
     CLASS_COLORS,
+    finviz_ticker_col,
+    finviz_url,
     CLASS_LABELS,
     P_HR_COL,
     P_STRONG_COL,
@@ -451,9 +453,7 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
     # Ticker → Finviz link via LinkColumn. URL goes in the column; display_text
     # regex strips it back to the bare ticker for display.
     if "ticker" in table.columns:
-        table["ticker"] = table["ticker"].apply(
-            lambda t: f"https://finviz.com/quote.ashx?t={t}" if pd.notna(t) else None
-        )
+        table["ticker"] = table["ticker"].apply(finviz_url)
 
     rename = {
         "ticker": "Ticker", "company_name": "Company", "sector": "Sector",
@@ -479,10 +479,7 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
 
     column_config: dict = {}
     if "Ticker" in table.columns:
-        column_config["Ticker"] = st.column_config.LinkColumn(
-            "Ticker", help="Open Finviz quote",
-            display_text=r"finviz\.com/quote\.ashx\?t=(.+)$",
-        )
+        column_config["Ticker"] = finviz_ticker_col(pinned=True)
     if "Mkt Cap" in table.columns:
         column_config["Mkt Cap"] = st.column_config.TextColumn(
             "Mkt Cap", help="Market cap (point-in-time at watchlist refresh)",
@@ -514,14 +511,8 @@ def render_watchlist_table(scored: pd.DataFrame, watchlist: pd.DataFrame) -> Non
 
 # ── Watchlist activity / exits (F2) ───────────────────────────────────────────
 
-def _finviz(t):
-    return f"https://finviz.com/quote.ashx?t={t}" if pd.notna(t) else None
-
-
-_FINVIZ_LINK = st.column_config.LinkColumn(
-    "Ticker", help="Open Finviz quote",
-    display_text=r"finviz\.com/quote\.ashx\?t=(.+)$",
-)
+_finviz = finviz_url
+_FINVIZ_LINK = finviz_ticker_col(pinned=True)
 
 
 def _style_return_col(styled, col: str):

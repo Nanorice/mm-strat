@@ -28,7 +28,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard_utils import load_screening, load_vip_watchlist
+from dashboard_utils import (
+    finviz_ticker_col, finviz_url, load_screening, load_vip_watchlist,
+)
 
 # theta.md tokens (mirror scripts/pages/2_Macro.py) — a scoped strip so the
 # native Streamlit widgets below still theme cleanly.
@@ -43,6 +45,25 @@ _HEADER_CSS = """
   .scr-stats b{font-size:20px;font-weight:600}
   .scr-stats .lbl{color:#8a8272;font-size:11px;text-transform:uppercase;letter-spacing:.1em}
   .scr-stats .col{display:flex;flex-direction:column;gap:2px}
+
+  /* Filter form: label on the same line as its control, and a control that stops
+     at a readable width. Streamlit stacks label-over-widget and stretches the
+     widget to the full column, so a 3-column row gave three ~380px dropdowns
+     holding the word "All" — a lot of vertical space and screen for six choices.
+     Selectboxes only. The fundamentals row is five columns wide and its labels
+     ("Gross margin ≥ %") are longer than its controls — inlining those was
+     measured and left the input 11px wide, so they stay stacked. */
+  [data-testid="stForm"] [data-testid="stSelectbox"]{
+    display:flex;align-items:center;gap:10px}
+  [data-testid="stForm"] [data-testid="stSelectbox"] > label{
+    flex:0 0 auto;margin:0;white-space:nowrap}
+  [data-testid="stForm"] [data-testid="stSelectbox"] > div{
+    flex:1 1 auto;min-width:0;max-width:220px}
+  /* Phone: back to stacked — inline is a wide-screen affordance. */
+  @media (max-width:640px){
+    [data-testid="stForm"] [data-testid="stSelectbox"]{display:block}
+    [data-testid="stForm"] [data-testid="stSelectbox"] > div{max-width:none}
+  }
 </style>
 """
 
@@ -140,7 +161,9 @@ def _fmt_mcap(m: float) -> str:
 
 
 _TABLE_COLS = {
-    "ticker": st.column_config.TextColumn("Ticker", width="small"),
+    # Pinned: this table is 17 columns wide, so on a phone the ticker is off-screen
+    # before you reach Score. Frozen left, every row stays identifiable.
+    "ticker": finviz_ticker_col(pinned=True),
     "company_name": st.column_config.TextColumn("Name", width="medium"),
     "sector": st.column_config.TextColumn("Sector", width="small"),
     "stage": st.column_config.TextColumn("Stage", width="small"),
@@ -187,11 +210,29 @@ _TABLE_COLS = {
 }
 
 
+def _default_order(d: pd.DataFrame, as_of) -> pd.DataFrame:
+    """Fresh first, then triggered, then score — the read order of the page.
+
+    "Fresh" is anchor_date == the SNAPSHOT's date, not wall-clock today: on a
+    Sunday, or any morning before the nightly run lands, wall-clock would mark
+    every row stale and silently flatten the first sort key.
+    """
+    anchor = pd.to_datetime(d["anchor_date"], errors="coerce")
+    return d.assign(
+        _fresh=anchor.eq(pd.to_datetime(as_of)),
+        _trig=d["stage"].eq("triggered"),
+    ).sort_values(
+        ["_fresh", "_trig", "prob_home_run"],
+        ascending=False, na_position="last",
+    ).drop(columns=["_fresh", "_trig"])
+
+
 def _shape(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["mcap"] = out["market_cap"].apply(_fmt_mcap)
     out["fcf"] = np.where(out["fcf_positive"].fillna(False), "＋", "－")
     out["stage"] = out["stage"].map({"setup": "◔ setup", "triggered": "● triggered"})
+    out["ticker"] = out["ticker"].apply(finviz_url)
     return out[list(_TABLE_COLS.keys())]
 
 
@@ -294,9 +335,10 @@ if pe_max is not None:
 if rg_min is not None:
     d = d[d["revenue_growth_yoy"].isna() | (d["revenue_growth_yoy"] >= rg_min)]
 
-st.caption(f"**{len(d)}** of {len(df)} names match")
-st.dataframe(_shape(d), column_config=_TABLE_COLS, width='stretch',
-             hide_index=True, height=620)
+st.caption(f"**{len(d)}** of {len(df)} names match · sorted newest-anchored first, "
+           "then triggered, then score")
+st.dataframe(_shape(_default_order(d, df["date"].iloc[0])), column_config=_TABLE_COLS,
+             width='stretch', hide_index=True, height=620)
 
 # ── watchlist ────────────────────────────────────────────────────────────────
 # A separate table, NOT a preset: the watchlist is a hand-curated population
@@ -320,7 +362,7 @@ _VIP_STATUS = {  # view's derived status → glyph (most-advanced state wins)
 }
 
 _VIP_COLS = {
-    "ticker": st.column_config.TextColumn("Ticker", width="small"),
+    "ticker": finviz_ticker_col(pinned=True),
     "status": st.column_config.TextColumn("Status", width="small"),
     "close": st.column_config.NumberColumn("Price", format="$%.2f", width="small"),
     "prob_elite": st.column_config.NumberColumn(
@@ -348,6 +390,7 @@ if vip is None or vip.empty:
 else:
     v = vip.copy()
     v["status"] = v["status"].map(_VIP_STATUS).fillna(v["status"])
+    v["ticker"] = v["ticker"].apply(finviz_url)
     st.caption(f"{len(v)} curated name{'s' if len(v) != 1 else ''} · "
                "CLI-managed (`vip_add.py`); this page is read-only.")
     st.dataframe(v[list(_VIP_COLS.keys())], column_config=_VIP_COLS,
